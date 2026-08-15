@@ -145,9 +145,11 @@ function buildSystemPrompt(
   );
 
   sections.push(
-    'CONHECIMENTO: usa apenas os excertos fornecidos no bloco CONHECIMENTO abaixo (quando existir) e ' +
-      'cita a fonte que usaste. Nunca inventes factos nem fontes. Se não houver conhecimento relevante, ' +
-      'responde apenas com o que sabes sobre a própria aplicação, sem citar.',
+    'CONHECIMENTO: usa apenas os excertos fornecidos no bloco CONHECIMENTO abaixo (quando existir). ' +
+      'Quando USARES um excerto, termina a frase que o usa com a referência numérica desse excerto, ' +
+      'por exemplo [1]. Se não usares nenhum excerto — porque nenhum é relevante para a pergunta — ' +
+      'não incluas referências nenhumas. Nunca inventes factos nem fontes. Se não houver conhecimento ' +
+      'relevante, responde apenas com o que sabes sobre a própria aplicação, sem citar.',
   );
 
   if (tools.length > 0) {
@@ -247,6 +249,22 @@ export function extractActions(
 }
 
 /**
+ * Cited-or-silent, for real: keep only the citations whose numbered excerpt the reply actually
+ * referenced ([n] markers, matching the numbering formatBlock gave the CONHECIMENTO block). A
+ * reply that used no excerpt cites nothing — retrieval hits are the model's INPUT, not the
+ * answer's sources (finding: a todo app's "visão geral" listed five Jurisprudência docs it
+ * never used). Out-of-range markers are ignored; order and de-duplication follow the hits.
+ */
+export function usedCitations<T>(reply: string, hits: readonly T[]): T[] {
+  const used = new Set<number>();
+  for (const m of reply.matchAll(/\[(\d{1,2})\]/g)) {
+    const n = Number.parseInt(m[1]!, 10);
+    if (n >= 1 && n <= hits.length) used.add(n - 1);
+  }
+  return hits.filter((_, i) => used.has(i));
+}
+
+/**
  * Run the served-app assistant for one turn. Grounds under the OWNER's org, calls the model once
  * through the injected chokepoint one-shot billed to the owner, and returns the prose reply (with
  * any actions block stripped), the inferred/pinned mode, the knowledge citations, and the validated
@@ -263,13 +281,10 @@ export async function runAppAssistant(
   const toolsByName = new Map(tools.map((t) => [t.name, t.action] as const));
 
   // Grounding ALWAYS under the resolved owner's org (never a caller-supplied org); kind:'chat'
-  // grounds unconditionally and is cited-or-silent.
+  // grounds unconditionally and is cited-or-silent. The hits feed the prompt; which of them
+  // become CITATIONS is decided AFTER the model answers (usedCitations below) — only excerpts
+  // the reply actually referenced are cited to the visitor.
   const grounding = deps.ground({ orgId: input.owner.orgId, query: input.message, kind: 'chat' });
-  const citations: AssistantCitation[] = grounding.hits.map((h) => ({
-    collection: h.collection,
-    docId: h.docId,
-    title: h.title,
-  }));
 
   const systemPrompt = buildSystemPrompt(mode, tools, grounding.block, input.context);
   const prompt = renderPrompt(input.history, input.message);
@@ -286,6 +301,14 @@ export async function runAppAssistant(
 
   const res = await deps.oneShot({ prompt, systemPrompt, decision }, attribution);
   const { text, actions } = extractActions(res.text, toolsByName);
+
+  // Cite only what the reply used. The [n] markers stay in the prose — they tie each claim to
+  // its entry in the panel's "Fontes" list, exactly like the block numbered them.
+  const citations: AssistantCitation[] = usedCitations(text, grounding.hits).map((h) => ({
+    collection: h.collection,
+    docId: h.docId,
+    title: h.title,
+  }));
 
   return { reply: text, mode, citations, actions };
 }

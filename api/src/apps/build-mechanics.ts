@@ -14,7 +14,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { artifacts, slugs, users, sessions } from '../data/stores.js';
+import { artifacts, slugs, users, sessions, orgs } from '../data/stores.js';
 import { generateSlug, type ArtifactDoc } from './artifacts-service.js';
 import { newProjectDir, projectDirFor, patchArtifactData, loadWritable } from './app-paths.js';
 import { indexSlug } from './slug-index.js';
@@ -26,6 +26,7 @@ import { loadBase, baseProjectFiles, isBaseId, type LoadedBase } from './base-lo
 import { readUiActions } from './action-manifest.js';
 import { readTours } from './tour-writer.js';
 import { classifyArtifactType, baseForType, typeForBase, type ClassifyDeps } from './artifact-type.js';
+import { brandPromptSection } from './brand-prompt.js';
 import type { ArtifactType, Actor } from '@ekoa/shared';
 import { commitSnapshot, SecretCommitError } from '../services/commit-guard.js';
 import { captureArtifactScreenshot } from '../services/artifact-screenshot.js';
@@ -61,6 +62,21 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
       return (await users.get(userId))?.orgId ?? '';
     } catch {
       return '';
+    }
+  }
+
+  /** The org's brand as a first-build prompt section (brand-prompt.ts), or null when the org has
+   *  none. Best-effort like orgIdFor: a store failure costs the brand section, never the build -
+   *  the serve-time design-tokens overlay is the other half of the brand contract and is
+   *  unaffected. Read through the `orgs` store the same way this module reads `users`. */
+  async function brandSectionFor(orgId: string): Promise<string | null> {
+    if (!orgId) return null;
+    try {
+      const org = await orgs.get(orgId);
+      return brandPromptSection((org?.branding ?? null) as Record<string, unknown> | null);
+    } catch (err) {
+      console.warn('[build-mechanics] org brand load failed (non-fatal):', err instanceof Error ? err.message : err);
+      return null;
     }
   }
 
@@ -237,7 +253,11 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
       }
       await appRegistry.register(artifactId, projectDir, input.userId, name);
 
-      return { artifactId, projectDir, slug, appUrl, ...(base ? { basePromptSections: base.promptSections } : {}) };
+      // The base's structural conventions first, the org's brand last: the brand is what the
+      // agent must honour ON TOP of whichever base it is building in.
+      const brandSection = await brandSectionFor(orgId);
+      const promptSections = [...(base?.promptSections ?? []), ...(brandSection ? [brandSection] : [])];
+      return { artifactId, projectDir, slug, appUrl, ...(promptSections.length > 0 ? { basePromptSections: promptSections } : {}) };
     },
 
     /** Follow-up resolution (ch05 §5.3.5, §5.4.5): the artifact record → its project dir, the

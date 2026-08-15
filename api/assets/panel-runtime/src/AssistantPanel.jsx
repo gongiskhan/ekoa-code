@@ -337,13 +337,18 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
   const playerRef = useRef(null);
   const whoamiDoneRef = useRef(false); // guards the once-only admin detection (H2)
   const tourProbeDoneRef = useRef(false); // guards the once-only tour-availability probe
+  // Conversation lifecycle token + the in-flight turn's abort controller. "Nova conversa"
+  // bumps the generation and aborts the live fetch, so a superseded turn's response/error
+  // can never land in the FRESH conversation (same single-flight idea as the tour player).
+  const convGenRef = useRef(0);
+  const sendControllerRef = useRef(null);
 
   useEffect(() => {
     messagesRef.current = messages;
-    // keep the newest turn in view
+    // keep the newest turn in view (busy keeps the pending indicator in view too)
     const el = listRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+  }, [messages, busy]);
 
   useEffect(() => {
     // Auto-open handoff (G2): the visitor clicked the launcher, so the panel mounts
@@ -352,6 +357,21 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
     if (defaultOpen && textareaRef.current) textareaRef.current.focus();
     // Mount-only: the handoff intent is fixed at mount time.
   }, [defaultOpen]);
+
+  // Layout reservation: while the panel is OPEN the app must reflow into the space
+  // that remains, not sit covered underneath (the guided tour was highlighting
+  // elements hidden behind the panel). The attribute drives a stylesheet rule
+  // (AssistantPanel.css) that adds a body margin equal to the panel width on
+  // viewports wide enough to share; below that the panel stays an overlay. The
+  // attribute lives on <html> so the injected panel styles can address the APP's
+  // layout without touching its stylesheets.
+  useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const rootEl = document.documentElement;
+    if (!collapsed) rootEl.setAttribute('data-ekoa-assistant-open', 'true');
+    else rootEl.removeAttribute('data-ekoa-assistant-open');
+    return () => rootEl.removeAttribute('data-ekoa-assistant-open');
+  }, [collapsed]);
 
   // H2 admin DETECTION (detect-then-ask): ask the server ONCE, on mount, whether the current
   // viewer is an admin of this app's owner org. Reads the platform token defensively (a
@@ -565,6 +585,11 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
       // timeout and fall through to the calm PT-PT error turn.
       const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
       const timer = controller ? setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS) : null;
+      // Capture this turn's conversation generation; "Nova conversa" bumps it (and aborts
+      // the controller), after which every state update below is skipped - a superseded
+      // turn must never write into the fresh conversation.
+      const gen = convGenRef.current;
+      sendControllerRef.current = controller;
       try {
         const res = await fetch(ENDPOINT, {
           method: 'POST',
@@ -582,11 +607,13 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
             ...(Object.keys(context).length ? { context } : {}),
           }),
         });
+        if (convGenRef.current !== gen) return; // superseded by "Nova conversa"
         if (!res.ok) {
           setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', content: ERROR_REPLY, error: true }].slice(-MAX_MESSAGES));
           return;
         }
         const data = await res.json();
+        if (convGenRef.current !== gen) return; // superseded while parsing
         if (data && typeof data.mode === 'string') setMode(data.mode);
         const turnId = nextId();
         setMessages((prev) => [
@@ -603,14 +630,36 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
           await runActions(data.actions, turnId);
         }
       } catch {
-        setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', content: ERROR_REPLY, error: true }].slice(-MAX_MESSAGES));
+        // A reset-abort is not an error - the fresh conversation stays clean.
+        if (convGenRef.current === gen) {
+          setMessages((prev) => [...prev, { id: nextId(), role: 'assistant', content: ERROR_REPLY, error: true }].slice(-MAX_MESSAGES));
+        }
       } finally {
         if (timer) clearTimeout(timer);
-        setBusy(false);
+        if (sendControllerRef.current === controller) sendControllerRef.current = null;
+        if (convGenRef.current === gen) setBusy(false);
       }
     },
     [draft, busy, pinnedMode, runActions],
   );
+
+  /** "Nova conversa" - back to the first-open state (intro + example prompts). Bumps the
+   *  conversation generation and aborts any in-flight turn so a late response can never
+   *  land in the fresh conversation; mode returns to inference (nothing pinned). */
+  const resetConversation = useCallback(() => {
+    convGenRef.current += 1;
+    if (sendControllerRef.current) {
+      sendControllerRef.current.abort();
+      sendControllerRef.current = null;
+    }
+    setBusy(false);
+    setMessages([]);
+    setDraft('');
+    setMode('do');
+    setPinnedMode(null);
+    actionResultsRef.current = [];
+    if (textareaRef.current) textareaRef.current.focus();
+  }, []);
 
   const open = useCallback(() => {
     setCollapsed(false);
@@ -874,9 +923,24 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
             </span>
           ) : null}
         </span>
-        <button type="button" className="ekoa-assistant-close" onClick={collapsePanel} aria-label="Fechar o assistente">
-          <CloseIcon />
-        </button>
+        <span className="ekoa-assistant-headeractions">
+          {/* "Nova conversa" - the way BACK to the first-open state (intro + example
+              prompts). Rendered only once a conversation exists; also live while a turn
+              is in flight (it aborts the turn via resetConversation's generation bump). */}
+          {messages.length > 0 || busy ? (
+            <button
+              type="button"
+              className="ekoa-assistant-reset"
+              onClick={resetConversation}
+              aria-label="Recomeçar a conversa"
+            >
+              Nova conversa
+            </button>
+          ) : null}
+          <button type="button" className="ekoa-assistant-close" onClick={collapsePanel} aria-label="Fechar o assistente">
+            <CloseIcon />
+          </button>
+        </span>
       </header>
 
       <div className="ekoa-assistant-modes" role="group" aria-label="Modo do assistente">
@@ -1150,6 +1214,18 @@ export function AssistantPanel({ defaultOpen = false } = {}) {
             </div>
           ))
         )}
+        {/* Loading state: while a turn is in flight the visitor SEES the assistant is
+            thinking - an assistant-side bubble with three pulsing dots (role="status"
+            announces the PT-PT label to screen readers; the dots are decorative). */}
+        {busy ? (
+          <div className="ekoa-assistant-turn" data-role="assistant" data-pending="true">
+            <div className="ekoa-assistant-bubble ekoa-assistant-pending" role="status" aria-label="A preparar a resposta...">
+              <span className="ekoa-assistant-pending-dot" aria-hidden="true" />
+              <span className="ekoa-assistant-pending-dot" aria-hidden="true" />
+              <span className="ekoa-assistant-pending-dot" aria-hidden="true" />
+            </div>
+          </div>
+        ) : null}
       </div>
 
       {tourActive ? (

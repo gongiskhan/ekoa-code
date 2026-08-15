@@ -1193,9 +1193,11 @@ describe('write rails - the run pauses on an unapproved write', () => {
     // name so it could say nothing else.
     expect(result.status).not.toBe('awaiting_integration');
     expect(paused).toEqual([]);
-    // The terminal frame carries the actionable message instead.
+    // The terminal frame carries the actionable message instead - the USER-facing frame is
+    // PT-PT product copy (the English /approval/ this used to pin lives only on the internal
+    // record message, asserted via result.summary above).
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toMatch(/approval/);
+    expect(errors[0]).toMatch(/aprova/i);
     // The fixer is never asked: a non-recoverable record is refused by shouldAttemptFix.
     expect(hoisted.proposePatch).not.toHaveBeenCalled();
     // …and the record SAYS non-recoverable, rather than relying on `integration` happening to be a

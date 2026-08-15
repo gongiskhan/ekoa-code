@@ -33,6 +33,11 @@
  *   node scripts/dev-credential.mjs --provision    # ...and provision it into the running stack
  *   node scripts/dev-credential.mjs --reauth       # force a fresh browser authorize
  *   node scripts/dev-credential.mjs --no-browser   # never open a browser (refresh/stored only)
+ *   CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat... \
+ *   node scripts/dev-credential.mjs --store --provision
+ *       # replace the drop-file with a token minted elsewhere (`claude setup-token`) AND
+ *       # provision the running stack - the recovery path when the refresh token dies on a
+ *       # headless box where the browser-authorize loopback flow cannot run
  */
 import crypto from 'node:crypto';
 import http from 'node:http';
@@ -242,12 +247,20 @@ const asOauth = (cred) => ({
   expiresAt: cred.expiresAt,
 });
 
-export async function ensureCredential({ reauth = false, allowBrowser = true } = {}) {
+export async function ensureCredential({ reauth = false, allowBrowser = true, store = false } = {}) {
   if (!reauth) {
     // An env-supplied token is a bare access token with no refresh material — usable, but it
     // will expire with no way back, so say so rather than provisioning a silent time bomb.
+    // With `store` (the --store flag), it REPLACES the drop-file: the recovery path for a
+    // dead refresh token on a headless box, fed by `claude setup-token` run anywhere (those
+    // tokens are long-lived, so no-expiry-recorded is the accurate record for them).
     if (process.env.CLAUDE_CODE_OAUTH_TOKEN) {
-      log('using CLAUDE_CODE_OAUTH_TOKEN from the environment (no refresh token available - it cannot be renewed when it expires)');
+      if (store) {
+        writeCredFile({ accessToken: process.env.CLAUDE_CODE_OAUTH_TOKEN, source: 'setup-token' });
+        log(`stored the env-supplied token in ${CRED_PATH} (long-lived, no refresh material)`);
+      } else {
+        log('using CLAUDE_CODE_OAUTH_TOKEN from the environment (no refresh token available - it cannot be renewed when it expires)');
+      }
       return { mode: 'oauth', token: process.env.CLAUDE_CODE_OAUTH_TOKEN };
     }
     if (process.env.ANTHROPIC_API_KEY) return { mode: 'api-key' };
@@ -309,7 +322,11 @@ export function provisionCredential(cred) {
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   const args = process.argv.slice(2);
-  const cred = await ensureCredential({ reauth: args.includes('--reauth'), allowBrowser: !args.includes('--no-browser') });
+  const cred = await ensureCredential({
+    reauth: args.includes('--reauth'),
+    allowBrowser: !args.includes('--no-browser'),
+    store: args.includes('--store'),
+  });
   if (!cred) { log('no credential available'); process.exit(1); }
   log(`credential ready (mode=${cred.mode})`);
   if (args.includes('--provision')) {

@@ -128,8 +128,9 @@ authenticates, meters, routes, logs - no prompt interpretation, no context injec
 
 `garrison:fittings/seed/basic-memory/apm.yml` - faculty memory, component_shape skill, provides
 memory-store/basic-memory; config keys: vault_dir (~/ObsidianVault), memory_dir (Memory), project_name (main),
-capture_enabled (true), register_codex_gemini (manifest default true; overridden false in the dogfood/default
-compositions except `garrison:compositions/dogfood-orch/apm.yml`, which keeps it true). Setup installs upstream
+capture_enabled (true), register_codex_gemini (manifest default true; overridden false in every dogfood/default
+composition that ships an apm.yml - the former dogfood-orch exception no longer exists: that composition carries
+no apm.yml as of 2026-08-13). Setup installs upstream
 basicmachines-co basic-memory via uv and registers its stdio MCP server with Claude/Codex/Gemini
 (`garrison:fittings/seed/basic-memory/scripts/setup.sh`).
 **Ops surface in daily use** (the CLI-parity scope, from `garrison:fittings/seed/basic-memory/.apm/skills/garrison-memory/SKILL.md`):

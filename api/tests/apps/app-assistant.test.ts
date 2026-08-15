@@ -174,17 +174,37 @@ describe('runAppAssistant (D1)', () => {
     expect(res.mode).toBe('do');
   });
 
-  it('turns grounding hits into citations (collection/docId/title)', async () => {
+  it('cites ONLY the grounding hits the reply actually referenced ([n] markers)', async () => {
     const hits = [hit(), hit({ docId: 'd2', collection: 'guias', title: 'Guia', scope: 'shared' })];
-    const deps = makeDeps('Resposta com fonte.', hits);
+    // The reply uses excerpt [2] only — excerpt 1 was retrieved but not used, so it is NOT cited.
+    const deps = makeDeps('Segundo o guia, crie o cliente no menu Clientes [2].', hits);
     const res = await runAppAssistant(
       { message: 'Como crio um cliente?', owner: OWNER, artifactId: 'art-1', actionManifest: manifest },
       deps,
     );
-    expect(res.citations).toEqual([
-      { collection: 'faq', docId: 'd1', title: 'Como criar cliente' },
-      { collection: 'guias', docId: 'd2', title: 'Guia' },
-    ]);
+    expect(res.citations).toEqual([{ collection: 'guias', docId: 'd2', title: 'Guia' }]);
+  });
+
+  it('a reply that used no excerpt cites NOTHING, even when retrieval returned hits', async () => {
+    // The observed defect: a todo app's "visão geral" answer listed five Jurisprudência docs it
+    // never used — retrieval hits are the model's input, not the answer's sources.
+    const hits = [hit(), hit({ docId: 'd2', collection: 'jurisprudencia', title: 'Acórdão X', scope: 'shared' })];
+    const deps = makeDeps('Esta aplicação gere as suas tarefas pessoais.', hits);
+    const res = await runAppAssistant(
+      { message: 'Dê-me uma visão geral da aplicação', owner: OWNER, artifactId: 'art-1', actionManifest: manifest },
+      deps,
+    );
+    expect(res.citations).toEqual([]);
+  });
+
+  it('out-of-range [n] markers cite nothing (never an invented source)', async () => {
+    const hits = [hit()];
+    const deps = makeDeps('Como descrito em [7], faça assim.', hits);
+    const res = await runAppAssistant(
+      { message: 'Como crio um cliente?', owner: OWNER, artifactId: 'art-1', actionManifest: manifest },
+      deps,
+    );
+    expect(res.citations).toEqual([]);
   });
 
   it('parses + validates the actions block and strips it from the reply', async () => {

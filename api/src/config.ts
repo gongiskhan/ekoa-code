@@ -46,6 +46,14 @@ export interface AgentsConfig {
   buildInactivityTimeoutMs: number;
   /** 5.3.6 build absolute wall-clock ceiling. */
   buildWallClockMs: number;
+  /** Overload fast-fail: how long a build's main agent run may sit with ZERO events (no stream,
+   *  no tool, no session id) before the attempt is treated as a dead overload window. The Agent
+   *  SDK retries provider 529s internally and invisibly (measured 2026-08-13: 4m10s of silence
+   *  before it gave up); this deadline cuts that window so the in-job retry can act. */
+  buildFirstEventDeadlineMs: number;
+  /** Overload in-job retry: backoff before the ONE transparent retry of a run that died to
+   *  provider overload before streaming anything. */
+  buildOverloadRetryDelayMs: number;
   /** 5.3.3 first-build reservation TTL (wall clock + 5 min margin). */
   firstBuildReservationTtlMs: number;
   /** 5.4.4 build maxTurns. */
@@ -145,12 +153,14 @@ export function defaultLlmConfig(): LlmConfig {
       // Model refresh 2026-08-07: claude-opus-5 is a drop-in for opus-4-8 at the SAME $5/$25
       // sticker price (weight stands) with 1M context as the DEFAULT — no `[1m]` marker needed.
       EXPERT: { model: process.env.LLM_MODEL_EXPERT ?? 'claude-opus-5', effort: envEffort('LLM_EFFORT_EXPERT', 'high'), weight: envFloat('LLM_WEIGHT_EXPERT', 0.4) },
-      // GENIUS (2026-08-07): claude-fable-5 — the frontier tier for first builds and other
-      // design/architecture-critical work. $10/$50 = 2x the EXPERT sticker, so weight 0.8.
+      // GENIUS (2026-08-07): claude-fable-5 — the frontier tier for ambitious first builds and
+      // other design/architecture-critical work. $10/$50 = 2x the EXPERT sticker, so weight 0.8.
       // Fable ALWAYS thinks (the Agent SDK never sends a thinking config, so no 400 risk) and
-      // supports the full effort ladder; `max` trades latency for the most rigorous output,
-      // which is exactly the first-build posture (quality over cost — operator directive).
-      GENIUS: { model: process.env.LLM_MODEL_GENIUS ?? 'claude-fable-5', effort: envEffort('LLM_EFFORT_GENIUS', 'max'), weight: envFloat('LLM_WEIGHT_GENIUS', 0.8) },
+      // supports the full effort ladder. Default effort dropped max→high (2026-08-14): measured
+      // on a live build, `max` spent ~70% of its 96K output tokens thinking (~14 of 20.5 min);
+      // `high` keeps the frontier posture without the deliberation tax. LLM_EFFORT_GENIUS=max
+      // restores the old behaviour.
+      GENIUS: { model: process.env.LLM_MODEL_GENIUS ?? 'claude-fable-5', effort: envEffort('LLM_EFFORT_GENIUS', 'high'), weight: envFloat('LLM_WEIGHT_GENIUS', 0.8) },
     },
     cacheReadFactor: envFloat('LLM_CACHE_READ_FACTOR', 0.25),
     providerBaseUrl: process.env.LLM_PROVIDER_BASE_URL ?? '',
@@ -173,11 +183,16 @@ function envInt(name: string, dflt: number): number {
 export function defaultAgentsConfig(): AgentsConfig {
   return {
     chatRunTimeoutMs: envInt('CHAT_RUN_TIMEOUT_MS', 300_000),
-    // GENIUS first builds (claude-fable-5 at max effort) legitimately think for minutes
-    // between messages and run long overall — 10 min inactivity / 60 min wall clock keep the
-    // timers as runaway backstops, never a cutter of healthy frontier-tier turns.
+    // GENIUS first builds (claude-fable-5, high effort; ambitious briefs only since
+    // 2026-08-14) still think for long stretches between messages — 10 min inactivity /
+    // 60 min wall clock keep the timers as runaway backstops, never a cutter of healthy
+    // frontier-tier turns.
     buildInactivityTimeoutMs: envInt('BUILD_INACTIVITY_TIMEOUT_MS', 600_000),
     buildWallClockMs: envInt('BUILD_WALL_CLOCK_MS', 3_600_000),
+    // 90s with zero events is overload, not thinking: even a GENIUS max-effort run emits its
+    // init/session event within seconds when the provider is answering at all.
+    buildFirstEventDeadlineMs: envInt('BUILD_FIRST_EVENT_DEADLINE_MS', 90_000),
+    buildOverloadRetryDelayMs: envInt('BUILD_OVERLOAD_RETRY_DELAY_MS', 15_000),
     firstBuildReservationTtlMs: envInt('FIRST_BUILD_RESERVATION_TTL_MS', 3_900_000),
     // Turn ceilings are runaway backstops well above real use — the inactivity + wall-clock
     // timers are the operative bounds. A turn ceiling must never stop a user's task mid-way

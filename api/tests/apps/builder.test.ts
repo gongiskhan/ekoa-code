@@ -2,11 +2,14 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtemp, mkdir, writeFile, readFile, rm, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Server } from 'node:http';
+import express from 'express';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
-import { artifacts } from '../../src/data/stores.js';
+import { artifacts, orgs } from '../../src/data/stores.js';
 import { appBuilder, validateBundle } from '../../src/apps/builder.js';
 import { scaffoldApp } from '../../src/apps/scaffold.js';
+import { designTokensHandler } from '../../src/services/design-tokens.js';
 
 /**
  * G6 app-pipeline core (ch07 §7.1.1 - port-as-is): the esbuild builder (JSX bundling, plain-HTML
@@ -81,7 +84,9 @@ describe('AppBuilder — JSX path (ch07 §7.2)', () => {
     expect(bundle.startsWith('(() => {')).toBe(true);
 
     const html = await readFile(join(distDir, 'index.html'), 'utf-8');
-    const tokensIdx = html.indexOf('<link rel="stylesheet" href="/api/design-tokens.css">');
+    // The ?app= parameter is what makes the ORG's brand resolve at serve time: no Referer
+    // reaches the api (Referrer-Policy), so a bare link served every app the platform default.
+    const tokensIdx = html.indexOf('<link rel="stylesheet" href="/api/design-tokens.css?app=jsx-css">');
     const bundleScriptIdx = html.indexOf('./bundle.js');
     expect(tokensIdx).toBeGreaterThanOrEqual(0);
     expect(bundleScriptIdx).toBeGreaterThan(tokensIdx); // design tokens come before the bundle
@@ -123,9 +128,41 @@ describe('AppBuilder — plain-HTML fast path (ch07 §7.2)', () => {
     expect(result.success).toBe(true);
 
     const copied = await readFile(join(dir, 'dist', 'index.html'), 'utf-8');
-    expect(copied).toBe(htmlBody); // verbatim copy, not the generated template
+    expect(copied).toContain('<h1>plain html app</h1>'); // the agent's document, not the template
+    expect(copied).not.toContain('./bundle.js');
     expect(await fileExists(join(dir, 'dist', 'style.css'))).toBe(true);
     expect(await fileExists(join(dir, 'dist', 'bundle.js'))).toBe(false); // esbuild never ran
+    // The agent's own <head> carries no tokens link, so this whole app class sat outside the
+    // brand contract with no CSS variables to read.
+    expect(copied).toContain('<link rel="stylesheet" href="/api/design-tokens.css?app=plain">');
+    expect(copied.indexOf('/api/design-tokens.css')).toBeLessThan(copied.indexOf('<h1>'));
+    // The SOURCE document is never rewritten - the injection lands on the built copy only.
+    expect(await readFile(join(dir, 'index.html'), 'utf-8')).toBe(htmlBody);
+  });
+
+  it('leaves a document that already links the design tokens alone', async () => {
+    const dir = await mkTemp();
+    const htmlBody = '<!doctype html><html><head><link rel="stylesheet" href="/api/design-tokens.css?app=self"></head><body>x</body></html>';
+    await writeFile(join(dir, 'index.html'), htmlBody, 'utf-8');
+
+    expect((await appBuilder.build('plain-linked', dir)).success).toBe(true);
+    const copied = await readFile(join(dir, 'dist', 'index.html'), 'utf-8');
+    expect(copied).toBe(htmlBody);
+    expect(copied.match(/design-tokens\.css/g)).toHaveLength(1);
+  });
+
+  it('leaves a head-less document VERBATIM - <header> is not <head> (regex fix, 2026-08-15)', async () => {
+    // /<head[^>]*>/ also matched `<header class=...>`, splicing the tokens link into the
+    // visible header of a document with no <head> at all - against the injector's own
+    // "left as written" contract. This pin restores the verbatim guarantee for that class.
+    const dir = await mkTemp();
+    const htmlBody = '<!doctype html><html><body><header class="nav">menu</header><h1>landing</h1></body></html>';
+    await writeFile(join(dir, 'index.html'), htmlBody, 'utf-8');
+
+    expect((await appBuilder.build('plain-headless', dir)).success).toBe(true);
+    const copied = await readFile(join(dir, 'dist', 'index.html'), 'utf-8');
+    expect(copied).toBe(htmlBody); // verbatim - nothing injected anywhere
+    expect(copied).not.toContain('design-tokens.css');
   });
 });
 
@@ -233,6 +270,48 @@ describe('AppBuilder — pre-installed dependency resolution (WS7, motion/react)
 
     const bundle = await readFile(join(dir, 'dist', 'bundle.js'), 'utf-8');
     expect(bundle).toContain('AnimatePresence'); // the real library landed in the bundle
+  });
+});
+
+/**
+ * The whole brand chain in the shape a browser exercises it: the document the builder writes
+ * carries `?app=<id>`, and that URL - fetched with NO Referer, against the REAL org resolver
+ * (slug/artifact -> org -> branding) - returns the org's brand. Every link in this chain was
+ * broken at once (live 2026-08-12): the template's link had no ?app=, the api stamps
+ * no-referrer, and the logo path was prefixed twice, so every served app on the platform
+ * rendered the default teal with a 404 logo.
+ */
+describe('brand chain - the built document resolves its org brand', () => {
+  it('serves the org palette and a single-prefixed logo for the href the builder wrote', async () => {
+    await orgs.insert({
+      _id: 'org-brand-chain',
+      name: 'Acme',
+      branding: { primaryColor: '#7C3AED', logo: '/brand-assets/acme-mark.png', fonts: ['Inter', 'Lora'] },
+      createdAt: new Date().toISOString(),
+    } as never);
+    await artifacts.insert({ _id: 'brand-chain-app', name: 'Branded', orgId: 'org-brand-chain' } as never);
+
+    const dir = await mkJsxApp({ css: false });
+    expect((await appBuilder.build('brand-chain-app', dir)).success).toBe(true);
+    const html = await readFile(join(dir, 'dist', 'index.html'), 'utf-8');
+    const href = /<link rel="stylesheet" href="([^"]*design-tokens[^"]*)">/.exec(html)?.[1];
+    expect(href).toBe('/api/design-tokens.css?app=brand-chain-app');
+
+    const app = express();
+    app.get('/api/design-tokens.css', designTokensHandler()); // the real resolver, no injection
+    const server = await new Promise<Server>((r) => {
+      const s = app.listen(0, () => r(s));
+    });
+    try {
+      const { port } = server.address() as { port: number };
+      const css = await (await fetch(`http://127.0.0.1:${port}${href}`)).text();
+      expect(css).toContain('--color-primary: #7C3AED;');
+      expect(css).toContain('--logo-url: url("/brand-assets/acme-mark.png");');
+      expect(css).toContain("--font-sans: 'Inter',");
+      expect(css).not.toContain('#0F766E'); // the platform default this app used to receive
+    } finally {
+      server.close();
+    }
   });
 });
 

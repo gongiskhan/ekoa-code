@@ -130,6 +130,19 @@ describe('E2 runtime spotlight hook', () => {
     expect(RUNTIME).toMatch(/spotlightOverlay\s*=\s*buildRingOverlay/);
   });
 
+  it('the ring overlay sits BELOW the assistant panel and never places narration under it', () => {
+    // z contract: ring (2147481999) < panel (2147482000) < driving badge/confirm (>= 2147483001),
+    // so the tour's Seguinte/Sair controls are never dimmed by the ring's box-shadow.
+    expect(RUNTIME).toContain('z-index:2147481999');
+    expect(RUNTIME).not.toContain('z-index:2147483000');
+    // the tooltip clamp subtracts the open panel's occluded strip instead of window.innerWidth
+    expect(RUNTIME).toContain('occludedRight');
+    expect(RUNTIME).toContain('.ekoa-assistant[data-collapsed="false"]');
+    // panel open/close reflows via a body-margin change (no scroll/resize event) - the overlay
+    // observes the body box so the ring follows the reflow
+    expect(RUNTIME).toContain('ResizeObserver');
+  });
+
   it('the tour spotlight is persistent (not the ~2.5s auto-clear) and separate state', () => {
     expect(RUNTIME).toContain('spotlightOverlay');
     // the spotlight is NOT wired to the HIGHLIGHT_MS auto-clear timer (that is the

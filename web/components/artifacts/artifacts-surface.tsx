@@ -207,10 +207,15 @@ function getTemplateId(artifact: ArtifactInstance): string | undefined {
   return artifact.templateId || artifact.typeId;
 }
 
-function getArtifactAppUrl(artifact: ArtifactInstance): string | null {
+export function getArtifactAppUrl(artifact: Pick<ArtifactInstance, "id" | "status" | "slug" | "shareable">): string | null {
   if (artifact.id && (artifact.status === "ready" || artifact.status === "running" || artifact.status === "active")) {
     // Prefer slug-based URL when available
-    return api.appUrl(artifact.slug || artifact.id);
+    const url = api.appUrl(artifact.slug || artifact.id);
+    // An UNSHARED artifact answers the bare link with 410 ("Link já não disponível") - the
+    // owner opens their own app through the preview token instead (Q-05: owner-checked,
+    // non-shareable previews only). A shareable link stays bare: it serves without auth and
+    // must never carry the owner's JWT where a copied URL would leak it.
+    return artifact.shareable ? url : api.withPreviewToken(url);
   }
   return null;
 }

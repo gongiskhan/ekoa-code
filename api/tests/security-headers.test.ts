@@ -85,6 +85,21 @@ describe('security-headers baseline (ch09 §9.8 D1, FIXED-14)', () => {
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
   });
 
+  it('/apps documents send a same-origin Referer so the org brand resolves, while the API surface keeps no-referrer', async () => {
+    // An already-built app's <head> predates the parametrised design-tokens link; under
+    // no-referrer its stylesheet request named no app and the org's brand fell back to the
+    // platform default. same-origin is the narrowest fix: the api sees the requesting app, and
+    // a cross-origin destination still receives nothing.
+    const port = await start();
+    const appDoc = await fetch(`http://127.0.0.1:${port}/apps/nonexistent-app-id/`, { redirect: 'manual' });
+    expect(appDoc.headers.get('referrer-policy')).toBe('same-origin');
+
+    const api = await fetch(`http://127.0.0.1:${port}/api/design-tokens.css`);
+    expect(api.headers.get('referrer-policy')).toBe('no-referrer');
+    const other = await fetch(`http://127.0.0.1:${port}/build/nonexistent-slug`, { redirect: 'manual' });
+    expect(other.headers.get('referrer-policy')).toBe('no-referrer');
+  });
+
   it('/apps embed surface honours EKOA_DASHBOARD_ORIGINS (comma-separated, all present)', async () => {
     process.env.EKOA_DASHBOARD_ORIGINS = 'https://app.ekoa.io, https://staging.ekoa.io';
     __resetDashboardOriginsForTests();

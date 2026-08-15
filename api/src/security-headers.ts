@@ -4,7 +4,8 @@
  * (§9.2), and the web dashboard sets its own CSP via next.config. This sets, on every api
  * response:
  *   - X-Content-Type-Options: nosniff        (MIME-confusion defence, all responses)
- *   - Referrer-Policy: no-referrer           (no path/token leakage via Referer)
+ *   - Referrer-Policy: no-referrer           (no path/token leakage via Referer; the /apps
+ *                                             document surface relaxes to same-origin, below)
  *   - Strict-Transport-Security               (transit encryption posture, C2; HTTPS-only effect)
  * and, split by surface:
  *   - the JSON API surface (/api*, /health, /hooks) — a locked-down document CSP
@@ -88,6 +89,14 @@ export function securityHeaders(req: Request, res: Response, next: NextFunction)
       'Content-Security-Policy',
       `frame-ancestors 'self'${origins.length > 0 ? ` ${origins.join(' ')}` : ''}`,
     );
+    // An app DOCUMENT is the one surface whose Referer carries platform meaning: the org's brand
+    // resolves from the requesting app (`/apps/<slug>/` → its org's design tokens), and under
+    // no-referrer every already-built app - whose <head> predates the parametrised tokens link -
+    // fell back to the platform default palette. same-origin sends the referrer only to this
+    // origin (the api serving both the app and /api/design-tokens.css) and still sends NOTHING
+    // cross-origin, so no path or token leaves the platform. Documents only; the JSON API surface
+    // above keeps no-referrer.
+    res.setHeader('Referrer-Policy', 'same-origin');
   } else {
     // Served-app plane: framing-scoped containment, resource loading left to byte-compat.
     res.setHeader('Content-Security-Policy', SERVED_APP_CSP);

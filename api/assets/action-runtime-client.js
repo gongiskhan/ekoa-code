@@ -160,7 +160,11 @@
     opts = opts || {};
     var root = document.createElement('div');
     root.setAttribute('data-ekoa-actions-ui', opts.uiKind || 'highlight');
-    root.style.cssText = 'position:fixed;inset:0;z-index:2147483000;pointer-events:none;';
+    // z-order contract: BELOW the assistant panel (2147482000) - the panel holds the tour's
+    // Seguinte/Sair controls and must never be dimmed by the ring's box-shadow - and above
+    // everything the app renders. The driving badge / destructive-confirm UI (>= 2147483001)
+    // stay above both.
+    root.style.cssText = 'position:fixed;inset:0;z-index:2147481999;pointer-events:none;';
 
     var ring = document.createElement('div');
     ring.style.cssText =
@@ -202,6 +206,17 @@
 
     document.body.appendChild(root);
 
+    // The open assistant panel occludes a fixed right-side strip of the viewport (or, with
+    // the layout reservation active, owns that strip outright). Narration must never be
+    // placed under it - clamp against the visible width, not window.innerWidth.
+    var occludedRight = function () {
+      var panel = document.querySelector('.ekoa-assistant[data-collapsed="false"]');
+      if (!panel) return 0;
+      var pr = panel.getBoundingClientRect();
+      if (!(pr.width > 0) || pr.left >= window.innerWidth) return 0;
+      return Math.max(0, window.innerWidth - pr.left);
+    };
+
     var reposition = function () {
       var r = el.getBoundingClientRect();
       ring.style.top = Math.round(r.top - 4) + 'px';
@@ -209,12 +224,14 @@
       ring.style.width = Math.round(r.width + 8) + 'px';
       ring.style.height = Math.round(r.height + 8) + 'px';
       if (tip) {
-        // Prefer below the element; flip above when there is no room below.
+        // Prefer below the element; flip above when there is no room below. Clamp to the
+        // width the panel leaves visible.
         var th = tip.offsetHeight || 96;
         var tw = tip.offsetWidth || 280;
+        var vw = window.innerWidth - occludedRight();
         var below = r.bottom + 10;
         var top = below + th > window.innerHeight && r.top - 10 - th > 0 ? r.top - 10 - th : below;
-        var left = Math.max(8, Math.min(r.left, window.innerWidth - tw - 8));
+        var left = Math.max(8, Math.min(r.left, vw - tw - 8));
         tip.style.top = Math.round(top) + 'px';
         tip.style.left = Math.round(left) + 'px';
       }
@@ -223,6 +240,14 @@
     reposition();
     window.addEventListener('scroll', reposition, true);
     window.addEventListener('resize', reposition, true);
+    // Panel open/close reflows the app via a body-margin change that fires neither scroll
+    // nor resize - observe the body's box so the ring follows the reflow (incl. during the
+    // margin transition). Best-effort: absent ResizeObserver the scroll/resize pair remains.
+    var ro = null;
+    if (typeof ResizeObserver === 'function' && document.body) {
+      ro = new ResizeObserver(reposition);
+      ro.observe(document.body);
+    }
 
     return {
       root: root,
@@ -231,6 +256,7 @@
         try {
           window.removeEventListener('scroll', reposition, true);
           window.removeEventListener('resize', reposition, true);
+          if (ro) ro.disconnect();
         } catch (_) { /* ignore */ }
         if (root.parentNode) root.parentNode.removeChild(root);
       },

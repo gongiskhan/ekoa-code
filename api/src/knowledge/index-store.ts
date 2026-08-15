@@ -57,19 +57,32 @@ export function collectionAuthority(collection: string): number {
 }
 
 // Portuguese + English stopwords: dropped from the MATCH query so grounding never triggers on
-// grammatical filler ("de", "the"). Small and deterministic.
+// grammatical filler ("de", "the"). Small and deterministic. Checked AFTER accent folding, so the
+// accented surface forms ("dê", "às", "é") normalise onto these entries — the FTS index folds
+// diacritics at match time (remove_diacritics 2), which made an unfolded "dê" match every "de"
+// in the corpus while sailing past this list (finding: a todo app's "Dê-me uma visão geral"
+// retrieved five Jurisprudência docs).
 const STOPWORDS = new Set([
   'de', 'a', 'o', 'e', 'do', 'da', 'em', 'um', 'uma', 'os', 'as', 'no', 'na', 'por', 'para', 'com',
   'que', 'se', 'dos', 'das', 'ao', 'aos', 'pela', 'pelo', 'sua', 'seu', 'ou',
-  'the', 'a', 'an', 'and', 'or', 'of', 'to', 'in', 'is', 'for', 'on', 'with', 'as', 'at', 'by',
+  'me', 'te', 'nos', 'este', 'esta', 'isto', 'esse', 'essa', 'isso', 'como', 'nao', 'mais', 'ja',
+  'the', 'an', 'and', 'or', 'of', 'to', 'in', 'is', 'for', 'on', 'with', 'at', 'by',
+  'it', 'this', 'that', 'be', 'me', 'my',
 ]);
 
-/** Turn free text into a safe FTS5 MATCH expression: fold to tokens, drop stopwords/short tokens,
- *  quote each (so punctuation can never inject FTS operators), OR-join for recall. Returns null
- *  when nothing meaningful remains (→ the caller stays silent). */
+/** Fold to lowercase and strip combining diacritics — the SAME folding the FTS tokenizer applies
+ *  (unicode61 remove_diacritics 2), applied up front so the stopword check sees what the index
+ *  will actually match against. */
+function foldToken(s: string): string {
+  return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+/** Turn free text into a safe FTS5 MATCH expression: fold to tokens (accent-folded, matching the
+ *  index tokenizer), drop stopwords/short tokens, quote each (so punctuation can never inject FTS
+ *  operators), OR-join for recall. Returns null when nothing meaningful remains (→ the caller
+ *  stays silent). */
 export function toMatchQuery(text: string): string | null {
-  const tokens = text
-    .toLowerCase()
+  const tokens = foldToken(text)
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .split(/\s+/)
     .filter((t) => t.length >= 2 && !STOPWORDS.has(t));
@@ -167,17 +180,28 @@ function healDocMap(d: Database.Database): void {
   const ftsCount = (d.prepare('SELECT COUNT(*) AS n FROM knowledge_fts').get() as { n: number }).n;
   const mapCount = (d.prepare('SELECT COUNT(*) AS n FROM knowledge_doc_map').get() as { n: number }).n;
   if (ftsCount === mapCount) return;
-  const rows = d.prepare('SELECT rowid, orgId, collection, docId, title, createdAt, sourceUrl, sourceType, language FROM knowledge_fts').all() as {
-    rowid: number; orgId: string; collection: string; docId: string;
-    title: string; createdAt: string; sourceUrl: string; sourceType: string; language: string;
-  }[];
+  // Rebuild PER-ORG (finding `knowledge-fts-heal-scan-unscoped`, resolution (b)): every
+  // content-bearing read of the fts table carries an orgId predicate — including this
+  // maintenance scan, so the tenancy grep gate stays honest with no carve-out — and the working
+  // set is bounded to one partition at a time instead of the whole 200k+-row shared corpus.
+  // The org listing itself reads no content (ids only).
+  const orgIds = (d.prepare('SELECT DISTINCT orgId FROM knowledge_fts').all() as { orgId: string }[]).map((r) => r.orgId);
+  const perOrg = d.prepare(
+    'SELECT rowid, orgId, collection, docId, title, createdAt, sourceUrl, sourceType, language FROM knowledge_fts WHERE orgId = ?',
+  );
   const ins = d.prepare(
     `INSERT OR REPLACE INTO knowledge_doc_map(orgId, collection, docId, ftsRowid, title, createdAt, sourceUrl, sourceType, language)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const tx = d.transaction(() => {
     d.exec('DELETE FROM knowledge_doc_map');
-    for (const r of rows) ins.run(r.orgId, r.collection, r.docId, r.rowid, r.title, r.createdAt, r.sourceUrl, r.sourceType, r.language);
+    for (const orgId of orgIds) {
+      const rows = perOrg.all(orgId) as {
+        rowid: number; orgId: string; collection: string; docId: string;
+        title: string; createdAt: string; sourceUrl: string; sourceType: string; language: string;
+      }[];
+      for (const r of rows) ins.run(r.orgId, r.collection, r.docId, r.rowid, r.title, r.createdAt, r.sourceUrl, r.sourceType, r.language);
+    }
   });
   tx();
 }
@@ -279,18 +303,29 @@ interface RawHit {
 
 /**
  * Dual-scope lexical search: accent-folded BM25 (title-weighted) re-ranked by collection authority.
- * A search consults the caller's OWN partition AND the reserved shared corpus (`_shared`), and
- * NOTHING else — a cross-org search remains structurally impossible. When the caller IS the shared
- * partition the two ids collapse to one (no duplicate scope). Each hit carries `scope` derived from
- * its row's orgId; the orgId itself never surfaces.
+ * A search consults the caller's OWN partition AND (unless `includeShared` is false) the reserved
+ * shared corpus (`_shared`), and NOTHING else — a cross-org search remains structurally impossible.
+ * When the caller IS the shared partition the two ids collapse to one (no duplicate scope). Each
+ * hit carries `scope` derived from its row's orgId; the orgId itself never surfaces.
+ *
+ * `includeShared` (default true) lets a caller keep the search to the org's OWN vault: grounding
+ * passes false for non-legal queries, so a 200k-doc legal corpus can never dominate an app
+ * assistant's answer about a todo list.
  */
-export function search(orgId: string, query: string, limit = 5): SearchHit[] {
+export function search(
+  orgId: string,
+  query: string,
+  limit = 5,
+  opts?: { includeShared?: boolean },
+): SearchHit[] {
   const match = toMatchQuery(query);
   if (!match) return [];
   const d = connect();
   // The caller's partition + the shared corpus. `IN (?, ?)` with equal ids when the caller is the
-  // shared partition collapses to a single-partition scan with no duplicate rows.
-  const shared = orgId === SHARED_ORG_ID ? orgId : SHARED_ORG_ID;
+  // shared partition (or the shared scope is excluded) collapses to a single-partition scan with
+  // no duplicate rows.
+  const includeShared = opts?.includeShared !== false;
+  const shared = orgId === SHARED_ORG_ID || !includeShared ? orgId : SHARED_ORG_ID;
   // Over-fetch so the authority re-rank has candidates, then trim to `limit`.
   const rows = d
     .prepare(

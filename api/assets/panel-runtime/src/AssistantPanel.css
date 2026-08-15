@@ -48,6 +48,23 @@
   flex: 0 0 auto;
 }
 
+/* -- Layout reservation (open panel shares the viewport with the app) ------ */
+/* While the panel is open (data attribute set on <html> by the panel), the APP
+   reflows into the remaining space instead of sitting covered underneath - so
+   nothing (content, tour highlights) hides behind the panel. On viewports too
+   narrow to share, the panel remains an overlay (and full-width at <=480px). */
+
+:root[data-ekoa-assistant-open] body {
+  margin-right: 380px;
+  transition: margin-right 0.2s ease;
+}
+
+@media (max-width: 900px) {
+  :root[data-ekoa-assistant-open] body {
+    margin-right: 0;
+  }
+}
+
 /* -- Panel ---------------------------------------------------------------- */
 
 .ekoa-assistant {
@@ -91,6 +108,30 @@
 .ekoa-assistant-title {
   font-size: var(--text-lg, 1.125rem);
   font-weight: 600;
+  color: var(--color-text, #0F172A);
+}
+
+.ekoa-assistant-headeractions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2, 0.5rem);
+}
+
+/* "Nova conversa" - back to the first-open suggestions state. */
+.ekoa-assistant-reset {
+  padding: var(--space-1, 0.25rem) var(--space-3, 0.75rem);
+  border: 1px solid var(--color-border, #E2E8F0);
+  border-radius: var(--radius-md, 0.5rem);
+  background: transparent;
+  color: var(--color-text-muted, #475569);
+  font: inherit;
+  font-size: var(--text-sm, 0.8125rem);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.ekoa-assistant-reset:hover {
+  background: var(--color-surface-muted, #F1F5F9);
   color: var(--color-text, #0F172A);
 }
 
@@ -621,6 +662,33 @@
   border-bottom-left-radius: var(--radius-sm, 0.25rem);
 }
 
+/* -- Loading state (turn in flight) ---------------------------------------- */
+/* An assistant-side bubble with three pulsing dots while the answer is prepared.
+   The bubble carries role="status" + a PT-PT aria-label; the dots are decorative. */
+
+.ekoa-assistant-pending {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2, 0.5rem);
+  min-width: 0;
+}
+
+.ekoa-assistant-pending-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--color-text-muted, #475569);
+  animation: ekoaAssistantPulse 1.2s ease-in-out infinite;
+}
+
+.ekoa-assistant-pending-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.ekoa-assistant-pending-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
 /* -- Citations (Fontes) --------------------------------------------------- */
 
 .ekoa-assistant-citations {
@@ -883,6 +951,8 @@
   .ekoa-assistant-edit-spinner { animation: none; }
   .ekoa-assistant-editswitch-track,
   .ekoa-assistant-editswitch-thumb { transition: none; }
+  .ekoa-assistant-pending-dot { animation: none; }
+  :root[data-ekoa-assistant-open] body { transition: none; }
 }
 
 /* -- Responsive ----------------------------------------------------------- */

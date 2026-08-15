@@ -92,6 +92,44 @@ describe('D2 panel source contract', () => {
     expect(PANEL).toContain('title');
   });
 
+  it('shows a visible loading state while a turn is in flight (pending bubble, role=status)', () => {
+    // The visitor must SEE the assistant is thinking between send and answer: an
+    // assistant-side pending bubble driven by `busy`, announced to screen readers.
+    expect(PANEL).toContain('data-pending="true"');
+    expect(PANEL).toContain('ekoa-assistant-pending');
+    expect(PANEL).toMatch(/role="status"/);
+    expect(PANEL).toContain('A preparar a resposta...');
+    // The pending indicator is styled + animated in the panel css (reduced-motion aware).
+    expect(CSS).toContain('.ekoa-assistant-pending-dot');
+    expect(CSS).toMatch(/prefers-reduced-motion[\s\S]*ekoa-assistant-pending-dot \{ animation: none; \}/);
+  });
+
+  it('offers "Nova conversa" back to the first-open suggestions state, abort-safe', () => {
+    // The reset affordance restores the intro + example prompts. It bumps the
+    // conversation generation and aborts the in-flight turn so a superseded response
+    // can never land in the fresh conversation.
+    expect(PANEL).toContain('Nova conversa');
+    expect(PANEL).toContain('resetConversation');
+    expect(PANEL).toContain('convGenRef');
+    expect(PANEL).toMatch(/resetConversation[\s\S]{0,400}sendControllerRef\.current\.abort\(\)/);
+    expect(PANEL).toMatch(/resetConversation[\s\S]{0,600}setMessages\(\[\]\)/);
+    // Every post-await state write in send() is generation-guarded.
+    expect(PANEL).toMatch(/convGenRef\.current !== gen/);
+    // Rendered only once a conversation exists (or a turn is in flight).
+    expect(PANEL).toMatch(/messages\.length > 0 \|\| busy \? \(/);
+  });
+
+  it('reserves layout space while open so the app reflows (never covered by the panel)', () => {
+    // The open panel stamps <html data-ekoa-assistant-open>; the css adds a matching
+    // body margin on viewports wide enough to share (overlay below that). This is what
+    // keeps app content and tour highlights out from BEHIND the panel.
+    expect(PANEL).toContain('data-ekoa-assistant-open');
+    expect(PANEL).toMatch(/setAttribute\('data-ekoa-assistant-open', 'true'\)/);
+    expect(PANEL).toMatch(/removeAttribute\('data-ekoa-assistant-open'\)/);
+    expect(CSS).toMatch(/:root\[data-ekoa-assistant-open\] body \{[\s\S]{0,80}margin-right: 380px/);
+    expect(CSS).toMatch(/@media \(max-width: 900px\) \{[\s\S]{0,120}margin-right: 0/);
+  });
+
   it('renders a calm PT-PT message on an endpoint error / missing runtime (never a crash)', () => {
     expect(PANEL).toContain('O assistente está indisponível de momento.');
     // execute() is guarded when the runtime is absent (standalone preview)

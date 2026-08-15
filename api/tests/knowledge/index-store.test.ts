@@ -283,10 +283,30 @@ describe('query builder', () => {
     expect(toMatchQuery('prazo de recurso')).toBe('"prazo" OR "recurso"');
   });
 
+  it('accent-folds BEFORE the stopword check ("Dê" is the stopword "de", not a live token)', () => {
+    // The index tokenizer folds diacritics at match time (remove_diacritics 2), so an unfolded
+    // "dê" used to sail past the stopword list and match every "de" in a 200k-doc corpus — the
+    // todo-app Jurisprudência finding. The emitted tokens are folded the same way.
+    expect(toMatchQuery('Dê-me uma visão')).toBe('"visao"');
+    expect(toMatchQuery('dê à é')).toBeNull(); // every token folds onto a stopword or is short
+  });
+
   it('neutralises FTS operator punctuation in the query (no injection)', () => {
     doc('orgA', 'c', 'd1', 'T', 'termo especial aqui');
     // punctuation like " OR ( must not break MATCH parsing
     expect(() => search('orgA', 'termo" OR ("x', 5)).not.toThrow();
     expect(search('orgA', 'termo" OR ("x', 5).map((h) => h.docId)).toContain('d1');
+  });
+});
+
+describe('shared-scope gating (includeShared)', () => {
+  it('includeShared: false keeps the search to the org partition only', () => {
+    doc('orgA', 'guias', 'own', 'Guia próprio sobre prazo', 'prazo de entrega das tarefas');
+    doc(SHARED_ORG_ID, 'jurisprudencia', 'jz', 'Acórdão sobre prazo', 'prazo de recurso no processo');
+    const withShared = search('orgA', 'prazo', 5);
+    const orgOnly = search('orgA', 'prazo', 5, { includeShared: false });
+    expect(withShared.map((h) => h.docId).sort()).toEqual(['jz', 'own']);
+    expect(orgOnly.map((h) => h.docId)).toEqual(['own']);
+    expect(orgOnly.every((h) => h.scope === 'org')).toBe(true);
   });
 });

@@ -13,6 +13,15 @@
  *
  * The org→brand resolution is an injected seam (default: the data/ stores), so the
  * builder is testable and the module never imports apps/.
+ *
+ * The overlay DERIVES what brand research does not state, because a half-applied brand
+ * renders worse than none: the primary's hover step and its label colour come from the
+ * primary itself (WCAG contrast, not the house teal), the neutral layer comes from the
+ * org's extracted palette when it names a canvas (a dark brand serves a DARK app, every
+ * neutral moving together), the researched `fonts` array feeds the font stacks, and the
+ * full logo stands in for the compact mark the pipeline never writes. Every value is
+ * shape-checked before it is emitted - a branding record is admin-editable free text
+ * landing verbatim in a stylesheet that every served app loads.
  */
 import { createHash } from 'node:crypto';
 import type { Request, Response } from 'express';
@@ -97,6 +106,149 @@ function escapeUrlPart(s: string): string {
   return s.replace(/[^a-zA-Z0-9._/-]/g, '');
 }
 
+/**
+ * The value shapes allowed into a colour token: a hex literal, an rgb()/hsl() functional form,
+ * or a bare colour keyword. A branding record is admin-editable free text that lands VERBATIM in
+ * a stylesheet every served app loads, so anything else (a `url(...)`, a value carrying `;` or
+ * `}` that would break out of the declaration) is DROPPED rather than escaped - a missing token
+ * falls back to the platform default, which is always a safe render.
+ */
+const CSS_COLOR_RE = /^(?:#(?:[0-9a-fA-F]{3,4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})|(?:rgb|rgba|hsl|hsla)\([0-9.,%/\sdeg-]+\)|[a-zA-Z]{3,20})$/;
+function isCssColor(v: unknown): v is string {
+  return typeof v === 'string' && CSS_COLOR_RE.test(v.trim());
+}
+
+type Rgb = readonly [number, number, number];
+const WHITE: Rgb = [255, 255, 255];
+const BLACK: Rgb = [0, 0, 0];
+/** The platform's ink and its inverse (the DEFAULT_VARS text/surface values), reused as the two
+ *  candidate label colours everywhere a readable-on-X decision is made. */
+const INK_DARK = '#0F172A';
+const INK_LIGHT = '#F8FAFC';
+
+function parseHex(v: string): Rgb | null {
+  const h = v.trim().replace('#', '');
+  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+  if (!/^[0-9a-fA-F]{6}$/.test(full)) return null;
+  return [parseInt(full.slice(0, 2), 16), parseInt(full.slice(2, 4), 16), parseInt(full.slice(4, 6), 16)];
+}
+
+function toHex(rgb: Rgb): string {
+  return `#${rgb.map((c) => Math.max(0, Math.min(255, Math.round(c))).toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+}
+
+/** Linear-blend `a` towards `b` by `t` (0..1). */
+function mix(a: Rgb, b: Rgb, t: number): Rgb {
+  return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+}
+
+/** WCAG 2.1 relative luminance. */
+function relativeLuminance(rgb: Rgb): number {
+  const channel = (c: number): number => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+}
+
+/** WCAG 2.1 contrast ratio between two colours (1..21). */
+function contrastRatio(a: Rgb, b: Rgb): number {
+  const la = relativeLuminance(a);
+  const lb = relativeLuminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+
+/** The readable label colour ON a filled surface: whichever of the two candidate inks measures
+ *  the higher WCAG contrast against it. */
+function inkOn(bg: Rgb, light: string, dark: string): string {
+  const lightRgb = parseHex(light) ?? WHITE;
+  const darkRgb = parseHex(dark) ?? BLACK;
+  return contrastRatio(lightRgb, bg) >= contrastRatio(darkRgb, bg) ? light : dark;
+}
+
+/** The hover step for a brand fill: a visible move AWAY from the resting colour. Darkening is the
+ *  house rule (see the --color-primary-hover note above), but a near-black brand primary has no
+ *  room left to darken into, so that one lightens instead. */
+function hoverFor(primary: Rgb): string {
+  return relativeLuminance(primary) < 0.1 ? toHex(mix(primary, WHITE, 0.14)) : toHex(mix(primary, BLACK, 0.1));
+}
+
+/** A canvas is a colour a page can actually be painted with: near-paper or near-ink. A mid-tone
+ *  brand hue is a FILL, never the background, so it is refused here. */
+const CANVAS_LIGHT_FLOOR = 0.8;
+const CANVAS_DARK_CEILING = 0.12;
+
+export interface BrandCanvas {
+  /** The org's page background as a hex literal. */
+  background: string;
+  /** True when the canvas is dark - the app must be BUILT dark, not light with dark accents. */
+  isDark: boolean;
+}
+
+/**
+ * The org's canvas, read from the brand-research design system (`branding.designSystem.palette`,
+ * the shape in shared/src/org.ts: `{ hex, count, confidence, sources }[]`). The most-used colour
+ * that is extreme enough to BE a canvas wins; a palette of nothing but mid-tones yields null and
+ * the platform's light default stands. Exported because the build agent's brand prompt section
+ * must state the same verdict the stylesheet encodes (one implementation, two consumers).
+ */
+export function resolveBrandCanvas(branding: Record<string, unknown> | null | undefined): BrandCanvas | null {
+  const designSystem = branding?.designSystem as { palette?: unknown } | undefined;
+  const palette = designSystem && Array.isArray(designSystem.palette) ? designSystem.palette : [];
+  let best: { hex: string; rgb: Rgb; count: number } | null = null;
+  for (const raw of palette) {
+    const entry = raw as { hex?: unknown; count?: unknown } | null;
+    if (!entry || !isCssColor(entry.hex)) continue;
+    const rgb = parseHex(entry.hex);
+    if (!rgb) continue;
+    const lum = relativeLuminance(rgb);
+    if (lum < CANVAS_LIGHT_FLOOR && lum > CANVAS_DARK_CEILING) continue;
+    const count = typeof entry.count === 'number' ? entry.count : 0;
+    if (!best || count > best.count) best = { hex: toHex(rgb), rgb, count };
+  }
+  if (!best) return null;
+  return { background: best.hex, isDark: relativeLuminance(best.rgb) < 0.5 };
+}
+
+/**
+ * Paint the whole neutral layer from one canvas colour. Every neutral moves TOGETHER: a dark
+ * background with the light-mode surface/border/text defaults left standing is worse than no
+ * brand at all (invisible text on near-black), so surfaces and borders are stepped off the
+ * canvas towards its ink and the text tokens are stepped off the ink back towards the canvas.
+ */
+function applyCanvas(vars: Record<string, string>, canvas: BrandCanvas): void {
+  const bg = parseHex(canvas.background);
+  if (!bg) return;
+  const ink = parseHex(inkOn(bg, INK_LIGHT, INK_DARK)) ?? BLACK;
+  vars['--color-bg'] = toHex(bg);
+  vars['--color-surface'] = toHex(mix(bg, ink, 0.05));
+  vars['--color-surface-muted'] = toHex(mix(bg, ink, 0.09));
+  vars['--color-border'] = toHex(mix(bg, ink, 0.16));
+  vars['--color-text'] = toHex(ink);
+  vars['--color-text-muted'] = toHex(mix(ink, bg, 0.3));
+  vars['--color-text-subtle'] = toHex(mix(ink, bg, 0.45));
+}
+
+/** Resolve a stored brand-asset reference to a served URL token.
+ *  The branding record stores what the brand pipeline wrote - a full served path
+ *  `/brand-assets/<file>` (brand-assets.ts storeLogo) - while older/hand-written records carry a
+ *  bare filename. Prefixing unconditionally produced `url("/brand-assets//brand-assets/x.png")`,
+ *  a 404 on every app whose org actually HAD a logo, so an already-rooted path is taken as-is.
+ *  A remote reference is dropped: the stylesheet every served app loads never points a brand
+ *  asset at a third-party host. */
+function brandAssetUrl(raw: string): string | null {
+  const v = raw.trim();
+  if (!v || v.includes('://') || v.startsWith('//')) return null;
+  const path = escapeUrlPart(v.startsWith('/') ? v : `/brand-assets/${v}`);
+  return path.startsWith('/') ? `url("${path}")` : null;
+}
+
+/** A font family name safe to emit inside a quoted CSS font stack. */
+function quoteFontFamily(name: string): string | null {
+  const clean = name.replace(/[^a-zA-Z0-9 _-]/g, '').trim();
+  return clean ? `'${clean}'` : null;
+}
+
 /** Overlay an org's brand onto the platform default variable bag. */
 function tokensToVars(brand: OrgBrand | null): Record<string, string> {
   const vars: Record<string, string> = { ...DEFAULT_VARS };
@@ -105,40 +257,87 @@ function tokensToVars(brand: OrgBrand | null): Record<string, string> {
 
   // A design-system colours bag, when brand research produced one.
   const colors = branding.colors as Record<string, string> | undefined;
+  let brandPrimary: Rgb | null = null;
+  let hoverGiven = false;
+  let onPrimaryGiven = false;
   if (colors) {
-    if (colors.primary) vars['--color-primary'] = colors.primary;
-    if (colors.primaryHover) vars['--color-primary-hover'] = colors.primaryHover;
-    if (colors.onPrimary) vars['--color-on-primary'] = colors.onPrimary;
-    if (colors.accent) vars['--color-accent'] = colors.accent;
-    if (colors.background) vars['--color-bg'] = colors.background;
-    if (colors.surface) vars['--color-surface'] = colors.surface;
-    if (colors.surfaceMuted) vars['--color-surface-muted'] = colors.surfaceMuted;
-    if (colors.border) vars['--color-border'] = colors.border;
-    if (colors.text) vars['--color-text'] = colors.text;
-    if (colors.textMuted) vars['--color-text-muted'] = colors.textMuted;
-    if (colors.success) vars['--color-success'] = colors.success;
-    if (colors.warning) vars['--color-warning'] = colors.warning;
-    if (colors.danger) vars['--color-danger'] = colors.danger;
-    if (colors.info) vars['--color-info'] = colors.info;
+    if (isCssColor(colors.primary)) vars['--color-primary'] = colors.primary;
+    if (isCssColor(colors.primaryHover)) { vars['--color-primary-hover'] = colors.primaryHover; hoverGiven = true; }
+    if (isCssColor(colors.onPrimary)) { vars['--color-on-primary'] = colors.onPrimary; onPrimaryGiven = true; }
+    if (isCssColor(colors.accent)) vars['--color-accent'] = colors.accent;
+    if (isCssColor(colors.background)) vars['--color-bg'] = colors.background;
+    if (isCssColor(colors.surface)) vars['--color-surface'] = colors.surface;
+    if (isCssColor(colors.surfaceMuted)) vars['--color-surface-muted'] = colors.surfaceMuted;
+    if (isCssColor(colors.border)) vars['--color-border'] = colors.border;
+    if (isCssColor(colors.text)) vars['--color-text'] = colors.text;
+    if (isCssColor(colors.textMuted)) vars['--color-text-muted'] = colors.textMuted;
+    if (isCssColor(colors.success)) vars['--color-success'] = colors.success;
+    if (isCssColor(colors.warning)) vars['--color-warning'] = colors.warning;
+    if (isCssColor(colors.danger)) vars['--color-danger'] = colors.danger;
+    if (isCssColor(colors.info)) vars['--color-info'] = colors.info;
+    if (isCssColor(colors.primary)) brandPrimary = parseHex(colors.primary);
+  } else {
+    // No colours bag (nothing writes one today) - the neutral layer comes from the org's own
+    // extracted design system instead, so a dark brand serves a dark app.
+    const canvas = resolveBrandCanvas(branding);
+    if (canvas) applyCanvas(vars, canvas);
   }
 
   // Top-level branding fields (the agent writes these directly).
-  if (typeof branding.primaryColor === 'string') vars['--color-primary'] = branding.primaryColor;
-  if (typeof branding.secondaryColor === 'string') vars['--color-accent'] = branding.secondaryColor;
-  if (typeof branding.accentColor === 'string') vars['--color-accent'] = branding.accentColor;
+  if (isCssColor(branding.primaryColor)) {
+    vars['--color-primary'] = branding.primaryColor;
+    brandPrimary = parseHex(branding.primaryColor);
+  }
+  if (isCssColor(branding.secondaryColor)) vars['--color-accent'] = branding.secondaryColor;
+  if (isCssColor(branding.accentColor)) vars['--color-accent'] = branding.accentColor;
+
+  // The derived pair. A rebranded primary with the platform's default hover/label is the bug
+  // this closes: a #2DD4BF button hovering to the house teal #115E59, and a white label on a
+  // pale brand fill. Only derived when the brand supplied a primary AND the design system did
+  // not state the value itself.
+  if (brandPrimary) {
+    if (!hoverGiven) vars['--color-primary-hover'] = hoverFor(brandPrimary);
+    if (!onPrimaryGiven) vars['--color-on-primary'] = inkOn(brandPrimary, '#FFFFFF', INK_DARK);
+  }
+
+  // Fonts. Brand research writes `fonts` (an ordered array of family names); the older
+  // fontFamily/displayFontFamily strings, when present, still win - they are the explicit choice.
+  const fonts = Array.isArray(branding.fonts)
+    ? branding.fonts.filter((f): f is string => typeof f === 'string' && f.trim().length > 0)
+    : [];
   if (typeof branding.fontFamily === 'string' && branding.fontFamily.trim().length > 0) {
-    vars['--font-sans'] = `'${String(branding.fontFamily).replace(/'/g, '')}', ${vars['--font-sans']}`;
-    // The display face follows the brand font unless research produced a dedicated one.
-    vars['--font-display'] = `'${String(branding.fontFamily).replace(/'/g, '')}', ${vars['--font-display']}`;
+    const family = quoteFontFamily(branding.fontFamily);
+    if (family) {
+      vars['--font-sans'] = `${family}, ${vars['--font-sans']}`;
+      // The display face follows the brand font unless research produced a dedicated one.
+      vars['--font-display'] = `${family}, ${vars['--font-display']}`;
+    }
+  } else if (fonts.length > 0) {
+    const first = fonts[0];
+    // A second researched family is the display face; with only one, both roles share it.
+    const second = fonts[1] ?? first;
+    const sans = first ? quoteFontFamily(first) : null;
+    const display = second ? quoteFontFamily(second) : null;
+    if (sans) vars['--font-sans'] = `${sans}, ${DEFAULT_VARS['--font-sans']}`;
+    if (display) vars['--font-display'] = `${display}, ${DEFAULT_VARS['--font-display']}`;
   }
   if (typeof branding.displayFontFamily === 'string' && branding.displayFontFamily.trim().length > 0) {
-    vars['--font-display'] = `'${String(branding.displayFontFamily).replace(/'/g, '')}', ${DEFAULT_VARS['--font-display']}`;
+    const family = quoteFontFamily(branding.displayFontFamily);
+    if (family) vars['--font-display'] = `${family}, ${DEFAULT_VARS['--font-display']}`;
   }
+
   if (typeof branding.logo === 'string' && branding.logo.length > 0) {
-    vars['--logo-url'] = `url("/brand-assets/${escapeUrlPart(branding.logo)}")`;
+    const url = brandAssetUrl(branding.logo);
+    if (url) vars['--logo-url'] = url;
   }
   if (typeof branding.logoIcon === 'string' && branding.logoIcon.length > 0) {
-    vars['--logo-icon-url'] = `url("/brand-assets/${escapeUrlPart(branding.logoIcon)}")`;
+    const url = brandAssetUrl(branding.logoIcon);
+    if (url) vars['--logo-icon-url'] = url;
+  }
+  // Nothing writes a separate compact mark today, and the app shell reads --logo-icon-url FIRST,
+  // so an org WITH a logo would render no brand mark at all. The full logo stands in for it.
+  if (!vars['--logo-icon-url'] && vars['--logo-url']) {
+    vars['--logo-icon-url'] = vars['--logo-url'];
   }
   return vars;
 }

@@ -70,15 +70,61 @@ async function loadHtmlTemplate(): Promise<string> {
   return htmlTemplateCache;
 }
 
-async function generateIndexHtml(appName: string, _manifest: AppManifest | null, hasCss: boolean): Promise<string> {
+/**
+ * The `?app=` value the design-tokens link carries. That parameter is what makes the ORG's brand
+ * resolve: the tokens endpoint falls back to a `/apps/<slug>/` Referer, but the api stamps
+ * `Referrer-Policy: no-referrer`, so a bare link left it with no app to resolve from and EVERY
+ * browser received the platform default palette regardless of which org built the app (live
+ * 2026-08-12). URL-encoded (a query value) and then HTML-escaped (an attribute value).
+ */
+function appIdParam(appId: string): string {
+  return escapeHtml(encodeURIComponent(appId));
+}
+
+/** The full stylesheet link, for documents this module did not generate from the template. */
+function designTokensLink(appId: string): string {
+  return `<link rel="stylesheet" href="/api/design-tokens.css?app=${appIdParam(appId)}">`;
+}
+
+async function generateIndexHtml(appId: string, appName: string, _manifest: AppManifest | null, hasCss: boolean): Promise<string> {
   const template = await loadHtmlTemplate();
   const cssLink = hasCss
     ? '\n  <link rel="stylesheet" href="./bundle.css">'
     : '';
 
+  // Function replacements: a literal string one would let a `$&`/`$'` in an app name behave as a
+  // replacement pattern instead of text.
   return template
-    .replace('{{APP_NAME}}', escapeHtml(appName))
-    .replace('{{CSS_LINK}}', cssLink);
+    .replace('{{APP_NAME}}', () => escapeHtml(appName))
+    .replace('{{APP_ID}}', () => appIdParam(appId))
+    .replace('{{CSS_LINK}}', () => cssLink);
+}
+
+/**
+ * Give an agent-authored document the org's design tokens. A plain-HTML app (§7.2.1) is copied
+ * verbatim, so unlike the generated index.html it carries whatever <head> the agent wrote -
+ * usually no tokens link at all, which left that whole app class outside the brand contract with
+ * no CSS variables to read. Injected at the TOP of <head> so the app's own styles still win by
+ * cascade order. Best-effort on the BUILT copy only (the agent's source is never rewritten): a
+ * document already linking the tokens, or one with no <head> to inject into, is left as written.
+ */
+async function injectDesignTokensLink(htmlPath: string, appId: string): Promise<void> {
+  let html: string;
+  try {
+    html = await readFile(htmlPath, 'utf-8');
+  } catch {
+    return; // no built document (an app whose root html is not index.html) - nothing to brand
+  }
+  if (html.includes('design-tokens.css')) return;
+  // \s|> after "head": `<head ...>` and `<head>` only - `[^>]*` alone also matched `<header
+  // class=...>`, splicing the link into a head-less document's visible header element
+  // (code-review finding, 2026-08-15).
+  const headOpen = /<head(\s[^>]*)?>/i.exec(html);
+  if (!headOpen || headOpen.index === undefined) return;
+  const at = headOpen.index + headOpen[0].length;
+  try {
+    await writeFile(htmlPath, `${html.slice(0, at)}\n  ${designTokensLink(appId)}${html.slice(at)}`, 'utf-8');
+  } catch { /* non-fatal: the app still serves, unbranded */ }
 }
 
 function escapeHtml(str: string): string {
@@ -504,7 +550,7 @@ class AppBuilder {
 
       // Generate index.html with importmap
       const htmlPath = join(outDir, 'index.html');
-      await writeFile(htmlPath, await generateIndexHtml(appName, manifest, hasCss), 'utf-8');
+      await writeFile(htmlPath, await generateIndexHtml(appId, appName, manifest, hasCss), 'utf-8');
       outputFiles.push('index.html');
 
       const durationMs = performance.now() - start;
@@ -575,6 +621,8 @@ class AppBuilder {
           }
         } catch { /* skip unreadable files */ }
       }
+
+      await injectDesignTokensLink(join(outDir, 'index.html'), appId);
 
       const durationMs = performance.now() - start;
       console.log(`[app-builder] ${appId}: plain HTML copied in ${durationMs.toFixed(0)}ms (${outputFiles.length} files)`);
@@ -663,7 +711,7 @@ class AppBuilder {
                     const hasCss = dirFiles.some((f) => f === 'bundle.css');
                     await writeFile(
                       join(outDir, 'index.html'),
-                      await generateIndexHtml(appName, manifest, hasCss),
+                      await generateIndexHtml(appId, appName, manifest, hasCss),
                       'utf-8',
                     );
                     await self.clearArtifactHealth(appId);

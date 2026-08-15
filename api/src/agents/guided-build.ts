@@ -48,6 +48,33 @@ export async function classifyInBuildIntent(message: string, billeeUserId: strin
   }
 }
 
+/** First-build ambition levels (routing floor input, §5.2 step 5 as re-decided 2026-08-14). */
+export type BuildAmbition = 'basic' | 'ambitious';
+
+/**
+ * First-build ambition classifier (§5.2 step 5, 2026-08-14). Decides the routing FLOOR for a
+ * first build: 'basic' (standard internal tool: CRUD, lists, forms, simple dashboards) floors
+ * at EXPERT; 'ambitious' (design-led, public-facing, or multi-domain product work) keeps the
+ * frontier GENIUS floor. Language-agnostic by construction (the model classifies, not an EN
+ * keyword list - briefs here are mostly PT). Fallback is 'basic': the measured cost of a wrong
+ * 'ambitious' is ~3x wall clock on the user's very first impression (20.5 min observed
+ * 2026-08-13), while a wrong 'basic' still runs opus at high effort. Abort rethrows (§5.3.2).
+ */
+export async function classifyBuildAmbition(description: string, billeeUserId: string, signal?: AbortSignal): Promise<BuildAmbition> {
+  try {
+    const out = await fastClassify(
+      description,
+      'Classify the ambition of this app-build request. Answer with ONE word: "basic" (a standard internal tool: CRUD, records, lists, forms, time tracking, simple dashboards) or "ambitious" (design-led or public-facing work: landing/marketing pages, portfolios, brand showcases; or a complex multi-domain product; or the request explicitly demands premium/impressive visual quality).',
+      billeeUserId,
+      signal,
+    );
+    return out.includes('ambitious') ? 'ambitious' : 'basic';
+  } catch (err) {
+    if (err instanceof LlmAbortedError) throw err; // NEVER fall through to a fallback on abort (§5.3.2)
+    return 'basic'; // committed deterministic fallback: fail toward speed, opus-high is still strong
+  }
+}
+
 /** Build-need detection (§5.6.1). Fallback: deterministic keyword heuristic. */
 export async function detectBuildIntent(message: string, billeeUserId: string, signal?: AbortSignal): Promise<boolean> {
   try {

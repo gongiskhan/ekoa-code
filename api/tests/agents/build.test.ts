@@ -7,6 +7,9 @@ import { setBuildMechanics, setVerifyRunner, setIngestBuildKnowledge, __resetAge
 import type { Actor } from '@ekoa/shared';
 import { jobs, userSettings, activityLogs } from '../../src/data/stores.js';
 import { bootAgentTestDb, shutdownAgentTestDb, resetAgentState, restoreTransport, seedUser } from './_setup.js';
+import { makeFakeTransport } from './_fake-transport.js';
+import { __setTransportForTests } from '../../src/llm/client.js';
+import { __resetAgentsConfigForTests } from '../../src/config.js';
 import type { FakeTransport } from './_fake-transport.js';
 
 /**
@@ -134,18 +137,34 @@ describe('build execution (§5.4, §5.6.2)', () => {
     expect(call.allowedTools).not.toContain('knowledge_search'); // the plain name is translated, not duplicated
   });
 
-  it('a FIRST build routes on the GENIUS frontier tier (claude-fable-5, max effort) and mounts the design-skill plugin (operator directive 2026-08-07)', async () => {
-    const t = resetAgentState({ finalText: 'built' });
+  it('a BASIC first build routes on the EXPERT tier (opus, high effort) — the ambition classifier gates the frontier floor (2026-08-14)', async () => {
+    // Classifier answer 'basic' (also the committed fallback for an empty/garbage answer).
+    const t = resetAgentState({ finalText: 'built', oneShotText: 'basic' });
     startEvents();
     const { mech } = fakeMechanics();
     const jobId = await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'build a dashboard', language: 'pt', deps: deps() });
     const call = t.streamCalls[0]!;
-    expect(call.model).toBe('claude-fable-5');
-    expect(call.effort).toBe('max');
+    expect(call.model).toBe('claude-opus-5');
+    expect(call.effort).toBe('high');
     // The impeccable design skill rides as an Agent SDK local plugin (settingSources stays [] — FIXED-6).
     expect(call.plugins?.some((p) => p.endsWith('content/plugins/impeccable'))).toBe(true);
-    const job = (await jobs.get(jobId)) as JobRecord & { routing?: { tier: string } };
+    const job = (await jobs.get(jobId)) as JobRecord & { routing?: { tier: string; reason?: string } };
+    expect(job.routing?.tier).toBe('EXPERT');
+    expect(job.routing?.reason).toBe('first build (basic)');
+  });
+
+  it('an AMBITIOUS first build keeps the GENIUS frontier floor (claude-fable-5, high effort) and mounts the design-skill plugin (2026-08-07 directive, effort re-set 2026-08-14)', async () => {
+    const t = resetAgentState({ finalText: 'built', oneShotText: 'ambitious' });
+    startEvents();
+    const { mech } = fakeMechanics();
+    const jobId = await execFirstBuild(t, mech, { actor, username: 'u1', sessionId: 's1', description: 'build a premium marketing landing page', language: 'pt', deps: deps() });
+    const call = t.streamCalls[0]!;
+    expect(call.model).toBe('claude-fable-5');
+    expect(call.effort).toBe('high');
+    expect(call.plugins?.some((p) => p.endsWith('content/plugins/impeccable'))).toBe(true);
+    const job = (await jobs.get(jobId)) as JobRecord & { routing?: { tier: string; reason?: string } };
     expect(job.routing?.tier).toBe('GENIUS');
+    expect(job.routing?.reason).toBe('first build (ambitious)');
   });
 
   // Cost + quality guardrails on the build run (operator directive 2026-08-10, after a live site
@@ -560,5 +579,128 @@ describe('honest-completion gate (F16, §5.6.2 step 5a) — a scaffold build nev
     expect(call.systemPrompt).toBeTruthy();
     expect(call.systemPrompt).toContain('frontend/src/App.jsx');
     expect(call.systemPrompt!.toLowerCase()).toContain('html');
+  });
+});
+
+describe('overload resilience — one transparent in-job retry (finding 2026-08-13)', () => {
+  beforeAll(() => bootAgentTestDb('ekoa_build_retry'));
+  afterAll(shutdownAgentTestDb);
+  beforeEach(async () => {
+    await seedUser('u1', 'o1');
+    // Fast knobs for the retry machinery (reset the memoized config so they take).
+    process.env.BUILD_OVERLOAD_RETRY_DELAY_MS = '10';
+    process.env.BUILD_FIRST_EVENT_DEADLINE_MS = '200';
+    __resetAgentsConfigForTests();
+  });
+  afterEach(async () => {
+    delete process.env.BUILD_OVERLOAD_RETRY_DELAY_MS;
+    delete process.env.BUILD_FIRST_EVENT_DEADLINE_MS;
+    __resetAgentsConfigForTests();
+    vi.restoreAllMocks();
+    restoreTransport();
+    await jobs.deleteMany({});
+    await userSettings.deleteMany({});
+  });
+
+  /** A transport whose FIRST streamAgent call misbehaves per `firstCall` and whose second call
+   *  succeeds — the two-phase shape the in-job retry exists for. */
+  function twoPhaseTransport(firstCall: 'throw-529' | 'error-as-result' | 'auth-as-result' | 'hang' | 'stream-then-throw'): FakeTransport {
+    const good = makeFakeTransport({ finalText: 'built after retry' });
+    let call = 0;
+    const t: FakeTransport = {
+      ...good,
+      async *streamAgent(params) {
+        call += 1;
+        if (call === 1) {
+          // The good transport records only calls it serves — record the misbehaving first
+          // attempt here so the tests can count BOTH attempts.
+          (good.streamCalls as unknown as Array<typeof params>).push(params);
+          if (firstCall === 'throw-529') {
+            throw new Error('Claude Code returned an error result: API Error: 529 Overloaded. This is a server-side issue.');
+          }
+          if (firstCall === 'error-as-result') {
+            yield { kind: 'final', text: 'API Error: 529 Overloaded', usage: { input: 1, output: 1, cacheCreate: 0, cacheRead: 0 }, aborted: false };
+            return;
+          }
+          if (firstCall === 'auth-as-result') {
+            yield { kind: 'final', text: 'authentication failed: invalid api key', usage: { input: 1, output: 1, cacheCreate: 0, cacheRead: 0 }, aborted: false };
+            return;
+          }
+          if (firstCall === 'stream-then-throw') {
+            yield { kind: 'text', text: 'algum texto visível' };
+            throw new Error('API Error: 529 Overloaded');
+          }
+          // hang: no events at all until the per-attempt first-event deadline aborts us.
+          await new Promise<void>((resolve) => {
+            if (params.signal?.aborted) { resolve(); return; }
+            const t2 = setTimeout(resolve, 10_000);
+            params.signal?.addEventListener('abort', () => { clearTimeout(t2); resolve(); });
+          });
+          yield { kind: 'final', text: '', usage: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 }, aborted: true };
+          return;
+        }
+        yield* good.streamAgent(params);
+      },
+    };
+    return t;
+  }
+
+  async function runRetryBuild(t: FakeTransport): Promise<{ jobId: string; events: Array<{ stream: string; type: string; data: unknown }> }> {
+    const { events } = startEvents();
+    const { mech } = fakeMechanics();
+    const jobId = 'job-retry';
+    const abort = new AbortController();
+    registerRun({ id: jobId, ownerUserId: 'u1', orgId: 'o1', kind: 'build', abort, startedAt: 0, sessionId: 's-retry' });
+    await persistJob({ _id: jobId, kind: 'build', status: 'created', userId: 'u1', sessionId: 's-retry', request: { description: 'todo app', language: 'pt' }, createdAt: 'x' } as JobRecord);
+    setBuildMechanics(mech);
+    __setTransportForTests(t);
+    await executeBuildJob(jobId, { actor, username: 'u1', sessionId: 's-retry', description: 'todo app', language: 'pt', deps: deps() }, abort, { firstBuild: true });
+    return { jobId, events };
+  }
+
+  it('an overload THROW before anything streamed retries once, keeps the SAME routing, and completes', async () => {
+    const t = twoPhaseTransport('throw-529');
+    const { jobId, events } = await runRetryBuild(t);
+    expect(((await jobs.get(jobId)) as unknown as { status: string }).status).toBe('completed');
+    expect(t.streamCalls).toHaveLength(2);
+    // The retry preserves this run's own routing decision (the GENIUS first-build directive is
+    // exactly what the manual-retry path used to lose by rerouting as a follow-up).
+    expect(t.streamCalls[1]!.model).toBe(t.streamCalls[0]!.model);
+    expect(t.streamCalls[1]!.effort).toBe(t.streamCalls[0]!.effort);
+    // The retry is narrated, never silent.
+    const steps = events.filter((e) => e.type === 'plan_step').map((e) => e.data as { status: string });
+    expect(steps.some((s) => s.status === 'retrying')).toBe(true);
+  });
+
+  it('a transient provider-error-AS-RESULT (nothing streamed) retries once and completes', async () => {
+    const t = twoPhaseTransport('error-as-result');
+    const { jobId } = await runRetryBuild(t);
+    expect(((await jobs.get(jobId)) as unknown as { status: string }).status).toBe('completed');
+    expect(t.streamCalls).toHaveLength(2);
+  });
+
+  it('an AUTH-classed error-as-result never retries (operator work, not an overload window)', async () => {
+    const t = twoPhaseTransport('auth-as-result');
+    const { jobId } = await runRetryBuild(t);
+    const job = (await jobs.get(jobId)) as JobRecord & { error?: { code: string } };
+    expect(job.status).toBe('failed');
+    expect(job.error?.code).toBe('ADAPTER_ERROR');
+    expect(t.streamCalls).toHaveLength(1);
+  });
+
+  it('the first-event deadline cuts a silent overload window and the retry completes the build', async () => {
+    const t = twoPhaseTransport('hang');
+    const { jobId } = await runRetryBuild(t);
+    expect(((await jobs.get(jobId)) as unknown as { status: string }).status).toBe('completed');
+    expect(t.streamCalls).toHaveLength(2);
+  }, 15_000);
+
+  it('anything already streamed forfeits the retry (never re-stream a transcript)', async () => {
+    const t = twoPhaseTransport('stream-then-throw');
+    const { jobId } = await runRetryBuild(t);
+    const job = (await jobs.get(jobId)) as JobRecord & { error?: { code: string } };
+    expect(job.status).toBe('failed');
+    expect(job.error?.code).toBe('ADAPTER_ERROR');
+    expect(t.streamCalls).toHaveLength(1);
   });
 });

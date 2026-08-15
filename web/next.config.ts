@@ -82,6 +82,24 @@ function resolveVertical(): string {
   return "generic";
 }
 
+// Extra hosts (comma-separated, no scheme/port) the dev stack is reached on besides
+// localhost — a tailnet MagicDNS name + tailscale IP (`npm run dev -- --tailnet` resolves
+// them into this variable). Two consumers below: Next's allowedDevOrigins, and the dev CSP,
+// which must allow each host's API origin because the browser-side resolver
+// (web/lib/api/base-url.ts) adopts the page's hostname at runtime when the baked API URL is
+// localhost — the page at http://<host>:3000 calls http://<host>:4111.
+// DEV-ONLY by construction (code-review finding, 2026-08-15): headers() bakes the CSP at
+// build time, so a production `next build` on a machine whose shell still exports
+// EKOA_PUBLIC_WEB_HOST (dev.mjs sets it; the run skill documents setting it by hand) would
+// otherwise ship cleartext http://<host>:<apiPort> + ws:// origins in the production
+// dashboard's connect/img/frame-src for arbitrary hostnames.
+const publicWebHosts = process.env.NODE_ENV === "production"
+  ? []
+  : (process.env.EKOA_PUBLIC_WEB_HOST || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
 const nextConfig: NextConfig = {
   devIndicators: false,
   // Standalone output for the container image (Dockerfile.web sets NEXT_OUTPUT_STANDALONE=1):
@@ -92,11 +110,9 @@ const nextConfig: NextConfig = {
   // corrupts a live dev server's .next incremental state.
   distDir: process.env.NEXT_BUILD_DIST_DIR || ".next",
   // A dev server reached over a hostname other than localhost (the stack running on one box
-  // and driven from a laptop) is a cross-origin dev request as far as Next is concerned, and
-  // it refuses those unless the host is named here.
-  ...(process.env.EKOA_PUBLIC_WEB_HOST
-    ? { allowedDevOrigins: [process.env.EKOA_PUBLIC_WEB_HOST.trim()] }
-    : {}),
+  // and driven from a laptop/phone) is a cross-origin dev request as far as Next is
+  // concerned, and it refuses those unless the host is named here.
+  ...(publicWebHosts.length ? { allowedDevOrigins: publicWebHosts } : {}),
   env: {
     NEXT_PUBLIC_API_URL: resolveApiUrl(),
     NEXT_PUBLIC_EKOA_VERTICAL: resolveVertical(),
@@ -133,16 +149,32 @@ const nextConfig: NextConfig = {
     // covering its ws(s) scheme, so the API origin is allowed in BOTH scheme families (dev
     // additionally keeps the blanket ws:/wss: for HMR below).
     const apiWsOrigin = apiOrigin.replace(/^http/, "ws");
-    const connectSrc = ["'self'", apiOrigin, apiWsOrigin, bridgeLocalOrigin]
+    // The public-host API origins (tailnet access, see publicWebHosts above): the browser
+    // adopts the page's PROTOCOL + hostname and keeps the API PORT, so each extra host needs
+    // both http://<host>:<apiPort> and https://... (tailscale serve terminates TLS on the
+    // same port number) allowed everywhere the localhost API origin is, plus the ws(s) pair.
+    const apiPort = ((): string => {
+      try {
+        return new URL(apiOrigin).port;
+      } catch {
+        return "";
+      }
+    })();
+    const publicApiOrigins = apiPort
+      ? publicWebHosts.flatMap((h) => [`http://${h}:${apiPort}`, `https://${h}:${apiPort}`])
+      : [];
+    // http -> ws and https -> wss (the same prefix rewrite apiWsOrigin uses above).
+    const publicApiWsOrigins = publicApiOrigins.map((o) => o.replace(/^http/, "ws"));
+    const connectSrc = ["'self'", apiOrigin, apiWsOrigin, bridgeLocalOrigin, ...publicApiOrigins, ...publicApiWsOrigins]
       .filter(Boolean)
       .join(" ");
     // Artifact thumbnails are served by the API (/artifact-screenshots, ch07 §7.11); in dev
     // that origin is http so the blanket `https:` does not cover it — allow it explicitly.
-    const imgSrc = ["'self'", "data:", "blob:", "https:", apiOrigin].filter(Boolean).join(" ");
+    const imgSrc = ["'self'", "data:", "blob:", "https:", apiOrigin, ...publicApiOrigins].filter(Boolean).join(" ");
     // The artifact preview overlay frames the API's /apps/* plane (cross-origin). Framing is
     // two-sided: the api allowlists the dashboard via frame-ancestors, and the dashboard must
     // allow the api as a frame SOURCE here (no frame-src = default-src 'self' = blocked).
-    const frameSrc = ["'self'", apiOrigin].filter(Boolean).join(" ");
+    const frameSrc = ["'self'", apiOrigin, ...publicApiOrigins].filter(Boolean).join(" ");
     // Next's dev server (fast-refresh/HMR) and the webpack runtime evaluate code via eval, so
     // 'unsafe-eval' is required for the app to run; 'unsafe-inline' covers Next's inline
     // bootstrap. Websocket dev-HMR needs ws: in connect-src. The security-load-bearing directives

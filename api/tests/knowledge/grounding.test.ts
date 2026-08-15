@@ -88,4 +88,21 @@ describe('shared corpus grounding', () => {
     expect(hits.find((h) => h.docId === 'shared-1')!.scope).toBe('shared');
     expect(block).toContain('legal-spine / Prazo comum de recurso (doc shared-1)');
   });
+
+  it('a NON-legal chat query never pulls the shared corpus (the todo-app Jurisprudência finding)', () => {
+    // A generic-word overlap ("aplicação", "geral") must not surface the shared legal corpus in a
+    // non-legal app conversation — before the gate, "Dê-me uma visão geral da aplicação" retrieved
+    // five Jurisprudência docs into a todo list's assistant.
+    indexDoc({ orgId: SHARED_ORG_ID, collection: 'jurisprudencia', docId: 'shared-jz', title: 'Acórdão sobre aplicação geral da lei', body: 'a aplicação geral da norma no caso concreto', createdAt: '2026-01-01T00:00:00.000Z' });
+    const { block, hits } = buildGroundingBlock({ orgId: 'orgSemNada', query: 'Dê-me uma visão geral da aplicação', kind: 'chat' });
+    expect(hits).toHaveLength(0);
+    expect(block).toBe('');
+  });
+
+  it('a non-legal chat query still searches the org\'s OWN vault', () => {
+    indexDoc({ orgId: 'orgA', collection: 'guias', docId: 'g1', title: 'Visão geral da aplicação de tarefas', body: 'a aplicação gere tarefas pessoais e listas', createdAt: '2026-01-01T00:00:00.000Z' });
+    const { hits } = buildGroundingBlock({ orgId: 'orgA', query: 'Dê-me uma visão geral da aplicação de tarefas', kind: 'chat' });
+    expect(hits.map((h) => h.docId)).toContain('g1');
+    expect(hits.every((h) => h.scope === 'org')).toBe(true);
+  });
 });

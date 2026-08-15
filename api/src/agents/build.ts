@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { loadAgentsConfig } from '../config.js';
 import { checkAllowance } from '../billing/index.js';
 import { BILLING_PAGE_URL } from '../billing/constants.js';
-import { runAgent, decideForTask, LlmAbortedError } from '../llm/index.js';
+import { runAgent, decideForTask, LlmAbortedError, type AgentRunResult } from '../llm/index.js';
 import { runPostRunExtraction } from '../memory/index.js';
 import { userSettings } from '../data/stores.js';
 import {
@@ -32,7 +32,7 @@ import { MarkerProcessor, scanProviderError } from './markers.js';
 import { StreamingIdentityRedactor } from './branding.js';
 import { toolPolicyFor } from './tools.js';
 import { knowledgeToolSpecs, loadContextToolSpec, delegateToolSpec, docxToolSpecs } from './sdk-tools.js';
-import { classifyInBuildIntent } from './guided-build.js';
+import { classifyBuildAmbition, classifyInBuildIntent } from './guided-build.js';
 import {
   persistJob,
   patchJob,
@@ -508,13 +508,29 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       if (projectDir) await mech.watchRebuilds({ artifactId, projectDir, onRebuild: () => sink.previewReload() });
     }
 
-    // Routing floor (§5.2 step 5): a FIRST build runs on the frontier GENIUS tier at its
-    // configured (max) effort — the initial architecture + design of an app is the single
-    // highest-leverage model call the platform makes (operator directive 2026-08-07: best
-    // model, high/max effort for new apps). Follow-ups keep the EXPERT floor.
-    const decision = decideForTask(input.description, undefined, opts.firstBuild ? 'GENIUS' : 'EXPERT');
-    sink.routing(decision.tier, opts.firstBuild ? 'first build' : 'follow-up build');
-    await patchJob(jobId, { routing: { tier: decision.tier, reason: opts.firstBuild ? 'first build' : 'follow-up build' } });
+    // Routing floor (§5.2 step 5, re-decided 2026-08-14): a FIRST build's floor follows the
+    // brief's AMBITION, not a blanket frontier mandate. The FAST classifier labels the brief
+    // 'basic' (standard internal tool) or 'ambitious' (design-led / public-facing /
+    // multi-domain); basic floors at EXPERT, ambitious keeps the frontier GENIUS floor
+    // (operator directive 2026-08-07, effort since lowered max→high). Measured basis
+    // (2026-08-13, a basic time-tracking app): the blanket GENIUS-max floor spent ~68K of
+    // 96K output tokens THINKING — ~14 of 20.5 minutes. Follow-ups keep the EXPERT floor.
+    let routingReason = 'follow-up build';
+    let routingFloor: 'GENIUS' | 'EXPERT' = 'EXPERT';
+    if (opts.firstBuild) {
+      let ambition: Awaited<ReturnType<typeof classifyBuildAmbition>>;
+      try {
+        ambition = await classifyBuildAmbition(input.description, input.actor.userId, abort.signal);
+      } catch (err) {
+        if (err instanceof LlmAbortedError) { await settleAborted(); return; } // Stop pressed mid-classify: never start a build (§5.3.2)
+        throw err;
+      }
+      routingFloor = ambition === 'ambitious' ? 'GENIUS' : 'EXPERT';
+      routingReason = `first build (${ambition})`;
+    }
+    const decision = decideForTask(input.description, undefined, routingFloor);
+    sink.routing(decision.tier, routingReason);
+    await patchJob(jobId, { routing: { tier: decision.tier, reason: routingReason } });
 
     // F1 knowledge-during-build (§5.5.2 knowledge area). The first-build scoping phase runs a
     // DETERMINISTIC domain-heavy detector (no model call, no egress) over the request. A
@@ -614,118 +630,202 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       }
     }
 
-    const handle = runAgent(
-      {
-        prompt: buildPrompt,
-        // F16: pin the agent to the served entrypoint. Nothing else names it (settingSources is
-        // empty, §5.4.2), so without this the agent may write a standalone HTML file that is
-        // never served while the scaffold keeps being compiled. Flows through runAgent's
-        // anonymise path like every prompt (client.ts systemPrompt handling).
-        // Base conventions (operator-run B1) sit between the universal coding sections and
-        // the grounding block: universal judgment first, then the selected base's structural
-        // invariants, then dynamic knowledge, then the F16 entrypoint steer.
-        systemPrompt: [
-          ...contentSections,
-          ...basePromptSections,
-          groundingBlock,
-          BUILD_SYSTEM_PROMPT,
-          // The impeccable scripts' concrete location. Without this the agent guesses the
-          // upstream default (`.claude/skills/impeccable/...`), finds nothing in the sandbox,
-          // and SELF-ASSIGNS its direction - observed on the second live build (2026-08-08):
-          // "scripts do plugin indisponiveis no sandbox" in its DESIGN.md, i.e. the argmax rut
-          // the concept-seed roll exists to break. Absolute path, resolved server-side.
-          cfg.impeccablePluginDir
-            ? `The impeccable skill's scripts live at ${join(cfg.impeccablePluginDir, 'skills', 'impeccable', 'scripts')} (absolute path; the upstream docs' \`.claude/skills/impeccable/...\` path does not exist in this sandbox). Example: \`node ${join(cfg.impeccablePluginDir, 'skills', 'impeccable', 'scripts', 'concept-seed.mjs')} --scope direction --mode persuade\`. Run them from your project directory; never copy them into it.`
-            : '',
-        ].filter(Boolean).join('\n\n'),
-        decision,
-        allowedTools: policy.allowedTools,
-        maxTurns: policy.maxTurns,
-        // Builds mount the knowledge tools + the context-loading tool + the §5.4.8 local-bridge
-        // delegation tool as in-process MCP (§5.4.4; ch18 §18.2), plus the three ekoa-docx tools
-        // (2C-S5). The docx tools are ARTIFACT-BOUND: appId = artifactId, so the linked Word
-        // document they read/link/redline is the one on the artifact being built - never an id
-        // the model can name. Attribution ("<user> (Ekoa)" on every w:ins/w:del) and the path
-        // jail for `path` arguments (the run's projectDir) likewise bind HERE, from the run, not
-        // from tool arguments. Before the first build resolves an artifact, appId is undefined
-        // and the artifact-bound tools say so honestly.
-        sdkTools: [
-          ...knowledgeToolSpecs(input.actor),
-          loadContextToolSpec(input.actor, 'coding'),
-          delegateToolSpec(input.actor, input.sessionId),
-          ...docxToolSpecs({ appId: artifactId || undefined, userName: input.username, allowedDirs: projectDir ? [projectDir] : [] }),
-        ],
-        cwd: projectDir || undefined,
-        homeDir: projectDir || undefined, // build runs set HOME = projectDir (§5.4.1)
-        // Design-skill plugin: the vendored impeccable skill (api/content/plugins/impeccable,
-        // Apache-2.0 fork of pbakaus/impeccable v4.0.4), mounted as an Agent SDK local plugin so
-        // it loads by progressive disclosure on design-shaped work. It REPLACES the ekoa-design
-        // mount: two design skills with competing directives is the same class of contradiction
-        // the WS7 incident traced. Server-resolved config path; EKOA_IMPECCABLE_PLUGIN_DIR=""
-        // disables. Its concept-seed/serve-question scripts self-detect this headless harness and
-        // degrade exactly as their own docs specify (assigned direction, no browser page); the
-        // roll API is additionally forced offline via env at server boot (server.ts).
-        ...(cfg.impeccablePluginDir ? { plugins: [cfg.impeccablePluginDir] } : {}),
-        ...(resumeSessionId ? { resume: resumeSessionId } : {}),
-        steerable: true, // Conduzir: mid-run user messages join this run (POST /jobs/:id/steer)
-        signal: abort.signal,
-        callbacks: {
-          onToolEvent: (e) => { resetInactivity(); sink.toolEvent(e); narrateProgress(e); },
-          onSessionId: (sid) => { capturedSessionId = sid; },
-          onPlanNotification: () => resetInactivity(),
-        },
-      },
-      { kind: 'user_work', agentType: 'build', billeeUserId: input.actor.userId, sessionId: input.sessionId, runId: jobId, artifactId },
-    );
-    const liveEntry = getRun(jobId);
-    if (liveEntry) liveEntry.steer = (text) => handle.steer(text);
-
-    // Two channels, mirroring chat.ts (§5.6.1): the ANSWER stream (`text`) and the working
-    // commentary (`thinking` — intermediate-turn narration + thinking blocks, where the engine
-    // happily self-identifies). Pre-fix, build funneled BOTH into text_chunk, so the user's
-    // transcript filled with mid-word fragments of internal narration rendered as regular
-    // messages (operator report 2026-07-11). Each channel gets its own marker filter; the
-    // thinking channel is additionally engine-identity-redacted (branding.ts).
-    const thinkingMarkers = new MarkerProcessor();
-    const thinkingRedactor = new StreamingIdentityRedactor();
-    const emitThinking = (piece: string): void => {
-      if (piece) sink.thinking(piece);
-    };
+    // Overload resilience (finding 2026-08-13, the "20-minute todo app"): a run that dies to
+    // provider overload BEFORE anything user-visible streamed gets ONE transparent in-job retry
+    // instead of a terminal "Tente novamente". The manual retry it replaces was worse than slow:
+    // because the failed first build had already created the artifact, the human's retry routed
+    // as a FOLLOW-UP and silently dropped the GENIUS first-build directive (2026-08-07) — the
+    // in-job retry keeps this run's own routing decision. Two triggers, one retry:
+    //   - a thrown overload (the SDK's error-result throw classifies ADAPTER_ERROR, a transport
+    //     5xx classifies PROVIDER_UNAVAILABLE — auth/rate-cap/unknown throws keep their existing
+    //     terminal path untouched);
+    //   - the first-event deadline: the SDK retries 529s internally and invisibly (measured
+    //     4m10s of silence), so an attempt with ZERO events inside buildFirstEventDeadlineMs is
+    //     aborted per-attempt (never the job) and treated as a dead overload window.
+    // Anything already streamed to the user forfeits the retry (never re-stream a transcript).
+    const abortableDelay = (ms: number, signal: AbortSignal): Promise<void> =>
+      new Promise((resolve) => {
+        if (signal.aborted) { resolve(); return; }
+        const onAbort = (): void => { clearTimeout(t); resolve(); };
+        const t = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
+        signal.addEventListener('abort', onAbort);
+      });
+    let result!: AgentRunResult;
     let streamedAny = false; // ANSWER chunks only: thinking must not mask a provider-error-as-result
-    for await (const ev of handle.events) {
+    for (let attempt = 0; ; attempt++) {
+      streamedAny = false;
+      liveMarkers = new MarkerProcessor();
+      // Per-ATTEMPT abort: linked to the job's controller (user Stop / job timers still land
+      // here), plus the first-event deadline that must kill only this attempt.
+      const attemptAbort = new AbortController();
+      const onJobAbort = (): void => attemptAbort.abort();
+      abort.signal.addEventListener('abort', onJobAbort);
+      if (abort.signal.aborted) attemptAbort.abort();
+      let firstEventSeen = false;
+      let deadlineFired = false;
+      const firstEventTimer = setTimeout(() => {
+        if (!firstEventSeen) { deadlineFired = true; attemptAbort.abort(); }
+      }, cfg.buildFirstEventDeadlineMs);
+      const sawEvent = (): void => {
+        firstEventSeen = true;
+      };
+
+      let thrown: unknown;
+      try {
+        const handle = runAgent(
+          {
+            prompt: buildPrompt,
+            // F16: pin the agent to the served entrypoint. Nothing else names it (settingSources is
+            // empty, §5.4.2), so without this the agent may write a standalone HTML file that is
+            // never served while the scaffold keeps being compiled. Flows through runAgent's
+            // anonymise path like every prompt (client.ts systemPrompt handling).
+            // Base conventions (operator-run B1) sit between the universal coding sections and
+            // the grounding block: universal judgment first, then the selected base's structural
+            // invariants, then dynamic knowledge, then the F16 entrypoint steer.
+            systemPrompt: [
+              ...contentSections,
+              ...basePromptSections,
+              groundingBlock,
+              BUILD_SYSTEM_PROMPT,
+              // The impeccable scripts' concrete location. Without this the agent guesses the
+              // upstream default (`.claude/skills/impeccable/...`), finds nothing in the sandbox,
+              // and SELF-ASSIGNS its direction - observed on the second live build (2026-08-08):
+              // "scripts do plugin indisponiveis no sandbox" in its DESIGN.md, i.e. the argmax rut
+              // the concept-seed roll exists to break. Absolute path, resolved server-side.
+              cfg.impeccablePluginDir
+                ? `The impeccable skill's scripts live at ${join(cfg.impeccablePluginDir, 'skills', 'impeccable', 'scripts')} (absolute path; the upstream docs' \`.claude/skills/impeccable/...\` path does not exist in this sandbox). Example: \`node ${join(cfg.impeccablePluginDir, 'skills', 'impeccable', 'scripts', 'concept-seed.mjs')} --scope direction --mode persuade\`. Run them from your project directory; never copy them into it.`
+                : '',
+            ].filter(Boolean).join('\n\n'),
+            decision,
+            allowedTools: policy.allowedTools,
+            maxTurns: policy.maxTurns,
+            // Builds mount the knowledge tools + the context-loading tool + the §5.4.8 local-bridge
+            // delegation tool as in-process MCP (§5.4.4; ch18 §18.2), plus the three ekoa-docx tools
+            // (2C-S5). The docx tools are ARTIFACT-BOUND: appId = artifactId, so the linked Word
+            // document they read/link/redline is the one on the artifact being built - never an id
+            // the model can name. Attribution ("<user> (Ekoa)" on every w:ins/w:del) and the path
+            // jail for `path` arguments (the run's projectDir) likewise bind HERE, from the run, not
+            // from tool arguments. Before the first build resolves an artifact, appId is undefined
+            // and the artifact-bound tools say so honestly.
+            sdkTools: [
+              ...knowledgeToolSpecs(input.actor),
+              loadContextToolSpec(input.actor, 'coding'),
+              delegateToolSpec(input.actor, input.sessionId),
+              ...docxToolSpecs({ appId: artifactId || undefined, userName: input.username, allowedDirs: projectDir ? [projectDir] : [] }),
+            ],
+            cwd: projectDir || undefined,
+            homeDir: projectDir || undefined, // build runs set HOME = projectDir (§5.4.1)
+            // Design-skill plugin: the vendored impeccable skill (api/content/plugins/impeccable,
+            // Apache-2.0 fork of pbakaus/impeccable v4.0.4), mounted as an Agent SDK local plugin so
+            // it loads by progressive disclosure on design-shaped work. It REPLACES the ekoa-design
+            // mount: two design skills with competing directives is the same class of contradiction
+            // the WS7 incident traced. Server-resolved config path; EKOA_IMPECCABLE_PLUGIN_DIR=""
+            // disables. Its concept-seed/serve-question scripts self-detect this headless harness and
+            // degrade exactly as their own docs specify (assigned direction, no browser page); the
+            // roll API is additionally forced offline via env at server boot (server.ts).
+            ...(cfg.impeccablePluginDir ? { plugins: [cfg.impeccablePluginDir] } : {}),
+            ...(resumeSessionId ? { resume: resumeSessionId } : {}),
+            steerable: true, // Conduzir: mid-run user messages join this run (POST /jobs/:id/steer)
+            signal: attemptAbort.signal,
+            callbacks: {
+              onToolEvent: (e) => { sawEvent(); resetInactivity(); sink.toolEvent(e); narrateProgress(e); },
+              onSessionId: (sid) => { sawEvent(); capturedSessionId = sid; },
+              onPlanNotification: () => { sawEvent(); resetInactivity(); },
+            },
+          },
+          { kind: 'user_work', agentType: 'build', billeeUserId: input.actor.userId, sessionId: input.sessionId, runId: jobId, artifactId },
+        );
+        const liveEntry = getRun(jobId);
+        if (liveEntry) liveEntry.steer = (text) => handle.steer(text);
+
+        // Two channels, mirroring chat.ts (§5.6.1): the ANSWER stream (`text`) and the working
+        // commentary (`thinking` — intermediate-turn narration + thinking blocks, where the engine
+        // happily self-identifies). Pre-fix, build funneled BOTH into text_chunk, so the user's
+        // transcript filled with mid-word fragments of internal narration rendered as regular
+        // messages (operator report 2026-07-11). Each channel gets its own marker filter; the
+        // thinking channel is additionally engine-identity-redacted (branding.ts).
+        const thinkingMarkers = new MarkerProcessor();
+        const thinkingRedactor = new StreamingIdentityRedactor();
+        const emitThinking = (piece: string): void => {
+          if (piece) sink.thinking(piece);
+        };
+        for await (const ev of handle.events) {
+          sawEvent();
+          resetInactivity();
+          if (ev.type === 'thinking') {
+            emitThinking(thinkingRedactor.push(thinkingMarkers.push(ev.text)));
+            continue;
+          }
+          if (ev.type === 'text_reset') {
+            // B7 retraction: deltas streamed so far this turn were narration, not the answer.
+            // Fresh marker state; streamedAny returns to false so the §5.3.7 error-as-result
+            // scan still applies when only retracted narration streamed. FORWARDED to the client
+            // (codex B7 finding): the wire event is the ONLY signal on which the client drops its
+            // buffered stream — never inferred from a tool_event.
+            streamedAny = false;
+            liveMarkers = new MarkerProcessor();
+            sink.textReset();
+            continue;
+          }
+          streamedAny = true;
+          const clean = liveMarkers.push(ev.text);
+          if (clean) sink.text(clean);
+        }
+        const thinkingTail = thinkingMarkers.end();
+        emitThinking(thinkingRedactor.push(thinkingTail.text) + thinkingRedactor.end());
+        const tail = liveMarkers.end();
+        if (tail.text) sink.text(tail.text);
+        result = await handle.result;
+      } catch (err) {
+        thrown = err;
+      } finally {
+        clearTimeout(firstEventTimer);
+        abort.signal.removeEventListener('abort', onJobAbort);
+      }
+
+      // A JOB-level abort (user Stop / the job timers) terminates exactly as before — the
+      // attempt machinery never swallows it.
+      if (abort.signal.aborted) { await settleAborted(); return; }
+
+      // §5.6.2 completion sequence, step 1: provider-error-as-result reroute (§5.3.7). Scanned
+      // only on the nothing-streamed fallback shape — same reasoning as chat.ts (F20 made
+      // result.text the full accumulation; legitimate build narration can mention error terms).
+      // Only the TRANSIENT class retries — an auth-classed error-as-result is operator work,
+      // not an overload window, and goes terminal immediately exactly as before.
+      const errorClass = !thrown && !result.aborted && !streamedAny ? scanProviderError(result.text) : null;
+      const errorAsResult = errorClass !== null;
+      const thrownCode = thrown !== undefined ? classifyRunFailure(thrown) : undefined;
+      const overloadThrow = thrownCode === 'ADAPTER_ERROR' || thrownCode === 'PROVIDER_UNAVAILABLE';
+      const attemptDied = thrown !== undefined || errorAsResult || (deadlineFired && result.aborted);
+
+      if (!attemptDied) {
+        if (result.aborted) { await settleAborted(); return; } // defensive: no known path here
+        break; // healthy result — continue the completion sequence
+      }
+      // Auth / rate-cap / unknown throws keep their existing terminal classification. A
+      // deadline-fired attempt is overload BY CONSTRUCTION, whatever its abort surfaced as
+      // (the per-attempt abort can reach here as a thrown LlmAbortedError, which would
+      // otherwise classify TIMEOUT and wrongly terminal the job).
+      if (thrown !== undefined && !overloadThrow && !deadlineFired) throw thrown;
+
+      const cause = deadlineFired
+        ? `no model activity within ${cfg.buildFirstEventDeadlineMs}ms (overload window)`
+        : thrown !== undefined
+          ? (thrown instanceof Error ? thrown.message : String(thrown))
+          : `provider error result (${errorClass})`;
+      const canRetry = attempt === 0 && !streamedAny && errorClass !== 'auth';
+      if (!canRetry) {
+        if (thrown !== undefined && !deadlineFired) throw thrown;
+        await finishError('ADAPTER_ERROR', undefined, attempt > 0 ? `${cause}; retry exhausted` : cause);
+        return;
+      }
+      console.warn(`[build][job ${jobId}] attempt ${attempt + 1} died to provider overload (${cause}); retrying once in ${cfg.buildOverloadRetryDelayMs}ms`);
+      sink.planStep('retrying', 'O serviço está momentaneamente sobrecarregado. A repetir automaticamente...');
+      await abortableDelay(cfg.buildOverloadRetryDelayMs, abort.signal);
+      if (abort.signal.aborted) { await settleAborted(); return; }
       resetInactivity();
-      if (ev.type === 'thinking') {
-        emitThinking(thinkingRedactor.push(thinkingMarkers.push(ev.text)));
-        continue;
-      }
-      if (ev.type === 'text_reset') {
-        // B7 retraction: deltas streamed so far this turn were narration, not the answer.
-        // Fresh marker state; streamedAny returns to false so the §5.3.7 error-as-result
-        // scan still applies when only retracted narration streamed. FORWARDED to the client
-        // (codex B7 finding): the wire event is the ONLY signal on which the client drops its
-        // buffered stream — never inferred from a tool_event.
-        streamedAny = false;
-        liveMarkers = new MarkerProcessor();
-        sink.textReset();
-        continue;
-      }
-      streamedAny = true;
-      const clean = liveMarkers.push(ev.text);
-      if (clean) sink.text(clean);
     }
-    const thinkingTail = thinkingMarkers.end();
-    emitThinking(thinkingRedactor.push(thinkingTail.text) + thinkingRedactor.end());
-    const tail = liveMarkers.end();
-    if (tail.text) sink.text(tail.text);
-    const result = await handle.result;
     clearTimers();
-
-    if (result.aborted) { await settleAborted(); return; }
-
-    // §5.6.2 completion sequence, step 1: provider-error-as-result reroute (§5.3.7). Scanned only
-    // on the nothing-streamed fallback shape — same reasoning as chat.ts (F20 made result.text the
-    // full accumulation; legitimate build narration can mention error terms).
-    if (!streamedAny && scanProviderError(result.text)) { await finishError('ADAPTER_ERROR'); return; }
 
     // Session resume (§5.4.5): persist sdkSessionId ONLY when it differs from what we resumed with.
     if (capturedSessionId && capturedSessionId !== resumeSessionId) {

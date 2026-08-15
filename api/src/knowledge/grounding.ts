@@ -61,10 +61,18 @@ function formatBlock(hits: SearchHit[]): string {
 }
 
 /** Build the grounding block. Returns '' (silent) when the run is a non-legal build, or when
- *  nothing in the org partition is relevant. */
+ *  nothing in the org partition is relevant.
+ *
+ *  The shared legal corpus (`_shared`, ~200k Jurisprudência docs) joins the search ONLY when the
+ *  deterministic legal-context detector matches the query — for BOTH kinds. Before this gate a
+ *  todo-list app's "Dê-me uma visão geral" pulled five Jurisprudência hits (generic words match
+ *  a 200k-doc corpus somewhere; the authority boost then outranks the org's own vault). The org's
+ *  OWN partition is always searched: an org's uploaded knowledge is relevant to its apps. */
 export function buildGroundingBlock(input: GroundingInput): GroundingResult {
   if (input.kind === 'build' && !isLegalContext(input.query)) return { block: '', hits: [] };
-  const hits = search(input.orgId, input.query, input.limit ?? 5);
+  const hits = search(input.orgId, input.query, input.limit ?? 5, {
+    includeShared: isLegalContext(input.query),
+  });
   if (hits.length === 0) return { block: '', hits: [] };
   return { block: formatBlock(hits), hits };
 }

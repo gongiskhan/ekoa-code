@@ -82,6 +82,27 @@ operator's keychain (permission-gated) — when no credential is in the
 environment, **ask the operator to run the line above** (`! <command>` runs it
 in-session).
 
+**Dead refresh token on this headless box** (symptom: chat turns fail, `/health`
+shows `claudeAuth.ok=false` with `oauth refresh rejected: HTTP 400`; the
+browser-authorize loopback flow cannot run here): the operator mints a
+long-lived token with `claude setup-token` on any machine — **using the
+dedicated ekoa account, never Claude Code's own login** — then runs
+`CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat... node scripts/dev-credential.mjs --store --provision`,
+which replaces the drop-file AND provisions the running stack in one shot.
+
+### Dev seed data — the brand survives restarts
+
+The dev Mongo is ephemeral, so org/user state dies on every restart. Committed
+fixtures under `scripts/seed/` are re-applied by `npm run dev` after boot
+(`scripts/dev-seed.mjs`; `--no-seed` skips). Today that is the admin org's
+**branding** — the ekoa.io brand research (logo, palette, fonts, tone, design
+system) — restored via `PUT /api/v1/branding` plus a copy of the logo file into
+`<dataDir>/brand-assets/`. Idempotent: an already-branded stack is left alone.
+
+- Stack booted via `driver.mjs` directly (no `npm run dev`): `node scripts/dev-seed.mjs`.
+- After a NEW brand research worth keeping: `node scripts/dev-seed.mjs --capture`
+  re-snapshots the running stack's brand into the fixture (commit the result).
+
 ### The seeded admin does NOT force a password change locally
 
 `scripts/dev-api.mjs` sets `EKOA_ADMIN_NO_FORCED_PASSWORD_CHANGE=1`, so the
@@ -146,11 +167,51 @@ The API also serves ~184 standalone apps at `/apps/<slug>/` with permissive CORS
 already — no proxy needed. With any stack up (or just the API), e.g.
 `http://localhost:4111/apps/legal-nucleo/`.
 
+## Tailnet — drive the stack from any device on the tailscale network
+
+```bash
+npm run dev -- --tailnet            # operator entrypoint
+EKOA_TAILNET=1 node .claude/skills/run-ekoa-code/driver.mjs up   # agent path
+```
+
+Both resolve this machine's tailscale MagicDNS name + IPv4 (`scripts/tailnet.mjs`)
+into `EKOA_PUBLIC_WEB_HOST` and print the tailnet URLs on the READY line — normally
+**`https://dev-madrid.<tailnet>.ts.net:3000`**. Login stays `admin`/`tmp12345`;
+the model credential flow is unchanged.
+
+**HTTPS is not optional on a ts.net host the operator's browser knows.** The
+dashboard sends a 2-year HSTS header and this box serves many https `tailscale
+serve` mounts on the same hostname; HSTS is host-wide and port-agnostic, so
+Chrome force-upgrades plain-http tailnet URLs and they die with
+`ERR_SSL_PROTOCOL_ERROR` (seen live 2026-08-13). Tailnet mode therefore also
+arms `tailscale serve` TLS termination **on the same port numbers** (3000 → web,
+4111 → api proxy) when the tailnet has HTTPS certs, so the forced upgrade simply
+works. Arming is idempotent, touches only these two ports, and refuses to rebind
+a port some other mount owns; without certs it falls back to http URLs and warns.
+
+**How it works** — the servers already bind all interfaces; what the flag wires is
+origin plumbing, all keyed off `EKOA_PUBLIC_WEB_HOST` (comma-separated hosts):
+1. Next `allowedDevOrigins` (Next refuses cross-origin dev requests otherwise);
+2. the dashboard's dev CSP gains `http(s)://<host>:4111` + `ws(s)://` in
+   connect/img/frame-src — needed because `web/lib/api/base-url.ts` adopts the
+   page's protocol+hostname at runtime when the baked API URL is localhost, so
+   the page at `https://<host>:3000` calls the cortex at `https://<host>:4111`
+   (same box, right API);
+3. the api's `/apps/*` frame-ancestors allowlist gains both schemes of
+   `<host>:3000` (driver sets `EKOA_DASHBOARD_ORIGINS`) so artifact previews render;
+4. `tailscale serve` TLS termination on 3000/4111 as above.
+
+`EKOA_PUBLIC_WEB_HOST` can also be set by hand (any non-localhost hostname works,
+not just tailscale). `EKOA_PUBLIC_API_URL` remains the verbatim-bake escape for a
+browser that must use one fixed API origin; tailnet mode does not need it.
+
 ## Env overrides
 
 `EKOA_API_PORT` (4211) · `EKOA_WEB_PORT` (3000) · `EKOA_ADMIN_USERNAME` (admin) ·
 `EKOA_ADMIN_PASSWORD` (tmp12345) · `EKOA_SHOT_DIR` (.ekoa-run) ·
-`EKOA_API_MODE` (`built` | `dev`).
+`EKOA_API_MODE` (`built` | `dev`) · `EKOA_TAILNET` (expose on tailscale addresses) ·
+`EKOA_PUBLIC_WEB_HOST` (comma-separated extra hosts) · `EKOA_PUBLIC_API_URL`
+(verbatim API origin for the bundle).
 
 ## Gotchas
 

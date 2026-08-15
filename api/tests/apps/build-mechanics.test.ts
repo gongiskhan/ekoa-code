@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
-import { artifacts, slugs, users } from '../../src/data/stores.js';
+import { artifacts, slugs, users, orgs } from '../../src/data/stores.js';
 import { appBuilder } from '../../src/apps/builder.js';
 import { appRegistry } from '../../src/apps/app-registry.js';
 import { createBuildMechanics } from '../../src/apps/build-mechanics.js';
@@ -150,6 +150,44 @@ describe('createBuildMechanics — first build (ch05 §5.6.2, ch07 §7.3/§7.4)'
     mocked.mockRejectedValueOnce(new Error('browser pool down'));
     expect(() => mech.screenshot('art-shot-2')).not.toThrow();
     await new Promise((r) => setTimeout(r, 10));
+  });
+});
+
+/**
+ * The org's brand reaches the BUILD, not just the served stylesheet (ch05 §5.6.2). Design tokens
+ * recolour what the agent painted; they cannot make it place the brand mark or build dark. The
+ * section rides the same basePromptSections channel the bases use, so the agent picks it up with
+ * no change to the run itself.
+ */
+describe('createBuildMechanics - first build carries the org brand into the prompt', () => {
+  const BRANDED_USER = 'user-branded';
+
+  it('appends the brand section, after the base conventions, for an org with branding', async () => {
+    await orgs.insert({
+      _id: 'org-branded',
+      name: 'Acme',
+      branding: { primaryColor: '#7C3AED', logo: '/brand-assets/acme.png', fonts: ['Inter'] },
+      createdAt: new Date().toISOString(),
+    } as never);
+    await users.insert({ _id: BRANDED_USER, username: 'branded', passwordHash: 'x', role: 'user', orgId: 'org-branded', active: true } as never);
+
+    const prep = await mech.prepareFirstBuild({ userId: BRANDED_USER, sessionId: 'sess-brand', description: 'Um gestor de tarefas', language: 'pt' });
+    await appBuilder.unwatch(prep.artifactId); // release the preview watcher this test does not use
+    const sections = prep.basePromptSections ?? [];
+    expect(sections.length).toBeGreaterThan(0);
+    const brand = sections[sections.length - 1]!; // last: the brand sits on top of the base
+    expect(brand).toContain('MARCA DA ORGANIZAÇÃO');
+    expect(brand).toContain('#7C3AED');
+    expect(brand).toContain('var(--logo-url)');
+  });
+
+  it('appends nothing for an org with no brand research', async () => {
+    // USER's org (org-1) has no org record at all - the store read yields nothing to state.
+    const prep = await mech.prepareFirstBuild({ userId: USER, sessionId: 'sess-nobrand', description: 'Uma lista simples', language: 'pt' });
+    await appBuilder.unwatch(prep.artifactId);
+    for (const section of prep.basePromptSections ?? []) {
+      expect(section).not.toContain('MARCA DA ORGANIZAÇÃO');
+    }
   });
 });
 

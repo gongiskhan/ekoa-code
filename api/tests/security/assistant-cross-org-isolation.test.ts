@@ -54,7 +54,11 @@ function realGroundingDeps(captured: Captured): AppAssistantDeps {
   return {
     oneShot: async (opts) => {
       captured.systemPrompt = opts.systemPrompt ?? '';
-      return { text: 'ok', usage: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 } };
+      // Citations are USED-ONLY (2026-08-13): only excerpts the reply references as [n] surface
+      // as citations. The canned reply references every possible excerpt so `citations` mirrors
+      // exactly what RETRIEVAL returned - this gate proves which partition retrieval can reach,
+      // not the model's citing habits.
+      return { text: 'ok [1] [2] [3] [4] [5]', usage: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0 } };
     },
     ground: buildGroundingBlock, // the REAL org-partitioned grounding seam
     decide: () => DECISION,
