@@ -641,6 +641,7 @@ export interface components {
             createdAt?: components["schemas"]["IsoTimestamp"];
             id: components["schemas"]["Id"];
             language?: string;
+            scope?: components["schemas"]["KnowledgeScope"];
             size?: number;
             sourceType?: string;
             sourceUrl?: string;
@@ -667,6 +668,8 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** @enum {string} */
+        KnowledgeScope: "org" | "shared";
         KnowledgeSearchHit: {
             collection: string;
             docId: string;
@@ -2679,7 +2682,9 @@ export interface operations {
     };
     "knowledge.listCollections": {
         parameters: {
-            query?: never;
+            query?: {
+                scope?: components["schemas"]["KnowledgeScope"];
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -2693,6 +2698,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CollectionsResponse"];
+                };
+            };
+            /** @description Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message). */
@@ -2757,6 +2771,7 @@ export interface operations {
                 collection?: string;
                 limit?: number;
                 offset?: number;
+                scope?: components["schemas"]["KnowledgeScope"];
             };
             header?: never;
             path?: never;
