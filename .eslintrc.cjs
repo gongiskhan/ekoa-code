@@ -131,6 +131,7 @@ module.exports = {
                   './api/src/legal',
                   './api/src/security',
                   './api/src/cofre',
+                  './api/src/schedules',
                 ],
                 from: ['./api/src/routes', './api/src/server.ts'],
                 message: 'Nothing may import api/src/routes/ or server.ts (ch02 §2.7 — they are leaves-in-reverse).',
@@ -150,6 +151,14 @@ module.exports = {
                 target: './api/src/agents',
                 from: './api/src/automation',
                 message: 'agents/ must not import automation/ — the tier-5 authoring edge runs ONE way (automation/ -> agents/integration-agent.ts).',
+              },
+              // The schedules timer rail (tier 4, beside events/) executes automation and
+              // integration targets ONLY through seams injected at the composition root —
+              // importing tier 5 directly would let the rail bypass the one wiring point.
+              {
+                target: './api/src/schedules',
+                from: ['./api/src/automation', './api/src/agents', './api/src/apps'],
+                message: 'schedules/ (tier 4) reaches automation/agents/apps only through seams wired in server.ts.',
               },
             ],
           },

@@ -164,7 +164,7 @@ export interface RunContext {
   /** The owner's org — threaded so the memory-backed cache and scoped-memory injection are
    *  tenant-scoped (ch09 invariant 5). Built by the caller alongside ownerUserId. */
   orgId: string;
-  triggeredBy: 'user' | 'agent' | 'webhook' | 'listener';
+  triggeredBy: 'user' | 'agent' | 'webhook' | 'listener' | 'schedule';
   /**
    * The event payload that fired a webhook/listener run. Steps see it as
    * {{event.*}} via the template-vars resolver. Absent on user/agent runs.

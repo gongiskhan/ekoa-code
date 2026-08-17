@@ -407,14 +407,18 @@ describe('entry path: every rail still routes through the gated executor', () =>
   const serverSrc = readFileSync(join(__dirname, '..', '..', 'src', 'server.ts'), 'utf-8');
   const capabilitySrc = readFileSync(join(__dirname, '..', '..', 'src', 'integrations', 'integration-capability.ts'), 'utf-8');
 
-  it('the executor has exactly THREE named call sites, each an inventoried rail', () => {
-    // Two in the composition root: setIntegrationActionExecutor (the agent tool + the automation
-    // `integration` step) and callUserIntegration (the listener supervisor). One in the D1
-    // capability core, which is the HTTP rail. A FOURTH appearing without a test is exactly the
-    // drift this asserts against — and a rail that grew its own gate is caught by the next case.
-    expect(serverSrc.split('executeUserIntegrationAction(').length - 1, 'server.ts executor call sites').toBe(2);
+  it('the executor has exactly FOUR named call sites, each an inventoried rail', () => {
+    // Three in the composition root: setIntegrationActionExecutor (the agent tool + the
+    // automation `integration` step), callUserIntegration (the listener supervisor), and
+    // runIntegrationAction (the SCHEDULES supervisor, 2026-08-17 — a timer fire runs as the
+    // schedule's stored owner and treats `awaiting_consent` as a BLOCKED run; pinned by
+    // tests/schedules/supervisor.test.ts). One in the D1 capability core, the HTTP rail.
+    // A FIFTH appearing without joining this inventory is exactly the drift this asserts
+    // against — and a rail that grew its own gate is caught by the next case.
+    expect(serverSrc.split('executeUserIntegrationAction(').length - 1, 'server.ts executor call sites').toBe(3);
     expect(serverSrc).toContain('setIntegrationActionExecutor(');
     expect(serverSrc).toContain('callUserIntegration:');
+    expect(serverSrc).toContain('runIntegrationAction: (s, t) =>');
     expect(capabilitySrc.split('executeUserIntegrationAction(').length - 1, 'integration-capability.ts executor call sites').toBe(1);
   });
 

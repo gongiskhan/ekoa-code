@@ -1348,6 +1348,7 @@ export interface Translations {
     artifacts: string;
     integrations: string;
     automations: string;
+    schedules: string;
     users: string;
     memory: string;
     knowledge: string;
@@ -1876,6 +1877,150 @@ export interface Translations {
       hide: string;
       show: string;
       copy: string;
+    };
+  };
+
+  // ============================================
+  // SCHEDULES
+  // ============================================
+
+  schedules: {
+    title: string;
+    loading: string;
+    total: (n: number) => string;
+    newSchedule: string;
+    noDescription: string;
+    /** Relative next-fire line, e.g. "Próxima execução dentro de 2 h". */
+    nextIn: (rel: string) => string;
+    noNextRun: string;
+    runNowAria: string;
+    deleteAria: string;
+    deleteConfirm: (name: string) => string;
+    enabledAria: string;
+    autoPausedHint: string;
+    groups: {
+      today: string;
+      tomorrow: string;
+      thisWeek: string;
+      later: string;
+      paused: string;
+      finished: string;
+    };
+    targetKinds: {
+      manual: string;
+      automation: string;
+      integration_action: string;
+    };
+    runStatus: {
+      running: string;
+      ok: string;
+      failed: string;
+      blocked: string;
+      pending: string;
+      done: string;
+      dismissed: string;
+    };
+    emptyState: {
+      title: string;
+      description: string;
+      create: string;
+    };
+    inbox: {
+      title: string;
+      description: string;
+      overdue: string;
+      complete: string;
+      dismiss: string;
+      plannedFor: (when: string) => string;
+      unknownSchedule: string;
+    };
+    form: {
+      createTitle: string;
+      editTitle: string;
+      nameLabel: string;
+      namePlaceholder: string;
+      descriptionLabel: string;
+      descriptionPlaceholder: string;
+      sectionWhat: string;
+      sectionWhen: string;
+      sectionPreview: string;
+      targetManual: string;
+      targetManualHint: string;
+      targetAutomation: string;
+      targetAutomationHint: string;
+      targetIntegration: string;
+      targetIntegrationHint: string;
+      instructionsLabel: string;
+      instructionsPlaceholder: string;
+      automationLabel: string;
+      automationPlaceholder: string;
+      noAutomations: string;
+      integrationLabel: string;
+      integrationPlaceholder: string;
+      noIntegrations: string;
+      actionLabel: string;
+      actionPlaceholder: string;
+      argsTitle: string;
+      argsJsonLabel: string;
+      argsJsonHint: string;
+      argsJsonInvalid: string;
+      writeBadge: string;
+      writeNeedsApproval: string;
+      tabOnce: string;
+      tabRecurring: string;
+      onceLabel: string;
+      everyLabel: string;
+      intervalLabel: string;
+      units: {
+        minute: string;
+        hour: string;
+        day: string;
+        week: string;
+        month: string;
+      };
+      timeLabel: string;
+      weekdaysLabel: string;
+      monthDayLabel: string;
+      timezoneLabel: string;
+      timezoneSearchPlaceholder: string;
+      previewTitle: string;
+      previewLoading: string;
+      previewEmpty: string;
+      cancel: string;
+      submitCreate: string;
+      submitSave: string;
+      errors: {
+        nameRequired: string;
+        instructionsRequired: string;
+        automationRequired: string;
+        integrationRequired: string;
+        actionRequired: string;
+        onceRequired: string;
+        weekdaysRequired: string;
+        specIncomplete: string;
+      };
+    };
+    detail: {
+      loading: string;
+      notFoundTitle: string;
+      notFoundDescription: string;
+      notFoundBack: string;
+      edit: string;
+      enabledLabel: string;
+      timezone: (tz: string) => string;
+      targetTitle: string;
+      instructionsTitle: string;
+      inputsTitle: string;
+      argsTitle: string;
+      openAutomation: string;
+      historyTitle: string;
+      historyEmpty: string;
+      historyLoading: string;
+      plannedFor: string;
+      firedAt: string;
+      duration: (seconds: number) => string;
+      noteLabel: string;
+      runIdLabel: string;
     };
   };
 }

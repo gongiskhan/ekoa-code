@@ -6,7 +6,7 @@ obeys, and the CI gates that keep declared and mounted surfaces in sync.
 ## `shared/` is the single contract
 
 `shared/src/` holds zod schemas + inferred types + one **endpoint descriptor map** per domain
-(`authEndpoints`, `artifactsEndpoints`, ...). `ALL_ENDPOINTS` (25 domains) aggregates them and
+(`authEndpoints`, `artifactsEndpoints`, ...). `ALL_ENDPOINTS` (33 domains at 2026-08-17) aggregates them and
 `allEndpointsFlat()` yields `{ domain, name, method, path, ... }` for every endpoint. Both consumers
 use this contract: the api contract tests validate real responses against the schemas, and the web
 client is generated from the descriptor maps. A new endpoint means a new descriptor + a new contract

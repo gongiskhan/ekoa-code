@@ -61,6 +61,16 @@ export const OPERATIONS = {
   'memvault.readNote': { method: 'GET', path: '/api/v1/memvault/note', domain: 'memvault', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },
   'memvault.searchNotes': { method: 'POST', path: '/api/v1/memvault/search', domain: 'memvault', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },
   'memvault.writeNote': { method: 'POST', path: '/api/v1/memvault/notes', domain: 'memvault', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },
+  'schedules.completeRun': { method: 'POST', path: '/api/v1/schedules/runs/{runId}/complete', domain: 'schedules', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },
+  'schedules.create': { method: 'POST', path: '/api/v1/schedules', domain: 'schedules', successStatuses: [201], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },
+  'schedules.get': { method: 'GET', path: '/api/v1/schedules/{id}', domain: 'schedules', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },
+  'schedules.list': { method: 'GET', path: '/api/v1/schedules', domain: 'schedules', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },
+  'schedules.listAllRuns': { method: 'GET', path: '/api/v1/schedules/runs', domain: 'schedules', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },
+  'schedules.listRuns': { method: 'GET', path: '/api/v1/schedules/{id}/runs', domain: 'schedules', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },
+  'schedules.patch': { method: 'PATCH', path: '/api/v1/schedules/{id}', domain: 'schedules', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },
+  'schedules.preview': { method: 'POST', path: '/api/v1/schedules/preview', domain: 'schedules', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },
+  'schedules.remove': { method: 'DELETE', path: '/api/v1/schedules/{id}', domain: 'schedules', successStatuses: [200], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },
+  'schedules.runNow': { method: 'POST', path: '/api/v1/schedules/{id}/run-now', domain: 'schedules', successStatuses: [202], kind: 'json', mediaType: 'application/json', timeoutMs: 30000 },
 } as const satisfies Record<string, OperationSpec>;
 
 /** Every operationId in the contract: `<domain>.<endpoint>`. */

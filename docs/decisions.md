@@ -656,3 +656,56 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   domain); the Lax flavor is same-site in both layouts too. Pins: served-app contract strings
   (api/tests/contract/served-app.test.ts), the discriminating e2e
   (web/e2e/app-sso-frame.spec.ts, ledgered band4), diagram 03-request-crud AS-BUILT note.
+
+- 2026-08-17 - SCHEDULES: ONE ENTITY, THREE TARGET KINDS, A CLAIM-FIRST TIMER RAIL AT TIER 4.
+  The platform gains user-facing scheduling (operator request: date + recurring, manual tasks,
+  agent tasks, API tasks, agent-driven creation) as ONE `Schedule` entity - deliberately NOT a
+  second automation/workflow concept - with a target union: `manual` (firing creates a `pending`
+  run, a human task the owner completes/dismisses), `automation` (fires through the SAME
+  `startRunForTrigger` rail the delivery pipeline uses, `triggeredBy:'schedule'` - both closed
+  unions widened additively, Rule 7), and `integration_action` (fires through the ONE
+  `executeUserIntegrationAction` rail with the ONE `runAutomationBackedAction` binding;
+  `awaiting_consent` is recorded as a `blocked` run - the rail never approves, never retries into
+  consent, and the owner approves through the existing integrations surface). Runs execute AS the
+  stored owner (`ownerUserId`/`orgId` server-stamped at creation); an automation target must be
+  OWNED by the creating actor (an org-shared automation is refused: a schedule must never aim a
+  peer's authority), and fire-time re-verification stays with the rails themselves. Placement:
+  `api/src/schedules/` at TIER 4 beside `events/` - it reaches automation/integrations only
+  through seams wired in server.ts (lint zone added; plus `schedules/` in the routes/server
+  never-import zone). RECURRENCE is self-rolled on Intl (the twice-recorded no-node-cron stance,
+  now extended to IANA wall-clock math): minute/hour are ANCHOR-ALIGNED strides (creation is the
+  anchor - no drift-from-last-fire); day/week/month are tz-local wall-clock with pinned DST
+  semantics (a skipped local time shifts forward by the gap, 01:30->02:30; a repeated one fires
+  on its FIRST occurrence) - `api/tests/schedules/recurrence.test.ts` pins the Europe/Lisbon
+  2026-03-29/2026-10-25 edges. The server is the ONLY occurrence-math truth: the create-form
+  preview is `POST /api/v1/schedules/preview`, so UI promise and supervisor behavior cannot
+  drift. RUNTIME: no per-schedule timer map - one 30s unref'd tick reads `nextRunAt <= now`;
+  each occurrence is CLAIMED by inserting a run row whose _id is DETERMINISTIC over
+  (scheduleId, plannedFor) (the §4.3.2 insert-as-claim pattern: at-most-once across crashes);
+  the pointer ADVANCES BEFORE execution (a crash mid-fire leaves a claimed `running` row, never
+  a double fire); fires run un-awaited by the tick (an automation fire awaits its FULL run),
+  capped at 3 in flight, drained by stop(). NO BACKFILL (the 2A-S4 precedent): an occurrence
+  missed beyond a 5-minute grace advances with a log line, no run row - a boot after a weekend
+  must not manufacture history. FAILURE CEILING: 20 consecutive non-ok automatic fires (blocked
+  counts - an unapproved write firing every minute forever is noise, and the pause is surfaced
+  as `autoPausedAt`) disable the schedule; a human re-enable clears the counter. AUTH: the whole
+  family is `user-or-key` (Capability rule 4 - "agent-driven" scheduling IS a key holder
+  managing schedules; the key is never wider than its user, and run-now/patch/delete/complete
+  are OWNER-only while org-admin visibility stays read-only - pinned by
+  api/tests/security/schedules-isolation.test.ts, the Rule 5 memvault-class suite, with
+  byte-identical uniform 404s). Env kill: EKOA_SCHEDULES_DISABLED=1. Rejected: (a) a third
+  Trigger kind riding the event queue - the queue's delivery targets are automations only, a
+  manual task has nothing to execute, and "never a second queue" governs EVENT sourcing, not a
+  time signal that fans into three target kinds; (b) node-cron/luxon (the recorded stance;
+  Intl covers the zone math and the suite pins it); (c) cron-expression syntax in v1 (additive
+  later; the structured rule is what the recurrence UI builds and previews). Accepted residuals:
+  the supervisor is single-process (the deployment's shape; the deterministic claim already
+  makes a second process safe for duplicates, not for load-sharing); minute-level cadence floor
+  is the 30s tick; integration-action fires leave a schedule_runs row but no integration-side
+  ledger (none exists - recorded here, not promised in UI). FIXED-12:
+  docs/diagrams/02-module-map.excalidraw and 05-data-model.excalidraw gain the AS-BUILT
+  annotations in this same unit of work; docs/architecture.md gains the module row + tier-table
+  entry. Suites: api/tests/schedules/{recurrence,supervisor}.test.ts,
+  api/tests/contract/schedules.test.ts (both admissions + revoked 401 + billing 402),
+  api/tests/security/schedules-isolation.test.ts; ten COVERED keys, EXPECTED_PENDING_COUNT
+  unchanged at 49; OpenAPI + cortex-cli client regenerated in the same change.

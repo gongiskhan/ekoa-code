@@ -257,6 +257,11 @@ export const approvedCommands = new Store<Doc>('approved_commands');
  */
 export const approvedIntegrationActions = new Store<Doc>('approved_integration_actions');
 export const triggers = new Store<Doc>('triggers');
+/** Schedules (one-time + recurring runs of a target with fixed params) and their fire history.
+ *  A timer-fired run's `_id` is DETERMINISTIC over (scheduleId, plannedFor) — the §4.3.2
+ *  insert-as-claim pattern makes each occurrence at-most-once across crashes and restarts. */
+export const schedules = new Store<Doc>('schedules');
+export const scheduleRuns = new Store<Doc>('schedule_runs');
 export const appSessions = new Store<Doc>('app_sessions');
 export const appSsoPending = new Store<Doc>('app_sso_pending');
 export const adobeAgreements = new Store<Doc>('adobe_agreements');

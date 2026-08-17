@@ -28,6 +28,9 @@
     },
     {
       "name": "memvault"
+    },
+    {
+      "name": "schedules"
     }
   ],
   "security": [
@@ -3386,6 +3389,1084 @@
           }
         }
       }
+    },
+    "/api/v1/schedules": {
+      "get": {
+        "operationId": "schedules.list",
+        "summary": "GET /api/v1/schedules",
+        "tags": [
+          "schedules"
+        ],
+        "x-ekoa-domain": "schedules",
+        "x-ekoa-endpoint": "list",
+        "x-ekoa-auth": "user-or-key",
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited by the per-key capability window (`RATE_LIMITED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error (`INTERNAL`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "schedules.create",
+        "summary": "POST /api/v1/schedules",
+        "tags": [
+          "schedules"
+        ],
+        "x-ekoa-domain": "schedules",
+        "x-ekoa-endpoint": "create",
+        "x-ekoa-auth": "user-or-key",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited by the per-key capability window (`RATE_LIMITED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error (`INTERNAL`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/schedules/{id}": {
+      "get": {
+        "operationId": "schedules.get",
+        "summary": "GET /api/v1/schedules/{id}",
+        "tags": [
+          "schedules"
+        ],
+        "x-ekoa-domain": "schedules",
+        "x-ekoa-endpoint": "get",
+        "x-ekoa-auth": "user-or-key",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited by the per-key capability window (`RATE_LIMITED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error (`INTERNAL`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "schedules.patch",
+        "summary": "PATCH /api/v1/schedules/{id}",
+        "tags": [
+          "schedules"
+        ],
+        "x-ekoa-domain": "schedules",
+        "x-ekoa-endpoint": "patch",
+        "x-ekoa-auth": "user-or-key",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SchedulePatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Schedule"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited by the per-key capability window (`RATE_LIMITED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error (`INTERNAL`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "schedules.remove",
+        "summary": "DELETE /api/v1/schedules/{id}",
+        "tags": [
+          "schedules"
+        ],
+        "x-ekoa-domain": "schedules",
+        "x-ekoa-endpoint": "remove",
+        "x-ekoa-auth": "user-or-key",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited by the per-key capability window (`RATE_LIMITED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error (`INTERNAL`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/schedules/{id}/run-now": {
+      "post": {
+        "operationId": "schedules.runNow",
+        "summary": "POST /api/v1/schedules/{id}/run-now",
+        "tags": [
+          "schedules"
+        ],
+        "x-ekoa-domain": "schedules",
+        "x-ekoa-endpoint": "runNow",
+        "x-ekoa-auth": "user-or-key",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted - processing started.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleRunResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited by the per-key capability window (`RATE_LIMITED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error (`INTERNAL`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/schedules/{id}/runs": {
+      "get": {
+        "operationId": "schedules.listRuns",
+        "summary": "GET /api/v1/schedules/{id}/runs",
+        "tags": [
+          "schedules"
+        ],
+        "x-ekoa-domain": "schedules",
+        "x-ekoa-endpoint": "listRuns",
+        "x-ekoa-auth": "user-or-key",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ScheduleRunStatus"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleRunListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited by the per-key capability window (`RATE_LIMITED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error (`INTERNAL`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/schedules/preview": {
+      "post": {
+        "operationId": "schedules.preview",
+        "summary": "POST /api/v1/schedules/preview",
+        "tags": [
+          "schedules"
+        ],
+        "x-ekoa-domain": "schedules",
+        "x-ekoa-endpoint": "preview",
+        "x-ekoa-auth": "user-or-key",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SchedulePreviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SchedulePreviewResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited by the per-key capability window (`RATE_LIMITED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error (`INTERNAL`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/schedules/runs": {
+      "get": {
+        "operationId": "schedules.listAllRuns",
+        "summary": "GET /api/v1/schedules/runs",
+        "tags": [
+          "schedules"
+        ],
+        "x-ekoa-domain": "schedules",
+        "x-ekoa-endpoint": "listAllRuns",
+        "x-ekoa-auth": "user-or-key",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ScheduleRunStatus"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleRunListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited by the per-key capability window (`RATE_LIMITED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error (`INTERNAL`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/schedules/runs/{runId}/complete": {
+      "post": {
+        "operationId": "schedules.completeRun",
+        "summary": "POST /api/v1/schedules/runs/{runId}/complete",
+        "tags": [
+          "schedules"
+        ],
+        "x-ekoa-domain": "schedules",
+        "x-ekoa-endpoint": "completeRun",
+        "x-ekoa-auth": "user-or-key",
+        "parameters": [
+          {
+            "name": "runId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleRunCompleteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleRunResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request body, query string or path segment failed contract validation (`VALIDATION_FAILED`); `details` carries the zod issues.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthenticated - missing, unknown, revoked or inactive credential (one uniform message).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Billing-locked account (`BILLING_LOCKED`) or a blocked allowance (`BILLING_BLOCKED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Deactivated account (`ACCOUNT_DISABLED`), or a role that may not perform this call (`FORBIDDEN`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. Also returned for a resource owned by another tenant - the mismatch is deliberately indistinguishable from absence.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeded the platform JSON body limit of 1 MiB (`PAYLOAD_TOO_LARGE`). Note this is a BYTE limit, while schema `maxLength` counts CHARACTERS: a body inside its declared `maxLength` can still exceed it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited by the per-key capability window (`RATE_LIMITED`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error (`INTERNAL`).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4522,6 +5603,72 @@
         },
         "additionalProperties": true
       },
+      "RecurrenceRule": {
+        "type": "object",
+        "properties": {
+          "every": {
+            "type": "string",
+            "enum": [
+              "minute",
+              "hour",
+              "day",
+              "week",
+              "month"
+            ]
+          },
+          "interval": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 999
+          },
+          "at": {
+            "type": "object",
+            "properties": {
+              "hour": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 23
+              },
+              "minute": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 59
+              }
+            },
+            "required": [
+              "hour",
+              "minute"
+            ],
+            "additionalProperties": false
+          },
+          "weekdays": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 6
+            },
+            "minItems": 1,
+            "maxItems": 7
+          },
+          "monthDay": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 31
+          },
+          "timezone": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "every",
+          "interval",
+          "timezone"
+        ],
+        "additionalProperties": false
+      },
       "RevokeApprovedCommandRequest": {
         "type": "object",
         "properties": {
@@ -4775,6 +5922,427 @@
           }
         },
         "additionalProperties": true
+      },
+      "Schedule": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ScheduleTarget"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ScheduleSpec"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "nextRunAt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IsoTimestamp"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastRun": {
+            "$ref": "#/components/schemas/ScheduleLastRun"
+          },
+          "consecutiveFailures": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "autoPausedAt": {
+            "$ref": "#/components/schemas/IsoTimestamp"
+          },
+          "ownerId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "orgId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/IsoTimestamp"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/IsoTimestamp"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "target",
+          "spec",
+          "enabled",
+          "nextRunAt"
+        ],
+        "additionalProperties": true
+      },
+      "ScheduleCreateRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "target": {
+            "$ref": "#/components/schemas/ScheduleTarget"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ScheduleSpec"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "target",
+          "spec"
+        ],
+        "additionalProperties": false
+      },
+      "ScheduleLastRun": {
+        "type": "object",
+        "properties": {
+          "runId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ScheduleRunStatus"
+          },
+          "at": {
+            "$ref": "#/components/schemas/IsoTimestamp"
+          },
+          "code": {
+            "type": "string",
+            "maxLength": 64
+          }
+        },
+        "required": [
+          "runId",
+          "status",
+          "at"
+        ],
+        "additionalProperties": true
+      },
+      "ScheduleListResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Schedule"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "additionalProperties": false
+      },
+      "SchedulePatch": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "target": {
+            "$ref": "#/components/schemas/ScheduleTarget"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ScheduleSpec"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SchedulePreviewRequest": {
+        "type": "object",
+        "properties": {
+          "spec": {
+            "$ref": "#/components/schemas/ScheduleSpec"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "additionalProperties": false
+      },
+      "SchedulePreviewResponse": {
+        "type": "object",
+        "properties": {
+          "occurrences": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IsoTimestamp"
+            }
+          }
+        },
+        "required": [
+          "occurrences"
+        ],
+        "additionalProperties": false
+      },
+      "ScheduleRun": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "scheduleId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ScheduleRunStatus"
+          },
+          "plannedFor": {
+            "$ref": "#/components/schemas/IsoTimestamp"
+          },
+          "firedAt": {
+            "$ref": "#/components/schemas/IsoTimestamp"
+          },
+          "finishedAt": {
+            "$ref": "#/components/schemas/IsoTimestamp"
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "manual"
+            ]
+          },
+          "detail": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "maxLength": 64
+              },
+              "message": {
+                "type": "string",
+                "maxLength": 2000
+              }
+            },
+            "additionalProperties": false
+          },
+          "automationRunId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "ownerId": {
+            "$ref": "#/components/schemas/Id"
+          },
+          "orgId": {
+            "$ref": "#/components/schemas/Id"
+          }
+        },
+        "required": [
+          "id",
+          "scheduleId",
+          "status",
+          "plannedFor",
+          "trigger"
+        ],
+        "additionalProperties": true
+      },
+      "ScheduleRunCompleteRequest": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "done",
+              "dismissed"
+            ]
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "additionalProperties": false
+      },
+      "ScheduleRunListResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScheduleRun"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "additionalProperties": false
+      },
+      "ScheduleRunResponse": {
+        "type": "object",
+        "properties": {
+          "run": {
+            "$ref": "#/components/schemas/ScheduleRun"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "additionalProperties": false
+      },
+      "ScheduleRunStatus": {
+        "type": "string",
+        "enum": [
+          "running",
+          "ok",
+          "failed",
+          "blocked",
+          "pending",
+          "done",
+          "dismissed"
+        ]
+      },
+      "ScheduleSpec": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "once"
+              },
+              "at": {
+                "$ref": "#/components/schemas/IsoTimestamp"
+              }
+            },
+            "required": [
+              "kind",
+              "at"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "recurring"
+              },
+              "rule": {
+                "$ref": "#/components/schemas/RecurrenceRule"
+              }
+            },
+            "required": [
+              "kind",
+              "rule"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ScheduleTarget": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "manual"
+              },
+              "instructions": {
+                "type": "string",
+                "maxLength": 4000
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "automation"
+              },
+              "automationId": {
+                "$ref": "#/components/schemas/Id"
+              },
+              "inputs": {
+                "type": "object",
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "kind",
+              "automationId"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "integration_action"
+              },
+              "integrationKey": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "actionName": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "args": {
+                "type": "object",
+                "additionalProperties": {}
+              }
+            },
+            "required": [
+              "kind",
+              "integrationKey",
+              "actionName"
+            ],
+            "additionalProperties": false
+          }
+        ]
       },
       "StepFeedbackRequest": {
         "type": "object",

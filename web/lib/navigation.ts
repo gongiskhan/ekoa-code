@@ -1,6 +1,7 @@
 import {
   MessageSquare,
   Play,
+  CalendarClock,
   Box,
   Plug2,
   Brain,
@@ -46,6 +47,7 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { href: "/chat", icon: MessageSquare, labelKey: "chat" },
   { href: "/automations", icon: Play, labelKey: "automations" },
+  { href: "/schedules", icon: CalendarClock, labelKey: "schedules" },
   { href: "/artifacts", icon: Box, labelKey: "artifacts" },
   { href: "/integrations", icon: Plug2, labelKey: "integrations" },
   { href: "/memory", icon: Brain, labelKey: "memory" },

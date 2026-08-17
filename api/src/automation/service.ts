@@ -977,7 +977,7 @@ export interface TriggerRunInput {
   /** Server-trusted owner (from the trigger record, NEVER the inbound payload — §5.6.7). */
   ownerUserId: string;
   orgId: string;
-  triggeredBy: 'webhook' | 'listener';
+  triggeredBy: 'webhook' | 'listener' | 'schedule';
   /** The trigger event payload; steps read it as {{event.*}}. */
   event?: RunContext['triggerEvent'];
   inputs?: Record<string, unknown>;

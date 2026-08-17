@@ -86,5 +86,6 @@ export function useTranslation() {
     friendlyMessages: t('friendlyMessages'),
     versions: t('versions'),
     automations: t('automations'),
+    schedules: t('schedules'),
   };
 }

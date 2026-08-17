@@ -20,6 +20,7 @@ import { platformIntegrationsEndpoints } from './platform-integrations.js';
 import { pipedreamEndpoints } from './pipedream.js';
 import { triggersEndpoints } from './triggers.js';
 import { automationsEndpoints } from './automations.js';
+import { schedulesEndpoints } from './schedules.js';
 import { memoriesEndpoints } from './memories.js';
 import { knowledgeEndpoints } from './knowledge.js';
 import { billingEndpoints } from './billing.js';
@@ -64,6 +65,7 @@ export * from './platform-integrations.js';
 export * from './pipedream.js';
 export * from './triggers.js';
 export * from './automations.js';
+export * from './schedules.js';
 export * from './memories.js';
 export * from './knowledge.js';
 export * from './billing.js';
@@ -111,6 +113,7 @@ export const ALL_ENDPOINTS: Record<string, DomainDescriptorMap> = {
   pipedream: pipedreamEndpoints,
   triggers: triggersEndpoints,
   automations: automationsEndpoints,
+  schedules: schedulesEndpoints,
   memories: memoriesEndpoints,
   knowledge: knowledgeEndpoints,
   billing: billingEndpoints,

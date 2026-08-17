@@ -210,6 +210,14 @@ import {
   enqueueListenerEvent,
   type SupervisorTrigger,
 } from './events/listener-supervisor.js';
+import {
+  configureScheduleSupervisor,
+  startScheduleSupervisor,
+  stopScheduleSupervisor,
+  mapAutomationOutcome,
+  mapIntegrationOutcome,
+} from './schedules/supervisor.js';
+import { schedulesRouter } from './routes/schedules.js';
 import { readListenerCursor, writeListenerCursor, bumpListenerFailure } from './events/listener-state.js';
 import { buildArtifactBackendInputs } from './integrations/event-sources/dispatch-input.js';
 import { hydrateEmailInput } from './integrations/event-sources/email-hydrate.js';
@@ -797,6 +805,38 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     now: () => new Date(deps.now()).toISOString(),
   });
 
+  // Schedules — the timer rail (one-time + recurring runs of a target with fixed params).
+  // Injected across the seams here (ch02 §2.8): an automation target fires through the SAME
+  // startRunForTrigger the delivery pipeline uses (server-trusted owner, org + private-visibility
+  // re-verified at fire time, triggeredBy 'schedule'); an integration-action target fires through
+  // the ONE executeUserIntegrationAction rail with the ONE runAutomationBackedAction binding, so
+  // the write gate answers exactly as it does everywhere else (awaiting_consent → a `blocked`
+  // run). Outcome mapping lives in schedules/supervisor.ts — these lambdas stay one-liners.
+  // The loop is STARTED post-listen (below) and stopped on shutdown.
+  const scheduleSupervisor = configureScheduleSupervisor({
+    runAutomation: (s, t) =>
+      startRunForTrigger({
+        automationId: t.automationId,
+        ownerUserId: s.ownerUserId,
+        orgId: s.orgId,
+        triggeredBy: 'schedule',
+        ...(t.inputs ? { inputs: t.inputs } : {}),
+      }).then(mapAutomationOutcome),
+    runIntegrationAction: (s, t) =>
+      executeUserIntegrationAction(
+        {
+          orgId: s.orgId,
+          ownerUserId: s.ownerUserId,
+          integrationKey: t.integrationKey,
+          actionName: t.actionName,
+          args: t.args ?? {},
+        },
+        { runAutomationBackedAction },
+      ).then(mapIntegrationOutcome),
+    now: () => new Date(deps.now()).toISOString(),
+    genId: () => deps.genId(),
+  });
+
   // content/ audit write path (FIXED-8, ch08): the loader reaches data/ logActivity ONLY through
   // this injected seam, wired BEFORE boot ingest. Fire-and-forget — an audit hiccup never blocks
   // content IO.
@@ -1122,6 +1162,8 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   app.use('/api/v1/notifications', notificationsRouter());
   // G8 — automations (§3.8.18) + the platform-integration execution layer (§3.8.15/16).
   app.use('/api/v1/automations', automationsRouter());
+  // Schedules — user-or-key capability surface; run-now fires through the supervisor seam.
+  app.use('/api/v1/schedules', schedulesRouter({ now: deps.now, genId: deps.genId, fireNow: (s) => scheduleSupervisor.fireNow(s) }));
   app.use('/api/v1/platform-integrations', platformIntegrationsRouter(deps));
   // The OAuth callback path is kept VERBATIM (§3.8.15): it is a registered redirect URI.
   app.use('/api/v1/oauth', oauthCallbackRouter(deps));
@@ -1545,6 +1587,8 @@ export function boot(): void {
         // 2A-S1: the listener supervisor (durable poll→enqueue) also starts post-listen — its polls
         // enqueue into the same queue the (now-running) delivery pipeline drains.
         void startListenerSupervisor();
+        // The schedules timer rail — same post-listen rule; env kill EKOA_SCHEDULES_DISABLED=1.
+        startScheduleSupervisor();
       });
       // The live browser canvas media channel (FIXED-2 carve-out, RESOLVED Q-01): a WS
       // upgrade surface on the same HTTP server, short-TTL token auth, 1000/4000 close codes.
@@ -1574,6 +1618,7 @@ export function boot(): void {
   const shutdown = () => {
     void Promise.allSettled([
       stopListenerSupervisor(),
+      stopScheduleSupervisor(),
       stopDelivery(),
       appBuilder.dispose(),
       appRegistry.stop(),

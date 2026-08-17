@@ -543,8 +543,10 @@ export interface RunRecord {
    *     POST'd a verified event at /hooks/<triggerId>.
    *   - listener: dispatched by the trigger dispatcher after a polling
    *     listener picked up new events from an integration action.
+   *   - schedule: fired by the schedules/ timer rail at a planned occurrence,
+   *     under the schedule's stored owner (additive, Rule 7).
    */
-  triggeredBy: 'user' | 'agent' | 'webhook' | 'listener';
+  triggeredBy: 'user' | 'agent' | 'webhook' | 'listener' | 'schedule';
   /** Run owner + org, persisted at creation so the run resource can be tenant-scoped (visible to
    *  the owner and org-admins) without a join back to the automation (ch05 §5.6.7, Amendment 2). */
   ownerUserId?: string;

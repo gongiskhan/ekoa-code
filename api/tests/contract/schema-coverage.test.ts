@@ -257,6 +257,17 @@ const COVERED = new Set<string>([
   // else as key-closed). Two NEW descriptors, two COVERED entries: the pinned
   // EXPECTED_PENDING_COUNT below is UNCHANGED.
   'integrations.achieve', 'integrations.trustAction',
+  // 2026-08-17 - the SCHEDULES family (schedules.test.ts: the whole family through the real app
+  // under BOTH admissions - a platform JWT and a REAL minted gateway key - plus the revoked-key
+  // 401 and billing-locked 402; every 2xx body against the shared schemas, every non-2xx against
+  // the envelope; the preview endpoint pinned as the single occurrence-math truth incl. the
+  // Lisbon DST wall-clock; run-now + complete driving a manual task end to end; the service-level
+  // cross-field refusals with their machine codes in details. Tenancy: schedules-isolation.test.ts
+  // (Rule 5, memvault class). TEN new descriptors, ten COVERED entries: the pinned
+  // EXPECTED_PENDING_COUNT below is UNCHANGED.
+  'schedules.list', 'schedules.create', 'schedules.listAllRuns', 'schedules.completeRun',
+  'schedules.preview', 'schedules.get', 'schedules.patch', 'schedules.remove',
+  'schedules.runNow', 'schedules.listRuns',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as
