@@ -435,6 +435,41 @@ describe('context injection (ch07 §7.6) - every member of the injected table, s
     }
   });
 
+  it('signIn is frame-aware: a framed app opens SSO in a named top-level window, top-level keeps navigating in place', async () => {
+    await mkServedApp('svsso');
+    await artifacts.insert({ _id: 'svsso', name: 'Sso', userId: 'owner1', orgId: 'orgA', visibility: 'org', shareable: true } as never);
+
+    const html = await (await api('/apps/svsso/')).text();
+    for (const member of [
+      // the frame check + the named popup the framed path opens
+      'framed=window.self!==window.top',
+      "window.open(u,'__ekoa_sso_'+window.__EKOA_APP_ID)",
+      // the frame-side fallback watcher: DEFINITION and INVOCATION (deleting the
+      // call site while keeping the function would pass every other assertion)
+      'function watchSsoPopup(w)',
+      'if(w)return watchSsoPopup(w);',
+      // the watcher probes the QUIET session endpoint (200 in both states), not
+      // /me, and completes only on a session CHANGE from the pre-open baseline
+      "ekoaFetch('/api/app-sso/session')",
+      'k!==null&&k!==baseline',
+      // a blocked popup leaves the frame alone (navigating it renders the refusal)
+      'sign-in popup blocked',
+      // the flow SETTLES in both outcomes: a cancelable event, then a reload unless
+      // the app handled it - without this an app's own sign-in spinner never clears
+      "'ekoa:sso-'+(signedIn?'complete':'cancelled')",
+      'if(!handled)window.location.reload();',
+      'if(closedTicks>1)return void settle(false);',
+      // the top-level path is unchanged
+      'window.location.assign(u)',
+      // the popup half of the handshake: reload the framed opener, close itself
+      "window.name.lastIndexOf('__ekoa_sso_',0)===0",
+      'opener.location.reload()',
+      'window.close()',
+    ]) {
+      expect(html, `injected HTML must contain ${member}`).toContain(member);
+    }
+  });
+
   it('demo-bridge client is served at /__ekoa/demo-bridge.js', async () => {
     const res = await api('/__ekoa/demo-bridge.js');
     expect(res.status).toBe(200);

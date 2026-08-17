@@ -2708,6 +2708,52 @@ silently absorbed into a ledger note):
   disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
   `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
 
+## Recently fixed - 2026-08-15 a cancelled framed sign-in left the app hung (own regression)
+
+**`framed-sso-never-settles`** (found by driving the REAL customer ERP login framed with the
+first version of the popup fix below; a regression that fix introduced). Removing the frame
+navigation removed the only signal an app had that sign-in had ended. Measured: click
+"Continuar com Microsoft 365", close the popup, and the button stays `disabled` with its
+spinner animating **forever** - the ERP does `setMsLoading(true)` on click and nothing clears
+it, which was invisible while the frame navigated away. Every already-built bundle has the
+same shape, so no app-side change reaches them. **Fixed** in the runtime (decision entry
+2026-08-15): `signIn()` returns `Promise<boolean>` and both outcomes dispatch a cancelable
+`ekoa:sso-complete` / `ekoa:sso-cancelled` event, then reload the frame unless a listener
+calls `preventDefault()`; a still-open popup past the watcher budget stops without reloading.
+Side benefit, verified in the same pass: the reload revived the ERP's own `erp_sso_pending`
+path, so a cancelled/failed SSO now renders its intended PT-PT message instead of nothing.
+Closed by: `api/tests/contract/served-app.test.ts` (settle strings) + a third test in
+`web/e2e/app-sso-frame.spec.ts` - green against the fixed runtime, failing against the old
+one. Still OPEN and app-side, recorded here rather than silently fixed: submitting the ERP
+login with BOTH fields empty fires a doomed `POST /api/app-sso/login` (400) and reports
+"E-mail ou palavra-passe incorretos." instead of asking the user to fill the fields; that is
+a change to the customer's artifact source, not to this repo.
+
+## Recently fixed - 2026-08-15 preview frame rendered "refused to connect" on Microsoft sign-in
+
+**`preview-frame-sso-refused`** (found live by the owner on the tailnet dev stack: the builder
+side-panel's Pré-visualização of the imported salomao ERP showed "dev-madrid.tail31efa.ts.net
+refused to connect"; ask recorded as "we should allow new windows and pop ups on the preview
+frame"). Root cause reproduced E2E before touching code: the ERP's "Continuar com Microsoft 365"
+calls the injected `__ekoa.signIn()`, which `location.assign`ed the IFRAME to
+`/api/app-sso/microsoft/start` - an /api-surface URL served with `X-Frame-Options: DENY` +
+`frame-ancestors 'none'` (security-headers.ts, correct and unchanged), and the provider's own
+login page refuses framing too. So in-frame SSO can never render; the panel showed Chrome's
+refusal instead. NOT a frame-ancestors misconfiguration: `/apps/*` framed fine throughout (the
+2026-08-07 tailnet CSP finding stayed fixed). **Fixed** by making the injected runtime
+frame-aware (decision entry 2026-08-15): framed `signIn()` opens the start URL in a named
+top-level window (`'__ekoa_sso_'+appId`) and polls the quiet `/api/app-sso/session` probe
+against a popup-open baseline, reloading the frame only on a session CHANGE; the popup, when
+the callback returns it to `/apps/<id>/<return>`, detects the marker name + same-origin framed
+opener, reloads that frame and closes itself; a BLOCKED popup leaves the frame alone with a
+console warning; top-level keeps the unchanged `location.assign`. Closed by:
+`api/tests/contract/served-app.test.ts` (frame-aware signIn strings) +
+`web/e2e/app-sso-frame.spec.ts` (ledgered same change; verified green against a scratch --built
+stack AND verified to fail against the pre-change runtime). Residual, deliberate: the LIVE dev
+stack keeps serving the old dist until its next restart - restarting it here would have wiped
+the ephemeral Mongo holding the verified salomao import; and dev answers the start leg 503
+(Microsoft SSO env not configured), which now renders in the popup instead of killing the frame.
+
 ## Recently fixed - 2026-08-13 "Usar" opened an unshared artifact's dead 410 link
 
 **`usar-opens-revoked-link`** (found during the live verification of the assistant-overhaul batch:

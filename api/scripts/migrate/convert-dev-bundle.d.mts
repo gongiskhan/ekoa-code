@@ -35,5 +35,13 @@ export function screenAppData(
 ): ConvertedAppDataDump | undefined;
 export function convertDevBundle(
   envelope: unknown,
-  opts?: { appData?: unknown; slug?: string; warn?: (msg: string) => void },
+  opts?: {
+    appData?: unknown;
+    slug?: string;
+    /** Canonical prod artifact id (--id): wins over envelope.sourceArtifactId (S3 preserveId). */
+    id?: string;
+    /** Inject the ekoa-code-only manifest Graph opt-in (--m365-proxy). */
+    m365Proxy?: boolean;
+    warn?: (msg: string) => void;
+  },
 ): ConvertedBundle;

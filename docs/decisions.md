@@ -610,3 +610,49 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   exit 0 against the imported instance. Auditoria dup-key and mobile-login fixes are verified
   in-browser but carry no committed pin (no driver visits those surfaces) - stated here
   rather than implied.
+
+- 2026-08-15 - FRAMED SIGN-IN IS A POPUP: THE INJECTED signIn() GAINS ITS ONE FRAME-AWARE
+  BRANCH. The injected-context script is a compatibility contract ("do not improve it"); this
+  is a deliberate, dated extension, not an improvement pass. Why the old shape could never
+  work framed: `signIn()` navigated the DOCUMENT to /api/app-sso/microsoft/start, and both
+  legs of that flow refuse framing - the /api surface ships `X-Frame-Options: DENY` +
+  `frame-ancestors 'none'` (by design, unchanged), and the provider's login page refuses
+  framing as well - so every preview surface (builder side-panel, artifact overlay, demo
+  tour) rendered "refused to connect" the moment an app reached Microsoft sign-in. The new
+  contract: framed (`window.self!==window.top`), `signIn()` opens the start URL in a NAMED
+  top-level window (`'__ekoa_sso_'+appId` - named so a second click reuses the window instead
+  of spawning more; the watcher is likewise single - arming it clears any predecessor) and
+  the frame polls the QUIET `/api/app-sso/session` probe (200 in both states - a 401-per-tick
+  `/me` poll would violate the recorded console-noise standard) at 2s cadence, bounded (2
+  ticks past popup-close or 150 total), against a BASELINE captured at popup-open: only a
+  session CHANGE (null-to-user, different identity, or canSendMail flipping on re-consent)
+  reloads the frame - a pre-existing consent-less session is the normal re-consent state and
+  must not reload the frame mid-auth (adversarial-review finding, fixed pre-land). The popup
+  half, injected in every served document, fires only on the marker name + a SAME-ORIGIN
+  framed opener with the SAME app id (so an app's ordinary window.open of itself is never
+  hijacked), reloads the opener and closes itself. Popup BLOCKED while framed: the frame is
+  left alone with a console warning - navigating it to the start leg can only render the
+  refusal (the very defect this entry removes; also an adversarial-review finding, fixed
+  pre-land). Top-level: the byte-compat `location.assign`, unchanged.
+
+  THE FLOW MUST SETTLE, and settling means RELOADING (second pass, same day, after driving
+  the real customer login): removing the navigation removed the only signal an app had that
+  sign-in ended. The ERP flips its button into a loading state on click and never clears it
+  (its own `screens-internal.jsx`), so a cancelled popup left the button disabled and
+  spinning FOREVER - measured, not theorised. No app-side fix reaches already-built bundles,
+  so the runtime ends the flow itself: `signIn()` now returns `Promise<boolean>`, and BOTH
+  outcomes (signed in / popup closed without signing in) dispatch a cancelable
+  `ekoa:sso-complete` | `ekoa:sso-cancelled` event and then reload the frame unless a
+  listener calls `preventDefault()` - the escape hatch for an app that would rather keep its
+  in-page state. Reloading is the conservative choice precisely because it re-reads the
+  session from the server rather than trusting in-page state; it also REVIVED the ERP's own
+  dead code path (its `erp_sso_pending` flag renders a proper PT-PT failure message that
+  could never appear while the document never came back). A still-OPEN popup past the
+  150-tick budget stops the watcher WITHOUT reloading - the user may still be at the
+  provider. Cookie reasoning, recorded because it is load-bearing: the
+  session cookie set in the popup (a top-level context on the api origin) is visible to the
+  framed app because the CHIPS partition key is the top-level SITE - the same site in dev
+  (one host, ports differ) and in prod (app.<domain> embeds api.<domain>, same registrable
+  domain); the Lax flavor is same-site in both layouts too. Pins: served-app contract strings
+  (api/tests/contract/served-app.test.ts), the discriminating e2e
+  (web/e2e/app-sso-frame.spec.ts, ledgered band4), diagram 03-request-crud AS-BUILT note.

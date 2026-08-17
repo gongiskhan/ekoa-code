@@ -7,6 +7,30 @@
  * and `<base href="/apps/<id>/">`. The 37-spec legal suite drives the injected
  * handle directly - the script body below is a compatibility contract; do not
  * "improve" it.
+ *
+ * One deliberate extension (2026-08-15): `signIn()` is frame-aware. The OIDC start
+ * leg lives on the /api surface (X-Frame-Options: DENY) and the provider's login
+ * page refuses framing too, so navigating the preview iframe there renders
+ * "refused to connect". When framed, signIn() opens the flow in a named top-level
+ * window instead; the popup half of the handshake (reload the opener frame, close
+ * itself) is the `__ekoa_sso_` named-window block below, and the frame additionally
+ * polls the quiet /api/app-sso/session probe (200 in both states - no console 401
+ * stream) against a baseline captured at popup-open, reloading only on a session
+ * CHANGE - a pre-existing consent-less session (re-consent flows) must not reload
+ * the frame mid-auth. A BLOCKED popup leaves the frame alone with a console
+ * warning: navigating a frame to the start leg can only ever render the refusal.
+ * Top-level behavior is unchanged.
+ *
+ * The framed flow SETTLES (2026-08-15, second pass - a login defect measured on the
+ * real customer app): signIn() returns a Promise<boolean>, and both outcomes -
+ * signed in, or popup closed without signing in - dispatch a cancelable
+ * `ekoa:sso-complete` / `ekoa:sso-cancelled` event and then reload the frame unless
+ * the app calls preventDefault(). Without this, an app that flips a button into a
+ * loading state on click (as the ERP does) spins FOREVER when the user cancels: the
+ * frame no longer navigates away, so nothing ever tells the app the flow ended, and
+ * no already-built bundle can be taught to listen. The 150-tick budget with the
+ * popup still OPEN stops watching without reloading - the user may still be at the
+ * provider.
  */
 
 /** Inject the app context into a served HTML document (placement carried exactly:
@@ -30,6 +54,50 @@ window.__EKOA_APP_ID=${JSON.stringify(appId)};
     return res.json().then(function(json){
       if(!res.ok){throw new Error((json&&json.error)||('Request failed: '+res.status));}
       return json&&json.data;
+    });
+  }
+  var ssoWatchTimer=null;
+  function watchSsoPopup(w){
+    if(ssoWatchTimer){clearInterval(ssoWatchTimer);ssoWatchTimer=null;}
+    var ticks=0,closedTicks=0,baseline,done=false;
+    function sessionKey(u){return u?String(u.email||'')+'|'+String(u.oid||'')+'|'+String(!!u.canSendMail):null;}
+    function probeSession(){
+      return ekoaFetch('/api/app-sso/session').then(function(res){return res.json();}).then(function(j){
+        return sessionKey(j&&j.data);
+      });
+    }
+    return new Promise(function(resolve){
+      function settle(signedIn){
+        if(done)return; done=true;
+        if(ssoWatchTimer){clearInterval(ssoWatchTimer);ssoWatchTimer=null;}
+        // The app cannot know the popup finished, so its own pending UI (a spinner on the
+        // sign-in button) would stay forever - the frame no longer navigates away as it did
+        // before the popup existed. Reloading restores the truth from the server in BOTH
+        // outcomes. An app that would rather keep its in-page state listens for the event
+        // and calls preventDefault(); every already-built bundle has no listener and gets
+        // the reload that unsticks it.
+        var handled=false;
+        try{handled=!window.dispatchEvent(new CustomEvent('ekoa:sso-'+(signedIn?'complete':'cancelled'),{cancelable:true}));}catch(_){}
+        resolve(!!signedIn);
+        if(!handled)window.location.reload();
+      }
+      probeSession().then(function(k){baseline=k;}).catch(function(){baseline=null;});
+      ssoWatchTimer=setInterval(function(){
+        ticks++;
+        var closed=true;
+        try{closed=!!w.closed;}catch(_){}
+        if(closed)closedTicks++;
+        probeSession().then(function(k){
+          if(k!==null&&k!==baseline)return void settle(true);
+          if(closedTicks>1)return void settle(false);
+          // Popup still open past the budget: the user may still be mid-flow at the
+          // provider, so stop watching WITHOUT reloading under them.
+          if(ticks>150){done=true;clearInterval(ssoWatchTimer);ssoWatchTimer=null;resolve(false);}
+        }).catch(function(){
+          if(closedTicks>1)return void settle(false);
+          if(ticks>150){done=true;clearInterval(ssoWatchTimer);ssoWatchTimer=null;resolve(false);}
+        });
+      },2000);
     });
   }
   window.__ekoa={
@@ -104,6 +172,15 @@ window.__EKOA_APP_ID=${JSON.stringify(appId)};
       var ret;
       try{var t=new URL(target);ret=t.pathname+t.search;}catch(_){ret=window.location.pathname;}
       var u='/api/app-sso/microsoft/start?appId='+encodeURIComponent(window.__EKOA_APP_ID)+'&return='+encodeURIComponent(ret);
+      var framed=false;
+      try{framed=window.self!==window.top;}catch(_){framed=true;}
+      if(framed){
+        var w=null;
+        try{w=window.open(u,'__ekoa_sso_'+window.__EKOA_APP_ID);}catch(_){}
+        if(w)return watchSsoPopup(w);
+        console.warn('[ekoa] sign-in popup blocked - allow pop-ups for this site and try again');
+        return Promise.resolve(false);
+      }
       window.location.assign(u);
     },
     whoami:function(){
@@ -189,6 +266,20 @@ window.__EKOA_APP_ID=${JSON.stringify(appId)};
       }
     }
   };
+})();
+(function(){
+  try{
+    if(window.name&&window.name.lastIndexOf('__ekoa_sso_',0)===0&&window.opener){
+      var opener=window.opener;
+      try{
+        if(opener!==window&&opener.__EKOA_APP_ID===window.__EKOA_APP_ID&&opener.self!==opener.top){
+          window.name='';
+          try{opener.location.reload();}catch(_){}
+          window.close();
+        }
+      }catch(_){/* cross-origin or dead opener - leave this window alone */}
+    }
+  }catch(_){}
 })();
 (function(){
   try {
