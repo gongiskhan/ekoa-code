@@ -6,6 +6,37 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`browser-step-retry-may-double-fire`** (2026-08-18, OPEN, self-reported by the slice that
+  introduced it - the automation budgets/primitives work, `ca43335`). The new deterministic
+  per-step retry (`STEP_RETRY_BUDGET.deterministicRetries`, `engine.ts:1568-1600`) re-issues the
+  SAME cached DOM action after a runtime failure. A browser step can fail having PARTIALLY
+  succeeded - a click that landed and then threw while waiting for navigation - so a
+  non-idempotent browser step (submit, confirm, pay) could fire twice.
+
+  **This is not a new class of failure.** The old path reached the same place: on a cache failure
+  it fell through to vision, which typically re-resolved to the same click and acted again. What
+  changed is the COST of getting there - the retry is now cheap and unconditional where the vision
+  path was expensive and occasionally resolved elsewhere. So the risk is pre-existing but is now
+  materially easier to hit.
+
+  **Why it is open rather than fixed here.** There is no consent gate on `browser` steps the way
+  there is on `api_call` (`action-executor.ts` refuses `awaiting_consent` before any credential
+  load; a DOM click has no equivalent). Closing this properly means deciding what makes a browser
+  step non-idempotent - and the honest answer is that the engine cannot know from a locator alone.
+  Plan trap T4 already covers replay idempotency for INJECTED CALLS via `InjectedCall.idempotent`
+  (P2.3), where the HTTP method makes the answer structural. The browser-step case wants the same
+  treatment and should land with P2.3 or P4, not as a guessed heuristic here.
+
+  **Closes when:** a browser step carries an idempotence verdict the retry consults, of the class
+  `InjectedCall.idempotent`, with a test proving a non-idempotent step is not silently re-issued.
+
+- **`verify-step-vision-fallthrough-uncounted`** (2026-08-18, OPEN, scoped out deliberately).
+  `executeVerifyStep` has its own assertion-cache to vision fallthrough that remains UNCOUNTED,
+  while the browser-step fallthrough is now bounded by `STEP_RETRY_BUDGET.visionRegroundsPerStep`.
+  The budgets work deliberately did not widen its blast radius across a 2300-line central file.
+  Small and self-contained; closes by threading the same `createStepRetryLedger` through the verify
+  path with a spec of the same shape.
+
 - **`knowledge-fts-heal-scan-unscoped`** (2026-08-11, OPEN, found by a full api-suite run during
   the `run-error-text-leak` work; NOT caused by it). `api/tests/security/knowledge-scoping.test.ts`
   ("grep gate: every CONTENT-bearing knowledge_fts query filters on orgId") fails
