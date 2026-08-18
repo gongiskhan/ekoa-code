@@ -4723,6 +4723,11 @@
         },
         "additionalProperties": true
       },
+      "BoundOrigin": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 253
+      },
       "CatalogEntry": {
         "type": "object",
         "properties": {
@@ -4822,6 +4827,13 @@
           }
         },
         "additionalProperties": true
+      },
+      "CredentialEstablishmentMode": {
+        "type": "string",
+        "enum": [
+          "typist",
+          "ceremony"
+        ]
       },
       "DeleteNoteResponse": {
         "type": "object",
@@ -5669,6 +5681,39 @@
         ],
         "additionalProperties": false
       },
+      "RelayLoginPrompt": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "string",
+            "const": "login"
+          },
+          "relayId": {
+            "type": "string"
+          },
+          "automationName": {
+            "type": "string"
+          },
+          "siteOrigin": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation",
+          "relayId",
+          "automationName",
+          "siteOrigin",
+          "reason",
+          "expiresAt"
+        ],
+        "additionalProperties": false
+      },
       "RevokeApprovedCommandRequest": {
         "type": "object",
         "properties": {
@@ -5752,6 +5797,49 @@
         },
         "required": [
           "runId"
+        ],
+        "additionalProperties": false
+      },
+      "RunCredentialRequest": {
+        "type": "object",
+        "properties": {
+          "stepIndex": {
+            "type": "integer"
+          },
+          "origin": {
+            "$ref": "#/components/schemas/BoundOrigin"
+          },
+          "integrationKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "portalDeepLink": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "mode": {
+            "$ref": "#/components/schemas/CredentialEstablishmentMode"
+          },
+          "preferredPairingId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "ceremony": {
+            "$ref": "#/components/schemas/RelayLoginPrompt"
+          }
+        },
+        "required": [
+          "stepIndex",
+          "origin",
+          "integrationKey",
+          "portalDeepLink",
+          "mode",
+          "reason"
         ],
         "additionalProperties": false
       },
@@ -5849,6 +5937,9 @@
           },
           "consentRequest": {
             "$ref": "#/components/schemas/RunConsentRequest"
+          },
+          "credentialRequest": {
+            "$ref": "#/components/schemas/RunCredentialRequest"
           }
         },
         "required": [
@@ -5881,7 +5972,8 @@
           "awaiting_integration",
           "paused_for_user",
           "awaiting_consent",
-          "awaiting_daemon"
+          "awaiting_daemon",
+          "needs_credentials"
         ]
       },
       "RunStepRecord": {

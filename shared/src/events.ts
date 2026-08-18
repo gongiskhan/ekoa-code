@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { RunCredentialRequest } from './cofre.js';
 
 /**
  * The four SSE event unions (CONV-4, ch03 §3.6). Exactly four streams for web clients:
@@ -194,6 +195,11 @@ export const AutomationRunEvent = z.discriminatedUnion('type', [
     capability: z.enum(['browser', 'bash']),
     reason: z.string(),
   }),
+  // The run halted because the Cofre holds no usable credential for the origin the step needs
+  // (P3.1). Built by EXTENDING the persisted `RunCredentialRequest` rather than restating its
+  // fields, so the frame a live viewer receives and the request a reloading client reads back off
+  // `GET /runs/:id` cannot drift — the reload path is the whole reason this state exists.
+  RunCredentialRequest.extend({ type: z.literal('needs_credentials') }),
   z.object({ type: z.literal('complete'), summary: z.string() }),
   RunErrorEvent,
 ]);

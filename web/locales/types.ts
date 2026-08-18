@@ -1738,6 +1738,14 @@ export interface Translations {
       needsHelpOnStep: (n: number) => string;
       browserOpenHint: string;
       continue: string;
+      /** The credential halt (P3.1): names the step and the origin the Cofre cannot serve. */
+      needsCredentialsOnStep: (n: number, origin: string) => string;
+      /** Mode `typist`: store the password and the platform replays it. */
+      credentialsTypistHint: (origin: string) => string;
+      /** Mode `ceremony`: the human logs in themselves (OTP / MFA / CAPTCHA origins). */
+      credentialsCeremonyHint: (origin: string) => string;
+      establishCredential: string;
+      credentialsContinue: string;
       stopRun: string;
       pausedAlt: string;
       stepScreenshotAlt: (n: number) => string;
@@ -1751,6 +1759,7 @@ export interface Translations {
         paused_for_user: string;
         awaiting_consent: string;
         awaiting_daemon: string;
+        needs_credentials: string;
       };
       tier: {
         cached: string;

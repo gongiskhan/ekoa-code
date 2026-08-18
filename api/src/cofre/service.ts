@@ -85,6 +85,26 @@ export function isGrantActive(grant: CofreGrantDoc, opts: { runId?: string; now:
 }
 
 /**
+ * Does this item carry a STANDING grant - one that outlives the run asking?
+ *
+ * The re-auth policy's input (P3.3, `automation/session-establishment.ts`): a typist re-login is a
+ * password replayed with no human present, and the only thing that can authorise it in advance is a
+ * grant the user issued to last beyond one run. `this_run` is DELIBERATELY excluded even when it is
+ * live: it is consent for the run in front of the user, not permission to log in again later on
+ * their behalf. Answering "yes" for it would turn the narrowest scope in the model into the widest
+ * one in effect.
+ *
+ * Read-only and grant-only: it never touches the ciphertext, so asking the question costs no
+ * decrypt and leaks nothing. A refused/absent item answers false - fail closed, never an oracle.
+ */
+export async function hasStandingGrant(actor: Actor, itemId: string, now = Date.now()): Promise<boolean> {
+  const grants = await cofreGrants.listVisible(actor, { itemId });
+  return grants.some(
+    (g) => (g.scope === 'ttl' || g.scope === 'until_locked') && isGrantActive(g, { now }),
+  );
+}
+
+/**
  * Resolve a credential reference to its value. THE seam.
  *
  * Order matters and is deliberate: tenancy, then grant, then origin. The origin check is last

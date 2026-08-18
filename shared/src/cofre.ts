@@ -202,27 +202,39 @@ export type GrantRequest = z.infer<typeof GrantRequest>;
  * is the technical enforcement of "we never sign for the lawyer", and it is also the anti-phishing
  * control: the relay teaches users that a code prompt with no visible document is never legitimate.
  */
-export const RelayPrompt = z.discriminatedUnion('operation', [
-  z.object({
-    operation: z.literal('login'),
-    relayId: z.string(),
-    automationName: z.string(),
-    siteOrigin: z.string(),
-    reason: z.string(),
-    expiresAt: z.string(),
-  }),
-  z.object({
-    operation: z.literal('signature'),
-    relayId: z.string(),
-    automationName: z.string(),
-    siteOrigin: z.string(),
-    /** MUST be displayed before any code is accepted. */
-    documentName: z.string().min(1),
-    documentHash: z.string().min(1),
-    documentPreviewUrl: z.string().optional(),
-    expiresAt: z.string(),
-  }),
-]);
+/**
+ * The LOGIN variant, named so it can be referenced ALONE.
+ *
+ * Extracted from the union (which is still built from it, below, so the two cannot drift) because
+ * the `needs_credentials` ceremony has a server half and the signature ceremony does not. A
+ * ceremony request must be typed as "a login prompt", not as "some relay prompt": the whole point
+ * of I8 is that the two operations are not interchangeable, and a producer that can only construct
+ * the login shape cannot accidentally emit a signature one.
+ */
+export const RelayLoginPrompt = z.object({
+  operation: z.literal('login'),
+  relayId: z.string(),
+  automationName: z.string(),
+  siteOrigin: z.string(),
+  reason: z.string(),
+  expiresAt: z.string(),
+});
+export type RelayLoginPrompt = z.infer<typeof RelayLoginPrompt>;
+
+export const RelaySignaturePrompt = z.object({
+  operation: z.literal('signature'),
+  relayId: z.string(),
+  automationName: z.string(),
+  siteOrigin: z.string(),
+  /** MUST be displayed before any code is accepted. */
+  documentName: z.string().min(1),
+  documentHash: z.string().min(1),
+  documentPreviewUrl: z.string().optional(),
+  expiresAt: z.string(),
+});
+export type RelaySignaturePrompt = z.infer<typeof RelaySignaturePrompt>;
+
+export const RelayPrompt = z.discriminatedUnion('operation', [RelayLoginPrompt, RelaySignaturePrompt]);
 export type RelayPrompt = z.infer<typeof RelayPrompt>;
 
 /**
@@ -236,6 +248,62 @@ export const RelayCompleteRequest = z.object({
   code: z.string().min(1).max(32),
 });
 export type RelayCompleteRequest = z.infer<typeof RelayCompleteRequest>;
+
+// ---------------------------------------------------------------------------
+// The `needs_credentials` halt (P3.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * HOW the missing credential gets established, and therefore what the human is asked to do.
+ *
+ *   - `typist` — supply the CREDENTIAL to the Cofre (a password for this origin) and the trusted
+ *     typist replays it unattended on resume. The human never touches a browser.
+ *   - `ceremony` — the human logs in THEMSELVES in a headed window, and the resulting session is
+ *     captured. This is the ONLY answer for an origin whose login is OTP / MFA / CAPTCHA gated
+ *     (`origin-posture.ts` `requiresAttendedAuth`), because there is no typed-code automation in
+ *     this system and there is deliberately not going to be one.
+ */
+export const CredentialEstablishmentMode = z.enum(['typist', 'ceremony']);
+export type CredentialEstablishmentMode = z.infer<typeof CredentialEstablishmentMode>;
+
+/**
+ * What a run parked at `needs_credentials` is asking a human to establish.
+ *
+ * NOTHING HERE IS A CREDENTIAL, and the field list is the enforcement of that: an ORIGIN (where the
+ * credential would be used), a DEEP LINK (where the human goes to establish it), a MODE (what they
+ * will be asked to do) and a REASON. There is no field a value could occupy, which is why this
+ * shape is safe to persist on a run record, stream over SSE, and render.
+ *
+ * Published rather than internal for the same reason `RunConsentRequest` is (`automations.ts`): a
+ * gateway-key caller can read `status: 'needs_credentials'` off `GET /runs/:id` and has no event
+ * stream, so without this on the wire the status would be unanswerable for them.
+ */
+export const RunCredentialRequest = z.object({
+  /** Index of the step that is blocked, matching `RunStepRecord.index`. */
+  stepIndex: z.number().int(),
+  /** The portal origin the step could not reach. A HOST or scheme+host, never a URL with secrets. */
+  origin: BoundOrigin,
+  /** Which integration the step was running. Trace + label only; never branched on (Rule 3). */
+  integrationKey: z.string().min(1).max(128),
+  /** Relative deep link into the Cofre portal where this credential is established. */
+  portalDeepLink: z.string().min(1).max(512),
+  mode: CredentialEstablishmentMode,
+  /**
+   * Ceremony mode: the pairing where this origin's session was last established
+   * (`SessionMetadata.establishedBy.pairingId`). A PREFERENCE the portal surfaces so the human
+   * repeats the ceremony on the machine the portal already knows, not a new identity primitive.
+   */
+  preferredPairingId: z.string().optional(),
+  /** Human-readable cause, composed from the host and the route. Never echoes a failure body. */
+  reason: z.string().max(500),
+  /**
+   * Ceremony mode only: the login relay prompt, so the portal can render "log in to <site> in your
+   * headed window". Typed as the LOGIN variant alone — a ceremony request can never be a signature
+   * prompt (I8), and `RelayCompleteRequest.code` is NOT wired to anything on this path.
+   */
+  ceremony: RelayLoginPrompt.optional(),
+});
+export type RunCredentialRequest = z.infer<typeof RunCredentialRequest>;
 
 // ---------------------------------------------------------------------------
 // Registo vocabulary

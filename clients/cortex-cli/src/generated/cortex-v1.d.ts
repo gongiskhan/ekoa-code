@@ -655,6 +655,7 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        BoundOrigin: string;
         CatalogEntry: {
             description?: string;
             key: string;
@@ -683,6 +684,8 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
+        /** @enum {string} */
+        CredentialEstablishmentMode: "typist" | "ceremony";
         DeleteNoteResponse: {
             /** @constant */
             ok: true;
@@ -902,6 +905,15 @@ export interface components {
             timezone: string;
             weekdays?: number[];
         };
+        RelayLoginPrompt: {
+            automationName: string;
+            expiresAt: string;
+            /** @constant */
+            operation: "login";
+            reason: string;
+            relayId: string;
+            siteOrigin: string;
+        };
         RevokeApprovedCommandRequest: {
             shape: string;
         };
@@ -926,6 +938,16 @@ export interface components {
         RunCreateResponse: {
             runId: components["schemas"]["Id"];
         };
+        RunCredentialRequest: {
+            ceremony?: components["schemas"]["RelayLoginPrompt"];
+            integrationKey: string;
+            mode: components["schemas"]["CredentialEstablishmentMode"];
+            origin: components["schemas"]["BoundOrigin"];
+            portalDeepLink: string;
+            preferredPairingId?: string;
+            reason: string;
+            stepIndex: number;
+        };
         RunListResponse: {
             items: components["schemas"]["RunRecord"][];
         };
@@ -941,6 +963,7 @@ export interface components {
         RunRecord: {
             automationId: components["schemas"]["Id"];
             consentRequest?: components["schemas"]["RunConsentRequest"];
+            credentialRequest?: components["schemas"]["RunCredentialRequest"];
             finishedAt?: components["schemas"]["IsoTimestamp"];
             id: components["schemas"]["Id"];
             inputs?: {
@@ -959,7 +982,7 @@ export interface components {
             resumed: boolean;
         };
         /** @enum {string} */
-        RunStatus: "idle" | "running" | "completed" | "failed" | "cancelled" | "awaiting_integration" | "paused_for_user" | "awaiting_consent" | "awaiting_daemon";
+        RunStatus: "idle" | "running" | "completed" | "failed" | "cancelled" | "awaiting_integration" | "paused_for_user" | "awaiting_consent" | "awaiting_daemon" | "needs_credentials";
         RunStepRecord: {
             durationMs?: number;
             error?: {

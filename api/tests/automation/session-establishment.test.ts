@@ -151,6 +151,8 @@ function harness(opts: {
   storageState?: unknown;
   /** Where a `goto` actually lands (redirects are the portal's choice). */
   landAt?: (requested: string) => string;
+  /** P3.3: whether the credential carries a grant that outlives one run. Defaults to yes. */
+  hasStandingGrant?: EnsureSessionDeps['hasStandingGrant'];
 } = {}): Harness {
   const { page, navigations } = fakePage(opts.landAt);
   const typistInputs: TypistLoginInput[] = [];
@@ -200,6 +202,11 @@ function harness(opts: {
       typist: typist as unknown as EnsureSessionDeps['typist'],
       typistDeps,
       capture: capture as unknown as EnsureSessionDeps['capture'],
+      // P3.3: this harness's subject is the ROUTING table, and every case in it presupposes that an
+      // unattended re-login is authorised — that is what the pre-policy behaviour was. The policy
+      // itself (grant present/absent x attended required) has its own table suite,
+      // `session-reauth-policy.test.ts`, where this dep is the variable rather than the constant.
+      hasStandingGrant: opts.hasStandingGrant ?? (async () => true),
       clock: () => NOW,
     },
     openBrowser,
@@ -898,6 +905,19 @@ describe('the establishment round-trip, end to end', () => {
     const { cofreItems, cofreGrants } = await import('../../src/cofre/store.js');
     await cofreItems.raw.deleteMany({});
     await cofreGrants.raw.deleteMany({});
+    // The PASSWORD `runInput()` points at, for real (P3.3). It used to exist only as a string in
+    // the input while the fake typist papered over its absence — which was fine while nothing read
+    // it, and stopped being fine when the re-auth policy started asking whether that credential
+    // carries a standing grant. Minting it with an `until_locked` grant is what a real deployment
+    // looks like after the user stores a password, so the round-trip now proves the round-trip
+    // against the real answer instead of a hole.
+    const { mintCofreItem, issueGrant } = await import('../../src/cofre/index.js');
+    await mintCofreItem(
+      actor,
+      { type: 'password', label: 'citius', value: SECRET, boundOrigins: [HOST] },
+      { genId: () => 'itm_password_1' },
+    );
+    await issueGrant(actor, 'itm_password_1', 'until_locked');
   });
 
   /** Only the browser and the typist are fake. Everything the Cofre owns is real. */
@@ -988,10 +1008,21 @@ describe('the establishment round-trip, end to end', () => {
     const aliceItem = established(await ensureSession(runInput(), h.deps));
 
     // Same org, different owner: Cofre items are OWNER-scoped, so nothing is found and mallory's
-    // call is a first establishment of her own, not a reuse of alice's session.
+    // call is a first establishment of her own, not a reuse of alice's session. She needs her OWN
+    // granted password to get there — alice's is invisible to her, which is the property under
+    // test seen from the credential side (P3.3 reads the grant through the same owner scope).
     const mallory: Actor = { userId: 'mallory', orgId: 'orgA', role: 'user' } as Actor;
-    const malloryItem = established(await ensureSession(runInput({ actor: mallory }), h.deps));
+    const { mintCofreItem: mint, issueGrant: grant } = await import('../../src/cofre/index.js');
+    await mint(mallory, { type: 'password', label: 'citius', value: SECRET, boundOrigins: [HOST] }, {
+      genId: () => 'itm_password_mallory',
+    });
+    await grant(mallory, 'itm_password_mallory', 'until_locked');
+
+    const malloryItem = established(
+      await ensureSession(runInput({ actor: mallory, credentialRef: 'cofre:itm_password_mallory' }), h.deps),
+    );
     expect(malloryItem).not.toBe(aliceItem);
-    expect(await listCofreItems(mallory)).toHaveLength(1);
+    // Her password + her session; alice's two rows are invisible.
+    expect(await listCofreItems(mallory)).toHaveLength(2);
   });
 });

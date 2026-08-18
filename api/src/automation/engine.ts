@@ -25,8 +25,14 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { Actor } from '@ekoa/shared';
+import { RunCredentialRequest, type Actor } from '@ekoa/shared';
 import { loadAutomationConfig } from './config.js';
+import {
+  evaluateCredentialGate,
+  type CredentialGateInput,
+  type CredentialGateVerdict,
+} from './credential-gate.js';
+import { registerCredentialWaiter } from './credential-waiters.js';
 import {
   getDaemonConnection,
   executeIntegrationAction,
@@ -245,6 +251,13 @@ export interface RunEventEmitter {
    */
   runAwaitingDaemon?: (runId: string, info: RunAwaitingDaemonPayload) => void;
   /**
+   * The Cofre holds no usable credential for an origin this run needs. The run halts in
+   * `needs_credentials`; the UI names the origin and deep-links to `/cofre`. Beside
+   * `runAwaitingDaemon` and not beside `runPauseForUser` on purpose — this halt outlives the
+   * process, so it is a re-dispatch, not a poll.
+   */
+  runNeedsCredentials?: (runId: string, info: RunCredentialRequest) => void;
+  /**
    * Live stdout / stderr chunk from a running local_command step. Frontend
    * appends to the in-progress step's output panel as chunks arrive.
    */
@@ -304,6 +317,19 @@ export interface RunAutomationOptions {
    *  it, and passes it in so a `POST .../runs` can register-and-respond-early (202) before the run
    *  starts (§5.2 step 1-2). Absent → the engine mints one. */
   runId?: string;
+  /**
+   * Restart a HALTED run at this step index instead of at 0 (P3.1 auto-resume).
+   *
+   * WHY NOT "just run it again". A `needs_credentials` halt is a pause, not a failure: the steps
+   * before it already ran, and re-running them would re-execute their effects — an api_call write
+   * that succeeded before the halt would fire twice for one user action. So the resumed run keeps
+   * its OWN run id and its OWN step records, and picks up at the step that stopped it. The step
+   * records for earlier indices are read back from the persisted run, so the timeline the user was
+   * already looking at stays whole rather than restarting at zero under them.
+   *
+   * Absent → 0, which is every other caller and every pre-existing behaviour.
+   */
+  resumeFromStepIndex?: number;
 }
 
 export interface RunAutomationResult {
@@ -413,6 +439,13 @@ async function runOrRehearse(
   ctx.secrets ??= new SecretRegistry();
   registerCredentialBag(ctx.secrets, inputs.credentials);
 
+  // RESUMING A HALTED RUN (P3.1). Clamped to the step list: a persisted index from an automation
+  // whose steps were edited between the halt and the resume would otherwise skip past the end (or
+  // start mid-nowhere), and starting over from 0 is the safe reading of "that index no longer
+  // means anything".
+  const resumeFrom = Math.max(0, Math.min(options.resumeFromStepIndex ?? 0, automation.steps.length - 1));
+  const isResume = resumeFrom > 0;
+
   const initialRecord: RunRecord = {
     id: runId,
     automationId,
@@ -427,6 +460,13 @@ async function runOrRehearse(
     kind: options.kind,
   };
   await automationRunStore.create(initialRecord);
+  if (isResume) {
+    // `create` is a duplicate no-op on an existing id (the service's register-first insert is the
+    // row that sticks), so a resumed run is still sitting at `needs_credentials` in the store. Put
+    // it back to `running` and drop the request the human just answered, or the UI would show a
+    // credential banner over a run that is already moving again.
+    await automationRunStore.update(automationId, runId, { status: 'running', credentialRequest: undefined });
+  }
 
   const emit = options.emit;
 
@@ -450,7 +490,10 @@ async function runOrRehearse(
   // read once here, handed opaquely to the browser session, never logged
   // and never template-substituted (template-vars redacts input.credentials).
   const credentials = inputs['credentials'];
-  const sessionState = credentials && typeof credentials === 'object'
+  // `let`, because the credential gate below may establish a session for a declared origin and that
+  // storageState is what the browser must start from. Assigned only while `browser` is still null
+  // (the session is injected at context creation, and there is no cookie channel to a live one).
+  let sessionState = credentials && typeof credentials === 'object'
     ? (credentials as Record<string, unknown>)['storageState']
     : undefined;
   // The browser session is created lazily on first browser use so a run with
@@ -497,9 +540,17 @@ async function runOrRehearse(
   const retryLedger: StepRetryLedger = createStepRetryLedger();
 
   try {
-    const stepRecords: StepRecord[] = [];
+    // A resumed run inherits the records of the steps that already ran, so the persisted timeline
+    // (and the rehearsal patch merge below, which looks records up by index) stays continuous.
+    // Filtered through the same defensive predicate `finalizeReturn` uses — an old-schema row must
+    // not be able to crash a resume.
+    const stepRecords: StepRecord[] = isResume
+      ? ((await automationRunStore.findById(automationId, runId))?.steps ?? []).filter(
+          (r): r is StepRecord => r != null && typeof r === 'object' && typeof r.index === 'number' && r.index < resumeFrom,
+        )
+      : [];
 
-    let i = 0;
+    let i = resumeFrom;
     while (i < workingSteps.length) {
       if (ctx.cancellation?.isCancelled()) {
         await finalize(runId, automationId, 'cancelled', stepRecords, startedAt);
@@ -596,7 +647,24 @@ async function runOrRehearse(
         ? { step: (workingSteps[lastRecord.index] ?? workingSteps[i - 1])!, record: lastRecord }
         : undefined;
 
-      const executed = await executeStep({
+      // THE CREDENTIAL GATE (P3.1), for every integration and with no branch on any of them. It
+      // fires only for a step whose declaration NAMES a Cofre reference, so a run that asks for no
+      // credential is not gated at all and behaves exactly as it did before this existed. A halt
+      // is expressed as a FAILED STEP RECORD with typed details, so it flows through the one
+      // persist/emit/halt path the awaiting-daemon and consent halts already use rather than
+      // opening a second exit from the loop.
+      const gate = await credentialGateRecord({
+        actor: actorFromCtx(ctx),
+        runId,
+        automationName: automation.name,
+        steps: workingSteps,
+        index: i,
+      }, step);
+      if (!gate.record && gate.storageState !== undefined && !browser) {
+        sessionState = gate.storageState;
+      }
+
+      const executed = gate.record ?? await executeStep({
         browser: getBrowser(),
         daemonConnected: !!connection,
         automation,
@@ -693,6 +761,61 @@ async function runOrRehearse(
               startedAt,
               stuckAtIndex: i,
               reason: 'awaiting approval',
+            }),
+            lastStepIndex: i,
+          });
+        }
+
+        // NEEDS-CREDENTIALS halt (P3.1). The Cofre holds nothing usable for the origin this step
+        // declared.
+        //
+        // ORDER IS LOAD-BEARING, and it cost a red test to learn: this is checked BEFORE the
+        // awaiting-integration branch below, which fires on ANY non-recoverable failure of an
+        // `integration` step and would otherwise swallow every credential halt on the integration
+        // rail — telling a user whose integration is connected and working to go connect it. It is
+        // also before the awaiting-daemon block, for the mirror reason: "start your local Ekoa" is
+        // the wrong instruction for someone whose machine is running and whose password is missing.
+        //
+        // HALT AND RE-DISPATCH, not pause-and-poll. The human is about to leave this page, walk to
+        // `/cofre` and come back — possibly after a reload, possibly after a restart — so the run
+        // must be recoverable from the STORE, not from a listener tick. The waiter registered here
+        // is the fast path (`credential-waiters.ts`); the persisted state below is what makes the
+        // slow path (a reloading client, or the `/cofre` establish action calling resume) work at
+        // all. Neither is load-bearing alone.
+        const credentialDetails = extractNeedsCredentials(record);
+        if (credentialDetails) {
+          await automationRunStore.update(automationId, runId, {
+            status: 'needs_credentials',
+            steps: stepRecords,
+            credentialRequest: credentialDetails,
+          });
+          await finalize(runId, automationId, 'needs_credentials', stepRecords, startedAt);
+          registerCredentialWaiter({
+            runId,
+            orgId: ctx.orgId,
+            userId: ctx.ownerUserId,
+            origin: credentialDetails.origin,
+          });
+          emit?.runNeedsCredentials?.(runId, credentialDetails);
+          if (isRehearsal) {
+            await persistRefinedSteps(automation, workingSteps, isRehearsal);
+          }
+          return finalizeReturn({
+            runId,
+            status: 'needs_credentials',
+            startedAt,
+            stepRecords,
+            message: `paused: no usable credential for ${credentialDetails.origin}`,
+            isRehearsal,
+            refinedSteps: workingSteps,
+            rehearsalSummary: buildRehearsalSummary({
+              isRehearsal,
+              status: 'aborted',
+              fixerCallCount,
+              patchesApplied,
+              startedAt,
+              stuckAtIndex: i,
+              reason: 'awaiting credentials',
             }),
             lastStepIndex: i,
           });
@@ -1975,6 +2098,89 @@ async function snap(
   }
 }
 
+/**
+ * Run the credential gate for one step and translate its verdict into the loop's currency.
+ *
+ * THREE OUTCOMES, and the shape says which: `{}` = the gate had nothing to say (the overwhelmingly
+ * common case, and the one that must cost nothing); `{ storageState }` = there is a live session
+ * for the declared origin; `{ record }` = a failed step record the outer loop turns into a halt.
+ *
+ * A THROW FROM THE GATE IS NOT A HALT. `ensureSession` throws for the states a
+ * `needs_credentials` banner would misdescribe — a locked item (the user's own kill switch), an
+ * origin refusal, an incoherent request. Those become an ordinary non-recoverable step failure
+ * carrying the module's own message, which is composed from ids and hosts and is safe to show.
+ */
+async function credentialGateRecord(
+  input: CredentialGateInput,
+  step: Step,
+): Promise<{ record?: StepRecord; storageState?: unknown }> {
+  const stepStart = Date.now();
+  const base: StepRecord = { stepId: step.id, index: input.index, status: 'running', tier: 'cache', durationMs: 0 };
+  let verdict: CredentialGateVerdict;
+  try {
+    verdict = await evaluateCredentialGate(input);
+  } catch (err) {
+    return {
+      record: finishRecord(base, 'failed', stepStart, {
+        tier: 'cache',
+        error: { message: credentialGateFailureMessage(err), recoverable: false },
+      }),
+    };
+  }
+
+  switch (verdict.kind) {
+    case 'not-applicable':
+      return {};
+    case 'ready':
+      return { storageState: verdict.storageState };
+    case 'needs-machine':
+      // Honest routing: a healthy session with no way out of the network is a MACHINE problem, and
+      // sending the user to the Cofre for it would be a lie. `awaiting_daemon` is the existing
+      // state for "a machine of yours is needed"; P4 refines it into a `blocked` schedule outcome.
+      return {
+        record: finishRecord(base, 'failed', stepStart, {
+          tier: 'cache',
+          error: {
+            message: verdict.reason,
+            recoverable: false,
+            details: { kind: 'awaiting_daemon', capability: 'browser', stepIndex: input.index },
+          },
+        }),
+      };
+    case 'needs-credentials':
+      return {
+        record: finishRecord(base, 'failed', stepStart, {
+          tier: 'cache',
+          error: {
+            // The step message names the ORIGIN and nothing else. `credentialRequest` carries the
+            // structure; this string is what a log line and a non-SSE client see.
+            message: `no usable credential for ${verdict.request.origin} — establish it in the Cofre`,
+            recoverable: false,
+            details: { kind: 'needs_credentials', request: verdict.request },
+          },
+        }),
+      };
+  }
+}
+
+/**
+ * The message a gate failure is allowed to carry.
+ *
+ * `ensureSession` composes its own messages from hosts, ids and fixed text and is safe to repeat —
+ * that is the contract its module docblock states, and its `sanitizeLoginFailure` is what upholds
+ * it. A VALIDATION error is different in kind: it comes from parsing the step's own declaration,
+ * which is the one place a caller could have written something secret-shaped (`CredentialRef`'s
+ * regex exists precisely because someone might put a value where a reference belongs). Zod's
+ * message is a JSON dump of its issues; it does not include the offending value today, and this
+ * does not depend on that staying true.
+ */
+function credentialGateFailureMessage(err: unknown): string {
+  if ((err as { name?: unknown } | null)?.name === 'ZodError') {
+    return 'this step\'s credential declaration is not valid — credentialRefs must be opaque cofre:<itemId> references';
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
 /** Build the awaiting_daemon failure record the outer loop converts to a halt. */
 function awaitingDaemonRecord(
   base: StepRecord,
@@ -2193,6 +2399,22 @@ function extractAwaitingIntegrationConsent(
     integrationKey: typeof d.integrationKey === 'string' ? d.integrationKey : 'unknown',
     actionName: typeof d.actionName === 'string' ? d.actionName : 'unknown',
   };
+}
+
+/**
+ * Detect the needs_credentials failure record. Sibling of `extractAwaitingDaemon`.
+ *
+ * Re-VALIDATES through the shared schema rather than casting: the details blob is read back off a
+ * step record that may have been persisted by another version of this engine, and a halt payload
+ * that does not match the contract must fail to be a halt rather than be streamed as one.
+ */
+function extractNeedsCredentials(record: StepRecord): RunCredentialRequest | null {
+  const details = record.error?.details;
+  if (!details || typeof details !== 'object') return null;
+  const d = details as Record<string, unknown>;
+  if (d.kind !== 'needs_credentials') return null;
+  const parsed = RunCredentialRequest.safeParse(d.request);
+  return parsed.success ? parsed.data : null;
 }
 
 /** Detect the awaiting_daemon failure record (no local daemon connected). */

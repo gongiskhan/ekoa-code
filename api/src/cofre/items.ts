@@ -12,6 +12,7 @@ import type { Actor, CofreItem, CofreItemType, GrantDuration } from '@ekoa/share
 import { assertGrantAllowedForItemType } from '@ekoa/shared';
 import { envelopeEncrypt } from '../data/crypto.js';
 import { cofreItems, cofreGrants } from './store.js';
+import { notifyCredentialEstablished } from './notify.js';
 import { isGrantActive } from './service.js';
 import type { CofreItemDoc, CofreGrantDoc, IntegrationItemLink } from './types.js';
 
@@ -84,6 +85,12 @@ export async function mintCofreItem(
     ...(input.integrationLink ? { integrationLink: input.integrationLink } : {}),
   } as CofreItemDoc;
   await cofreItems.raw.insert(doc as never);
+  // A run halted in `needs_credentials` for one of these origins can now make progress (P3.1).
+  // Announced at MINT as well as at grant because the two are separate user actions and a run
+  // must not sit waiting through the gap: a mint with no grant yet wakes a run that re-checks,
+  // finds no live grant, and halts again. Over-announcing costs one re-dispatch; under-announcing
+  // costs a run that never resumes, so it fails in the cheap direction on purpose.
+  notifyCredentialEstablished({ orgId: actor.orgId, userId: actor.userId, boundOrigins });
   return doc;
 }
 
@@ -132,6 +139,10 @@ export async function issueGrant(
     } as CofreGrantDoc;
   }
   await cofreGrants.raw.insert(doc as never);
+  // THE decisive moment for a waiting run: `unwrap` needs a live grant, so this - not the mint -
+  // is when the credential actually becomes usable. Announced with the ITEM's bound origins, which
+  // are what a waiter matches on.
+  notifyCredentialEstablished({ orgId: actor.orgId, userId: actor.userId, boundOrigins: item.boundOrigins });
   return doc;
 }
 

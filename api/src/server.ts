@@ -99,6 +99,7 @@ import { verifyGatewayKey } from './auth/gateway-keys-service.js';
 import { gatewayKeysRouter } from './routes/gateway-keys.js';
 import { memvaultRouter } from './routes/memvault.js';
 import { cofreRouter } from './routes/cofre.js';
+import { setCredentialEstablishedNotifier } from './cofre/index.js';
 import { artifactsRouter } from './routes/artifacts.js';
 // G7B — agent execution (ch05 + ch08): chat/job routers, the injected agent seams, and the
 // boot obligations (content ingest, knowledge backfill, orphan sweep).
@@ -141,6 +142,10 @@ import {
   setPlatformIntegrationCaller,
   setIntegrationCredentialLoader,
   setIntegrationOriginResolver,
+  setIntegrationActionDeclarationResolver,
+  setCredentialResumeDriver,
+  onCredentialEstablished,
+  redispatchRunAwaitingCredentials,
   setScopedMemoryResolver,
   setAppDataStore,
   setArtifactResolver,
@@ -266,6 +271,10 @@ function makeRunSseEmitter(runId: string): RunEventEmitter {
     runStreamingAvailable: (_id, info) => emit('streaming_available', { token: info.token, wsUrl: info.wsUrl, viewport: info.viewport }),
     runAwaitingConsent: (_id, info) => emit('awaiting_consent', { stepIndex: info.stepIndex, shape: info.shape, argv: info.argv, description: info.description }),
     runAwaitingDaemon: (_id, info) => emit('awaiting_daemon', { stepIndex: info.stepIndex, capability: info.capability, reason: info.reason }),
+    // Forwarded WHOLE: the wire event is the persisted `RunCredentialRequest` plus a `type`
+    // discriminator (`shared/src/events.ts`), so field-picking here could only introduce drift
+    // between what a live viewer sees and what a reloading one reads off `GET /runs/:id`.
+    runNeedsCredentials: (_id, info) => emit('needs_credentials', { ...info }),
     runOutputChunk: (_id, info) => emit('step_output_chunk', { stepIndex: info.stepIndex, stream: info.stream, chunk: info.chunk }),
   };
 }
@@ -576,6 +585,25 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   setIntegrationOriginResolver((integrationKey, actor) =>
     egressOriginsForIntegration(actor, integrationKey, findConfigForOwner, deps.now()),
   );
+  // 4b. The ACTION's own declaration for the credential gate (P3.1/P3.2): its resolved
+  // `httpConfig.baseUrl` (the repo's one origin truth since `declaredOrigins` was deleted) and its
+  // posture / attended-auth labels, which `origin-posture.ts` folds into a classification. Resolved
+  // as the RUN ACTOR for exactly the reason above it: the same key names a different package per
+  // org, so an unscoped read would apply one tenant's declaration to another tenant's run. A key or
+  // action that resolves to nothing answers null, which classifies CLOSED.
+  setIntegrationActionDeclarationResolver(async (integrationKey, actionName, actor) => {
+    const def = await resolveDefinition(actor, integrationKey);
+    const action = def?.actions?.find((a) => a.actionName === actionName);
+    if (!action) return null;
+    // Only the three fields the gate reads travel. An `IntegrationAction` also carries request
+    // templates and credential wiring, and the seam's type is the statement that none of that is
+    // the credential gate's business.
+    return {
+      ...(action.posture ? { posture: action.posture } : {}),
+      ...(action.authProfile ? { authProfile: action.authProfile } : {}),
+      ...(action.httpConfig?.baseUrl ? { httpConfig: { baseUrl: action.httpConfig.baseUrl } } : {}),
+    };
+  });
   // 5. Automation-scoped memory snippets for vision prompts (correction memories, §11.6).
   setScopedMemoryResolver(async (q) => {
     const all = await listVisibleMemories({ userId: q.ownerUserId, orgId: q.orgId, role: 'user' });
@@ -681,6 +709,21 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       },
     };
   });
+
+  // 11. THE CREDENTIAL-ESTABLISHED OBSERVER (P3.1). Two bindings, one loop, and the direction is
+  // the whole point: `cofre/` declares a notifier it calls when a credential becomes usable, and
+  // `automation/` declares a resume driver it calls when a waiting run should restart. Neither
+  // module imports the other — cofre sits below automation in the tier table — and this is the one
+  // place they meet, exactly as the daemon seam above.
+  //
+  // NOT LOAD-BEARING ALONE, deliberately (plan trap T7). The waiter registry is process-local, so a
+  // restart forgets it; the run is still persisted `needs_credentials`, the reloading client still
+  // recovers it, and the `/cofre` establish action still drives `POST /runs/:id/resume` itself.
+  // Both paths converge on `resumeRun`/`redispatchRunAwaitingCredentials`, which re-read the row.
+  setCredentialEstablishedNotifier((event) => {
+    onCredentialEstablished(event);
+  });
+  setCredentialResumeDriver(redispatchRunAwaitingCredentials);
 
   // G8 — trigger delivery targets (ch02 §2.8: injected callbacks, never upward imports).
   setDeliveryTargets({

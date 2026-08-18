@@ -75,6 +75,7 @@ import {
   CofreNotFoundError,
   CredentialOriginError,
   findSessionItemsForOrigin,
+  hasStandingGrant,
   markSessionUnhealthy as persistSessionUnhealthy,
   originsFromStorageState,
   unwrap,
@@ -274,6 +275,15 @@ export interface EnsureSessionInput {
    * that has already re-established once in this run cannot accidentally do it twice.
    */
   allowReestablish?: boolean;
+  /**
+   * The origin's login is OTP / MFA / CAPTCHA gated (`origin-posture.ts` `requiresAttendedAuth`).
+   *
+   * ABSENT MEANS FALSE, which is today's behaviour, and that is the one direction this default may
+   * fail in: `true` only ever REMOVES the typist route. The caller resolves it (posture is a fact
+   * about the action being run, and this module does not know the action); this module's job is to
+   * make it un-overridable once it arrives — see `decideReauthRoute`.
+   */
+  requiresAttendedAuth?: boolean;
 }
 
 /**
@@ -322,6 +332,8 @@ export interface EnsureSessionDeps {
   recipes: (host: string) => TypistRecipe | undefined;
   /** The REVIEWED login URL for a host, when the asset declares one. */
   recipeLoginUrl: (host: string) => string | undefined;
+  /** Does the credential carry a grant that outlives one run? The re-auth policy's other input. */
+  hasStandingGrant: (actor: Actor, itemId: string, now: number) => Promise<boolean>;
   clock: () => number;
 }
 
@@ -336,8 +348,49 @@ const REAL_DEPS: EnsureSessionDeps = {
   capture: captureSessionWithGrant,
   recipes: recipeForHost,
   recipeLoginUrl: loginUrlForHost,
+  hasStandingGrant: (actor, itemId, now) => hasStandingGrant(actor, itemId, now),
   clock: () => Date.now(),
 };
+
+// ---------------------------------------------------------------------------
+// The re-auth policy (P3.3)
+// ---------------------------------------------------------------------------
+
+/** What may re-establish a session that checkout refused. */
+export type ReauthRoute = 'typist' | 'ceremony';
+
+/**
+ * THE RE-AUTH TABLE, as a function, because it is two booleans and everyone must read them the
+ * same way.
+ *
+ *   attended | standing grant | route
+ *   ---------+----------------+---------
+ *   false    | yes            | typist    <- the silent re-login this exists to allow
+ *   false    | no             | ceremony  <- nobody authorised an unattended replay
+ *   true     | yes            | ceremony  <- ATTENDED WINS, whatever the grant says
+ *   true     | no             | ceremony
+ *
+ * THE THIRD ROW IS THE WHOLE POINT. A live `until_locked` grant is the user saying "you may use
+ * this credential without asking me again" — it is NOT the user saying "you may solve my OTP", and
+ * on an OTP-gated portal the typist cannot: it would fill the password, submit, meet a code prompt
+ * it has no answer for, and leave a spent login attempt against a portal with an unknown lock-out
+ * policy. So the attended flag is checked FIRST and nothing downstream can re-open it.
+ *
+ * `this_run` grants are not "standing" — see `hasStandingGrant` (`cofre/service.ts`).
+ */
+export function decideReauthRoute(input: {
+  requiresAttendedAuth: boolean;
+  grantAllowsUnattendedRelogin: boolean;
+}): ReauthRoute {
+  if (input.requiresAttendedAuth) return 'ceremony';
+  return input.grantAllowsUnattendedRelogin ? 'typist' : 'ceremony';
+}
+
+/** The `cofre:<itemId>` reference's item id, or null when the string is not a reference. */
+function itemIdOfRef(ref: string): string | null {
+  const m = /^cofre:(.+)$/.exec(ref.trim());
+  return m?.[1] ?? null;
+}
 
 // ---------------------------------------------------------------------------
 // ensureSession
@@ -488,6 +541,32 @@ export async function ensureSession(
       route: 'relay',
       reason: `${host} already re-established once in this run — refusing a second automated login`,
       attempted: false, // THIS call submitted nothing; an earlier one in the run may have
+      ...(chosen ? { itemId: chosen._id } : {}),
+    };
+  }
+
+  // ---- 4b. THE RE-AUTH POLICY (P3.3) ---------------------------------------
+  // Everything above decided that a typist login is what this PORTAL's state calls for. This is the
+  // separate question of whether an unattended login is permitted at all, and it is asked here —
+  // after the route, before the browser — so that a refusal costs nothing and, crucially, so that
+  // no password is unwrapped on a path that was never going to be allowed to submit one.
+  const credentialItemId = itemIdOfRef(input.credentialRef);
+  const standingGrant = credentialItemId
+    ? await d.hasStandingGrant(actor, credentialItemId, now)
+    : false;
+  if (
+    decideReauthRoute({
+      requiresAttendedAuth: input.requiresAttendedAuth === true,
+      grantAllowsUnattendedRelogin: standingGrant,
+    }) === 'ceremony'
+  ) {
+    return {
+      status: 'needs-human',
+      route: 'attended',
+      reason: input.requiresAttendedAuth === true
+        ? `${host} requires an attended login (OTP / MFA / CAPTCHA) — the typist never runs against it`
+        : `${host} has no standing grant on its credential — an unattended re-login is not authorised`,
+      attempted: false, // nothing was unwrapped and nothing was typed
       ...(chosen ? { itemId: chosen._id } : {}),
     };
   }

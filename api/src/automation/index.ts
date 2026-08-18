@@ -35,6 +35,25 @@ export {
 // --- Rehearsal fixer (budget + fast-path detector) --------------------------
 export { REHEARSAL_BUDGET, detectHumanActionable } from './rehearsal.js';
 
+// --- The credential halt's observer half (P3.1). `server.ts` binds `onCredentialEstablished` to
+//     the Cofre-side notifier seam and `setCredentialResumeDriver` to the run re-dispatcher, which
+//     is how a Cofre mint reaches a waiting run without `cofre/` importing `automation/`. ---------
+export {
+  onCredentialEstablished,
+  setCredentialResumeDriver,
+  registerCredentialWaiter,
+  clearCredentialWaiter,
+  credentialWaiterCount,
+  __resetCredentialWaitersForTests,
+  type CredentialResumeDriver,
+} from './credential-waiters.js';
+export {
+  evaluateCredentialGate,
+  credentialEstablishmentMode,
+  cofrePortalDeepLink,
+  type CredentialGateVerdict,
+} from './credential-gate.js';
+
 // --- Actor-scoped REST service surface (ch03 §3.8.18) — routes/ call these; the router never
 //     imports data/ directly. Every response is shape-compatible with shared/automations.ts. ------
 export {
@@ -64,6 +83,7 @@ export {
   type RunCreateOutcome,
   cancelRun,
   resumeRun,
+  redispatchRunAwaitingCredentials,
   resolveConsent,
   submitStepFeedback,
   buildCatalog,
@@ -127,6 +147,7 @@ export {
   setPlatformIntegrationCaller,
   setIntegrationCredentialLoader,
   setIntegrationOriginResolver,
+  setIntegrationActionDeclarationResolver,
   setScopedMemoryResolver,
   setAppDataStore,
   setArtifactResolver,
@@ -143,6 +164,8 @@ export {
   type IntegrationActionCall,
   type PlatformIntegrationCaller,
   type IntegrationCredentialLoader,
+  type IntegrationActionDeclaration,
+  type IntegrationActionDeclarationResolver,
   type ScopedMemoryResolver,
   type ScopedMemoryQuery,
   type AppDataStore,

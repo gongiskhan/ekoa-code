@@ -61,6 +61,7 @@ import type { Actor } from '@ekoa/shared';
 import { envelopeEncrypt } from '../data/crypto.js';
 import { cofreItems, cofreGrants } from './store.js';
 import { issueGrant, mintCofreItem, purgeCofreItem, type CofreDeps } from './items.js';
+import { notifyCredentialEstablished } from './notify.js';
 import {
   isGrantActive,
   unwrapResolved,
@@ -183,6 +184,10 @@ export async function mintIntegrationCredentialItem(
     deps,
   );
   await issueGrant(actor, item._id, 'until_locked', {}, deps);
+  // NO `notifyCredentialEstablished` here on purpose (P3.1): both calls above already announce it,
+  // and a third announcement for one act would re-dispatch a waiting run twice for nothing. The
+  // same is true of `captureSessionToCofre` / `captureSessionWithGrant` (`sessions.ts`) and of
+  // `ensureSession`'s success path, which reaches the Cofre through exactly these two functions.
   return item;
 }
 
@@ -260,6 +265,16 @@ async function rewriteValue(
     ...(boundOrigins.length > 0 ? { boundOrigins } : {}),
     updatedAt: new Date(now).toISOString(),
   }));
+  // THE ONE PATH MINT/GRANT DO NOT COVER (P3.1). A rotation re-encrypts in place: no mint, no
+  // grant, so neither of the two hooks in `items.ts` fires - yet from a waiting run's point of view
+  // a working credential just appeared where a broken one was. Announced with the item's OWN owner
+  // and org, not the caller's: an org-shared rotation is written by a peer into the connecting
+  // admin's item, and the waiter that can use it is the item owner's.
+  notifyCredentialEstablished({
+    orgId: item.orgId,
+    userId: item.userId,
+    boundOrigins: boundOrigins.length > 0 ? boundOrigins : item.boundOrigins,
+  });
   return 'updated';
 }
 

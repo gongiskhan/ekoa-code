@@ -16,6 +16,7 @@ export {
   lockItem,
   lockAll,
   isGrantActive,
+  hasStandingGrant,
   CofreLockedError,
   CofreNotFoundError,
   CredentialOriginError,
@@ -25,6 +26,18 @@ export {
 } from './service.js';
 
 export { recordCofreEvent } from './audit.js';
+
+// The login relay's server half (P3.2). There is deliberately no completion export - see relay.ts.
+export { issueLoginRelayPrompt, LOGIN_RELAY_TTL_MS, type IssueLoginRelayInput } from './relay.js';
+
+// The "a credential became available" seam (P3.1). Bound at the composition root to the
+// automation-side waiter registry; `cofre/` never imports `automation/`.
+export {
+  setCredentialEstablishedNotifier,
+  __resetCredentialNotifierForTests,
+  type CredentialEstablishedEvent,
+  type CredentialEstablishedNotifier,
+} from './notify.js';
 
 export {
   mintCofreItem,

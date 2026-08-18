@@ -236,6 +236,19 @@ adversarial/closed, resolved at use from an optional per-action declaration on `
 (never stored resolved), with cloud egress structurally impossible on an adversarial origin and
 posture overriding `StepDeclaration`'s `cloud` default.
 
+A run that needs a credential the Cofre does not hold halts in `needs_credentials`, a first-class
+`RunStatus` modelled on `awaiting_daemon` (halt and re-dispatch) rather than on `paused_for_user` (an
+in-process poll): the human is expected to leave the page for `/cofre`, so the halt has to survive a
+reload and a restart. `automation/credential-gate.ts` is the general home of `ensureSession` in the
+run loop - it fires only for a step whose `StepDeclaration.credentialRefs` is non-empty, derives the
+origin from the step's own URL or the action's resolved `httpConfig.baseUrl`, and contains no branch
+on any integration key. Resume is driven from two independent places, neither load-bearing alone: a
+process-local waiter registry (`automation/credential-waiters.ts`) woken through the `cofre/notify.ts`
+seam that `server.ts` binds - `cofre/` never imports `automation/` - and the client's own resume call
+after it unlocks a credential. An origin whose login is OTP / MFA / CAPTCHA gated halts with
+`mode: 'ceremony'` and is established by the human in a headed window; there is no typed-OTP path and
+`cofre/relay.ts` deliberately ships the login prompt's producer with no completion half.
+
 ## Integrations
 
 `integrations/` connects external systems: OAuth flows (Google, Microsoft, Adobe), AES-encrypted

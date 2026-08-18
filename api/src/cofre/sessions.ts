@@ -104,6 +104,9 @@ export async function captureSessionWithGrant(
   // `until_locked` goes through the ordinary grant API — no new grant kind, no second code path
   // that `lockItem`/`lockAll` would have to learn about to be able to revoke.
   const grant = await issueGrant(actor, item._id, 'until_locked', {}, deps);
+  // A run halted in `needs_credentials` for this origin is woken from inside `mintCofreItem` and
+  // `issueGrant` (`items.ts`, P3.1). Nothing to add here: announcing again would only re-dispatch
+  // the same run a second time.
   return { item, grant };
 }
 

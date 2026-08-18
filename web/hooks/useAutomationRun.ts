@@ -18,6 +18,7 @@ import type {
   AutomationRunStreamingAvailableEvent,
   AutomationRunAwaitingConsentEvent,
   AutomationRunAwaitingDaemonEvent,
+  AutomationRunNeedsCredentialsEvent,
   AutomationStepOutputChunkEvent,
   FailureKind,
   PatchKind,
@@ -154,6 +155,24 @@ function toDaemonEvent(runId: string, e: RunEvt<'awaiting_daemon'>): AutomationR
   };
 }
 
+function toNeedsCredentialsEvent(
+  runId: string,
+  e: RunEvt<'needs_credentials'>,
+): AutomationRunNeedsCredentialsEvent {
+  return {
+    type: 'automation_run_needs_credentials',
+    trace_id: runId,
+    runId,
+    stepIndex: e.stepIndex,
+    origin: e.origin,
+    integrationKey: e.integrationKey,
+    portalDeepLink: e.portalDeepLink,
+    mode: e.mode,
+    reason: e.reason,
+    ...(e.preferredPairingId ? { preferredPairingId: e.preferredPairingId } : {}),
+  };
+}
+
 function toCompleteEvent(runId: string, e: RunEvt<'complete'>): AutomationRunCompleteEvent {
   const raw = e as unknown as Record<string, unknown>;
   return {
@@ -231,6 +250,7 @@ function openEntry(runId: string): RunEntry {
   unsubs.push(stream.on('streaming_available', (e) => feed(toStreamingEvent(runId, e))));
   unsubs.push(stream.on('awaiting_consent', (e) => feed(toConsentEvent(runId, e))));
   unsubs.push(stream.on('awaiting_daemon', (e) => feed(toDaemonEvent(runId, e))));
+  unsubs.push(stream.on('needs_credentials', (e) => feed(toNeedsCredentialsEvent(runId, e))));
   unsubs.push(
     stream.on('complete', (e) => {
       done = true;

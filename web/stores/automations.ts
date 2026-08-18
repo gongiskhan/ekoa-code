@@ -11,6 +11,7 @@ import type {
   IntegrationActionCatalogEntry,
   StreamingSession,
   StreamingConnectionStatus,
+  CredentialRequest,
 } from '@/types/automation';
 
 // ============================================================================
@@ -46,7 +47,7 @@ interface AutomationsState {
      * auto-scroll to the latest entry.
      */
     timeline: AutomationLiveEvent[];
-    status: 'idle' | 'running' | 'completed' | 'failed' | 'cancelled' | 'awaiting_integration' | 'paused_for_user' | 'awaiting_consent' | 'awaiting_daemon';
+    status: 'idle' | 'running' | 'completed' | 'failed' | 'cancelled' | 'awaiting_integration' | 'paused_for_user' | 'awaiting_consent' | 'awaiting_daemon' | 'needs_credentials';
     summary?: string;
     awaitingService?: string;
     error?: string;
@@ -73,6 +74,12 @@ interface AutomationsState {
       capability: 'browser' | 'bash';
       reason: string;
     };
+    /**
+     * Active credential halt: the Cofre holds nothing usable for `origin`. Unlike every other
+     * request on this record it is ALSO recovered from the run resource after a reload — the halt
+     * outlives the page, so the SSE frame cannot be the only carrier.
+     */
+    credentialsRequest?: CredentialRequest;
     /** Live stdout/stderr accumulators per step index. */
     liveChunks?: Record<number, { stdout: string; stderr: string }>;
     streamingSession?: StreamingSession;
@@ -148,6 +155,10 @@ const NON_TERMINAL_RUN_STATUSES = new Set<string>([
   'paused_for_user',
   'awaiting_consent',
   'awaiting_daemon',
+  // A credential halt is the state that MOST needs to be here: the human is expected to leave this
+  // page for `/cofre` and come back, so "recover the in-flight run after a reload" is its normal
+  // path rather than a crash-recovery edge case.
+  'needs_credentials',
 ]);
 
 // ============================================================================
@@ -333,7 +344,20 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
       const status = NON_TERMINAL_RUN_STATUSES.has(live.status)
         ? (live.status as AutomationsState['activeRun']['status'])
         : 'running';
-      return { activeRun: { ...INITIAL_RUN, automationId, runId: live.id, status, kind: 'normal' } };
+      // A credential halt carries its own question, and the reload is the case it exists for: the
+      // SSE frame that announced it was emitted before this page existed, so the banner has to be
+      // rebuilt from the run resource or the user comes back from /cofre to a silent screen.
+      const credentialsRequest = (live as { credentialRequest?: CredentialRequest }).credentialRequest;
+      return {
+        activeRun: {
+          ...INITIAL_RUN,
+          automationId,
+          runId: live.id,
+          status,
+          kind: 'normal',
+          ...(status === 'needs_credentials' && credentialsRequest ? { credentialsRequest } : {}),
+        },
+      };
     });
   },
 
@@ -358,7 +382,15 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
     // through applyLiveEvent. We optimistically clear the pauseRequest here so
     // the UI reacts immediately.
     set((s) => ({
-      activeRun: { ...s.activeRun, pauseRequest: undefined, status: 'running', streamingSession: undefined },
+      activeRun: {
+        ...s.activeRun,
+        pauseRequest: undefined,
+        // The credential halt clears the same way: the server drops the persisted request when it
+        // re-dispatches, so leaving it here would keep the banner over a run that is moving again.
+        credentialsRequest: undefined,
+        status: 'running',
+        streamingSession: undefined,
+      },
     }));
   },
 
@@ -493,6 +525,25 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
               timeline,
               status: 'awaiting_daemon',
               daemonRequest: { stepIndex: event.stepIndex, capability: event.capability, reason: event.reason },
+            },
+          };
+        }
+        case 'automation_run_needs_credentials': {
+          return {
+            activeRun: {
+              ...s.activeRun,
+              runId: event.runId,
+              timeline,
+              status: 'needs_credentials',
+              credentialsRequest: {
+                stepIndex: event.stepIndex,
+                origin: event.origin,
+                integrationKey: event.integrationKey,
+                portalDeepLink: event.portalDeepLink,
+                mode: event.mode,
+                reason: event.reason,
+                ...(event.preferredPairingId ? { preferredPairingId: event.preferredPairingId } : {}),
+              },
             },
           };
         }

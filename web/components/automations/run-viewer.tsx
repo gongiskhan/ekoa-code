@@ -1,6 +1,7 @@
 "use client";
 
-import { Hand, Play, Square, ThumbsDown, ThumbsUp, Wand2 } from 'lucide-react';
+import Link from 'next/link';
+import { Hand, KeyRound, Play, Square, ThumbsDown, ThumbsUp, Wand2 } from 'lucide-react';
 import { Spinner } from '@/components/ui/spinner';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAutomationsStore } from '@/stores/automations';
@@ -273,6 +274,18 @@ export default function RunViewer({ automationId, steps }: RunViewerProps) {
         </div>
       )}
 
+      {activeRun.status === 'needs_credentials' && activeRun.credentialsRequest && (
+        <NeedsCredentialsBanner
+          stepIndex={activeRun.credentialsRequest.stepIndex}
+          origin={activeRun.credentialsRequest.origin}
+          portalDeepLink={activeRun.credentialsRequest.portalDeepLink}
+          mode={activeRun.credentialsRequest.mode}
+          reason={activeRun.credentialsRequest.reason}
+          onContinue={() => resume()}
+          onCancel={() => cancel()}
+        />
+      )}
+
       {isPausedForUser && activeRun.pauseRequest && (
         <PauseForUserBanner
           stepIndex={activeRun.pauseRequest.stepIndex}
@@ -461,7 +474,7 @@ export default function RunViewer({ automationId, steps }: RunViewerProps) {
   );
 }
 
-type RunStatusBadgeStatus = 'idle' | 'running' | 'completed' | 'failed' | 'cancelled' | 'awaiting_integration' | 'paused_for_user' | 'awaiting_consent' | 'awaiting_daemon';
+type RunStatusBadgeStatus = 'idle' | 'running' | 'completed' | 'failed' | 'cancelled' | 'awaiting_integration' | 'paused_for_user' | 'awaiting_consent' | 'awaiting_daemon' | 'needs_credentials';
 
 function RunStatusBadge({ status }: { status: RunStatusBadgeStatus }) {
   const { automations } = useTranslation();
@@ -475,6 +488,10 @@ function RunStatusBadge({ status }: { status: RunStatusBadgeStatus }) {
     paused_for_user: 'bg-cyan-200 text-cyan-900',
     awaiting_consent: 'bg-orange-200 text-orange-900',
     awaiting_daemon: 'bg-orange-200 text-orange-900',
+    // Violet, not the orange the two daemon/consent halts share: this one is answered somewhere
+    // else entirely (the Cofre), and a colour it shares with "start your local Ekoa" would read as
+    // the same instruction.
+    needs_credentials: 'bg-violet-200 text-violet-900',
   };
   return (
     <span className={`text-xs px-2 py-0.5 rounded-full ${tones[status]}`}>
@@ -554,6 +571,87 @@ function PauseForUserBanner({
             />
           </a>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The credential halt's banner. Deliberately shaped like `PauseForUserBanner` — same anatomy, same
+ * two affordances — because to the user these are the same kind of moment: the run stopped and it
+ * needs them. What differs is WHERE they go, so the primary action is a link to the Cofre rather
+ * than an instruction about the browser window on their screen.
+ *
+ * Thin on purpose: a sibling slice owns the richer Cofre surface. This is the honest minimum — name
+ * the origin, say which of the two things is being asked, get them there, and let them come back.
+ */
+function NeedsCredentialsBanner({
+  stepIndex,
+  origin,
+  portalDeepLink,
+  mode,
+  reason,
+  onContinue,
+  onCancel,
+}: {
+  stepIndex: number;
+  origin: string;
+  portalDeepLink: string;
+  mode: 'typist' | 'ceremony';
+  reason: string;
+  onContinue: () => void;
+  onCancel: () => void;
+}) {
+  const { automations } = useTranslation();
+  const t = automations.runViewer;
+  return (
+    <div className="border-b-4 border-violet-500 bg-violet-50 p-4">
+      <div className="flex items-start gap-3">
+        <div className="rounded-full bg-violet-200 p-2 shrink-0">
+          <KeyRound size={18} className="text-violet-900" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <h3 className="text-sm font-semibold text-violet-950">
+            {t.needsCredentialsOnStep(stepIndex + 1, origin)}
+          </h3>
+          <p className="mt-1 text-sm text-violet-900 leading-relaxed">
+            {mode === 'ceremony' ? t.credentialsCeremonyHint(origin) : t.credentialsTypistHint(origin)}
+          </p>
+          {reason && <p className="mt-1 text-xs text-violet-800/85 italic">{reason}</p>}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {/*
+              A CLIENT navigation, not an `<a href>`, and the difference is load-bearing rather
+              than cosmetic: a full page load discards the automations store, and the Cofre's own
+              belt-and-braces resume (`stores/cofre.ts`) reads `activeRun` out of it to ask a
+              waiting run to continue. With a hard navigation that leg is silently dead and the
+              server-side observer becomes the only path — which is exactly the "neither is
+              load-bearing alone" property this halt is built on.
+            */}
+            <Link
+              href={portalDeepLink}
+              className="inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded bg-violet-600 text-white hover:bg-violet-700 font-medium"
+            >
+              <KeyRound size={14} />
+              {t.establishCredential}
+            </Link>
+            <button
+              type="button"
+              onClick={onContinue}
+              className="inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded border border-violet-300 text-violet-800 hover:bg-violet-100"
+            >
+              <Play size={14} />
+              {t.credentialsContinue}
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              className="inline-flex items-center gap-1.5 text-sm px-3 py-1.5 rounded border border-red-300 text-red-700 hover:bg-red-50"
+            >
+              <Square size={14} />
+              {t.stopRun}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

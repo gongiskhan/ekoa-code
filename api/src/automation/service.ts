@@ -37,6 +37,7 @@ import { buildAutomationCatalog } from './catalog.js';
 import { evictCacheForFingerprint } from './cache.js';
 import { approveCommandShape, revokeCommandShape, listApprovedShapes, listApprovedCommandRecords } from './consent.js';
 import { runEventEmitterFactory } from './seams.js';
+import { clearCredentialWaiter } from './credential-waiters.js';
 import { screenshotUrlFromPath, runLogsFromSteps } from './persistence.js';
 import type { Automation, Step, StepType, RunRecord, StepRecord } from './types.js';
 
@@ -243,6 +244,11 @@ function toWireRun(doc: StoredRun): WireRunRecord {
           },
         }
       : {}),
+    // The credential halt, for the same reason (P3.1) and with one more: this state SURVIVES a
+    // reload, so the run resource — not an SSE frame the client was not connected for — is the
+    // primary carrier. Forwarded WHOLE rather than field-picked, because every field on the shape
+    // is already published and none of them can hold a value (`shared/src/cofre.ts`).
+    ...(doc.credentialRequest ? { credentialRequest: doc.credentialRequest } : {}),
   };
 }
 
@@ -810,19 +816,109 @@ export async function cancelRun(actor: Actor, runId: string): Promise<{ cancelle
   const run = (await automationRuns.get(runId)) as StoredRun | null;
   if (!run || !isRunOwner(run, actor)) return { cancelled: false };
   const sig = signals.get(runId);
+  // Un-park it first: a cancelled run must not be woken later by an unrelated Cofre mint. The
+  // re-dispatcher re-checks the row and would refuse anyway, so this is hygiene rather than a gate.
+  clearCredentialWaiter(runId);
   if (!sig || sig.cancelled) return { cancelled: false };
   sig.cancelled = true; // engine observes this at the next loop check / resume poll
   return { cancelled: true };
 }
 
-/** Resume a paused-for-user run (§5.6.7). A run that is not currently paused is a no-op. */
+/**
+ * Resume a halted run. Two mechanisms behind one owner-scoped door, because they are two genuinely
+ * different halts and the caller should not have to know which one it is looking at:
+ *
+ *   - `paused_for_user` — the engine process is ALIVE, blocked in `waitForResumeOrCancel` polling
+ *     `resumeFlag`. Flipping the flag is the whole resume. No signals, no live process, no resume.
+ *   - `needs_credentials` — the engine process is GONE. The run halted and returned, and its state
+ *     lives only in the store. Resuming means DISPATCHING it again from the step that stopped it,
+ *     which is why this branch does not touch `resumeFlag` at all: there is nobody to signal.
+ *
+ * A run in any other status is a no-op, as before. Idempotent in both directions: a second call for
+ * an already-resumed credential halt sees a `running` row and answers false rather than starting a
+ * duplicate engine pass.
+ */
 export async function resumeRun(actor: Actor, runId: string): Promise<{ resumed: boolean }> {
   const run = (await automationRuns.get(runId)) as StoredRun | null;
   if (!run || !isRunOwner(run, actor)) return { resumed: false };
+
+  if (run.status === 'needs_credentials') {
+    return { resumed: await dispatchCredentialResume(run) };
+  }
+
   const sig = signals.get(runId);
   if (!sig || run.status !== 'paused_for_user') return { resumed: false };
   sig.resumeFlag = true;
   return { resumed: true };
+}
+
+/**
+ * Re-dispatch a run parked in `needs_credentials`, from the step that parked it.
+ *
+ * THE OBSERVER'S HALF of the resume (P3.1). Bound at the composition root as the
+ * `CredentialResumeDriver`, so a Cofre mint reaches it without `cofre/` ever importing
+ * `automation/`. It re-reads the run rather than trusting the caller: the registry is process-local
+ * and best-effort, so "this run is waiting" must be re-established from the durable row before
+ * anything starts, or a stale waiter could re-run a run that already completed.
+ *
+ * FIRE-AND-FORGET on purpose. It is called from inside a Cofre mint; making that mint wait for an
+ * automation to finish would be an unrelated latency (and an unrelated failure) on the path where a
+ * user just typed a password.
+ */
+export function redispatchRunAwaitingCredentials(runId: string): void {
+  void (async () => {
+    const run = (await automationRuns.get(runId)) as StoredRun | null;
+    if (!run || run.status !== 'needs_credentials') return;
+    await dispatchCredentialResume(run);
+  })().catch(() => undefined);
+}
+
+/**
+ * The shared body: restart `run` at its halted step. Answers false when the run does not carry
+ * enough to be resumed, which is the honest outcome for a row written before this state existed.
+ */
+async function dispatchCredentialResume(run: StoredRun): Promise<boolean> {
+  const owner = run.ownerUserId;
+  const orgId = run.orgId;
+  if (!owner || !orgId) return false;
+  const resumeFrom = run.credentialRequest?.stepIndex ?? 0;
+
+  // THE CLAIM, and it is not decoration. Resume is driven from TWO independent places by design —
+  // the server-side observer and the client's own call after it unlocks a credential — and they
+  // routinely fire within milliseconds of each other on the same mint. Both would read a
+  // `needs_credentials` row and both would dispatch, running two engine passes over one run id:
+  // duplicated step effects, and two writers racing the same record. A live signal set IS the "a
+  // pass is already in flight" fact (it is created here and deleted only when that pass returns),
+  // and both legs run in this process, so claiming it before anything starts is enough. The
+  // persisted flip to `running` happens inside the engine; this closes the window before it.
+  if (signals.has(run.id)) return false;
+
+  // A fresh signal set for the new pass: the old one was deleted when the halted run returned.
+  const sig: RunSignals = {
+    ownerUserId: owner,
+    orgId,
+    cancelled: false,
+    resumeFlag: false,
+    runApprovedShapes: new Set<string>(),
+  };
+  signals.set(run.id, sig);
+  clearCredentialWaiter(run.id);
+
+  const ctx = makeCtx(run.id, sig);
+  const emit = runEventEmitterFactory(run.id);
+  // `run.inputs` is the PERSISTED copy, so it has already been through `scrubCredentials` — the
+  // resumed run starts with no `inputs.credentials`. That is correct rather than lossy: the reason
+  // this run halted is that the credential was missing, and the credential gate re-establishes the
+  // session from the Cofre on the way back in. A resumed run must never depend on a decrypted bag
+  // that was only ever in the memory of a process that has since returned.
+  const started = runAutomation(run.automationId, ctx, {
+    runId: run.id,
+    resumeFromStepIndex: resumeFrom,
+    ...(emit ? { emit } : {}),
+    ...(run.inputs ? { inputs: run.inputs } : {}),
+  });
+  void started.catch(() => undefined).finally(() => signals.delete(run.id));
+  return true;
 }
 
 /** Resolve first-time consent for a local_command shape (once / always / stop). 'always' persists

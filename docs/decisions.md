@@ -896,3 +896,96 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   this package actually owns - `src/i18n/pt.ts` plus the three `packaging/` installer files, which
   ship PT-PT product copy and were never gated before. The two dropped documents' claims content is
   not currently gated anywhere in this repo.
+
+- 2026-08-18 - `needs_credentials` IS A FIRST-CLASS RUN STATE, AND `ensureSession` FINALLY HAS A
+  GENERAL HOME (execution-plane plan P3.1/P3.2/P3.3). Before this, a run that needed a credential
+  the Cofre did not hold had no honest state: `paused_for_user` blocks the engine process on a
+  250ms poll waiting for a live headed browser, and `awaiting_integration` is terminal and needs a
+  manual re-run. Neither survives the one thing a user actually does - walk to `/cofre`, establish
+  the credential, and come back, possibly after a reload and possibly after a restart.
+  (1) THE STATE IS MODELLED ON `awaiting_daemon`, NOT ON `paused_for_user`, and that IS the design:
+  halt-and-re-dispatch survives the process, an in-process poll cannot. Threaded through
+  `automation/types.ts` (`RunStatus` + `RunRecord.credentialRequest`), `shared/src/automations.ts`
+  (zod enum + the run view), `shared/src/events.ts` (a union member built by EXTENDING the
+  persisted `RunCredentialRequest`, so the SSE frame and the run resource cannot drift), the engine
+  halt block, `server.ts`'s `makeRunSseEmitter`, `service.ts`'s `resumeRun`, and the web store /
+  hook / viewer / locales. ORDER IS LOAD-BEARING in the engine and a red test found it: the halt is
+  checked BEFORE the awaiting-integration branch, which fires on any non-recoverable failure of an
+  `integration` step and was swallowing every credential halt on the integration rail.
+  (2) GENERALISATION IS THE POINT. `ensureSession` (`automation/session-establishment.ts`) was
+  built, security-tested and reachable from exactly ONE caller - the Citius sync rail
+  (`routes/sync.ts` -> `legal/citius-sync.ts`). Every other integration got no session handling at
+  all, which is a Rule 3 violation by omission. `automation/credential-gate.ts` is its general home
+  in the run loop. The Citius sync rail keeps its own direct call (it is a sync job, not an
+  automation run, and deleting it would remove a shipped capability), but it is no longer the only
+  door. TRIGGER: the step's own `resolveStepDeclaration().credentialRefs` - the only Rule-3-clean
+  trigger, because the alternative is guessing which sites look like portals, and it makes the
+  change backward compatible by construction (an automation authored before declarations existed
+  declares none, so the gate never fires on it - plan trap T6). ORIGIN: a `navigate`/`api_call`
+  step's own URL, an `integration` step's resolved `httpConfig.baseUrl` through a new per-run-actor
+  seam, and for a `browser`/`verify` step the nearest PRECEDING step that answers either - never a
+  stored allow-list, which is the discipline the deleted `declaredOrigins` field left behind.
+  (3) THE OBSERVER, AND WHY IT IS AN INJECTED SEAM. The Cofre has no event bus (`recordCofreEvent`
+  is called only from `routes/cofre.ts`, and half the `CofreRegistoEvent` vocabulary is
+  defined-but-never-emitted), so the resume trigger hangs on the DOMAIN functions where a credential
+  first becomes usable. `cofre/` sits below `automation/`, so `cofre/notify.ts` declares the
+  callback and `server.ts` binds it to `automation/credential-waiters.ts` - the
+  `setDaemonConnectionResolver` pattern, pinned by a source assertion in
+  `api/tests/automation/credential-waiters.test.ts` that no file in `cofre/` imports `automation/`.
+  Hooked at `mintCofreItem` + `issueGrant` (`items.ts`) and at the in-place rotation
+  (`integration-items.ts` `rewriteValue`); `mintIntegrationCredentialItem`, `captureSessionToCofre`,
+  `captureSessionWithGrant` and `ensureSession`'s success path all reach the Cofre THROUGH those
+  two, so they are covered transitively and a third announcement would only re-dispatch the same
+  run twice. Announced at mint as well as at grant on purpose: over-announcing costs one
+  re-dispatch, under-announcing costs a run that never resumes. CROSS-PROCESS (plan trap T7): the
+  registry is in-memory and is NOT the durable truth - the run is persisted `needs_credentials` with
+  its request, `NON_TERMINAL_RUN_STATUSES` recovers it on reload, and the `/cofre` unlock action
+  drives `POST /runs/:id/resume` itself. Both legs converge on code that re-reads the row. They also
+  routinely fire within milliseconds of each other on the same mint, and re-reading is NOT enough on
+  its own - both would see `needs_credentials` and both would dispatch, running two engine passes
+  over one run id. A live `RunSignals` entry is the claim ("a pass is in flight"), taken before
+  anything starts; the loser answers `{resumed:false}`. The Cofre deep link is a client-side `Link`
+  rather than an `<a href>` for the same reason the second leg exists at all: a hard navigation
+  discards the store the client-side resume reads, silently reducing two legs to one.
+  (4) RESUME MEANS RE-DISPATCH FROM THE HALTED STEP, via an additive `resumeFromStepIndex` on the
+  engine. Rejected: re-running the automation from step 0, which would re-execute the effects of
+  every step before the halt for one credential the user supplied.
+  (5) NO TYPED-OTP AUTOMATION, EVER. This overrides the earlier draft's typed-OTP relay. An origin
+  whose login demands OTP/MFA/CAPTCHA classifies `requiresAttendedAuth` (`origin-posture.ts`), its
+  halt carries `mode: 'ceremony'`, and establishment is the human logging in themselves in a headed
+  window with `captureSessionWithGrant` storing the result. `cofre/relay.ts` gives the `login`
+  variant of `RelayPrompt` a producer and DELIBERATELY no completion half:
+  `RelayCompleteRequest.code` is an OTP field, and wiring it to the typist is one small
+  plausible-looking commit away, so its absence is asserted rather than described
+  (`api/tests/automation/no-typed-otp.test.ts`, three layers: exports, the typist's input shape,
+  and no import of `RelayCompleteRequest` anywhere in the credential path). `RelayPrompt` was split
+  into named `RelayLoginPrompt`/`RelaySignaturePrompt` members (the union is still built from them)
+  so a ceremony request is typed as a login prompt and cannot be a signature one (I8).
+  (6) RE-AUTH POLICY (P3.3): `decideReauthRoute` is the four-cell table, and ATTENDED IS A VETO, not
+  a tiebreaker - a live `until_locked` grant is the user saying "use this credential without asking
+  me again", not "solve my OTP", and on an attended portal the typist would spend a login attempt
+  against an unknown lock-out policy for nothing. `cofre/service.ts` gains `hasStandingGrant`, which
+  EXCLUDES `this_run` even when live: that scope is consent for the run in front of the user, not
+  permission to log in again later on their behalf. The check runs after the route and before the
+  browser, so a refusal never unwraps a password. Behaviour change to the existing Citius rail: a
+  password with no standing grant now answers `needs-human` instead of throwing `CofreLockedError`
+  from inside the typist - strictly more actionable, and nothing is typed either way.
+  ACCEPTED RESIDUALS, named: `needs-egress` (a healthy session with no route out) is routed to the
+  existing `awaiting_daemon` halt rather than to `needs_credentials`, because sending a user to the
+  Cofre for a network gap is a lie; P4.1 refines it into the `blocked` schedule channel. The gate's
+  established `storageState` is injected only into a browser not yet created for the run (there is
+  no cookie channel to a live daemon session) - P1/P4 own the rest. The `preferredPairingId` field
+  is on the wire and the halt shape but is not yet populated: it is read from
+  `sessionMetadata.establishedBy.pairingId` by P4.2, which owns bridge preference.
+  Rule 7: additive throughout (a new enum member, a new event union member, two optional fields);
+  no new endpoint descriptor, so `EXPECTED_PENDING_COUNT` is unchanged at 49; OpenAPI and the
+  cortex-cli client regenerated in the same change. FIXED-12:
+  `docs/diagrams/02-module-map.excalidraw` gains the two new `automation/` modules, the
+  `cofre/notify.ts` seam and its binding arrow in this same unit of work. Suites:
+  `api/tests/contract/run-status.test.ts` (the full `RunStatus` set and the full run-event set,
+  pinned - none existed, which is why the union had drifted),
+  `api/tests/automation/engine-needs-credentials.test.ts`,
+  `api/tests/automation/credential-gate.test.ts`,
+  `api/tests/automation/credential-waiters.test.ts`,
+  `api/tests/automation/session-reauth-policy.test.ts`,
+  `api/tests/automation/no-typed-otp.test.ts`, `web/__tests__/automations-needs-credentials.test.ts`.

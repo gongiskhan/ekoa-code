@@ -188,6 +188,49 @@ export function loadIntegrationBoundOrigins(integrationKey: string, actor: Actor
   return originResolver(integrationKey, actor);
 }
 
+// ---- The action's own declaration (P3.1/P3.2, Cofre G-4) -------------------
+//
+// The credential gate needs two facts about the action a step is running: WHERE it goes (the
+// resolved `httpConfig.baseUrl`, which is the repo's one origin truth since `declaredOrigins` was
+// deleted) and HOW the origin treats being automated (`posture` / `authProfile`, which
+// `origin-posture.ts` folds into a classification). Both live on `IntegrationAction`, which is in
+// `integrations/` — the tier `automation/` does not import. Hence a seam, resolved per RUN ACTOR
+// for the same reason `IntegrationOriginResolver` is: the same key names a different package per
+// org, so an unscoped resolution would read one tenant's declaration for another tenant's run.
+
+/**
+ * The three fields the gate reads off an action, structurally rather than as an
+ * `IntegrationAction` import. `PostureBearingAction` (`origin-posture.ts`) is the same shape and an
+ * `IntegrationAction` satisfies both by construction.
+ */
+export interface IntegrationActionDeclaration {
+  posture?: 'permissive' | 'adversarial';
+  authProfile?: { attended: boolean };
+  httpConfig?: { baseUrl?: string };
+}
+
+export type IntegrationActionDeclarationResolver = (
+  integrationKey: string,
+  actionName: string,
+  actor: Actor,
+) => Promise<IntegrationActionDeclaration | null>;
+
+/** DEFAULT IS "NOTHING DECLARED", which `classifyOrigin` reads as adversarial + no cloud egress.
+ *  An unbound seam must not be able to open a posture; it can only fail closed. */
+const defaultActionDeclarationResolver: IntegrationActionDeclarationResolver = async () => null;
+let actionDeclarationResolver: IntegrationActionDeclarationResolver = defaultActionDeclarationResolver;
+export function setIntegrationActionDeclarationResolver(fn: IntegrationActionDeclarationResolver): void {
+  actionDeclarationResolver = fn;
+}
+/** The named action's posture + base URL AS SEEN BY `actor`, or null when nothing is declared. */
+export function loadIntegrationActionDeclaration(
+  integrationKey: string,
+  actionName: string,
+  actor: Actor,
+): Promise<IntegrationActionDeclaration | null> {
+  return actionDeclarationResolver(integrationKey, actionName, actor);
+}
+
 // ============================================================================
 // Scoped memory grounding (ch02 `memory/`) — the engine may import memory/ per
 // §2.7, but the entity-scoped resolver with a snippet cap is not on memory/'s
@@ -420,6 +463,7 @@ export function __resetAutomationSeamsForTests(): void {
   platformCaller = defaultPlatformCaller;
   credentialLoader = defaultCredentialLoader;
   originResolver = defaultOriginResolver;
+  actionDeclarationResolver = defaultActionDeclarationResolver;
   scopedMemoryResolver = defaultScopedMemoryResolver;
   appDataStore = defaultAppDataStore;
   artifactResolver = defaultArtifactResolver;

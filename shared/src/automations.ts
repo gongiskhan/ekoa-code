@@ -2,6 +2,7 @@
 import { z } from 'zod';
 import { Id, IsoTimestamp, itemsResponse, OkResponse, Language, Visibility } from './common.js';
 import { AutomationRunEvent } from './events.js';
+import { RunCredentialRequest } from './cofre.js';
 import type { DomainDescriptorMap } from './descriptor.js';
 
 /** Run status machine (ch03 §3.6.3; ops-inventory §17). */
@@ -15,6 +16,11 @@ export const RunStatus = z.enum([
   'paused_for_user',
   'awaiting_consent',
   'awaiting_daemon',
+  // The Cofre holds no usable credential for an origin the run needs (P3.1). Additive under Rule 7:
+  // an old client that does not know the member renders it as an unknown status rather than
+  // failing, and no persisted run written before this existed can carry it. The full set is pinned
+  // by `api/tests/contract/run-status.test.ts` so the next member is a deliberate act.
+  'needs_credentials',
 ]);
 export type RunStatus = z.infer<typeof RunStatus>;
 
@@ -187,6 +193,12 @@ export const RunRecord = z
     steps: z.array(RunStepRecord).optional(),
     /** Present exactly while `status === 'awaiting_consent'`; cleared when the run resumes. */
     consentRequest: RunConsentRequest.optional(),
+    /**
+     * Present exactly while `status === 'needs_credentials'`. This is the field a RELOADING client
+     * reads: the halt survives the process and the page, so the banner must be reconstructible from
+     * the run resource alone rather than from an SSE frame that was emitted before the reload.
+     */
+    credentialRequest: RunCredentialRequest.optional(),
   })
   .passthrough();
 export type RunRecord = z.infer<typeof RunRecord>;

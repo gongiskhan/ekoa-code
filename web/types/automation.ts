@@ -179,7 +179,25 @@ export type RunStatus =
   | 'awaiting_integration'
   | 'paused_for_user'
   | 'awaiting_consent'
-  | 'awaiting_daemon';
+  | 'awaiting_daemon'
+  /** The Cofre holds no usable credential for an origin the run needs. Survives a reload. */
+  | 'needs_credentials';
+
+/**
+ * What the run is asking the human to establish. Mirrors the published `RunCredentialRequest`
+ * (`shared/src/cofre.ts`) — an origin, a deep link and a mode, and deliberately no field a
+ * credential VALUE could occupy.
+ */
+export interface CredentialRequest {
+  stepIndex: number;
+  origin: string;
+  integrationKey: string;
+  portalDeepLink: string;
+  /** `typist` = put the password in the Cofre; `ceremony` = log in yourself in a headed window. */
+  mode: 'typist' | 'ceremony';
+  preferredPairingId?: string;
+  reason: string;
+}
 
 export interface ConsentRequest {
   stepIndex: number;
@@ -354,6 +372,19 @@ export interface AutomationRunAwaitingDaemonEvent {
   reason: string;
 }
 
+export interface AutomationRunNeedsCredentialsEvent {
+  type: 'automation_run_needs_credentials';
+  trace_id: string;
+  runId: string;
+  stepIndex: number;
+  origin: string;
+  integrationKey: string;
+  portalDeepLink: string;
+  mode: 'typist' | 'ceremony';
+  preferredPairingId?: string;
+  reason: string;
+}
+
 export interface AutomationStepOutputChunkEvent {
   type: 'automation_step_output_chunk';
   trace_id: string;
@@ -374,4 +405,5 @@ export type AutomationLiveEvent =
   | AutomationRunStreamingAvailableEvent
   | AutomationRunAwaitingConsentEvent
   | AutomationRunAwaitingDaemonEvent
+  | AutomationRunNeedsCredentialsEvent
   | AutomationStepOutputChunkEvent;

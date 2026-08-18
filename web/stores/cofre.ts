@@ -25,6 +25,34 @@ interface CofreState {
   clearError: () => void;
 }
 
+/**
+ * THE CLIENT HALF OF THE AUTO-RESUME (P3.1, plan trap T7).
+ *
+ * The server already wakes a waiting run when a credential becomes usable — a process-local waiter
+ * registry hung off the Cofre's domain functions. That registry does not survive a server restart,
+ * and this is the other leg: if THIS client knows a run of its own is parked in `needs_credentials`,
+ * unlocking a credential also asks the run to resume. `resumeRun` re-reads the durable row, so the
+ * two paths racing costs at most one no-op — and neither one alone is load-bearing.
+ *
+ * Deliberately not filtered by origin. The client does not know which item covers which host (the
+ * item view carries `boundOrigins`, but the covering rule is the server's), and a resume for a run
+ * whose credential still is not there simply halts again. Guessing here would be the failure mode
+ * that leaves a run parked forever.
+ *
+ * The import is dynamic so the Cofre page does not pull the automations store into its bundle for a
+ * path that only matters when a run is actually waiting.
+ */
+async function resumeAnyRunWaitingForCredentials(): Promise<void> {
+  try {
+    const { useAutomationsStore } = await import('./automations');
+    const { activeRun, resume } = useAutomationsStore.getState();
+    if (activeRun.status === 'needs_credentials' && activeRun.runId) await resume();
+  } catch {
+    // Best-effort by design: the server-side observer is the primary path, and a failure here must
+    // never turn a successful unlock into a reported error.
+  }
+}
+
 export const useCofreStore = create<CofreState>()((set, get) => ({
   items: [],
   isLoading: false,
@@ -49,6 +77,7 @@ export const useCofreStore = create<CofreState>()((set, get) => ({
       return { success: false, error: message };
     }
     await get().fetchItems();
+    await resumeAnyRunWaitingForCredentials();
     return { success: true };
   },
 

@@ -14,7 +14,7 @@
  * zero imports, so it re-homes into ekoa-code/automation/ unchanged.
  */
 
-import { StepDeclaration } from '@ekoa/shared';
+import { StepDeclaration, type RunCredentialRequest } from '@ekoa/shared';
 
 // ============================================================================
 // Cache layer — Locators
@@ -525,7 +525,18 @@ export type RunStatus =
   | 'awaiting_integration'
   | 'paused_for_user'
   | 'awaiting_consent'   // local_command needs first-time per-shape consent
-  | 'awaiting_daemon';   // browser/local_command step needs the local ekoa daemon, which isn't connected
+  | 'awaiting_daemon'    // browser/local_command step needs the local ekoa daemon, which isn't connected
+  /**
+   * The Cofre holds no usable credential for an origin this run needs (P3.1).
+   *
+   * MODELLED ON `awaiting_daemon`, NOT ON `paused_for_user`, and that is the whole design. A
+   * `paused_for_user` pause blocks the engine process on a 250ms poll waiting for a live headed
+   * browser, so it dies with the process and with the tab. This state has to survive the human
+   * walking to `/cofre`, establishing a credential, and coming back — possibly after a reload, and
+   * possibly after a server restart. So the run HALTS and is RE-DISPATCHED, exactly as an
+   * awaiting-daemon run is re-dispatched once the daemon appears.
+   */
+  | 'needs_credentials';
 
 export interface RunRecord {
   id: string;
@@ -560,6 +571,14 @@ export interface RunRecord {
   pauseRequest?: PauseRequest;
   /** Set when a local_command step is awaiting first-time consent for its shape. */
   consentRequest?: ConsentRequest;
+  /**
+   * Set when the run halted in `needs_credentials`. The wire shape (`shared/`) is the SAME object,
+   * so the persisted halt and the SSE frame cannot drift.
+   *
+   * ADDITIVE-OPTIONAL, and it must stay that way: a run persisted before this field existed loads
+   * with it absent and renders exactly as it did before.
+   */
+  credentialRequest?: RunCredentialRequest;
 }
 
 /**
