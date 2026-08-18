@@ -40,7 +40,7 @@ const client = (fetchImpl: typeof fetch, baseUrl = 'https://cortex.example.com/'
   new CortexClient({ baseUrl, apiKey: 'ekoa_gk_test', clientTag: 'cortex-cli/9.9.9', fetchImpl });
 
 describe('generated operation table', () => {
-  it('carries all 31 contract operations, each with its declared success statuses', () => {
+  it('carries all 41 contract operations, each with its declared success statuses', () => {
     // 27 -> 30 with slice D1 (2026-08-03): the integrations domain reached the public surface with
     // `list` (flipped from `user`), `getIntegration` and `executeAction`. The count is a PIN, not a
     // description: it moves only when a descriptor's auth class does, which is exactly the event a
@@ -49,7 +49,13 @@ describe('generated operation table', () => {
     // `integrations.trustAction`, is deliberately ABSENT — it is `auth: 'user'`, so it is not part
     // of the public surface a gateway key can reach, and the pin below asserts that rather than
     // leaving it to be inferred from a number.
-    expect(OPERATION_IDS).toHaveLength(31);
+    // 31 -> 41 with schedules (2026-08-17): the whole family is `user-or-key`, so all ten
+    // operations (list/create/get/patch/remove/runNow/preview/listRuns/listAllRuns/completeRun)
+    // reach the public surface at once. Landed without bumping this pin, leaving the suite red;
+    // repaired 2026-08-18. `gate:client-drift` was green throughout, which is the point of the
+    // separation: drift proves the generated table matches the spec, this pin proves a HUMAN
+    // noticed the public surface grew.
+    expect(OPERATION_IDS).toHaveLength(41);
     expect(OPERATIONS['integrations.achieve']).toMatchObject({
       method: 'POST',
       path: '/api/v1/integrations/{key}/achieve',
