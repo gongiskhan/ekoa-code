@@ -4,17 +4,27 @@
  * `nextRunAt` is the source of truth, so restarts and edits need no reconciliation diff).
  *
  * The execution DISCIPLINE, in order, per due schedule:
- *  1. SKIP stale occurrences: a `plannedFor` older than the 5-minute grace is advanced without
- *     firing (the house "adopt now as the cursor, no backfill" precedent; observable via a log
- *     line, not a run row — a boot after a weekend must not manufacture history).
+ *  1. SKIP stale occurrences: a `plannedFor` older than the 5-minute grace is not fired, and the
+ *     pointer ADOPTS THE PRESENT in ONE jump (the first occurrence at or after now - never one
+ *     cadence step per tick, or a 5-minute schedule would spend hours walking back from an
+ *     outage). A recurring miss is observable via a log line, not a run row (a boot after a
+ *     weekend must not manufacture history); a `once` spec has no next occurrence to carry it,
+ *     so it instead lands a TERMINAL `failed`/`missed` run row - vanishing without a trace is
+ *     the one outcome a missed one-time schedule must not have.
+ *     The grace is measured from when THIS process FIRST SAW the occurrence due, so the
+ *     supervisor's own queueing can never turn a live occurrence into a skipped one.
  *  2. CLAIM the occurrence: the run row's DETERMINISTIC _id over (scheduleId, plannedFor) is
  *     inserted first; a duplicate-key refusal means a previous process already owns this fire
  *     (crash recovery), and this tick only advances the pointer.
  *  3. ADVANCE `nextRunAt` BEFORE executing: a crash mid-execution leaves a claimed `running`
  *     row and a moved pointer — never a double fire. (`once` specs advance to null.)
- *  4. EXECUTE without awaiting in the tick (an automation fire awaits its FULL run): in-flight
- *     fires are tracked and awaited by stop(); concurrency is capped so a burst of due
- *     schedules cannot stampede the engine.
+ *  4. EXECUTE without awaiting in the tick (an automation fire awaits its FULL run): concurrency
+ *     is capped so a burst of due schedules cannot stampede the engine, and the pass NEVER
+ *     blocks on a fire - a schedule that finds every slot busy is DEFERRED to the next tick with
+ *     its grace clock intact, so one slow fire cannot starve the tail of the due list.
+ *     stop() drains: it awaits the pass in flight and then every fire until none remain, because
+ *     a claimed occurrence abandoned mid-flight sits `running` forever (the claim is permanent -
+ *     nothing retries it).
  *
  * The write gate is untouched: a mutating integration action with no live standing approval
  * comes back `awaiting_consent` and is recorded as a `blocked` run — the supervisor never
@@ -43,6 +53,11 @@ const DEFAULT_TICK_MS = 30_000;
 const SKIP_GRACE_MS = 5 * 60_000;
 const MAX_CONCURRENT_FIRES = 3;
 export const FAILURE_CEILING = 20;
+
+/** `detail.code` on the row a missed one-time schedule leaves behind. The UI derives its text
+ *  from the CODE, never from server prose - `failed` + this code reads "the planned moment
+ *  passed without the schedule running", which is exactly what happened. */
+export const MISSED_RUN_CODE = 'missed';
 
 export interface ScheduleFireOutcome {
   status: 'ok' | 'failed' | 'blocked';
@@ -76,9 +91,15 @@ export interface ScheduleSupervisorDeps {
 export class ScheduleSupervisor {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
-  private ticking = false;
+  /** The pass in flight, held as a PROMISE (not a boolean) so stop() can await it: a pass
+   *  abandoned mid-claim is exactly how a fire escapes shutdown. */
+  private ticking: Promise<void> | null = null;
   private generation = 0;
   private readonly inFlight = new Set<Promise<void>>();
+  /** When this process first SAW each schedule's pending occurrence due, keyed by schedule.
+   *  Only occurrences we deferred ourselves survive a pass, and the map is swept against the
+   *  due list every complete pass, so it cannot grow with dead entries. */
+  private readonly seenDue = new Map<string, { plannedFor: string; atMs: number }>();
 
   constructor(private readonly deps: ScheduleSupervisorDeps) {}
 
@@ -93,12 +114,19 @@ export class ScheduleSupervisor {
     this.timer.unref?.();
   }
 
+  /** Shutdown drains to EMPTY, in two steps, because either half alone leaks a claim:
+   *  the pass in flight may still be mid-claim and about to launch a fire (awaiting a ONE-SHOT
+   *  snapshot of `inFlight` would miss it), and a fire that outlives the pass holds a claimed
+   *  occurrence whose `running` row nothing else will ever finalise. */
   async stop(): Promise<void> {
     this.running = false;
     this.generation += 1;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
-    await Promise.allSettled([...this.inFlight]);
+    const pass = this.ticking;
+    if (pass) await pass;
+    while (this.inFlight.size > 0) await Promise.allSettled([...this.inFlight]);
+    this.seenDue.clear();
   }
 
   /** One pass: claim + fire everything due. Re-entrancy-guarded (a slow store must not stack
@@ -106,39 +134,97 @@ export class ScheduleSupervisor {
    *  future admin poke) — `running` gates only the interval, not a pass. */
   async tick(gen: number = this.generation): Promise<void> {
     if (gen !== this.generation || this.ticking) return;
-    this.ticking = true;
-    try {
-      const nowIso = this.deps.now();
-      const due = await listDueSchedules(nowIso);
-      for (const schedule of due) {
-        if (gen !== this.generation) return;
-        while (this.inFlight.size >= (this.deps.maxConcurrent ?? MAX_CONCURRENT_FIRES)) {
-          await Promise.race([...this.inFlight]);
-        }
-        await this.claimAndFire(schedule, gen);
-      }
-    } catch (err) {
+    const pass = this.pass(gen).catch((err) => {
       console.warn(`[schedule-supervisor] tick failed: ${msgOf(err)}`);
+    });
+    this.ticking = pass;
+    try {
+      await pass;
     } finally {
-      this.ticking = false;
+      if (this.ticking === pass) this.ticking = null;
     }
   }
 
-  private async claimAndFire(schedule: ScheduleDoc, gen: number): Promise<void> {
+  private async pass(gen: number): Promise<void> {
+    // ONE clock for the whole pass. Every staleness verdict is judged against the instant the
+    // due list was READ (or earlier - see firstSeenDue), never against a wall clock our own
+    // execution moved: otherwise a slow fire ahead in the list silently drops the tail.
+    const nowIso = this.deps.now();
+    const nowMs = new Date(nowIso).getTime();
+    const due = await listDueSchedules(nowIso);
+    const maxConcurrent = this.deps.maxConcurrent ?? MAX_CONCURRENT_FIRES;
+    const stillDue = new Set<string>();
+    let deferred = 0;
+    let completed = true;
+
+    for (const schedule of due) {
+      if (gen !== this.generation) { completed = false; break; }
+      const plannedFor = schedule.nextRunAt;
+      if (!plannedFor) continue;
+      stillDue.add(schedule._id);
+      const stale = this.firstSeenDue(schedule._id, plannedFor, nowMs) - new Date(plannedFor).getTime() > SKIP_GRACE_MS;
+      // Only an actual EXECUTION costs a slot: a stale verdict and a manual task (which fires
+      // nothing) must never queue behind a slow automation. A deferred occurrence keeps its
+      // `seenDue` entry, so the next pass judges it by the grace it had when we first saw it -
+      // and the due list is ordered by `nextRunAt`, so the oldest deferral wins the next slot.
+      if (!stale && schedule.target.kind !== 'manual' && this.inFlight.size >= maxConcurrent) {
+        deferred += 1;
+        continue;
+      }
+      await this.claimAndFire(schedule, gen, { stale, nowMs });
+      this.seenDue.delete(schedule._id);
+    }
+
+    if (deferred > 0) {
+      console.log(
+        `[schedule-supervisor] ${deferred} due schedule(s) deferred to the next tick (all ${maxConcurrent} fire slots busy)`,
+      );
+    }
+    // Forget occurrences that stopped being due (fired, edited, paused, deleted). Skipped on an
+    // abandoned pass: the un-visited tail is not proof that its occurrence went away.
+    if (completed) {
+      for (const id of [...this.seenDue.keys()]) if (!stillDue.has(id)) this.seenDue.delete(id);
+    }
+  }
+
+  /** When this process first saw (schedule, occurrence) due, recording it on first sight. The
+   *  grace runs from HERE, not from the moment we get round to the schedule: backpressure and a
+   *  slow fire ahead in the list are OUR delay, and must not convert a live occurrence into a
+   *  skipped one. No entry (a fresh process, a boot after an outage) means the tick's own clock
+   *  - downtime still skips history, exactly as before. */
+  private firstSeenDue(scheduleId: string, plannedFor: string, nowMs: number): number {
+    const seen = this.seenDue.get(scheduleId);
+    if (seen && seen.plannedFor === plannedFor) return seen.atMs;
+    this.seenDue.set(scheduleId, { plannedFor, atMs: nowMs });
+    return nowMs;
+  }
+
+  private async claimAndFire(
+    schedule: ScheduleDoc,
+    gen: number,
+    judged: { stale: boolean; nowMs: number },
+  ): Promise<void> {
     const plannedFor = schedule.nextRunAt;
     if (!plannedFor) return;
-    const nowMs = new Date(this.deps.now()).getTime();
 
-    // 1. Stale window → advance without firing (observable, never silent).
-    if (nowMs - new Date(plannedFor).getTime() > SKIP_GRACE_MS) {
-      console.warn(
-        `[schedule-supervisor] schedule ${schedule._id} missed ${plannedFor} beyond grace; advancing without firing`,
-      );
-      await this.advance(schedule._id, plannedFor);
+    // 1. Stale window → never fired, never silent. The pointer adopts the PRESENT in one jump,
+    //    and a `once` spec - with no next occurrence to adopt - leaves the miss on the record.
+    if (judged.stale) {
+      if (schedule.spec.kind === 'once') {
+        await this.recordMissedOccurrence(schedule, plannedFor);
+      } else {
+        console.warn(
+          `[schedule-supervisor] schedule ${schedule._id} missed ${plannedFor} beyond grace; advancing to the next occurrence at or after now`,
+        );
+      }
+      await this.advance(schedule._id, plannedFor, judged.nowMs);
       return;
     }
 
-    // 2. Claim the occurrence (the insert IS the at-most-once guard).
+    // 2. Claim the occurrence (the insert IS the at-most-once guard). A stopped supervisor
+    //    claims NOTHING new: the deterministic id makes a claim permanent, so one taken and
+    //    then abandoned would leave a `running` row nothing ever retries.
+    if (gen !== this.generation) return;
     const runId = occurrenceRunId(schedule._id, plannedFor);
     const nowIso = this.deps.now();
     const isManual = schedule.target.kind === 'manual';
@@ -170,8 +256,34 @@ export class ScheduleSupervisor {
       });
     this.inFlight.add(fire);
     void fire.finally(() => this.inFlight.delete(fire));
-    // Fires are awaited only by stop(); the tick moves on.
-    void gen;
+    // The pass moves on; stop() drains this fire even if it was launched after stop() began.
+  }
+
+  /** A one-time schedule whose instant passed while nobody was listening. Skipping it the way a
+   *  recurring miss is skipped would erase it whole - there is no next occurrence to carry the
+   *  work, so the schedule would simply go quiet with NO run row and no user-visible trace. The
+   *  SAME deterministic claim keeps this at-most-once across processes, and the row lands
+   *  terminal: `failed` + `missed`, `finishedAt` set, `firedAt` absent because nothing ran. */
+  private async recordMissedOccurrence(schedule: ScheduleDoc, plannedFor: string): Promise<void> {
+    const runId = occurrenceRunId(schedule._id, plannedFor);
+    const nowIso = this.deps.now();
+    const claimed = await insertRun({
+      _id: runId,
+      scheduleId: schedule._id,
+      orgId: schedule.orgId,
+      ownerUserId: schedule.ownerUserId,
+      status: 'failed',
+      plannedFor,
+      finishedAt: nowIso,
+      trigger: 'auto',
+      detail: { code: MISSED_RUN_CODE },
+      createdAt: nowIso,
+    });
+    if (!claimed) return; // a predecessor already owns this occurrence
+    console.warn(
+      `[schedule-supervisor] one-time schedule ${schedule._id} missed ${plannedFor} beyond grace; recorded as ${MISSED_RUN_CODE}`,
+    );
+    await this.recordOutcome(schedule._id, runId, { status: 'failed', code: MISSED_RUN_CODE }, false);
   }
 
   /** Fire out of band (the run-now route). Random run id, `trigger: 'manual'`, no advance. */
@@ -226,12 +338,22 @@ export class ScheduleSupervisor {
   }
 
   /** Advance `nextRunAt` past `firedPlannedFor` (CAS; anchored at creation). No-op when a
-   *  concurrent edit already moved the pointer elsewhere. */
-  private async advance(scheduleId: string, firedPlannedFor: string): Promise<void> {
+   *  concurrent edit already moved the pointer elsewhere.
+   *
+   *  `adoptFromMs` (set only on the stale path) makes recovery ADOPT THE PRESENT in one step:
+   *  the pointer lands on the first occurrence at or after that instant instead of the next one
+   *  after the missed occurrence. Without it a 5-minute cadence recovering from a 3-hour outage
+   *  would advance 5 minutes per 30-second tick and stay silent for half an hour. */
+  private async advance(scheduleId: string, firedPlannedFor: string, adoptFromMs?: number): Promise<void> {
     await updateScheduleSystem(scheduleId, (cur) => {
       if (cur.nextRunAt !== firedPlannedFor) return cur; // an edit outran us — theirs wins
+      // `nextOccurrence` is strictly-after, so searching from (adoptFrom - 1ms) yields the first
+      // occurrence AT OR AFTER `adoptFrom`: an occurrence landing exactly on now stays live and
+      // fires on the next tick, rather than being stepped over.
+      const firedMs = new Date(firedPlannedFor).getTime();
+      const after = new Date(Math.max(firedMs, (adoptFromMs ?? 0) - 1));
       const next = cur.enabled
-        ? nextOccurrence(cur.spec, new Date(firedPlannedFor), new Date(cur.createdAt))
+        ? nextOccurrence(cur.spec, after, new Date(cur.createdAt))
         : null;
       return { ...cur, nextRunAt: next ? next.toISOString() : null };
     }).catch((err) => {

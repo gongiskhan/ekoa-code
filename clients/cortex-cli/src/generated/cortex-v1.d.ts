@@ -1021,6 +1021,7 @@ export interface components {
         };
         SchedulePreviewRequest: {
             count?: number;
+            scheduleId?: components["schemas"]["Id"];
             spec: components["schemas"]["ScheduleSpec"];
         };
         SchedulePreviewResponse: {

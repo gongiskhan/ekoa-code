@@ -2708,6 +2708,87 @@ silently absorbed into a ledger note):
   disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
   `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
 
+## Recently fixed - 2026-08-18 schedules adversarial review (15 confirmed, all closed by test)
+
+The schedules feature (5a5e721) was merged to `main` under the review gate the QA process requires.
+A four-lens adversarial review (tenancy/auth, supervisor correctness, wire contract, web surface)
+raised 23 findings; each was handed to an independent verifier prompted to REFUTE it. **8 were
+refuted** (recorded below as dismissals), **15 were confirmed** and are all now fixed, every one
+pinned by a test verified to fail before the fix and pass after.
+
+**Supervisor (`api/src/schedules/supervisor.ts`).**
+- `schedules-slow-fire-starves-due-tail` - the tick blocked at the concurrency gate
+  (`while (inFlight.size >= max) await Promise.race(...)`), so a few slow fires stalled the due
+  list until its tail aged past the 5-minute grace and was skipped outright. The blocking wait is
+  gone: a schedule that finds no free slot is deferred to the next tick, and the staleness verdict
+  is now judged against `firstSeenDue(scheduleId, plannedFor)` - the instant this process first saw
+  the occurrence due - so the supervisor's own queueing can never convert a live occurrence into a
+  skipped one.
+- `schedules-stale-recovery-crawls` - stale recovery advanced the pointer by ONE occurrence per
+  tick, so a 5-minute schedule stayed silent for hours after a short outage while it walked
+  forward. `advance()` now takes `adoptFromMs` on the stale path and lands on the first occurrence
+  at or after now in one step.
+- `schedules-missed-once-vanishes` - a `once` schedule whose instant passed while the process was
+  down hit the stale branch and was dropped with no run row and no user-visible trace. It now goes
+  through `recordMissedOccurrence()` under the SAME deterministic `occurrenceRunId` claim (so
+  at-most-once still holds across processes), writing a terminal row with `detail.code: 'missed'`
+  and no `firedAt`. No `shared/` change: the existing `failed` status plus a code is exactly the
+  designed vocabulary ("user-facing text derives from the CODE, never from server prose").
+- `schedules-fire-escapes-shutdown` - `stop()` spread `inFlight` ONCE, so a fire launched by an
+  in-flight tick after that snapshot escaped, leaving a claimed occurrence stuck `running` forever
+  (the deterministic claim makes it permanent). `ticking` is now the pass promise, `stop()` drains
+  in a loop, and `claimAndFire` re-checks the generation immediately before the claim insert.
+
+**Wire contract.**
+- `schedules-runs-status-filter-dropped` - `GET /api/v1/schedules/:id/runs` DECLARED a `status`
+  query filter and silently forwarded only `limit`, so a client filtering by status got unfiltered
+  rows and could not tell. Honoured end to end now (route -> service -> store), with the limit
+  capping the filtered set.
+- `schedules-preview-has-no-anchor` - `SchedulePreviewRequest` was `{spec, count}`, so
+  `previewSpec` always anchored on the REQUEST INSTANT while the supervisor anchors on the
+  schedule's `createdAt`. The edit dialog therefore previewed occurrence times the supervisor would
+  not fire. Additive fix: optional `scheduleId`, anchor read from the STORE (never from the body -
+  a caller-chosen anchor would be a second source of occurrence truth), landed with its contract
+  test, OpenAPI regen and client regen in the same unit.
+
+**Rule 5 regression-guard gap.**
+- `schedules-list-owner-filter-untested` - the isolation suite's header claimed "list surfaces
+  never leak" and that coverage did not exist. Every peer probe hit item-level routes guarded by
+  `canSeeSchedule`/`getSchedule`; nothing exercised the owner narrowing in `listSchedules`
+  (`store.ts:80`) or `listRunsForActor` (`store.ts:189`). **Proof it mattered:** deleting both lines
+  left the whole suite green while every plain user in an org gained read access to every
+  colleague's schedules and runs, including `target.instructions` free text. The shipped code was
+  always correct - this was a missing guard, not a live hole. Closed by a test that asserts
+  "mine, and only mine" on both collection surfaces with the victim's specific ids, verified to
+  fail with either narrowing line removed independently.
+
+**Web surface - the UI lying when something fails.** All five error-handling defects shared one
+root cause: the store had a single `error` field that no page read. Split into `loadError` (a
+broken READ) and `error` (a refused ACTION).
+- A failed list fetch rendered the "no schedules yet" EMPTY state - telling the user their data
+  does not exist. Now an error card with retry; the empty state is gated on the list having
+  actually arrived.
+- Every mutation failure was silent (toggle snapped back, delete/run-now/complete failed
+  invisibly). Now reported through the same toast channel `integrations/page.tsx` uses.
+- The detail page reported "schedule not found" for a 500, a 403 and a network loss alike. Now only
+  a 404 reads as absent.
+- Run history spun forever when its fetch failed (`runs === undefined` assumed only two states).
+- Org-admins see the whole org's schedules (deliberate) but may only mutate their own, so every
+  mutating control shown on a peer's row was guaranteed to 404. New `web/lib/schedules/authority.ts`
+  `canActOnOwned` mirrors the server's `canEditSchedule`; rows stay readable without fake controls.
+- Rows were mouse-only (a `Card` div with `onClick`): now a real link with a stretched overlay, so
+  keyboard and AT reach it as a link. Form validation errors moved out of the scrolling body into
+  the fixed footer beside the submit button, where they are visible at the moment of submission.
+
+**Dismissed (verifier refuted, no change made).** Run failure codes rendered untranslated (the
+code-not-prose rule is deliberate and pinned by the `run-error-text-leak` fix above); em dashes in
+the e2e spec (comments only, not authored user-facing content); `every:'week'` above ~157 answering
+null (schema allows 999, but the search horizon is a deliberate bound and the refusal is explicit,
+not silent); the CAS mutator writing on an authorization refusal (no cross-tenant effect - the
+mutator returns `cur` unchanged and the write is a no-op rewrite); preview timezone presentation;
+the e2e preview assertion's looseness; and run-now touching `consecutiveFailures` (a docstring
+wording nit - the ceiling state it produces is intended).
+
 ## Recently fixed - 2026-08-15 a cancelled framed sign-in left the app hung (own regression)
 
 **`framed-sso-never-settles`** (found by driving the REAL customer ERP login framed with the

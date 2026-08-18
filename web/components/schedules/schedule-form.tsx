@@ -297,6 +297,12 @@ export function ScheduleForm({ open, onClose, schedule, onSaved }: ScheduleFormP
 
   // Debounced server preview. The timer is cleared on every spec change and on close, so a
   // fast typist never sees an older answer land after a newer one.
+  //
+  // In EDIT mode the schedule's id travels with the request: a stride or week/month cadence is
+  // counted from the schedule's creation, so a preview anchored on "now" would list occurrences
+  // the supervisor is not going to fire. Creating, there is nothing to anchor on yet and the
+  // request instant is the right anchor - which is exactly what create does on submit.
+  const anchorId = schedule?.id;
   useEffect(() => {
     if (!open || !specKey) {
       setOccurrences([]);
@@ -307,7 +313,11 @@ export function ScheduleForm({ open, onClose, schedule, onSaved }: ScheduleFormP
     setPreviewing(true);
     const timer = setTimeout(() => {
       void (async () => {
-        const result = await preview({ spec: JSON.parse(specKey) as ScheduleSpec, count: PREVIEW_COUNT });
+        const result = await preview({
+          spec: JSON.parse(specKey) as ScheduleSpec,
+          count: PREVIEW_COUNT,
+          ...(anchorId ? { scheduleId: anchorId } : {}),
+        });
         if (cancelled) return;
         setPreviewing(false);
         if (result.ok) {
@@ -325,7 +335,7 @@ export function ScheduleForm({ open, onClose, schedule, onSaved }: ScheduleFormP
       clearTimeout(timer);
     };
     // `preview` is a zustand action - referentially stable for the store's lifetime.
-  }, [open, specKey, preview]);
+  }, [open, specKey, anchorId, preview]);
 
   const toggleWeekday = (value: number) => {
     setWeekdays((current) =>
@@ -421,7 +431,22 @@ export function ScheduleForm({ open, onClose, schedule, onSaved }: ScheduleFormP
       size="lg"
       title={editing ? t.editTitle : t.createTitle}
       footer={
+        /*
+          The validation error lives NEXT TO the button that produces it. The dialog body
+          scrolls and the footer does not, so an error rendered at the end of the body could
+          be off-screen at the exact moment the user pressed submit - the form would look
+          like it had silently done nothing.
+        */
         <>
+          {formError && (
+            <p
+              className="mr-auto max-w-[60%] self-center text-xs text-red-600"
+              role="alert"
+              data-testid="schedule-form-error"
+            >
+              {formError}
+            </p>
+          )}
           <Button variant="ghost" onClick={onClose} disabled={saving}>
             {t.cancel}
           </Button>
@@ -729,12 +754,6 @@ export function ScheduleForm({ open, onClose, schedule, onSaved }: ScheduleFormP
             )}
           </div>
         </section>
-
-        {formError && (
-          <p className="text-xs text-red-600" role="alert" data-testid="schedule-form-error">
-            {formError}
-          </p>
-        )}
       </div>
     </Dialog>
   );

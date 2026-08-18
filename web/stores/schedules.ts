@@ -11,6 +11,11 @@
  * `pendingTasks` is DERIVED from `orgRuns` and recomputed inside every `set` that touches
  * them - never assigned independently, so the inbox can't drift from the feed it summarises.
  * Occurrence math (next fire, preview) belongs to the server; nothing here computes a date.
+ *
+ * Failures are kept in THREE channels because the surfaces render them in three different
+ * places: `loadError` (the page's own read broke - show that instead of an empty list),
+ * `error` (the action the user just took broke - report it, leave the list alone) and
+ * `runsError[scheduleId]` (one schedule's history broke - offer a retry in its place).
  */
 
 import { create } from 'zustand';
@@ -28,12 +33,28 @@ interface SchedulesState {
   items: Schedule[];
   /** Run history per schedule id (detail page). */
   runs: Record<string, ScheduleRun[]>;
+  /**
+   * Why a schedule's history is missing, per schedule id. `runs[id]` stays UNSET on a failed
+   * fetch (there is no history to show), so without this a reader cannot tell "not back yet"
+   * from "came back broken" and renders a spinner that never resolves.
+   */
+  runsError: Record<string, string>;
   /** The org-wide run feed. */
   orgRuns: ScheduleRun[];
   /** Derived from `orgRuns`: the manual tasks still waiting on the owner. */
   pendingTasks: ScheduleRun[];
   loading: boolean;
+  /**
+   * A failed ACTION the user just took (create / patch / delete / run-now / complete). Read
+   * once and cleared, so the surface reports it instead of letting the control snap back.
+   */
   error?: string;
+  /**
+   * A failed READ of the page's own data (the list or the org run feed). Kept apart from
+   * `error` because the two demand opposite renderings: a broken read must replace the list
+   * (never "no schedules yet"), a broken write must leave the list standing.
+   */
+  loadError?: string;
 }
 
 /**
@@ -53,12 +74,16 @@ interface SchedulesActions {
   fetchSchedules: () => Promise<void>;
   fetchOrgRuns: (status?: ScheduleRunStatus) => Promise<void>;
   fetchRuns: (scheduleId: string) => Promise<void>;
+  /** Acknowledge the last action failure once a surface has reported it. */
+  clearError: () => void;
   create: (input: ScheduleInput) => Promise<Schedule | null>;
   update: (id: string, patch: SchedulePatchInput) => Promise<Schedule | null>;
   remove: (id: string) => Promise<boolean>;
   runNow: (id: string) => Promise<ScheduleRun | null>;
   completeRun: (runId: string, outcome: 'done' | 'dismissed', note?: string) => Promise<boolean>;
-  preview: (input: { spec: ScheduleSpec; count?: number }) => Promise<PreviewResult>;
+  /** `scheduleId` anchors the preview on an EXISTING schedule (the edit dialog); omitted, the
+   *  server anchors on the request instant, which is what the create form wants. */
+  preview: (input: { spec: ScheduleSpec; count?: number; scheduleId?: string }) => Promise<PreviewResult>;
 }
 
 const pendingOf = (runs: ScheduleRun[]): ScheduleRun[] => runs.filter((r) => r.status === 'pending');
@@ -76,37 +101,56 @@ function replaceRun(state: SchedulesState, run: ScheduleRun): Pick<SchedulesStat
 export const useSchedulesStore = create<SchedulesState & SchedulesActions>((set) => ({
   items: [],
   runs: {},
+  runsError: {},
   orgRuns: [],
   pendingTasks: [],
   loading: false,
 
+  /**
+   * The list page fires this and `fetchOrgRuns` together; both clear `loadError` before their
+   * first await and only ever set it afterwards, so the pair cannot erase each other's failure
+   * however the two responses interleave.
+   */
   async fetchSchedules() {
-    set({ loading: true, error: undefined });
+    set({ loading: true, error: undefined, loadError: undefined });
     const res = await tryCall(() => api.schedules.list());
     if (res.ok) {
       set({ items: res.data.items, loading: false });
     } else {
-      set({ loading: false, error: res.error.message || 'Não foi possível carregar os agendamentos.' });
+      set({ loading: false, loadError: res.error.message || 'Não foi possível carregar os agendamentos.' });
     }
   },
 
   async fetchOrgRuns(status) {
+    set({ loadError: undefined });
     const res = await tryCall(() => api.schedules.listAllRuns(status ? { status } : undefined));
     if (res.ok) {
       const orgRuns = res.data.items;
       set({ orgRuns, pendingTasks: pendingOf(orgRuns) });
     } else {
-      set({ error: res.error.message || 'Não foi possível carregar as execuções.' });
+      set({ loadError: res.error.message || 'Não foi possível carregar as execuções.' });
     }
   },
 
   async fetchRuns(scheduleId) {
+    const forget = (state: SchedulesState) => {
+      const runsError = { ...state.runsError };
+      delete runsError[scheduleId];
+      return runsError;
+    };
+    set((s) => ({ runsError: forget(s) }));
     const res = await tryCall(() => api.schedules.listRuns({ id: scheduleId }));
     if (res.ok) {
-      set((s) => ({ runs: { ...s.runs, [scheduleId]: res.data.items } }));
+      set((s) => ({ runs: { ...s.runs, [scheduleId]: res.data.items }, runsError: forget(s) }));
     } else {
-      set({ error: res.error.message || 'Não foi possível carregar o histórico.' });
+      set((s) => ({
+        runsError: { ...s.runsError, [scheduleId]: res.error.message || 'Não foi possível carregar o histórico.' },
+      }));
     }
+  },
+
+  clearError() {
+    set({ error: undefined });
   },
 
   async create(input) {
@@ -140,8 +184,16 @@ export const useSchedulesStore = create<SchedulesState & SchedulesActions>((set)
       set((s) => {
         const runs = { ...s.runs };
         delete runs[id];
+        const runsError = { ...s.runsError };
+        delete runsError[id];
         const orgRuns = s.orgRuns.filter((r) => r.scheduleId !== id);
-        return { items: s.items.filter((item) => item.id !== id), runs, orgRuns, pendingTasks: pendingOf(orgRuns) };
+        return {
+          items: s.items.filter((item) => item.id !== id),
+          runs,
+          runsError,
+          orgRuns,
+          pendingTasks: pendingOf(orgRuns),
+        };
       });
       return true;
     }
@@ -180,10 +232,10 @@ export const useSchedulesStore = create<SchedulesState & SchedulesActions>((set)
     return false;
   },
 
-  async preview({ spec, count }) {
+  async preview({ spec, count, scheduleId }) {
     // Preview errors are the FORM's (an incomplete rule), not the page's - they are returned
     // for inline rendering and deliberately never written to the store-wide `error`.
-    const res = await tryCall(() => api.schedules.preview({ spec, count }));
+    const res = await tryCall(() => api.schedules.preview({ spec, count, scheduleId }));
     if (res.ok) return { ok: true, occurrences: res.data.occurrences };
     return { ok: false, error: res.error.message };
   },

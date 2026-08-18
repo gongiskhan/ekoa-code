@@ -1898,6 +1898,11 @@ export interface Translations {
     deleteConfirm: (name: string) => string;
     enabledAria: string;
     autoPausedHint: string;
+    /** Toast fallback when a mutation fails without a server message. */
+    actionFailed: string;
+    /** Read-only enabled/paused state, shown where the actor may not toggle it. */
+    stateActive: string;
+    statePaused: string;
     groups: {
       today: string;
       tomorrow: string;
@@ -1933,6 +1938,8 @@ export interface Translations {
       dismiss: string;
       plannedFor: (when: string) => string;
       unknownSchedule: string;
+      /** Marks a peer's task: an admin sees it, only its owner may close it. */
+      otherOwner: string;
     };
     form: {
       createTitle: string;
@@ -2005,6 +2012,8 @@ export interface Translations {
       notFoundTitle: string;
       notFoundDescription: string;
       notFoundBack: string;
+      /** The fetch FAILED (500, 403, no network) - not the same story as an absent schedule. */
+      loadErrorTitle: string;
       edit: string;
       enabledLabel: string;
       timezone: (tz: string) => string;

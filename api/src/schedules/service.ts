@@ -13,6 +13,7 @@ import type {
   Schedule,
   ScheduleCreateRequest,
   SchedulePatch,
+  SchedulePreviewRequest,
   ScheduleRun,
   ScheduleRunCompleteRequest,
   ScheduleSpec,
@@ -231,10 +232,17 @@ export async function removeSchedule(actor: Actor, id: string): Promise<void> {
   await deleteSchedule(id);
 }
 
-export async function listRuns(actor: Actor, scheduleId: string, limit: number): Promise<ScheduleRun[]> {
+/** One schedule's history, narrowed by the SAME query the descriptor declares as the org feed's
+ *  (`ScheduleRunListQuery`): dropping `status` here would leave a client filtering by status
+ *  holding unfiltered rows with no way to tell. */
+export async function listRuns(
+  actor: Actor,
+  scheduleId: string,
+  query: { status?: ScheduleRun['status']; limit: number },
+): Promise<ScheduleRun[]> {
   const doc = await getSchedule(scheduleId, actor);
   if (!doc) throw new ScheduleServiceError('NOT_FOUND', 'Agendamento não encontrado.');
-  return (await listRunsForSchedule(scheduleId, limit)).map(toWireRun);
+  return (await listRunsForSchedule(scheduleId, query)).map(toWireRun);
 }
 
 export async function listAllRuns(
@@ -274,8 +282,39 @@ export async function completeRun(
   return toWireRun(next);
 }
 
-export function previewSpec(spec: ScheduleSpec, count: number, deps: ScheduleServiceDeps): string[] {
+/** How many occurrences a preview answers when the caller names no count. Lives with the math,
+ *  not in the route: it is part of what "preview" means, not a paging knob. */
+const DEFAULT_PREVIEW_COUNT = 5;
+
+/**
+ * The next occurrences the SUPERVISOR would fire for `spec`.
+ *
+ * The anchor is the load-bearing part. Stride and week/month cadences count from an anchor
+ * instant, and for a stored schedule that anchor is its creation: `advance()` in supervisor.ts
+ * and the PATCH recompute above both pass `createdAt`. Anchoring a preview at the REQUEST
+ * instant therefore answers a DIFFERENT series for an existing schedule, so the edit dialog
+ * would promise times the supervisor never fires. With `scheduleId` we read the stored anchor;
+ * without it (the create form, where no row exists yet) the request instant IS the anchor -
+ * exactly what createSchedule's own `nextOccurrence(spec, now, now)` will use moments later.
+ *
+ * The anchor is read from the store, never from the body: a caller-chosen anchor would be a
+ * second source of occurrence truth. An id the actor cannot read answers the uniform NOT_FOUND,
+ * so preview is no wider an oracle than GET /:id.
+ */
+export async function previewSpec(
+  actor: Actor,
+  body: SchedulePreviewRequest,
+  deps: ScheduleServiceDeps,
+): Promise<string[]> {
   const now = new Date(deps.now());
-  assertSpecValid(spec, now);
-  return occurrencesOf(spec, now, now, count).map((d) => d.toISOString());
+  assertSpecValid(body.spec, now);
+  let anchor = now;
+  if (body.scheduleId) {
+    const doc = await getSchedule(body.scheduleId, actor);
+    if (!doc) throw new ScheduleServiceError('NOT_FOUND', 'Agendamento não encontrado.');
+    anchor = new Date(doc.createdAt);
+  }
+  return occurrencesOf(body.spec, now, anchor, body.count ?? DEFAULT_PREVIEW_COUNT).map((d) =>
+    d.toISOString(),
+  );
 }

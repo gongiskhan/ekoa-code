@@ -190,6 +190,104 @@ describe('schedules contract', () => {
     expect(ScheduleRunListResponse.safeParse(await perSchedule.json()).success).toBe(true);
   });
 
+  it('per-schedule runs honour the DECLARED status filter, not just the limit', async () => {
+    // `listRuns` declares `query: ScheduleRunListQuery`, which carries `status` AND `limit`. A
+    // client that filters and silently gets everything cannot tell the difference from a
+    // schedule whose runs really are all in that status, so the filter is asserted against a
+    // history holding BOTH statuses.
+    const t = await tokenFor('usr');
+    const created = await authed('/api/v1/schedules', t, { method: 'POST', body: JSON.stringify(VALID_BODY) });
+    expect(created.status).toBe(201);
+    const id = ((await created.json()) as { id: string }).id;
+
+    const fire = async (): Promise<string> => {
+      const res = await authed(`/api/v1/schedules/${id}/run-now`, t, { method: 'POST', body: JSON.stringify({}) });
+      expect(res.status).toBe(202);
+      return ((await res.json()) as { run: { id: string } }).run.id;
+    };
+    const completed = await fire();
+    const stillPending = await fire();
+    const done = await authed(`/api/v1/schedules/runs/${completed}/complete`, t, {
+      method: 'POST',
+      body: JSON.stringify({ outcome: 'done' }),
+    });
+    expect(done.status).toBe(200);
+
+    const idsOf = async (query: string): Promise<string[]> => {
+      const res = await authed(`/api/v1/schedules/${id}/runs${query}`, t);
+      expect(res.status).toBe(200);
+      const body: unknown = await res.json();
+      expect(ScheduleRunListResponse.safeParse(body), JSON.stringify(body)).toMatchObject({ success: true });
+      return (body as { items: Array<{ id: string }> }).items.map((i) => i.id);
+    };
+
+    expect((await idsOf('')).sort()).toEqual([completed, stillPending].sort());
+    expect(await idsOf('?status=pending')).toEqual([stillPending]);
+    expect(await idsOf('?status=done')).toEqual([completed]);
+    expect(await idsOf('?status=failed')).toEqual([]);
+    // The limit caps the FILTERED rows, so a status with one row survives a limit of one.
+    expect(await idsOf('?status=done&limit=1')).toEqual([completed]);
+  });
+
+  it('preview anchors on an existing schedule, so the edit dialog shows what the supervisor fires', async () => {
+    const t = await tokenFor('usr');
+    // A 5-hour stride counts from the schedule's CREATION, not from the moment someone opens the
+    // edit dialog. Seeded directly so the anchor (07:32Z) is genuinely older than the request
+    // instant (BASE, 10:00Z) - the exact case a request-anchored preview got wrong.
+    const spec = { kind: 'recurring', rule: { every: 'hour', interval: 5, timezone: 'Europe/Lisbon' } };
+    await schedulesStore.insert({
+      _id: 'sch-anchored',
+      orgId: 'orgA',
+      ownerUserId: 'usr',
+      name: 'A cada 5 horas',
+      target: { kind: 'manual' },
+      spec,
+      enabled: true,
+      nextRunAt: '2026-08-17T12:32:00.000Z',
+      consecutiveFailures: 0,
+      createdAt: '2026-08-17T07:32:00.000Z',
+      updatedAt: '2026-08-17T07:32:00.000Z',
+    } as never);
+
+    const anchored = await authed('/api/v1/schedules/preview', t, {
+      method: 'POST',
+      body: JSON.stringify({ spec, count: 3, scheduleId: 'sch-anchored' }),
+    });
+    expect(anchored.status).toBe(200);
+    const anchoredBody: unknown = await anchored.json();
+    expect(SchedulePreviewResponse.safeParse(anchoredBody), JSON.stringify(anchoredBody)).toMatchObject({ success: true });
+    const occurrences = (anchoredBody as { occurrences: string[] }).occurrences;
+    expect(occurrences).toEqual([
+      '2026-08-17T12:32:00.000Z',
+      '2026-08-17T17:32:00.000Z',
+      '2026-08-17T22:32:00.000Z',
+    ]);
+
+    // The claim is not just "some other series": it is the SUPERVISOR's. A PATCH recomputes
+    // `nextRunAt` through the same anchored math the supervisor's advance uses, so the first
+    // previewed occurrence must be the very instant the schedule now points at.
+    const patched = await authed('/api/v1/schedules/sch-anchored', t, { method: 'PATCH', body: JSON.stringify({ spec }) });
+    expect(patched.status).toBe(200);
+    expect((await patched.json() as { nextRunAt: string | null }).nextRunAt).toBe(occurrences[0]);
+
+    // Without the id (the create form) the request instant stays the anchor: 10:00Z + 5h.
+    const anchorless = await authed('/api/v1/schedules/preview', t, {
+      method: 'POST',
+      body: JSON.stringify({ spec, count: 1 }),
+    });
+    expect(anchorless.status).toBe(200);
+    expect((await anchorless.json() as { occurrences: string[] }).occurrences).toEqual(['2026-08-17T15:00:00.000Z']);
+
+    // An id the actor cannot read is the uniform not-found - never a preview off someone else's
+    // anchor, and no wider an oracle than GET /:id.
+    const foreign = await authed('/api/v1/schedules/preview', t, {
+      method: 'POST',
+      body: JSON.stringify({ spec, scheduleId: 'sch-does-not-exist' }),
+    });
+    expect(foreign.status).toBe(404);
+    expect(ErrorEnvelope.safeParse(await foreign.json()).success).toBe(true);
+  });
+
   it('validation refusals are envelope-shaped with the machine code in details', async () => {
     const t = await tokenFor('usr');
     // Zod-level: bad body.

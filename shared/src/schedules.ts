@@ -197,11 +197,22 @@ export type ScheduleRunCompleteRequest = z.infer<typeof ScheduleRunCompleteReque
 export const ScheduleRunResponse = z.object({ run: ScheduleRun });
 export type ScheduleRunResponse = z.infer<typeof ScheduleRunResponse>;
 
-/** Preview the next occurrences of a spec — the SERVER is the single source of occurrence
- *  math, so the create-form preview can never drift from what the supervisor will do. */
+/**
+ * Preview the next occurrences of a spec - the SERVER is the single source of occurrence
+ * math, so the create-form preview can never drift from what the supervisor will do.
+ *
+ * `scheduleId` names an EXISTING schedule to anchor on. Stride and week/month cadences count
+ * from an anchor instant, and for a stored schedule that anchor is its creation - the
+ * supervisor's advance and the PATCH recompute both pass it. Without the id the anchor is the
+ * request instant, which is right for the create form (nothing is stored yet) and WRONG for the
+ * edit dialog, which would otherwise show occurrences the supervisor never fires. The anchor is
+ * deliberately not a client-supplied timestamp: `createdAt` is optional on the wire `Schedule`,
+ * and a caller-chosen anchor would be a second source of occurrence truth.
+ */
 export const SchedulePreviewRequest = z.object({
   spec: ScheduleSpec,
   count: z.number().int().min(1).max(10).optional(),
+  scheduleId: Id.optional(),
 });
 export type SchedulePreviewRequest = z.infer<typeof SchedulePreviewRequest>;
 

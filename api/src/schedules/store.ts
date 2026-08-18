@@ -166,9 +166,16 @@ export async function updateRunAsOwner(
   return next as ScheduleRunDoc;
 }
 
-export async function listRunsForSchedule(scheduleId: string, limit: number): Promise<ScheduleRunDoc[]> {
-  const rows = (await scheduleRuns.find({ scheduleId }, { plannedFor: -1 })) as ScheduleRunDoc[];
-  return rows.slice(0, limit);
+/** One schedule's history. The caller has already proved it may SEE the schedule, so no tenancy
+ *  filter here - but the declared `status` narrowing is applied, same shape as the org feed. */
+export async function listRunsForSchedule(
+  scheduleId: string,
+  query: { status?: ScheduleRunStatus; limit: number },
+): Promise<ScheduleRunDoc[]> {
+  const filter: Record<string, unknown> = { scheduleId };
+  if (query.status) filter.status = query.status;
+  const rows = (await scheduleRuns.find(filter, { plannedFor: -1 })) as ScheduleRunDoc[];
+  return rows.slice(0, query.limit);
 }
 
 export async function listRunsForActor(

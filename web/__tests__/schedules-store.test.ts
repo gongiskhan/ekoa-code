@@ -6,7 +6,10 @@
  *    inbox can never show a task the run feed no longer has, whichever action moved it;
  *  - mutations update the cached array from the RESPONSE (create prepends, update maps,
  *    remove filters) rather than re-fetching, so a list does not blink on every edit;
- *  - a failed call leaves the cache untouched and puts a user-safe message on `error`;
+ *  - a failed call leaves the cache untouched and puts a user-safe message on the channel the
+ *    surface renders: `loadError` for a broken READ (the page shows it instead of an empty
+ *    list), `error` for a broken ACTION, `runsError[id]` for one schedule's history - a
+ *    distinction the pages depend on to avoid claiming "no schedules yet" over a 500;
  *  - `preview` is the exception: its failures are the FORM's (an incomplete rule) and are
  *    returned to the caller, never written to the page-wide `error`.
  */
@@ -89,10 +92,12 @@ beforeEach(() => {
   useSchedulesStore.setState({
     items: [],
     runs: {},
+    runsError: {},
     orgRuns: [],
     pendingTasks: [],
     loading: false,
     error: undefined,
+    loadError: undefined,
   });
 });
 
@@ -107,19 +112,29 @@ describe('fetchSchedules', () => {
     expect(state.error).toBeUndefined();
   });
 
-  it('surfaces the failure message and stops loading', async () => {
+  it('surfaces the failure on loadError - the READ channel, not the action one', async () => {
     listSpy.mockImplementation(failWith('Sessão expirada'));
     await useSchedulesStore.getState().fetchSchedules();
     const state = useSchedulesStore.getState();
     expect(state.items).toEqual([]);
     expect(state.loading).toBe(false);
-    expect(state.error).toBe('Sessão expirada');
+    expect(state.loadError).toBe('Sessão expirada');
+    // `error` is what a failed ACTION writes; a broken list must not read as one, or the page
+    // cannot tell "show this instead of the list" from "toast this and leave the list".
+    expect(state.error).toBeUndefined();
   });
 
   it('falls back to a user-safe message when the failure carries none', async () => {
     listSpy.mockImplementation(() => Promise.reject(new Error('')));
     await useSchedulesStore.getState().fetchSchedules();
-    expect(useSchedulesStore.getState().error).toBe('Não foi possível carregar os agendamentos.');
+    expect(useSchedulesStore.getState().loadError).toBe('Não foi possível carregar os agendamentos.');
+  });
+
+  it('clears a previous loadError once the list comes back', async () => {
+    useSchedulesStore.setState({ loadError: 'Falha anterior' });
+    listSpy.mockResolvedValue({ items: [schedule()] });
+    await useSchedulesStore.getState().fetchSchedules();
+    expect(useSchedulesStore.getState().loadError).toBeUndefined();
   });
 });
 
@@ -141,6 +156,28 @@ describe('fetchOrgRuns', () => {
     await useSchedulesStore.getState().fetchOrgRuns();
     expect(listAllRunsSpy).toHaveBeenLastCalledWith(undefined);
   });
+
+  it('reports a broken feed on loadError, leaving the inbox as it was', async () => {
+    useSchedulesStore.setState({ orgRuns: [run()], pendingTasks: [run()] });
+    listAllRunsSpy.mockImplementation(failWith('Serviço indisponível'));
+    await useSchedulesStore.getState().fetchOrgRuns('pending');
+    const state = useSchedulesStore.getState();
+    expect(state.loadError).toBe('Serviço indisponível');
+    expect(state.error).toBeUndefined();
+    expect(state.pendingTasks.map((r) => r.id)).toEqual(['run-1']);
+  });
+
+  it('does not erase the list fetch failure it races against', async () => {
+    // The list page fires both on mount. Each clears loadError BEFORE its first await, so the
+    // later success cannot wipe the earlier failure's message off the page.
+    listSpy.mockImplementation(failWith('Lista em baixo'));
+    listAllRunsSpy.mockResolvedValue({ items: [] });
+    await Promise.all([
+      useSchedulesStore.getState().fetchSchedules(),
+      useSchedulesStore.getState().fetchOrgRuns('pending'),
+    ]);
+    expect(useSchedulesStore.getState().loadError).toBe('Lista em baixo');
+  });
 });
 
 describe('fetchRuns', () => {
@@ -152,6 +189,38 @@ describe('fetchRuns', () => {
     expect(runs['sch-1']!.map((r) => r.id)).toEqual(['run-9']);
     expect(runs['sch-other']!.map((r) => r.id)).toEqual(['keep']);
     expect(listRunsSpy).toHaveBeenCalledWith({ id: 'sch-1' });
+  });
+
+  it('records WHY a history is missing, so its absence is not read as "still loading"', async () => {
+    listRunsSpy.mockImplementation(failWith('Histórico indisponível'));
+    await useSchedulesStore.getState().fetchRuns('sch-1');
+    const state = useSchedulesStore.getState();
+    // No history was cached (there is none) - the reason is what the detail page renders.
+    expect(state.runs['sch-1']).toBeUndefined();
+    expect(state.runsError['sch-1']).toBe('Histórico indisponível');
+  });
+
+  it('scopes the failure to its own schedule and forgets it on a retry', async () => {
+    listRunsSpy.mockImplementation(failWith('Histórico indisponível'));
+    await useSchedulesStore.getState().fetchRuns('sch-1');
+    expect(useSchedulesStore.getState().runsError['sch-other']).toBeUndefined();
+
+    listRunsSpy.mockReset();
+    listRunsSpy.mockResolvedValue({ items: [run({ id: 'run-9', status: 'ok' })] });
+    await useSchedulesStore.getState().fetchRuns('sch-1');
+    const state = useSchedulesStore.getState();
+    expect(state.runsError['sch-1']).toBeUndefined();
+    expect(state.runs['sch-1']!.map((r) => r.id)).toEqual(['run-9']);
+  });
+});
+
+describe('clearError', () => {
+  it('acknowledges an action failure without touching the read channel', async () => {
+    useSchedulesStore.setState({ error: 'Sem permissão', loadError: 'Lista em baixo' });
+    useSchedulesStore.getState().clearError();
+    const state = useSchedulesStore.getState();
+    expect(state.error).toBeUndefined();
+    expect(state.loadError).toBe('Lista em baixo');
   });
 });
 
@@ -291,6 +360,15 @@ describe('preview', () => {
     const result = await useSchedulesStore.getState().preview({ spec, count: 3 });
     expect(previewSpy).toHaveBeenCalledWith({ spec, count: 3 });
     expect(result).toEqual({ ok: true, occurrences: ['2026-08-24T08:00:00.000Z'] });
+  });
+
+  it('forwards the anchor schedule id, so an edit dialog previews the stored anchor', async () => {
+    // The anchor is the SERVER's business (it reads the schedule's creation instant); the store's
+    // only duty is to carry the id, and dropping it silently returns the create-form series.
+    previewSpy.mockResolvedValue({ occurrences: ['2026-08-17T12:32:00.000Z'] });
+    const spec = { kind: 'recurring' as const, rule: { every: 'hour' as const, interval: 5, timezone: 'Europe/Lisbon' } };
+    await useSchedulesStore.getState().preview({ spec, count: 1, scheduleId: 'sch-1' });
+    expect(previewSpy).toHaveBeenCalledWith({ spec, count: 1, scheduleId: 'sch-1' });
   });
 
   it('returns a validation failure to the FORM without touching the page-wide error', async () => {

@@ -168,6 +168,53 @@ describe('schedules isolation (Rule 5, memvault class)', () => {
     }
   });
 
+  it('LIST surfaces narrow to the owner: a same-org PEER sees only their own schedules and runs', async () => {
+    const { scheduleId, runId } = await seedVictim();
+    // The peer owns rows of their own, so an assertion cannot be satisfied by an accidentally
+    // empty answer: the claim is "mine, and ONLY mine" - a broken list surface fails too.
+    const p = await tokenFor('peer');
+    const PEER_BODY = { ...VALID_BODY, name: 'Do peer', target: { kind: 'manual', instructions: 'assunto do peer' } };
+    const own = await authed('/api/v1/schedules', p, { method: 'POST', body: JSON.stringify(PEER_BODY) });
+    expect(own.status).toBe(201);
+    const peerScheduleId = ((await own.json()) as { id: string }).id;
+    const peerRan = await authed(`/api/v1/schedules/${peerScheduleId}/run-now`, p, { method: 'POST', body: JSON.stringify({}) });
+    expect(peerRan.status).toBe(202);
+    const peerRunId = ((await peerRan.json()) as { run: { id: string } }).run.id;
+
+    // The collection surface is guarded by the OWNER narrowing in listSchedules - not by
+    // canSeeSchedule, which never runs on a list. Assert on the victim's specific id.
+    const listRes = await authed('/api/v1/schedules', p);
+    expect(listRes.status).toBe(200);
+    const list = (await listRes.json()) as { items: Array<{ id: string; ownerId: string; orgId: string }> };
+    expect(list.items.map((i) => i.id)).toEqual([peerScheduleId]);
+    expect(list.items.map((i) => i.id)).not.toContain(scheduleId);
+    expect(new Set(list.items.map((i) => i.ownerId))).toEqual(new Set(['peer']));
+    // `target.instructions` is free text the victim typed - no projection of it may reach a peer.
+    expect(JSON.stringify(list.items)).not.toContain(VALID_BODY.target.instructions);
+    expect(JSON.stringify(list.items)).not.toContain(VALID_BODY.name);
+
+    // Same for the org run feed (listRunsForActor carries its OWN narrowing).
+    const feedRes = await authed('/api/v1/schedules/runs', p);
+    expect(feedRes.status).toBe(200);
+    const feed = (await feedRes.json()) as { items: Array<{ id: string; scheduleId: string; ownerId: string }> };
+    expect(feed.items.map((i) => i.id)).toEqual([peerRunId]);
+    expect(feed.items.map((i) => i.id)).not.toContain(runId);
+    expect(feed.items.map((i) => i.scheduleId)).not.toContain(scheduleId);
+    expect(new Set(feed.items.map((i) => i.ownerId))).toEqual(new Set(['peer']));
+    // The status filter is not a way around the narrowing either (both rows are `pending`).
+    const pending = (await (await authed('/api/v1/schedules/runs?status=pending', p)).json()) as { items: Array<{ id: string }> };
+    expect(pending.items.map((i) => i.id)).toEqual([peerRunId]);
+
+    // The narrowing is deliberately admin-exempt, and that exemption is what PROVES the peer's
+    // answers above are narrowing rather than an empty collection: the same two feeds, read by
+    // the org-admin, carry BOTH members' rows.
+    const a = await tokenFor('orgadmin');
+    const adminList = (await (await authed('/api/v1/schedules', a)).json()) as { items: Array<{ id: string }> };
+    expect(adminList.items.map((i) => i.id).sort()).toEqual([scheduleId, peerScheduleId].sort());
+    const adminFeed = (await (await authed('/api/v1/schedules/runs', a)).json()) as { items: Array<{ id: string }> };
+    expect(adminFeed.items.map((i) => i.id).sort()).toEqual([runId, peerRunId].sort());
+  });
+
   it('concurrent two-tenant writes never bleed', async () => {
     const tV = await tokenFor('victim');
     const tF = await tokenFor('foreignadmin');

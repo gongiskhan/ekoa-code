@@ -9,6 +9,12 @@
  *  - a stale occurrence (beyond the 5-minute grace) advances WITHOUT firing (no backfill);
  *  - the failure ceiling auto-pauses the schedule and stamps `autoPausedAt`;
  *  - fireNow runs out of band and does NOT advance the pointer.
+ *
+ * Plus the four shutdown/backpressure invariants, each pinning a defect the first cut had:
+ *  - a slow fire DEFERS the tail of the due list instead of starving it into the stale skip;
+ *  - stale recovery ADOPTS THE PRESENT in one jump, never one cadence step per tick;
+ *  - a missed ONE-TIME schedule leaves a terminal `failed`/`missed` row, never silence;
+ *  - stop() drains a fire launched after shutdown began (no occurrence left claimed-but-running).
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
@@ -17,6 +23,7 @@ import { schedules, scheduleRuns } from '../../src/data/stores.js';
 import {
   ScheduleSupervisor,
   FAILURE_CEILING,
+  MISSED_RUN_CODE,
   mapIntegrationOutcome,
   mapAutomationOutcome,
   type ScheduleSupervisorDeps,
@@ -62,6 +69,17 @@ function makeDeps(over: Partial<ScheduleSupervisorDeps> = {}): ScheduleSuperviso
     genId: () => `gid_${seq++}`,
     ...over,
   };
+}
+
+/** REAL milliseconds (the supervisor's fake clock is `clock`; these two wait on the event loop). */
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+async function waitFor(pred: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!pred()) {
+    if (Date.now() > deadline) throw new Error('waitFor timed out');
+    await sleep(5);
+  }
 }
 
 async function seedSchedule(over: Partial<ScheduleDoc> = {}): Promise<ScheduleDoc> {
@@ -225,5 +243,125 @@ describe('ScheduleSupervisor', () => {
     await sup.stop();
     await sup.tick(0); // stale generation
     expect(deps.automationCalls).toHaveLength(0);
+  });
+
+  it('a slow fire defers the tail of the due list instead of starving it into the stale skip', async () => {
+    // The single fire slot goes to a schedule whose automation takes 10 fake minutes. The tail's
+    // occurrence must survive that: the grace runs from when the supervisor FIRST SAW it due,
+    // not from the moment our own queueing gets round to it.
+    const fired: string[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const deps = makeDeps({
+      maxConcurrent: 1,
+      runAutomation: async (s) => {
+        fired.push(s._id);
+        if (s.name === 'lenta') await gate;
+        return { status: 'ok' };
+      },
+    });
+    const sup = new ScheduleSupervisor(deps);
+    // `once` for the slow one: it exhausts to null and cannot re-take the slot on a later tick.
+    const slowAt = new Date(clock - 60_000).toISOString();
+    const slow = await seedSchedule({ name: 'lenta', spec: { kind: 'once', at: slowAt }, nextRunAt: slowAt });
+    const tail = await seedSchedule({ name: 'cauda' }); // due exactly now
+
+    const pass1 = sup.tick(); // NOT awaited: a tick that blocks on the slot never settles here
+    await waitFor(() => fired.includes(slow._id));
+    clock += 10 * 60_000; // the slow fire outlasts the 5-minute grace
+    release();
+    await pass1;
+
+    for (let i = 0; i < 5 && !fired.includes(tail._id); i++) {
+      await sleep(10);
+      await sup.tick();
+    }
+    await sup.stop();
+
+    expect(fired).toContain(tail._id);
+    const runs = (await scheduleRuns.find({ scheduleId: tail._id })) as unknown as ScheduleRunDoc[];
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.plannedFor).toBe(T0.toISOString()); // the occurrence it was owed, not a later one
+    expect(runs[0]!.status).toBe('ok');
+  });
+
+  it('stale recovery jumps the pointer to the present in ONE step', async () => {
+    const deps = makeDeps();
+    const sup = new ScheduleSupervisor(deps);
+    // Every 5 minutes, anchored 4 hours ago, pointer 3 hours stale: an outage, not a slow fire.
+    const s = await seedSchedule({
+      spec: { kind: 'recurring', rule: { every: 'minute', interval: 5, timezone: 'Europe/Lisbon' } },
+      createdAt: new Date(clock - 4 * 3_600_000).toISOString(),
+      nextRunAt: new Date(clock - 3 * 3_600_000).toISOString(),
+    });
+
+    await sup.tick();
+    await sup.stop();
+
+    expect(deps.automationCalls).toHaveLength(0); // still no backfill
+    const after = (await schedules.get(s._id)) as unknown as ScheduleDoc;
+    // The occurrence landing exactly on now - one jump, not 06:05 (one cadence step per tick).
+    expect(after.nextRunAt).toBe(T0.toISOString());
+    expect(await scheduleRuns.find({ scheduleId: s._id })).toHaveLength(0);
+  });
+
+  it('a one-time schedule missed while the process was down leaves a MISSED run row', async () => {
+    const deps = makeDeps();
+    const sup = new ScheduleSupervisor(deps);
+    const missedAt = new Date(clock - 6 * 3_600_000).toISOString();
+    const s = await seedSchedule({ spec: { kind: 'once', at: missedAt }, nextRunAt: missedAt });
+
+    await sup.tick();
+    await sup.stop();
+
+    expect(deps.automationCalls).toHaveLength(0); // never executed late
+    const runs = (await scheduleRuns.find({ scheduleId: s._id })) as unknown as ScheduleRunDoc[];
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.status).toBe('failed');
+    expect(runs[0]!.detail?.code).toBe(MISSED_RUN_CODE);
+    expect(runs[0]!.plannedFor).toBe(missedAt);
+    expect(runs[0]!.trigger).toBe('auto');
+    expect(runs[0]!.firedAt).toBeUndefined(); // nothing ran
+    expect(runs[0]!.finishedAt).toBeDefined(); // but the row is terminal
+    const after = (await schedules.get(s._id)) as unknown as ScheduleDoc;
+    expect(after.nextRunAt).toBeNull();
+    expect(after.lastRun?.status).toBe('failed');
+    expect(after.lastRun?.code).toBe(MISSED_RUN_CODE);
+
+    // At-most-once holds: a second supervisor over the same occurrence adds nothing.
+    await schedules.update(s._id, (cur) => ({ ...cur, nextRunAt: missedAt }));
+    const sup2 = new ScheduleSupervisor(deps);
+    await sup2.tick();
+    await sup2.stop();
+    expect(await scheduleRuns.find({ scheduleId: s._id })).toHaveLength(1);
+  });
+
+  it('stop() drains a fire launched after shutdown began (nothing left claimed-but-running)', async () => {
+    const fired: string[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const deps = makeDeps({
+      maxConcurrent: 1,
+      runAutomation: async (s) => {
+        fired.push(s._id);
+        await (s.name === 'lenta' ? gate : sleep(300));
+        return { status: 'ok' };
+      },
+    });
+    const sup = new ScheduleSupervisor(deps);
+    const slowAt = new Date(clock - 60_000).toISOString();
+    const slow = await seedSchedule({ name: 'lenta', spec: { kind: 'once', at: slowAt }, nextRunAt: slowAt });
+    await seedSchedule({ name: 'seguinte' });
+
+    const pass = sup.tick(); // not awaited: the pass is still live when shutdown starts
+    await waitFor(() => fired.includes(slow._id));
+    const stopped = sup.stop();
+    release();
+    await Promise.all([pass, stopped]);
+    await sleep(80); // an escapee would claim + launch inside this window
+
+    const rows = (await scheduleRuns.find({})) as unknown as ScheduleRunDoc[];
+    expect(rows.filter((r) => r.status === 'running')).toEqual([]);
+    expect(rows.find((r) => r.scheduleId === slow._id)?.status).toBe('ok');
   });
 });

@@ -6089,6 +6089,9 @@
             "type": "integer",
             "minimum": 1,
             "maximum": 10
+          },
+          "scheduleId": {
+            "$ref": "#/components/schemas/Id"
           }
         },
         "required": [

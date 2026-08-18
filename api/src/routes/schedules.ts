@@ -98,7 +98,7 @@ export function schedulesRouter(deps: SchedulesRouterDeps): Router {
       const body = SchedulePreviewRequest.safeParse(req.body);
       if (!body.success) return sendError(res, 'VALIDATION_FAILED', 'Dados inválidos.', { issues: body.error.issues });
       try {
-        res.json({ occurrences: service.previewSpec(body.data.spec, body.data.count ?? 5, svcDeps) });
+        res.json({ occurrences: await service.previewSpec(actorOf(req as AuthedRequest), body.data, svcDeps) });
       } catch (err) { refuse(res, err); }
     })();
   });
@@ -148,7 +148,12 @@ export function schedulesRouter(deps: SchedulesRouterDeps): Router {
       const q = ScheduleRunListQuery.safeParse(req.query);
       if (!q.success) return sendError(res, 'VALIDATION_FAILED', 'Dados inválidos.', { issues: q.error.issues });
       try {
-        const items = await service.listRuns(actorOf(req as AuthedRequest), req.params.id!, q.data.limit ?? DEFAULT_RUNS_LIMIT);
+        // The WHOLE declared query travels, `status` included: the descriptor promises the same
+        // filter as the org feed, and forwarding half of it would be a contract that lies.
+        const items = await service.listRuns(actorOf(req as AuthedRequest), req.params.id!, {
+          ...(q.data.status ? { status: q.data.status } : {}),
+          limit: q.data.limit ?? DEFAULT_RUNS_LIMIT,
+        });
         res.json({ items });
       } catch (err) { refuse(res, err); }
     })();
