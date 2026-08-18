@@ -7,6 +7,16 @@ Canonical distribution is **GitHub Releases** on `gongiskhan/ekoa-bridge`. The
 https://github.com/gongiskhan/ekoa-bridge/releases/latest/download/<asset>
 ```
 
+> **OPEN after the move into `ekoa-code`.** The source now lives here, but the
+> release URLs above still point at the `ekoa-bridge` repository, and they are
+> baked into `install.sh`, `install.ps1` and every install command the web app
+> has ever displayed. Deciding where releases are cut from now is a distribution
+> decision, not a code move, so nothing here was repointed: keep publishing the
+> assets to `gongiskhan/ekoa-bridge/releases` (the repository can hold releases
+> without holding source) until that decision is made. Changing the URLs means
+> re-issuing every install command already in circulation, so it should happen
+> once, deliberately, with the old release kept as a redirect or a final build.
+
 ## Why there are no double-click installers any more
 
 There used to be `Instalar Ponte Ekoa.command` (macOS) and `.bat` (Windows), so a
