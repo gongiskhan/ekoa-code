@@ -6,6 +6,33 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`workspace-scoped-verification-misses-two-workspaces`** (2026-08-18, OPEN as a PROCESS gap; the
+  two red pins it hid are FIXED). Twice now a change has grown the public surface, left a pin red,
+  and been declared green by a reviewer who ran `npm test --workspace api` and
+  `npm test --workspace web` rather than root `npm test`. The root script fans out to FIVE
+  workspaces; `shared` and `clients/cortex-cli` were never executed.
+
+  **Measured, on `main` after the schedules landing:** `shared/src/contract.test.ts` red
+  (`expected 33 to be 32` - the descriptor-map pin) and `clients/cortex-cli/tests/client.test.ts`
+  red (`expected [ ...(41) ] to have a length of 31` - the public-operation pin). Both had been red
+  since `5a5e721`, through the review gate, the fix round, and a push to origin. Repaired in
+  `3c44bcf` and `adb007e`.
+
+  **This is the SECOND occurrence of the shared pin specifically** - `contract.test.ts`'s own
+  comment already records `appEmail`/`appVision` landing without bumping it (2026-08-06, repaired
+  2026-08-07). A defect that recurs on the same file with the same cause is a process gap, not an
+  oversight.
+
+  **Why the other gates did not catch it, and why that is correct.** `gate:client-drift` was green
+  the whole time, and rightly so: drift proves the GENERATED client matches the spec, which it did.
+  The pin proves a HUMAN noticed the public surface grew. They answer different questions and
+  neither substitutes for the other - which is exactly why the pin has to actually run.
+
+  **Closes when:** the verification habit is structural rather than remembered - either every
+  "is it green" claim runs root `npm test`, or the two pins move into a lane that the api/web
+  runs cannot skip. Until then, treat any green claim scoped to a workspace as unproven for the
+  other three.
+
 - **`browser-step-retry-may-double-fire`** (2026-08-18, OPEN, self-reported by the slice that
   introduced it - the automation budgets/primitives work, `ca43335`). The new deterministic
   per-step retry (`STEP_RETRY_BUDGET.deterministicRetries`, `engine.ts:1568-1600`) re-issues the
