@@ -4008,3 +4008,19 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   ENV-NOTED (no action): PWA manifest absent (tracked parity row - installed-PWA users lose
   their entry until ported); Zoho not connected on dev (send refusal correct); model
   credential works (AI features live).
+
+- **`bridge-pdfjs-major-declares-node-22-while-the-package-pins-node-20`** (OPEN 2026-08-18, MEDIUM,
+  latent runtime - found while moving the daemon into `clients/bridge`, pre-existing in its own
+  repository). `clients/bridge` depends on `pdfjs-dist ^6.1.200`, which resolves to a build whose
+  own `engines` field declares `node >=22.13.0 || >=24`. The package is pinned to Node 20
+  (`.nvmrc`, `engines: >=20 <21`), so `npm i -g` of the shipped tarball prints an EBADENGINE warning
+  and installs anyway - npm does not enforce engines by default. Nothing in the suite catches it:
+  the PDF path (`src/tools/extract-text.ts`, `await import('pdfjs-dist/legacy/build/pdf.mjs')`) is
+  exercised only where the legacy build happens to work on Node 20 today, so the failure mode is a
+  future pdfjs patch using a Node 22 API and breaking text extraction on operators' laptops with no
+  gate having gone red. Compounding it, `api/` pins `pdfjs-dist ^4.10.38`, so the monorepo now
+  carries TWO pdfjs copies (the bridge's nests under `clients/bridge/node_modules`). Disposition:
+  NOT fixed in the move - aligning them means either downgrading the daemon's extraction to v4 or
+  bumping api's to v6, and neither is a move. The real fix is one range across both workspaces,
+  chosen against a Node-20 runtime, with the extraction path pinned by a test that actually reads a
+  PDF on the pinned Node version.
