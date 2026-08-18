@@ -35,9 +35,10 @@ jobs:
       # silently absent from CI. Found by the E6 fresh-context review (run 20260730).
       - run: npm run build
       # 3b. chromium BEFORE the tests, not only before e2e. Two suites in the workspace fan-out
-      # catch a missing browser and return early instead of failing - clients/bridge's Tier-2
-      # browser smoke is one - so with the install after `npm test` they proved nothing. Installing
-      # here costs the e2e step nothing (it is the same cache) and makes those smokes execute.
+      # catch a missing browser and return early instead of failing -
+      # clients/bridge/test/tools/tier2/automation.test.ts and .../test/attended/ceremony.test.ts -
+      # so with the install after `npm test` they proved nothing. Installing here costs the e2e step
+      # nothing (it is the same cache) and makes those two smokes actually execute.
       - run: npx playwright install --with-deps chromium
       # 4. unit + module tests (api vitest runs tests/contract too; clients/bridge's unit lane rides
       # the same fan-out, its heavy canary is the separate step below)
