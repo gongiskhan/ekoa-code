@@ -1,0 +1,40 @@
+{
+  "name": "@ekoa/bridge",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Ekoa Bridge - executor-only local daemon bridging local files to hosted Cortex. No local agent loop (ADR-001). Separate process: never imported by api/.",
+  "engines": {
+    "node": ">=20 <21"
+  },
+  "bin": {
+    "ekoa-bridge": "./dist/cli/index.js"
+  },
+  "files": [
+    "dist",
+    "packaging"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
+    "test": "npm run build && vitest run --exclude 'test/integration/**'",
+    "test:integration": "vitest run test/integration",
+    "pack:dist": "node scripts/pack-dist.mjs"
+  },
+  "dependencies": {
+    "@ekoa/shared": "*",
+    "@vscode/ripgrep": "^1.18.0",
+    "execa": "^9.6.1",
+    "mammoth": "^1.12.0",
+    "pdfjs-dist": "^6.1.200",
+    "playwright": "^1.61.1",
+    "ws": "^8.21.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/eslint": "^8.56.12",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.27.7",
+    "mongodb-memory-server": "^10.1.2"
+  }
+}

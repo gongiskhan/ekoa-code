@@ -1,8 +1,10 @@
 /**
- * Repo lint enforcement (ch02 §2.9). Three rule families:
+ * Repo lint enforcement (ch02 §2.9). Four rule families:
  *  1. Repo boundaries (FIXED-1): web/↛api/, api/↛web/, shared/↛either.
  *  2. Egress chokepoint (FIXED-3/8/13): only api/src/llm/** may import @anthropic-ai/*.
  *  3. Module direction (ch02 §2.7): nothing imports routes/ or server.ts; routes/↛data/.
+ *  4. Bridge containment (S1): clients/bridge/src/containment/resolver.ts is the ONLY path
+ *     resolver, and filesystem access is confined to the modules that own it.
  */
 const path = require('path');
 
@@ -16,6 +18,81 @@ const COFRE_STORE_BAN = {
   message:
     'The Cofre item/grant stores are reachable only through api/src/cofre/ (B-1). Use the module entry — unwrap(), mintCofreItem(), issueGrant() — never the raw store handle.',
 };
+
+// -------------------------------------------------------------------------------------------
+// Rule 4 - the bridge daemon's SINGLE-RESOLVER containment invariant (S1).
+//
+// `clients/bridge` is a local daemon that reads a user's real filesystem under a granted root.
+// The whole containment argument rests on there being exactly ONE place that turns an untrusted
+// path into a real one - `clients/bridge/src/containment/resolver.ts` - so a second resolver
+// anywhere else would be a jail escape that no test would necessarily catch. The rules below are
+// ported verbatim in effect from the flat ESLint config the package carried while it lived in its
+// own repository; they came into this repo WITH the package because deleting that config without
+// them would have dropped a live security invariant silently.
+//
+// The ban must cover EVERY way to reach realpath or the fs module, not just the tidy member-call
+// form: an earlier, narrower version of this rule was proven to let bare named-import calls,
+// `.native`, dynamic `import()`, `require()` and `process.getBuiltinModule` through. Each hole is
+// closed below and clients/bridge/test/lint/containment-rule.test.ts exercises every form against
+// THIS config, so the invariant stays proven rather than merely declared.
+// -------------------------------------------------------------------------------------------
+const BRIDGE_FS_MODULES = ['node:fs', 'fs', 'node:fs/promises', 'fs/promises'];
+
+// realpath in ANY call form: bare `realpathSync(x)` / `realpath(x)` (named import), member
+// `fs.realpathSync(x)`, and `fs.realpathSync.native(x)` (callee is `X.realpathSync.native`).
+const BRIDGE_REALPATH_SYNTAX = [
+  {
+    selector:
+      "CallExpression[callee.name='realpathSync'], CallExpression[callee.name='realpath'], " +
+      "CallExpression[callee.property.name='realpathSync'], CallExpression[callee.property.name='realpath'], " +
+      "CallExpression[callee.object.property.name='realpathSync'], CallExpression[callee.object.property.name='realpath']",
+    message: 'realpath belongs to clients/bridge/src/containment/resolver.ts only (single-resolver rule, S1).',
+  },
+];
+
+// Dynamic fs acquisition that `no-restricted-imports` does NOT cover: `await import('node:fs')`,
+// `require('fs')`, and `process.getBuiltinModule('node:fs')`. Matched per module name so the
+// selector fields (ImportExpression.source, require's arguments[0]) are exact.
+const BRIDGE_DYNAMIC_FS_SYNTAX = [
+  ...BRIDGE_FS_MODULES.flatMap((name) => [
+    {
+      selector: `ImportExpression[source.value='${name}']`,
+      message: 'Dynamic import of the fs module is banned outside the fs-owning bridge modules (S1).',
+    },
+    {
+      selector: `CallExpression[callee.name='require'][arguments.0.value='${name}']`,
+      message: 'require() of the fs module is banned outside the fs-owning bridge modules (S1).',
+    },
+  ]),
+  {
+    selector: "CallExpression[callee.object.name='process'][callee.property.name='getBuiltinModule']",
+    message: 'process.getBuiltinModule is banned outside the fs-owning bridge modules (S1).',
+  },
+];
+
+// An ALIASED realpath import (`import { realpathSync as rp }` then `rp()`) cannot be caught by a
+// call-name syntax selector - the local name is arbitrary. Catch it at the import binding instead:
+// ban importing the realpath NAMES from the fs modules under any alias, even in fs-owning modules
+// (which may import readFileSync etc. but never realpath - that stays in the resolver).
+const BRIDGE_REALPATH_IMPORT_BAN = BRIDGE_FS_MODULES.map((name) => ({
+  name,
+  importNames: ['realpath', 'realpathSync'],
+  message: 'realpath belongs to clients/bridge/src/containment/resolver.ts only (single-resolver rule, S1).',
+}));
+
+const BRIDGE_FS_IMPORT_BAN = BRIDGE_FS_MODULES.map((name) => ({
+  name,
+  message: 'Filesystem access is confined to the bridge containment/tools/ledger/auth/session/cli/surface modules (S1).',
+}));
+
+const BRIDGE_FS_OWNING_GLOBS = [
+  'clients/bridge/src/tools/**/*.ts',
+  'clients/bridge/src/ledger/**/*.ts',
+  'clients/bridge/src/auth/**/*.ts',
+  'clients/bridge/src/session/**/*.ts',
+  'clients/bridge/src/cli/**/*.ts',
+  'clients/bridge/src/surface/**/*.ts',
+];
 
 module.exports = {
   root: true,
@@ -205,5 +282,26 @@ module.exports = {
     // tenant's rows and therefore cannot go through an owner-scoped repository — reaches the raw
     // handle legitimately. It is exported under a deliberately ugly name so that exception stays
     // greppable rather than looking ordinary.
+
+    // Rule 4a - bridge modules that do NOT own filesystem access: no fs in any form, no path
+    // resolution. `src/containment/**` is excluded outright (it IS the resolver), as are the
+    // fs-owning modules, which the next override covers with the narrower ban.
+    {
+      files: ['clients/bridge/src/**/*.ts'],
+      excludedFiles: ['clients/bridge/src/containment/**/*.ts', ...BRIDGE_FS_OWNING_GLOBS],
+      rules: {
+        'no-restricted-imports': ['error', { paths: BRIDGE_FS_IMPORT_BAN }],
+        'no-restricted-syntax': ['error', ...BRIDGE_REALPATH_SYNTAX, ...BRIDGE_DYNAMIC_FS_SYNTAX],
+      },
+    },
+    // Rule 4b - bridge modules that DO own filesystem access may import fs, but may not re-resolve
+    // paths (realpath stays in the resolver) and may not reach fs by the dynamic back doors either.
+    {
+      files: BRIDGE_FS_OWNING_GLOBS,
+      rules: {
+        'no-restricted-imports': ['error', { paths: BRIDGE_REALPATH_IMPORT_BAN }],
+        'no-restricted-syntax': ['error', ...BRIDGE_REALPATH_SYNTAX, ...BRIDGE_DYNAMIC_FS_SYNTAX],
+      },
+    },
   ],
 };

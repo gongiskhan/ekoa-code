@@ -34,8 +34,46 @@ jobs:
       # @ekoa/shared" and NO tests ran - so every api gate, including the OpenAPI drift gate, was
       # silently absent from CI. Found by the E6 fresh-context review (run 20260730).
       - run: npm run build
-      # 4. unit + module tests (api vitest runs tests/contract too)
+      # 3b. chromium BEFORE the tests, not only before e2e. Two suites in the workspace fan-out
+      # catch a missing browser and return early instead of failing - clients/bridge's Tier-2
+      # browser smoke is one - so with the install after `npm test` they proved nothing. Installing
+      # here costs the e2e step nothing (it is the same cache) and makes those smokes execute.
+      - run: npx playwright install --with-deps chromium
+      # 4. unit + module tests (api vitest runs tests/contract too; clients/bridge's unit lane rides
+      # the same fan-out, its heavy canary is the separate step below)
       - run: npm test
+      # 5. the bridge integration canary: the REAL daemon (BridgeSocket + DaemonRuntime + serve)
+      # against a REALLY booted Cortex - api/dist over mongodb-memory-server, the WS bridge server,
+      # task minting/signing, the anonymisation chokepoint. It is deliberately NOT in the workspace
+      # `test` fan-out: it needs api/dist and spins a mongod, which has no business running on every
+      # `npm test`. It replaces the cross-repo job the daemon carried while it lived in its own
+      # repository; the sibling checkout is now just this repo, so EKOA_CODE_DIR is unset and the
+      # harness defaults to the monorepo root.
+      #
+      # The guard is the load-bearing half. `ekoaCodeAvailable` in
+      # clients/bridge/test/integration/helpers/boot.ts turns the whole suite into `describe.skip`
+      # when api/dist is absent - a green step that tested nothing, which is the exact failure this
+      # gate exists to prevent. So assert the entrypoints the harness loads are really on disk.
+      # (The daemon's old CI also carried EKOA_DRIFT_REQUIRED=1 to stop its vendored-wire drift test
+      # self-skipping. There is no vendored wire any more - clients/bridge/src/wire re-exports
+      # @ekoa/shared - so that variable has no reader left and is deliberately not carried over.)
+      - name: guard - the bridge canary must not pass by testing nothing
+        run: |
+          set -euo pipefail
+          for f in \
+            api/dist/bridge/server.js \
+            api/dist/bridge/delegation.js \
+            api/dist/llm/anonymise/index.js \
+            api/dist/config.js \
+            shared/dist/index.js \
+            node_modules/express/index.js
+          do
+            if [ ! -f "$f" ]; then
+              echo "::error::$f is missing - the bridge integration harness would silently skip"
+              exit 1
+            fi
+          done
+      - run: npm run test:integration --workspace @ekoa/bridge
       # 6+7. ledger-gated e2e: the suite-ledger runner is the single authority for which
       # ported specs/drivers run at the current gate (from the latest gate-* tag). Not-yet-due
       # artifacts report `skipped (awaiting G<N>)`; due artifacts run and must be green; the
@@ -46,14 +84,14 @@ jobs:
       #
       #   1. Playwright's browsers were never installed on the runner, so the first `chromium.launch()`
       #      died with "Executable doesn't exist at ~/.cache/ms-playwright/...". Dockerfile.api already
-      #      does this for the same reason.
+      #      does this for the same reason. (The install now happens at step 3b above, earlier, so the
+      #      browser smokes in the unit fan-out get a browser too.)
       #   2. The step ran the BARE ledger runner, which needs a live api on :4111 and reports
       #      "10 due driver(s) require a live dev API — an unreachable-server skip is NOT green".
       #      `scripts/e2e-with-server.mjs` exists precisely for this: it boots dev-api on an ephemeral
       #      memory-mongo, waits for READY plus the featured prebuild, runs the ledger, and tears down.
       #      Its own docblock says "CI sets EKOA_SCREENSHOTS_DISABLED" — it was written for this lane
-      #      and the lane never called it. It needs `npm run build` output, which step 5 above produces.
-      - run: npx playwright install --with-deps chromium
+      #      and the lane never called it. It needs `npm run build` output, which step 3 above produces.
       - run: npm run e2e:server
         env:
           EKOA_SCREENSHOTS_DISABLED: '1'

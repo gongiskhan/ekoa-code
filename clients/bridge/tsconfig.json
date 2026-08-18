@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "types": ["node"],
+    // NOT inherited from the base, and load-bearing here: the daemon builds optional fields with
+    // the `...(x ? { k: v } : {})` spread idiom throughout (config writes, frame construction,
+    // observation envelopes). Without exactOptionalPropertyTypes, `{ k: undefined }` becomes
+    // assignable to `{ k?: string }` and those sites stop being checked - the breakage is silent,
+    // which is why this is restated rather than left to the base.
+    "exactOptionalPropertyTypes": true
+  },
+  "references": [{ "path": "../../shared" }],
+  "include": ["src/**/*.ts"]
+}

@@ -47,6 +47,11 @@ web/public/voice/vendor/
 __pycache__/
 .walkthrough/auth.json
 
+# Bridge release archives and the staging tree `npm run pack:dist --workspace @ekoa/bridge` builds
+# them from (clients/bridge/packaging/README.md). Build artifacts - never committed.
+clients/bridge/.pack/
+*.tgz
+
 # Planted-violation probes written by api/tests/security/grep-gates.test.ts. The test creates a
 # file that DELIBERATELY breaks the chokepoint gate (an api.anthropic.com literal outside
 # api/src/llm/) and deletes it again. A killed run leaves it behind, and committing one would

@@ -25,7 +25,7 @@ allowance (the activation model that replaces licensing).
 
 ## Repo layout
 
-Three parts, one repo, npm workspaces:
+Three platform parts plus the consumers, one repo, npm workspaces:
 
 - `api/` - one Node + TypeScript Express service. Default port `:4111` (`api/src/config.ts`,
   `backend.port`). Persistence is Mongo via the `mongodb` driver (`api/src/data/mongo.ts`); the
@@ -33,6 +33,20 @@ Three parts, one repo, npm workspaces:
 - `web/` - the Next.js dashboard (`:3000`). Transport is a typed REST client generated from `shared/`.
 - `shared/` - the API contract ONLY: zod schemas + inferred types + endpoint descriptor maps
   (`shared/src/`). Imports nothing but zod. Both apps consume it; neither extends it.
+- `clients/*` - shipped CONSUMERS of the platform, never a second implementation of it (Capability
+  Contract rule 1). They may reach `shared/` and nothing else in this repo; the `clients/*` zones in
+  `.eslintrc.cjs` enforce that. Neither is in the root `build` script (which is shared+api+web).
+  - `clients/cortex-cli` (`@ekoa/cortex-cli`) - the `cortex` CLI over the public Capability API,
+    driving one generated typed client (`docs/CAPABILITY_CONTRACT.md`).
+  - `clients/bridge` (`@ekoa/bridge`) - the local bridge daemon an operator installs on their own
+    machine. A SEPARATE PROCESS, not a module: `api/` never imports it, and it reaches Cortex the
+    way any paired machine does, over the WS bridge (`api/src/bridge/`). It re-exports the
+    delegation wire schemas from `@ekoa/shared` rather than carrying a copy, so daemon and Cortex
+    parse the same objects and sign the same bytes by construction. Its `playwright` range is
+    pinned equal to api's so npm hoists one copy. Ships as a `.tgz` with `@ekoa/shared` bundled in
+    (`npm run pack:dist`) because a `*` workspace dep cannot resolve on a laptop; the daemon needs
+    shared's runtime, not only its types. Its unit lane rides the workspace `test` fan-out; its
+    integration canary against `api/dist` is a separate CI step behind an entrypoints guard.
 
 In production web and API are same-origin behind an edge proxy, so the API ships **no CORS middleware
 on purpose**. Dev needs a shim - see `docs/operations-runbook.md` (the run driver).
@@ -121,6 +135,15 @@ Lint- and CI-enforced (`.eslintrc.cjs`). Full verbatim rule text is in `docs/gov
 - **Module direction.** ESLint zones encode the tier table: nothing imports `routes/` or
   `server.ts`; `routes/` does not import `data/`; only `server.ts` imports across the injected seams;
   nothing outside `api/src/llm/` imports `llm/` internals other than its public entry.
+- **Consumer boundary.** `clients/*/src|bin|scripts` may not import `api/**` or `web/**`, and
+  nothing in the platform may depend on `clients/`. The dependency runs one way: provider to
+  contract to consumer.
+- **Bridge containment (S1).** Inside `clients/bridge`, `src/containment/resolver.ts` is the ONLY
+  path resolver, and filesystem access is confined to the modules that own it
+  (`tools/`, `ledger/`, `auth/`, `session/`, `cli/`, `surface/`). Enforced by Rule 4 of
+  `.eslintrc.cjs` (`no-restricted-imports` + `no-restricted-syntax`, closing every bypass form:
+  aliased imports, `.native`, dynamic `import()`, `require()`, `process.getBuiltinModule`) and
+  PROVEN against that config by `clients/bridge/test/lint/containment-rule.test.ts`.
 
 ## LLM egress chokepoint (`api/src/llm/`) - FIXED-3, FIXED-8, FIXED-13
 

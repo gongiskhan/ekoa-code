@@ -810,3 +810,89 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   (security/redaction.ts) was quadratic on a long word-character run (~2.4s on 40KB, and a
   captured response body is exactly that shape) - the key is now anchored to the start of its run
   with a lookbehind, same match set, linear.
+- 2026-08-18 - THE BRIDGE DAEMON MOVES IN AS `clients/bridge`, DE-VENDORED, ON THIS REPO'S
+  TOOLCHAIN, WITH A BUNDLED SHIPPING ARTIFACT.
+  The `ekoa-bridge` local daemon (executor-only, no local agent loop; ADR-001 in its own history)
+  stops being a separate repository and becomes the workspace package `@ekoa/bridge` at
+  `clients/bridge`, beside `clients/cortex-cli`. It is a CONTENT COPY, never a git subtree or
+  history import: the package's own `CLAUDE.md` and its eight `.claude/` area skills did not cross
+  (a tracked CLAUDE.md or .claude/ outside this repo's own is a standing prohibition), and its
+  `docs/` did not cross either - anything wanted from them is authored fresh here rather than
+  dropped in. WHY MOVE IT: the daemon speaks a wire contract this repo defines, and while the two
+  lived apart nothing noticed when they disagreed - a contract break sat unseen for three weeks
+  because the daemon's repo had no CI and its cross-repo canary was only ever run by hand.
+  DE-VENDORED WIRE. `src/wire/contract.ts` (a byte-copy of the delegation schemas) and
+  `test/wire/drift.test.ts` (the canary that policed the copy against this repo's built `shared`
+  dist) are DELETED. `src/wire/index.ts` re-exports `BridgeFrame`, `DelegatedTask`,
+  `DelegationResult`, `EgressLedgerRow`, `BridgeCapability`, `AllowanceRef`, `PatchProposal` and
+  `canonicalTaskBinding` from `@ekoa/shared`; `src/wire/signing.ts` stays local (the HMAC
+  `signDelegatedTask`/`verifyDelegatedTaskSig` wrappers are not in shared) with its
+  `canonicalTaskBinding` import repointed at shared. The drift test was deleted rather than ported
+  BECAUSE drift is now structurally impossible - one source of the schemas, one canonicalisation
+  function, both sides importing it. A test that can no longer fail is not a gate. Consequence:
+  `EKOA_DRIFT_REQUIRED=1`, which the daemon's own CI carried to stop that test self-skipping, has
+  no reader left and is deliberately NOT carried into this repo's `ci.yml`.
+  TOOLCHAIN DIRECTION: THE PACKAGE COMES DOWN TO THE MONOREPO, NOT THE MONOREPO UP TO IT. The
+  daemon arrived on ESLint 10 flat + `typescript-eslint` 8.63 + TS 6 + `@types/node` 26; this repo
+  is on ESLint 8 `.eslintrc.cjs` + TS 5.x + `@types/node` 20. The package was downgraded, following
+  the `clients/cortex-cli` precedent (no own eslint config, no own eslint/typescript/vitest
+  devDeps, `tsconfig` extending `../../tsconfig.base.json` with a `references` entry for `shared`).
+  Rationale: the destination is ONE root gate, and migrating api + web's own flat config + shared +
+  cortex-cli to ESLint 10 flat and TS 6 is a large cross-cutting change with its own breaking
+  surface - a separate project, not a prerequisite for moving one client in. It is also the
+  reversible direction: the whole-repo flat/TS6 migration remains available later and would then
+  carry this package along for free. `vitest` was already identical (4.1.10), so no test-runner
+  change. Cost, measured rather than assumed: the source typechecks clean under TS 5.x with the
+  base's added `composite`/`esModuleInterop`/`noImplicitOverride`; `exactOptionalPropertyTypes` is
+  RE-DECLARED in `clients/bridge/tsconfig.json` because the base omits it and the daemon's
+  `...(x ? {k:v} : {})` idiom relies on it (omitting it breaks silently, not loudly). ESLint 8 does
+  not bundle its own types the way ESLint 10 does, so `@types/eslint` joins the package's devDeps
+  for the lint-proof test. The one real find: the daemon's own `typecheck` only ever covered `src`,
+  so adding `tsconfig.test.json` (the api/cortex-cli shape) surfaced 19 latent type errors in its
+  TEST files - including three suites importing `CliContext` from `src/auth/index.js`, which does
+  not export it. All were FIXED, none suppressed.
+  THE CONTAINMENT LINT RULES CAME WITH THE PACKAGE. The deleted flat config carried custom
+  fs-containment rules enforcing the single-resolver invariant (`src/containment/resolver.ts` is the
+  ONLY path resolver; filesystem access is confined to the modules that own it). Deleting that
+  config without porting them would have dropped a live security invariant silently, which is the
+  worst possible outcome of a toolchain change. They are ported as Rule 4 of `.eslintrc.cjs` -
+  `no-restricted-imports` + `no-restricted-syntax` scoped to `clients/bridge/**`, keeping the
+  FS_OWNING_GLOBS exception list and every bypass form the original closed (bare/aliased named
+  imports, `.native`, dynamic `import()`, `require()`, `process.getBuiltinModule`). The package's
+  lint-proof test came with them, repointed at the ROOT config, and gained an assertion that the
+  ban does NOT leak onto the rest of the repo.
+  PLACEMENT. `@ekoa/bridge` is a SEPARATE PROCESS, not a module: it is absent from the root `build`
+  script (shared+api+web), nothing in `api/` may import it, and the existing `clients/*`
+  import-boundary zone forbids it reaching `api/` or `web/`. That is what keeps Playwright out of
+  the api build. Its `playwright` range is pinned equal to api's (`^1.61.1`) so npm hoists ONE copy
+  and a machine never downloads two chromiums. Its unit lane joins the workspace `test` fan-out;
+  the heavy canary (mongodb-memory-server + `api/dist` + the real WS bridge server) is an explicit
+  CI step after `npm run build`, like e2e - with a GUARD asserting the harness entrypoints are on
+  disk, because `ekoaCodeAvailable` turns the whole suite into `describe.skip` when `api/dist` is
+  absent and the step would then pass having tested nothing. `EKOA_CODE_DIR` survives only as an
+  escape hatch; the harness now defaults to the repo root.
+  PACKAGING: ESBUILD-BUNDLE `@ekoa/shared` INTO THE SHIPPED ARTIFACT. The daemon is installed
+  globally on operators' laptops from a `.tgz`, and `@ekoa/shared` is an unpublished `*` workspace
+  dependency that resolves only inside this repo - a global install would try the registry and
+  fail. `cortex-cli` sidesteps this by copying shared's GENERATED TYPES, which does not work here:
+  the daemon needs shared's RUNTIME (`BridgeFrame` is a zod schema it parses every inbound frame
+  with; `canonicalTaskBinding` is the function it signs bytes with). So `npm run pack:dist`
+  (`clients/bridge/scripts/pack-dist.mjs`) bundles `@ekoa/shared` into `dist/cli/index.js` with
+  esbuild and packs from a STAGING tree whose manifest is derived from the real package.json minus
+  the workspace dep - never over `dist/`, which stays the `tsc -b` output CI typechecks and the
+  suites run against. Everything else (playwright, ws, execa, zod, pdfjs-dist, mammoth,
+  `@vscode/ripgrep`) stays external and installs on the laptop as before. The script FAILS if
+  `@ekoa/shared` survives as an import in the bundle, so the inlining is asserted rather than
+  trusted. Proven: `npm i -g` of the built tarball into a scratch prefix, then `ekoa-bridge --help`
+  and `ekoa-bridge status` both exit 0 with real PT-PT output. Rejected: publishing `@ekoa/shared`
+  to a registry (a public package for one private consumer); vendoring shared's source back into
+  the daemon (the exact coupling this move removes).
+  Accepted residuals, recorded not hidden: (a) `pdfjs-dist` stays at the daemon's `^6` while api is
+  on `^4`, so npm nests a second copy - aligning them means either a v4 downgrade of the daemon's
+  PDF text extraction or a v6 bump of api's, neither of which belongs in a move; pdfjs 6 also
+  declares `node >=22.13` while this package is pinned to Node 20, which npm reports as a warning
+  and which predates the move. (b) The daemon's claims-ceiling gate named two of its own `docs/`
+  files as claim-bearing surfaces; those documents did not move, so the gate now names the surfaces
+  this package actually owns - `src/i18n/pt.ts` plus the three `packaging/` installer files, which
+  ship PT-PT product copy and were never gated before. The two dropped documents' claims content is
+  not currently gated anywhere in this repo.
