@@ -277,6 +277,21 @@ export const BridgeFrame = z.discriminatedUnion('type', [
     ok: z.boolean(),
     output: z.unknown().optional(),
     error: z.string().optional(),
+    /**
+     * Per-step visual evidence from the machine that ran the step (P1.4): raw base64 PNG, no
+     * `data:` prefix. ADDITIVE and OPTIONAL - a daemon that captures nothing simply omits it and
+     * an older parser is unaffected (Rule 7). It rides the RESULT rather than a frame of its own
+     * because the screenshot IS the post-action observation: splitting them would let a run record
+     * a picture of a step that failed to report, or a report with no picture, with nothing to join
+     * them by. Cortex maps it onto `observation.screenshotB64`, which
+     * `DaemonBrowserSession.ingest` already reads, and from there into the existing tenant-scoped
+     * screenshot plane - so a bridge run produces the same evidence a hosted run does.
+     *
+     * NOT redacted, and deliberately so: it is an image, not text. The accompanying free text
+     * (`output`, `error`) goes through the daemon's outbound redactor and Cortex's ingress one.
+     * Credential-bearing REGIONS are a browser-side masking concern, not a wire-filter one.
+     */
+    screenshotB64: z.string().optional(),
   }),
   /**
    * ONE-TIME secret delivery (the bridge transit rule, I9). The payload is nonce-bound and
@@ -307,6 +322,145 @@ export const BridgeFrame = z.discriminatedUnion('type', [
   }),
 ]);
 export type BridgeFrame = z.infer<typeof BridgeFrame>;
+
+// ---------------------------------------------------------------------------
+// The local EXECUTION plane (P1.2 / P1.4) - the contract for a `tool.invoke` that
+// runs a STEP on the paired machine, and for the observation that comes back.
+//
+// WHY THIS IS IN `shared/` AND NOT IN EITHER END. Both ends already spoke this
+// shape and neither declared it: Cortex's `DaemonBrowserSession.toDaemonInput`
+// flattens a `PlaywrightAction` `{kind,...rest}` into `{action:kind,...rest}` and
+// its `ingest` reads a fixed set of keys off `observation.data`, silently dropping
+// anything it does not recognise. A daemon that spelled one key differently would
+// therefore produce a run that "worked" while every fingerprint was wrong. One
+// versioned schema, parsed on both sides, makes that failure loud.
+//
+// RULE 7: these are NEW EXPORTS. No existing export changes shape.
+// ---------------------------------------------------------------------------
+
+/** How the machine finds a DOM node. Identical union to Cortex's `Locator` (automation/types.ts);
+ *  the strategies are ordered stable-first and the set is CLOSED - an unrecognised strategy is a
+ *  step the daemon must refuse rather than approximate. */
+export const LocalBrowserLocator = z.discriminatedUnion('strategy', [
+  z.object({ strategy: z.literal('role'), role: z.string(), name: z.string().optional(), exact: z.boolean().optional() }),
+  z.object({ strategy: z.literal('text'), value: z.string(), exact: z.boolean().optional() }),
+  z.object({ strategy: z.literal('label'), value: z.string(), exact: z.boolean().optional() }),
+  z.object({ strategy: z.literal('placeholder'), value: z.string() }),
+  z.object({ strategy: z.literal('testid'), value: z.string() }),
+  z.object({ strategy: z.literal('css'), selector: z.string() }),
+  z.object({ strategy: z.literal('altText'), value: z.string() }),
+  z.object({ strategy: z.literal('title'), value: z.string() }),
+]);
+export type LocalBrowserLocator = z.infer<typeof LocalBrowserLocator>;
+
+/**
+ * One browser step, in the FLATTENED form Cortex puts on the wire (`{action:<kind>, ...rest}`).
+ *
+ * Actions and ASSERTIONS share the union because they share the wire slot: `DaemonBrowserSession`
+ * dispatches both through the same `runStep`, distinguished only by the verb. Keeping them in one
+ * discriminated union is what lets the daemon parse the frame ONCE and be sure it holds something
+ * it can run - the alternative (parse as action, else parse as assertion) has a silent third
+ * branch where neither matched.
+ *
+ * The vocabulary is the WHOLE of `PlaywrightAction` + `PlaywrightAssertion`, including the six
+ * verbs (`dblclick`/`select`/`check`/`uncheck`/`wait_for`/`scroll`) the daemon previously could
+ * not run - `browser-session.ts` called reconciling that gap a follow-up, and this is it.
+ */
+export const LocalBrowserAction = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('navigate'), url: z.string() }),
+  z.object({ action: z.literal('click'), locator: LocalBrowserLocator }),
+  z.object({ action: z.literal('dblclick'), locator: LocalBrowserLocator }),
+  z.object({ action: z.literal('fill'), locator: LocalBrowserLocator, value: z.string() }),
+  z.object({ action: z.literal('press'), key: z.string(), locator: LocalBrowserLocator.optional() }),
+  z.object({ action: z.literal('select'), locator: LocalBrowserLocator, value: z.string() }),
+  z.object({ action: z.literal('check'), locator: LocalBrowserLocator }),
+  z.object({ action: z.literal('uncheck'), locator: LocalBrowserLocator }),
+  z.object({ action: z.literal('hover'), locator: LocalBrowserLocator }),
+  z.object({ action: z.literal('wait'), durationMs: z.number().finite().nonnegative() }),
+  z.object({
+    action: z.literal('wait_for'),
+    locator: LocalBrowserLocator,
+    state: z.enum(['visible', 'hidden', 'attached', 'detached']),
+  }),
+  z.object({
+    action: z.literal('scroll'),
+    locator: LocalBrowserLocator.optional(),
+    direction: z.enum(['up', 'down']),
+    pixels: z.number().finite().optional(),
+  }),
+  z.object({ action: z.literal('screenshot') }),
+  z.object({ action: z.literal('noop'), reason: z.string() }),
+  // Assertions - the daemon runs them and reports the verdict on `assertionPassed`.
+  z.object({ action: z.literal('expect_visible'), locator: LocalBrowserLocator }),
+  z.object({ action: z.literal('expect_hidden'), locator: LocalBrowserLocator }),
+  z.object({ action: z.literal('expect_text'), locator: LocalBrowserLocator, contains: z.string() }),
+  z.object({ action: z.literal('expect_url'), pattern: z.string() }),
+  z.object({ action: z.literal('expect_title'), contains: z.string() }),
+]);
+export type LocalBrowserAction = z.infer<typeof LocalBrowserAction>;
+
+/** The browser step's payload: the owner it runs for, and the one action to run. */
+export const LocalBrowserStepInput = z.object({
+  owner: z.string(),
+  action: LocalBrowserAction,
+});
+export type LocalBrowserStepInput = z.infer<typeof LocalBrowserStepInput>;
+
+/**
+ * The bash step's payload. `argv` - NOT a command string: the argument vector never round-trips
+ * through a shell hosted-side, so a value interpolated into an argument cannot become shell syntax.
+ * `cwd` is a REQUEST, resolved on the machine through its containment resolver against the step's
+ * grant; a cwd that escapes is refused there, never honoured here.
+ */
+export const LocalBashStepInput = z.object({
+  argv: z.array(z.string()).min(1),
+  cwd: z.string().optional(),
+  stdin: z.string().optional(),
+  timeoutMs: z.number().finite().positive().optional(),
+  /** The grant whose root bounds `cwd`. Absent means "the daemon's default working root". */
+  grantRef: z.string().optional(),
+});
+export type LocalBashStepInput = z.infer<typeof LocalBashStepInput>;
+
+/** The `tool.invoke.input` envelope the Cortex daemon-connection resolver builds around a step. */
+export const LocalToolInvokeInput = z.object({
+  capability: z.enum(['browser', 'bash']),
+  input: z.unknown(),
+  stepId: z.string().optional(),
+  runId: z.string(),
+});
+export type LocalToolInvokeInput = z.infer<typeof LocalToolInvokeInput>;
+
+/**
+ * The post-action page observation - EXACTLY the keys `DaemonBrowserSession.ingest` reads off
+ * `observation.data`, and no others. A key not listed here is a key Cortex throws away, so adding
+ * one to the daemon without adding it here is work that produces nothing.
+ *
+ * `domShapeSketch` must be byte-identical in form to what Cortex's own `buildShapeSketchInPage`
+ * produces (`tags:<sorted>|roles:<sorted>|landmarks:<n>`), because it is hashed into the page
+ * fingerprint that keys the action cache: a different serialisation is a permanent cache miss,
+ * not a visible error.
+ */
+export const LocalBrowserObservation = z.object({
+  url: z.string().optional(),
+  title: z.string().optional(),
+  heading: z.string().optional(),
+  domShapeSketch: z.string().optional(),
+  accessibilitySnapshot: z.string().optional(),
+  viewport: z.object({ w: z.number(), h: z.number() }).optional(),
+  assertionPassed: z.boolean().optional(),
+});
+export type LocalBrowserObservation = z.infer<typeof LocalBrowserObservation>;
+
+/** The bash step's observation, as `local-command.ts` reads it off `observation.data`. */
+export const LocalBashObservation = z.object({
+  stdout: z.string(),
+  stderr: z.string(),
+  exitCode: z.number().nullable(),
+  timedOut: z.boolean().optional(),
+  truncated: z.boolean().optional(),
+});
+export type LocalBashObservation = z.infer<typeof LocalBashObservation>;
 
 /**
  * The canonical byte string a DelegatedTask signature covers (§18.1, §18.2.6): the whole task

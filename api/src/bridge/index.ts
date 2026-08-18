@@ -62,3 +62,9 @@ export {
 
 // Cofre J-1 wiring: the awaitable half of the tool.invoke / tool.result frame pair.
 export { invokeTool, ToolInvocationRefused, type ToolResult } from './tool-invocation.js';
+
+// P1.2/P1.3 - the automation-step seam (one place a resolved step becomes a `tool.invoke`) and the
+// I9 delivery half it calls. `secret-delivery.ts` was built, tested and had no production caller;
+// exporting it here is what makes the composition root able to be one.
+export { createDaemonStepConnection, capabilityForStep, type DaemonStepDeps } from './daemon-step-seam.js';
+export { authoriseDelivery, deliverSecrets, newInvocationId, SecretDeliveryError } from './secret-delivery.js';

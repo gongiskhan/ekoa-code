@@ -989,3 +989,97 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   `api/tests/automation/credential-waiters.test.ts`,
   `api/tests/automation/session-reauth-policy.test.ts`,
   `api/tests/automation/no-typed-otp.test.ts`, `web/__tests__/automations-needs-credentials.test.ts`.
+- 2026-08-18 - THE TIER-2 GATING STANCE FOR BRIDGE-EXECUTED STEPS: TWO GATES, AND THE SECOND IS
+  DERIVED FROM THE FIRST TODAY (say so rather than sell it).
+  `tool.invoke` now runs a real bash or browser step on the operator's machine. Two gates stand in
+  front of it and both fail closed.
+  GATE 1 - ADVERTISEMENT, and it is the real switch. A browser step needs the daemon to advertise
+  `desktop.automation`, a bash step `local.bash`. Neither is advertised by default:
+  `resolveCapabilities` adds them only from an explicit `extraCapabilities` entry in the machine's
+  own config file, which is an edit made by the human sitting at it. Cortex then intersects the
+  advertisement with the org's per-machine capability grant (I-3, default deny) and re-reads that
+  grant PER INVOCATION, so a capability revoked mid-run stops the next step. Advertisement
+  authorises nothing on its own; it only makes a machine eligible to be granted.
+  GATE 2 - ADR-002 TIER-2 ENABLEMENT, checked before EVERY step, bash AND browser. ADR-002 puts
+  both in tier 2 because both are exfiltration-capable by nature - a shell can curl, a browser can
+  POST - so applying the check to bash alone would have been the narrower reading of a rule whose
+  own justification covers both.
+  THE LIMITATION, STATED PLAINLY: `AutomationEnablement` is per-session, in-memory, and has no
+  runtime toggle anywhere in this daemon - nothing ever called `enable()` before this change. Had
+  the executor simply gated on it, bash over the bridge would have been permanently dead code that
+  looked implemented. So `serve.ts` enables the tier for the pairing's session exactly when the
+  operator advertised a tier-2 capability, on the argument that the config edit IS the explicit
+  local user action ADR-002 asks for. That makes gate 2 DERIVED from gate 1 today: it is
+  defence-in-depth and a single flip point, NOT an independent second factor, and calling it one
+  would be the kind of claim that survives review and then turns out to be furniture.
+  WHAT WOULD MAKE IT INDEPENDENT: a toggle on the daemon's existing loopback surface (`src/surface/`,
+  which already mints and revokes grants from the dashboard), so a human at the machine can arm and
+  disarm local execution while the daemon runs, without editing a file and restarting. That is the
+  next slice of this, not a rename of what exists.
+  IT IS NOT AN UNREACHABLE BRANCH. `test/runtime/tool-executor.test.ts` builds a runtime with the
+  capability advertised and the tier NOT enabled and asserts a refusal plus its ledger row, for
+  both a bash and a browser step. Mutation-proved: deleting the check leaves that suite red.
+  REVIEW DATE (Rule 10): revisit when the surface toggle lands, or by 2026-11-18, whichever is
+  first. If neither has happened by then, the honest move is to delete gate 2 rather than keep a
+  check that only ever mirrors gate 1.
+
+- 2026-08-18 - I9 ON THE DAEMON: DELIVERED SECRETS ARE HELD AS BUFFERS, NOT STRINGS, AND THE EGRESS
+  REDACTOR OUTLIVES THE HOLD.
+  WHY BUFFERS. A JavaScript string is immutable: no operation overwrites its bytes, and it survives
+  in the heap until the collector happens to reach it - which may be after a core dump, a heap
+  snapshot, or a page swapped to disk. `Buffer.fill(0)` overwrites the actual backing memory,
+  synchronously, at a moment we choose. So `secret-hold.ts` copies each delivered value into a
+  Buffer on arrival and every later hop works from that; a `string` is materialised only
+  transiently, inside `withChildEnv`, because Node's spawn API takes strings and there is no way
+  around that. The zeroization runs in a `finally`, so a child that throws, times out or is killed
+  cannot leave a credential resident, and an unmatched delivery is swept and zeroized on TTL.
+  WHAT THIS DOES NOT CLAIM. The frame's own `JSON.parse` produced strings this code never held a
+  handle on, and they are not erasable. The claim is bounded to the RESIDENT copy - the one that
+  lives for the whole invocation - and `test/security/secret-zeroize.test.ts` says so in its
+  docblock rather than implying a stronger property. A suite that claimed the process was clean
+  would be the more dangerous artefact.
+  THE REDACTOR'S LIFETIME, AND THE BUG THAT SET IT. The obvious design ties the outbound filter's
+  lifetime to the hold's: arm on delivery, clear on zeroize. It is WRONG, and provably so. The hold
+  is zeroized in `withChildEnv`'s `finally`, which runs BEFORE the `tool.result` carrying that
+  child's stdout is built and sent - so the frame the value is most likely to appear in is exactly
+  the one that would have gone out with the filter already disarmed. That was the first
+  implementation; `test/security/outbound-redaction.test.ts` failed on it, which is the reason the
+  suite exists. The filter now lives for the process and is cleared by `zeroizeSecrets()` at
+  shutdown, mirroring Cortex's ingress filter, which releases per PAIRING on socket close for the
+  same reason. Cost is bounded: one entry per distinct value a daemon is ever handed.
+  IT WRAPS `send`, ONCE. `DaemonRuntime` builds one wrapped sender in its constructor and never
+  calls `deps.send` again, so every outbound frame is filtered by construction - a frame added
+  later is covered without anyone remembering to cover it. Free text only: structural ids
+  (invocationId, taskId, correlationId, sha256) are left alone because substituting inside a join
+  key corrupts the join to protect a field that cannot hold a secret; `session.push.storageState`
+  is left byte-exact because mangling a captured session mints a valid, correctly-encrypted,
+  USELESS Cofre item that only fails later as a login that does not work; the screenshot is left
+  alone because it is an image. The walk is depth-bounded (12), copied from the ingress redactor's
+  guard, because an outbound body is arbitrary child output.
+
+- 2026-08-18 - A BRIDGE BASH STEP IS CONTAINED BY DEFAULT: THE cwd IS JAILED, AND "NO GRANT" MEANS A
+  PRIVATE WORK ROOT RATHER THAN WHEREVER THE DAEMON HAPPENED TO START.
+  THE GAP. `tools/tier2/bash.ts` ran its child with NO `cwd` option at all, so the child inherited
+  the DAEMON'S OWN PROCESS CWD - whatever directory the LaunchAgent or systemd unit started it in,
+  unbounded, different on every machine, and reachable from a step composed hosted-side. The file
+  tier has had a single containment resolver since S1 and every path in it is checked; the shell
+  tier had nothing, which is the asymmetry this closes. It was not exploitable before now only
+  because `tool.invoke` was refused outright.
+  THE FIX. `bashArgv()` resolves the requested `cwd` through `containment/resolver.ts` - THE single
+  resolver, never a second copy - against the step's grant root, and a request that escapes throws
+  `ContainmentError`, is ledgered as a denial, and never spawns. A named `grantRef` must belong to
+  THIS session (S2); a forged or foreign ref resolves to nothing and is NOT quietly widened to the
+  default root, because falling back there would turn "this grant" into "any root the daemon has".
+  NO SHELL, either: `execFile` spawns the executable directly, so an argument built by interpolating
+  run inputs into a hosted-side template cannot become shell syntax.
+  WHY A DEFAULT WORK ROOT RATHER THAN "REFUSE WITHOUT A GRANT". Cortex's `local-command.ts` sends no
+  `grantRef` today, so a jail that only applied to steps naming a grant would have been VACUOUS for
+  every step that actually exists. `serve.ts` therefore creates `<EKOA_BRIDGE_HOME>/work` at 0700
+  and the executor uses it when a step names no grant, so containment is a property of every bash
+  step rather than of the well-behaved ones.
+  THE USER-VISIBLE CONSEQUENCE, NAMED: an automation that wants to run in a real project directory
+  must have a GRANT for it. Until it does, the step is refused rather than silently run somewhere
+  else. Nothing regresses, because bash over the bridge did not execute at all before this slice -
+  this is a new capability shipped contained, not an existing one narrowed. Pinned by
+  `test/runtime/tool-executor.test.ts` (escape refused, forged ref refused, foreign-session ref
+  refused, no-grant step lands in the work root and NOT in `process.cwd()`).

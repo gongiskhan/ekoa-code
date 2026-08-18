@@ -30,6 +30,14 @@ export interface ToolResult {
   ok: boolean;
   output?: unknown;
   error?: string;
+  /**
+   * Per-step visual evidence the machine captured (P1.4), raw base64 PNG. Carried through so the
+   * daemon-step seam can map it onto `observation.screenshotB64` - the field
+   * `DaemonBrowserSession.ingest` already reads and which then feeds the existing tenant-scoped
+   * screenshot plane. It rode `tool.result` all the way to this type and was dropped here, so a
+   * bridge run produced no evidence at all while a hosted run produced it for every step.
+   */
+  screenshotB64?: string;
 }
 
 interface Pending {
@@ -81,6 +89,13 @@ export async function invokeTool(input: {
   capability: BridgeCapability;
   payload: unknown;
   timeoutMs?: number;
+  /**
+   * The id this invocation runs under. Supplied when a `secret.deliver` was authorised for the
+   * SAME id and must be joined to it on the machine - the daemon keys its RAM-held credential by
+   * invocationId, so an id minted independently here would leave the delivery unmatched and the
+   * child unauthenticated. Absent (the common case) mints a fresh one, exactly as before.
+   */
+  invocationId?: string;
 }): Promise<ToolResult> {
   const { pairingId, orgId, capability, payload } = input;
 
@@ -88,7 +103,7 @@ export async function invokeTool(input: {
     throw new ToolInvocationRefused(`${capability} is not granted for machine ${pairingId} in this org`);
   }
 
-  const invocationId = randomUUID();
+  const invocationId = input.invocationId ?? randomUUID();
   const result = new Promise<ToolResult>((resolve) => {
     const timer = setTimeout(
       () => settle(invocationId, { ok: false, error: 'the machine did not answer in time' }),

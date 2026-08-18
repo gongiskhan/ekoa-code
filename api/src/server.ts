@@ -47,7 +47,7 @@ import { sseManager } from './events/sse-manager.js';
 import { startDelivery, stopDelivery } from './events/delivery.js';
 import { attachCanvasServer } from './streaming/index.js';
 import { attachVoiceServer } from './voice/index.js';
-import { attachBridgeServer, bufferLedgerRow, delegateToLocal, rowsForSession, getConnectionByOwner, invokeTool, bridgeConnectionCount } from './bridge/index.js';
+import { attachBridgeServer, bufferLedgerRow, delegateToLocal, rowsForSession, getConnectionByOwner, invokeTool, bridgeConnectionCount, createDaemonStepConnection, authoriseDelivery, deliverSecrets, newInvocationId } from './bridge/index.js';
 import { maskedCountsForCorrelations } from './services/platform-crud.js';
 import { bridgeTokenRouter } from './routes/bridge.js';
 import { servedDataRouter } from './apps/served-data.js';
@@ -684,30 +684,20 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // has granted that machine the capability (I-3, re-read per invocation), so wiring the seam does
   // not by itself authorise anything. A fleet with no capability grants stays exactly as inert as
   // it was before this line existed — the difference is that granting one now works.
+  //
+  // The step dispatch itself lives in `bridge/daemon-step-seam.ts` - extracted so it can be
+  // imported and asserted on, which is how three defects that were invisible here got closed: a
+  // browser step dispatched under `local.filesystem` (it is `desktop.automation`), the per-step
+  // screenshot dropped on the floor, and a secret-delivery pair with no production caller.
   setDaemonConnectionResolver((ownerUserId: string) => {
     const conn = getConnectionByOwner(ownerUserId);
     if (!conn) return null;
-    return {
-      pairingId: conn.pairingId,
-      async runStep(req: { capability: 'browser' | 'bash'; input: unknown; stepId?: string; runId: string }, opts?: unknown) {
-        void opts; // streamed progress arrives as its own frames; not part of the invoke contract
-        const capability = req.capability === 'bash' ? 'local.bash' : 'local.filesystem';
-        const res = await invokeTool({
-          pairingId: conn.pairingId,
-          orgId: conn.org,
-          capability,
-          payload: { capability: req.capability, input: req.input, stepId: req.stepId, runId: req.runId },
-        });
-        // Shape the bridge's result into the envelope the automation engine expects. A refusal is
-        // an ordinary failed observation, not a thrown error, because the engine's step record is
-        // where a user-visible failure belongs.
-        return {
-          ok: res.ok,
-          ...(res.error ? { error: res.error } : {}),
-          observation: { data: (res.output ?? {}) as Record<string, unknown> },
-        } as never;
-      },
-    };
+    return createDaemonStepConnection(conn, {
+      invoke: (input) => invokeTool(input),
+      newInvocationId,
+      authoriseDelivery,
+      deliverSecrets: (actor, input) => deliverSecrets(actor, input),
+    }) as never;
   });
 
   // 11. THE CREDENTIAL-ESTABLISHED OBSERVER (P3.1). Two bindings, one loop, and the direction is

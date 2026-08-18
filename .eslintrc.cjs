@@ -92,6 +92,11 @@ const BRIDGE_FS_OWNING_GLOBS = [
   'clients/bridge/src/session/**/*.ts',
   'clients/bridge/src/cli/**/*.ts',
   'clients/bridge/src/surface/**/*.ts',
+  // The persistent-profile manager owns a directory under the daemon's home: it creates
+  // `<EKOA_BRIDGE_HOME>/profiles/<id>` at 0700 and clears the singleton lock a crashed Chromium
+  // leaves behind. That is fs ownership of the same kind `ledger/` and `session/` have, and it is
+  // listed here rather than worked around, so the realpath half of the ban still applies to it.
+  'clients/bridge/src/browser/**/*.ts',
 ];
 
 module.exports = {

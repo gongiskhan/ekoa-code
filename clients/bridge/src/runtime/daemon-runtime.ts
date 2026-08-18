@@ -16,6 +16,11 @@ import { runDelegatedTask, type EngineDeps } from '../engine/index.js';
 import type { GrantTable, NonceCache, EgressAccounting } from '../session/index.js';
 import type { EgressLedger, ReadLedgerRow } from '../ledger/index.js';
 import { runAttendedCeremony, type CeremonyDeps } from '../attended/index.js';
+import type { ProfileManager } from '../browser/index.js';
+import type { AutomationEnablement } from '../tools/tier2/index.js';
+import { executeToolInvocation, type ToolExecutorDeps } from './tool-executor.js';
+import { OutboundRedactor } from './outbound-redactor.js';
+import { SecretHold } from './secret-hold.js';
 
 /** The half of the daemon's identity that Cortex OWNS and can rotate: the org the pairing is scoped
  *  to, and the HMAC secret it signs task bindings with. Both arrive on the pre-dial token mint. */
@@ -45,6 +50,24 @@ export interface DaemonRuntimeDeps {
   /** Injected for tests so the ceremony can be driven without Playwright. */
   launchBrowser?: CeremonyDeps['launchBrowser'];
   now?: () => number;
+
+  // ---- the EXECUTION plane (P1.2). All optional: a daemon wired without them keeps the old
+  // behaviour of refusing `tool.invoke`, which is the honest answer for a build that has no
+  // executor rather than a half-running stub.
+  /** What this machine advertised - gate 1 of the executor. */
+  capabilities?: readonly BridgeCapability[];
+  /** ADR-002 per-session tier-2 enablement - gate 2. */
+  enablement?: AutomationEnablement;
+  /** Persistent headed profiles for browser steps. */
+  profiles?: ProfileManager;
+  /** The enablement/ledger session bridge-invoked steps run under (one per pairing). */
+  toolSession?: string;
+  /** Cofre session state for a run, when Cortex supplied one. */
+  sessionStateFor?: ToolExecutorDeps['sessionStateFor'];
+  /** Which persistent profile a step targets. Default: the pairing (one stable jar per machine). */
+  profileIdFor?: ToolExecutorDeps['profileIdFor'];
+  /** Where a bash step runs when its own step names no grant. See `ToolExecutorDeps`. */
+  defaultWorkRoot?: string;
 }
 
 export class DaemonRuntime {
@@ -66,8 +89,59 @@ export class DaemonRuntime {
    */
   private binding: TaskBinding;
 
+  /**
+   * THE EGRESS FILTER, and the single point every outbound frame passes through.
+   *
+   * `this.send` is the ONLY sender this class uses - `deps.send` is never called directly after
+   * the constructor. That is deliberate and load-bearing: the moment `tool.invoke` executes,
+   * unredacted child stdout/stderr and page text start crossing back, and a filter applied at the
+   * call sites is only as good as the next person's memory of it. Wrapping once means a frame
+   * added later is filtered by construction rather than by review.
+   */
+  private readonly redactor = new OutboundRedactor();
+  private readonly send: (frame: BridgeFrame) => boolean;
+
+  /** RAM-only credential custody for `secret.deliver` (I9). Registers with the redactor on
+   *  delivery and clears it on zeroize, so the filter's lifetime is the value's lifetime. */
+  private readonly secrets: SecretHold;
+
   constructor(private readonly deps: DaemonRuntimeDeps) {
     this.binding = { org: deps.org, signingSecret: deps.signingSecret };
+    this.send = this.redactor.wrapSend((frame) => this.deps.send(frame));
+    this.secrets = new SecretHold({
+      ...(deps.now ? { now: deps.now } : {}),
+      // Arm the filter BEFORE the value can be echoed. Registering after the child runs would
+      // leave a window in which a fast step's output crosses back unfiltered.
+      onRegister: (values) => this.redactor.register(values),
+      // NO onRelease. The filter deliberately OUTLIVES the hold, for the lifetime of the process.
+      //
+      // Tying its lifetime to the hold's is the obvious design and it is WRONG, provably: the hold
+      // is zeroized in `withChildEnv`'s `finally`, which runs BEFORE the `tool.result` carrying
+      // that child's stdout is built and sent - so the frame the value is most likely to appear in
+      // is precisely the one that would go out with the filter already disarmed. (Found by
+      // `test/security/outbound-redaction.test.ts`, which failed on exactly that window.)
+      //
+      // Cortex's ingress mirror makes the same choice for the same reason: `byPairing` is released
+      // when the SOCKET drops, not when a delivery is consumed. The cost is bounded - one entry per
+      // distinct value a daemon is ever handed - and `zeroizeSecrets()` clears it at shutdown.
+    });
+  }
+
+  /** The outbound filter, for tests and for a caller that needs to arm it from elsewhere. */
+  outboundRedactor(): OutboundRedactor {
+    return this.redactor;
+  }
+
+  /** How many deliveries are currently held in RAM. Tests assert this returns to zero; the
+   *  redactor's size deliberately does NOT (see the constructor). */
+  heldSecretCount(): number {
+    return this.secrets.size;
+  }
+
+  /** Zeroize every held credential (daemon shutdown). */
+  zeroizeSecrets(): void {
+    this.secrets.zeroizeAll();
+    this.redactor.clear();
   }
 
   /**
@@ -112,26 +186,22 @@ export class DaemonRuntime {
         void this.handleAttended(frame);
         break;
       case 'tool.invoke':
-        // J-1's frame pair. The EXECUTION side of this (running a bash/browser step on the machine
-        // on Cortex's behalf) is not implemented here, and this refusal is deliberate rather than a
-        // stub: it is an exfiltration-capable surface that would need the tier-2 enablement gate,
-        // the I9 secret-delivery lifecycle and evidence validation behind it before it could
-        // honestly be turned on. What this DOES fix is the silent version — before the v2 frames
-        // were vendored, an invocation failed the union, was dropped by the transport, and Cortex
-        // waited out its full invocation timeout to report "the machine did not answer in time".
-        // An immediate, named refusal is the honest failure; a stub that half-ran steps would not be.
-        this.deps.send({
-          type: 'tool.result',
-          invocationId: frame.invocationId,
-          ok: false,
-          error: `esta ponte não executa a capacidade ${frame.capability} (não implementado nesta versão)`,
-        });
+        // J-1's frame pair, now EXECUTED (P1.2). The refusal this replaces was deliberate rather
+        // than a stub - running a step on someone's machine on remote instruction needed the
+        // tier-2 gate, the I9 secret lifecycle and an evidence channel behind it first, and all
+        // three now exist. A daemon built WITHOUT an executor (no capabilities/enablement/profiles
+        // wired) still refuses by name below, because a silent drop makes Cortex wait out its full
+        // invocation timeout and then report "the machine did not answer in time".
+        void this.handleToolInvoke(frame);
         break;
       case 'secret.deliver':
-        // Credential material, and the only frame in the union that carries any. Its paired
-        // `tool.invoke` is refused above, so there is nothing to inject it into: drop it without
-        // storing it, without echoing it, and WITHOUT LOGGING IT — not even its env-var names, which
-        // are themselves a map of what this tenant holds.
+        // The one frame in the union carrying credential material. Taken into RAM-ONLY custody
+        // keyed by invocationId, values held as Buffers so they can actually be overwritten, and
+        // armed into the outbound filter on the way in. NEVER written to config.json, never to the
+        // ledger, never logged - not even the env-var NAMES, which are themselves a map of what
+        // this tenant holds. The matching `tool.invoke` consumes it and zeroizes it in a `finally`;
+        // a delivery whose invoke never arrives is swept and zeroized on TTL.
+        this.secrets.deliver(frame.invocationId, frame.nonce, frame.env);
         break;
       default:
         break; // provider_request/ledger_row/delegation_result/denial/ping/pong are not inbound work
@@ -154,6 +224,70 @@ export class DaemonRuntime {
     };
   }
 
+  /**
+   * Run one step and answer with its result. NEVER throws to the frame loop and never stays
+   * silent: an unhandled rejection here would leave Cortex waiting out a two-minute invocation
+   * timeout for a step that already failed, which reports the wrong cause to the user.
+   */
+  private async handleToolInvoke(frame: { invocationId: string; capability: BridgeCapability; input?: unknown }): Promise<void> {
+    const executor = this.executorDeps();
+    if (!executor) {
+      // No executor wired. Zeroize any delivery that arrived for this invocation rather than
+      // leaving credential material resident for a step that will never run.
+      this.secrets.zeroize(frame.invocationId);
+      this.send({
+        type: 'tool.result',
+        invocationId: frame.invocationId,
+        ok: false,
+        error: `esta ponte não executa a capacidade ${frame.capability} (execução local não configurada)`,
+      });
+      return;
+    }
+
+    let result;
+    try {
+      result = await executeToolInvocation(frame, executor);
+    } catch (err) {
+      result = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    } finally {
+      // Belt to the executor's braces: `withChildEnv` zeroizes on its own `finally`, but a step
+      // that never reached it (a refusal at either gate, a malformed envelope) must not leave the
+      // delivery resident either.
+      this.secrets.zeroize(frame.invocationId);
+    }
+
+    this.send({
+      type: 'tool.result',
+      invocationId: frame.invocationId,
+      ok: result.ok,
+      ...(result.output !== undefined ? { output: result.output } : {}),
+      ...(result.error !== undefined ? { error: result.error } : {}),
+      ...(result.screenshotB64 !== undefined ? { screenshotB64: result.screenshotB64 } : {}),
+    });
+  }
+
+  /** The executor's dependencies, or undefined when this daemon was built without an execution
+   *  plane. All four must be present: a partial wiring is a configuration error, not a degraded
+   *  mode, and running with (say) no enablement table would silently drop gate 2. */
+  private executorDeps(): ToolExecutorDeps | undefined {
+    const { capabilities, enablement, profiles } = this.deps;
+    if (!capabilities || !enablement || !profiles) return undefined;
+    return {
+      capabilities,
+      enablement,
+      profiles,
+      session: this.deps.toolSession ?? this.deps.pairingId,
+      ledger: this.deps.ledger,
+      grants: this.deps.grants,
+      secrets: this.secrets,
+      ...(this.deps.defaultWorkRoot !== undefined ? { defaultWorkRoot: this.deps.defaultWorkRoot } : {}),
+      ...(this.deps.profileIdFor ? { profileIdFor: this.deps.profileIdFor } : {}),
+      ...(this.deps.sessionStateFor ? { sessionStateFor: this.deps.sessionStateFor } : {}),
+      ...(this.deps.now ? { now: this.deps.now } : {}),
+      ...(this.deps.log ? { log: this.deps.log } : {}),
+    };
+  }
+
   private async handleAttended(frame: { requestId: string; kind: 'card_login' | 'relay_code'; origin: string; reason: string }): Promise<void> {
     const log = this.deps.log ?? ((): void => undefined);
     if (this.ceremonyInFlight) {
@@ -165,7 +299,7 @@ export class DaemonRuntime {
       await runAttendedCeremony(
         { requestId: frame.requestId, kind: frame.kind, origin: frame.origin, reason: frame.reason },
         {
-          send: (f) => this.deps.send(f),
+          send: (f) => this.send(f),
           log,
           ...(this.deps.launchBrowser ? { launchBrowser: this.deps.launchBrowser } : {}),
           ...(this.deps.now ? { now: this.deps.now } : {}),
@@ -204,7 +338,7 @@ export class DaemonRuntime {
       });
     });
     if (denial) {
-      this.deps.send({ type: 'denial', taskId: task.taskId, reason: denial.reason, principle: denial.principle });
+      this.send({ type: 'denial', taskId: task.taskId, reason: denial.reason, principle: denial.principle });
       return;
     }
 
@@ -234,18 +368,18 @@ export class DaemonRuntime {
     const rows = this.deps.ledger.readAll(task.session).rows.slice(before);
     for (const row of rows) {
       if (row.kind === 'read' && row.taskId === task.taskId) {
-        this.deps.send({ type: 'ledger_row', taskId: task.taskId, row: toWireRow(row) });
+        this.send({ type: 'ledger_row', taskId: task.taskId, row: toWireRow(row) });
       }
     }
 
-    this.deps.send({ type: 'delegation_result', taskId: task.taskId, result });
+    this.send({ type: 'delegation_result', taskId: task.taskId, result });
   }
 
   /** Send a provider_request and await the provider_response body (the engine's single compose step). */
   private providerComplete(session: string, body: unknown, correlationId: string): Promise<unknown> {
     return new Promise<unknown>((resolve) => {
       this.pendingProviders.set(correlationId, resolve);
-      this.deps.send({
+      this.send({
         type: 'provider_request',
         correlationId,
         session,

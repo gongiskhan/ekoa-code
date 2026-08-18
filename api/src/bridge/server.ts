@@ -321,7 +321,14 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
         // The awaiting half of J-1's frame pair. The frame arrived on THIS pairing's live socket
         // (the liveness guard above already bound it), and it has been through ingress redaction,
         // so any credential this process delivered is already filtered out of `output`/`error`.
-        resolveToolResult(frame.invocationId, { ok: frame.ok, output: frame.output, error: frame.error });
+        resolveToolResult(frame.invocationId, {
+          ok: frame.ok,
+          output: frame.output,
+          error: frame.error,
+          // P1.4: the per-step screenshot. Not redacted and deliberately so - it is an image, not
+          // text; the free-text fields beside it went through ingress redaction above.
+          ...(frame.screenshotB64 !== undefined ? { screenshotB64: frame.screenshotB64 } : {}),
+        });
         break;
       case 'session.push': {
         // J-5: the result of an attended ceremony. Bound to the socket it arrived on — the pairing

@@ -41,6 +41,21 @@ where they touch the dashboard.
   the deferred `erp-*` tenant-fork drivers (awaiting CUTOVER).
 - **`api/tests/journeys/`** - the zero-dependency HTTP journey probe kit (`_lib.mjs`, `j*.mjs`) plus
   the credentialed `boot-b.mjs` harness. Re-runnable; the source of the release-hardening findings.
+- **`clients/bridge/test/`** - the daemon's own vitest estate, one dir per module (`runtime/`,
+  `browser/`, `engine/`, `tools/`, `verify/`, `session/`, `ledger/`, `containment/`, `auth/`, `cli/`,
+  `surface/`, `attended/`, `autostart/`, `claims/`, `transport/`, `wire/`, plus `lint/` which runs the
+  ROOT eslint config over virtual files to prove the fs-containment ban still fires). `test/security/`
+  holds the I9 lifecycle suites, of the class of `api/tests/security/*`: **`secret-no-disk`** (a
+  delivered+consumed value appears in NO file under `EKOA_BRIDGE_HOME` - config, ledger, profiles),
+  **`secret-no-log`** (neither the value nor its env-var NAMES reach any log, console or ledger sink,
+  with the one deliberate boundary - a command that itself names the variable - asserted as such),
+  **`outbound-redaction`** (a bash step and a browser observation that echo a delivered value leave
+  `send` scrubbed, raw and in common encodings), **`secret-zeroize`** (held Buffers are `fill(0)`ed
+  after the child exits, when it throws, and on TTL sweep). `test/integration/` is the heavy canary
+  (mongodb-memory-server + `api/dist` + the real WS bridge server), excluded from the unit lane and
+  run as its own CI step. **No unit test launches a browser**: the persistent-profile launcher and the
+  Playwright page surface are injected interfaces, so the headed paths are exercised against fakes and
+  only the real headed launch needs a display.
 - **`web/__tests__/`** - web unit tests (`components/`, `lib/`, store logic).
 - **`web/e2e/`** - Playwright dashboard specs (real-UI login).
 

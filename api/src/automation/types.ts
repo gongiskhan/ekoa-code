@@ -187,6 +187,22 @@ export interface LocalCommandSpec {
   timeoutMs?: number;
   /** Piped to the process's stdin then closed. */
   stdin?: string;
+  /**
+   * The step's declared environment injection: env-var NAME -> `cofre:` REFERENCE (I9).
+   *
+   * READ THE DELETION NOTE BELOW FIRST - this is that field's INVERSE, not its return. The deleted
+   * `envWhitelist` took NAMES from a model and resolved them against the CORTEX SERVER'S OWN
+   * `process.env`. This takes names the step author chose and resolves each REFERENCE through
+   * `cofre/process-injection.ts` -> `unwrap()`, so the grant, the tenancy and the lock all apply,
+   * and the platform's own environment is never read at all. A raw secret written here is REFUSED
+   * by the Cofre's `CredentialRef` pattern rather than delivered. The resolved value reaches the
+   * machine on `secret.deliver` (single-use, nonce-bound), is held there in RAM and zeroized after
+   * the child exits; it never touches the command string, the step record, or a log.
+   *
+   * Absent on every automation authored before this existed, and absent means NO delivery happens
+   * - the closed default, not "inject whatever is around".
+   */
+  envRefs?: Record<string, string>;
   /*
    * DELETED 2026-07-27 (Cofre J-4, invariant I9): `envWhitelist?: string[]`.
    *

@@ -163,13 +163,21 @@ export async function executeLocalCommandStep(
         input: {
           argv: interpolatedArgv,
           cwd: interpolatedCwd,
-          // Cofre J-4 (I9): a secret reaches a child process ONLY through
-          // cofre/process-injection.ts, from a declared name -> cofre: reference mapping resolved
-          // through unwrap(). Nothing here reads the Cortex server's own environment.
-          env: undefined,
           stdin: interpolatedStdin,
           timeoutMs,
         },
+        // Cofre J-4 (I9): a secret reaches a child process ONLY through
+        // cofre/process-injection.ts, from a declared name -> `cofre:` REFERENCE mapping resolved
+        // through unwrap(). Nothing here reads the Cortex server's own environment, and no value
+        // passes through this module at all - the mapping goes out on the seam and the composition
+        // root authorises, resolves and delivers it under the step's own invocation id.
+        //
+        // This used to read `env: undefined` on the input, beside a comment describing a delivery
+        // that had no caller anywhere: `authoriseDelivery`/`deliverSecrets` were built, tested, and
+        // invoked by nothing. A step declaring a credential simply ran without it.
+        ...(spec.envRefs && Object.keys(spec.envRefs).length > 0
+          ? { secretEnv: spec.envRefs, actor: { userId: ctx.ownerUserId, orgId: ctx.orgId, role: 'user' as const } }
+          : {}),
         stepId: step.id,
         runId,
       },

@@ -7,6 +7,7 @@
  * graceful on SIGINT/SIGTERM (close the socket, drop the pidfile). Resolves only when signalled, so
  * unit tests exercise the pre-flight (unpaired) path, not the blocking loop.
  */
+import { mkdirSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -20,6 +21,8 @@ import {
 } from '../../auth/index.js';
 import { BridgeSocket } from '../../transport/index.js';
 import { DaemonRuntime } from '../../runtime/index.js';
+import { ProfileManager } from '../../browser/index.js';
+import { AutomationEnablement } from '../../tools/tier2/index.js';
 import { BridgeCapability } from '../../wire/index.js';
 import { DAEMON_VERSION } from '../../version.js';
 import { DEFAULT_SURFACE_PORT, startLocalSurface } from '../../surface/index.js';
@@ -36,10 +39,11 @@ import { isProcessAlive, readDaemonPid, removeDaemonPid, writeDaemonPid } from '
  * containment resolver) and `attended.card_login` (the ceremony implemented in src/attended).
  *
  * NEVER by default: `local.bash` and `desktop.automation`. Both are exfiltration-capable tier-2
- * surfaces that this daemon does not yet execute over the bridge at all, and a machine that claims
- * them would appear in an operator's grant UI as a plausible thing to switch on. `egress.residential`
- * is advertised only when an endpoint is actually configured, because claiming egress with nowhere
- * to send it would route a tenant's traffic into a black hole.
+ * surfaces - a shell can curl, a browser can POST - and this daemon CAN now execute both over the
+ * bridge, which makes the default matter more, not less: advertising them is the operator's
+ * deliberate switch, made by editing this machine's own config file, and nothing else turns them
+ * on. `egress.residential` is advertised only when an endpoint is actually configured, because
+ * claiming egress with nowhere to send it would route a tenant's traffic into a black hole.
  *
  * An unknown string in `extraCapabilities` is DROPPED, not passed through: the vocabulary is closed
  * upstream, and one bad entry would fail the whole `hello` frame at Cortex's boundary and leave the
@@ -54,6 +58,25 @@ export function resolveCapabilities(extra: string[] | undefined, egressEndpoint:
   if (egressEndpoint) set.add('egress.residential');
   else set.delete('egress.residential');
   return [...set].sort();
+}
+
+/** The tier-2 (automation) capabilities. Advertising either is what turns local execution on. */
+const TIER2_CAPABILITIES: readonly BridgeCapability[] = ['local.bash', 'desktop.automation'];
+
+/**
+ * Whether this machine's operator opted into running steps locally at all.
+ *
+ * ADR-002 requires a per-session tier-2 enablement that is OFF by default and turned on by an
+ * explicit user action. On this daemon there is no interactive session and no runtime toggle, so
+ * the explicit user action IS the config edit that advertises a tier-2 capability - made by the
+ * human at the machine, in the machine's own file. The executor still checks the enablement table
+ * before every step (`runtime/tool-executor.ts` gate 2), which keeps ONE place to flip when a
+ * runtime toggle lands and makes an unenabled session a real, ledgered refusal rather than an
+ * unreachable branch. That this derives gate 2 from gate 1 today is recorded, as a limitation
+ * rather than a design win, in docs/decisions.md.
+ */
+export function tier2Advertised(capabilities: readonly BridgeCapability[]): boolean {
+  return capabilities.some((c) => TIER2_CAPABILITIES.includes(c));
 }
 
 export async function serve(args: string[], ctx: CliContext): Promise<number> {
@@ -121,6 +144,32 @@ export async function serve(args: string[], ctx: CliContext): Promise<number> {
   const ledger = new EgressLedger(join(home, 'ledger'));
 
   ctx.io.out(pt.serveStarting(cfg.cortexBaseUrl));
+
+  // What this machine advertises it can do (I-1). Advertisement authorises NOTHING on its own -
+  // Cortex intersects it with a per-org capability grant (I-3, default deny) - so the honest list is
+  // "what is implemented and validated here", with the rest opt-in via config. Resolved BEFORE the
+  // runtime because it is also the executor's first gate: the runtime must know what this machine
+  // claims in order to refuse anything it does not.
+  const capabilities = resolveCapabilities(cfg.extraCapabilities, cfg.egressEndpoint);
+  const machineName = cfg.machineName ?? hostname();
+
+  // The local execution plane (P1.2). Persistent headed profiles live under the daemon's OWN home,
+  // never the user's real Chrome directory; the tier-2 table is enabled only when the operator
+  // advertised a tier-2 capability (see `tier2Advertised`).
+  const enablement = new AutomationEnablement();
+  const toolSession = `bridge:${cfg.pairingId}`;
+  if (tier2Advertised(capabilities)) enablement.enable(toolSession);
+  const profiles = new ProfileManager({
+    home,
+    log: (message) => ctx.io.out(message),
+    ...(ctx.now ? { now: ctx.now } : {}),
+  });
+  // Where a bash step runs when it names no grant. The alternative is the daemon's OWN process cwd
+  // - whatever directory the LaunchAgent or systemd unit started it in, which is unbounded, differs
+  // per machine, and is nobody's deliberate choice. Created 0700 under the daemon's home.
+  const workRoot = join(home, 'work');
+  mkdirSync(workRoot, { recursive: true, mode: 0o700 });
+
   // eslint-disable-next-line prefer-const -- `socket` and `runtime` reference each other; both are set below.
   let socket: BridgeSocket;
   const runtime = new DaemonRuntime({
@@ -134,16 +183,22 @@ export async function serve(args: string[], ctx: CliContext): Promise<number> {
     nonces: new NonceCache(),
     egress: new EgressAccounting(),
     ledger,
+    // RAW socket send. The runtime wraps this in its own outbound redactor, so every frame it
+    // emits - including a `tool.result` carrying child stdout - is filtered on the way out.
     send: (frame) => socket.send(frame),
     getCredential: () => lastToken,
     log: (message) => ctx.io.out(message),
+    capabilities,
+    enablement,
+    profiles,
+    toolSession,
+    // One persistent profile PER MACHINE by default. A run that names an integration/origin key
+    // gets its own jar (so two adversarial targets never share cookies); a run that names none
+    // must not mint a new profile each time, which would make every run a cold, obviously-fresh
+    // browser - the exact opposite of what a persistent profile is for.
+    profileIdFor: ({ owner }) => owner ?? cfg.pairingId,
+    defaultWorkRoot: workRoot,
   });
-
-  // What this machine advertises it can do (I-1). Advertisement authorises NOTHING on its own —
-  // Cortex intersects it with a per-org capability grant (I-3, default deny) — so the honest list is
-  // "what is implemented and validated here", with the rest opt-in via config.
-  const capabilities = resolveCapabilities(cfg.extraCapabilities, cfg.egressEndpoint);
-  const machineName = cfg.machineName ?? hostname();
 
   socket = new BridgeSocket({
     wsBase: cfg.cortexBaseUrl,
@@ -236,6 +291,11 @@ export async function serve(args: string[], ctx: CliContext): Promise<number> {
       done = true;
       ctx.io.out(pt.serveStopping);
       socket.close();
+      // Credential material first, and SYNCHRONOUSLY: a shutdown that closes browsers before it
+      // overwrites held secrets is a shutdown that can be interrupted with the secrets still
+      // resident. Then the headed windows, which would otherwise outlive the daemon that owns them.
+      runtime.zeroizeSecrets();
+      void profiles.closeAll();
       void surface?.close();
       removeDaemonPid(home);
       ctx.io.out(pt.serveStopped);

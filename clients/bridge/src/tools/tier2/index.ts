@@ -11,8 +11,8 @@
 import { bash } from './bash.js';
 import { browse } from './browser.js';
 
-export { bash } from './bash.js';
-export type { BashOptions, BashResult } from './bash.js';
+export { bash, bashArgv } from './bash.js';
+export type { BashOptions, BashArgvOptions, BashResult } from './bash.js';
 export { browse } from './browser.js';
 export type { BrowseOptions, BrowseResult } from './browser.js';
 export { AutomationEnablement, Tier2Error, ledgerAutomation } from './context.js';

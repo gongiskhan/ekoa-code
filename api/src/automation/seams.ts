@@ -41,6 +41,19 @@ export interface DaemonStepRequest {
   input: unknown;
   stepId?: string;
   runId: string;
+  /**
+   * The step's declared env-var -> `cofre:` REFERENCE mapping (I9). REFERENCES ONLY - the values
+   * are resolved at the composition root through the Cofre's `unwrap()` and delivered to the
+   * machine on the one frame in the union that carries credential material, under the SAME
+   * invocation id as the step that consumes them.
+   *
+   * It travels on the seam rather than being read from `bridge/` by the executor because
+   * `automation/` must not import the bridge: the wiring belongs at the root, and this field is
+   * how the step says what it needs without knowing how it gets there. Absent means no delivery.
+   */
+  secretEnv?: Record<string, string>;
+  /** The run's actor, required only to resolve `secretEnv` (the unwrap is tenant-scoped). */
+  actor?: Actor;
 }
 
 /** The live daemon control channel for one owner. `runStep` dispatches a resolved browser action
