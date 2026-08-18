@@ -319,18 +319,13 @@ function formatStepLine(step: Step | undefined): string {
 // Budget
 // ============================================================================
 
-export const REHEARSAL_BUDGET = {
-  maxFixerCalls: 25,
-  maxWallClockMs: 4 * 60 * 1000, // 4 minutes
-  maxPatchesPerIndex: 5,
-  /**
-   * Cap on fast-path or fixer-driven pauses during a NORMAL (non-rehearsal)
-   * run. CAPTCHA + MFA + one fallback covers the common case; more than
-   * that on a single run usually means the page is broken or the user
-   * has walked away.
-   */
-  maxNormalPauses: 5,
-} as const;
+/**
+ * MOVED to `budgets.ts` - the one module where every engine knob is declared, so a limit is
+ * findable and changeable in one place instead of halfway down whichever file first needed it.
+ * Re-exported here (values unchanged) because `engine.ts`, `automation/index.ts` and the suites
+ * import it from this module, and a knob relocation is not a reason to churn call sites.
+ */
+export { REHEARSAL_BUDGET } from './budgets.js';
 
 // ============================================================================
 // Fast-path: human-action detection from failure message

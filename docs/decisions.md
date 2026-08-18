@@ -709,3 +709,60 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   api/tests/contract/schedules.test.ts (both admissions + revoked 401 + billing 402),
   api/tests/security/schedules-isolation.test.ts; ten COVERED keys, EXPECTED_PENDING_COUNT
   unchanged at 49; OpenAPI + cortex-cli client regenerated in the same change.
+
+- 2026-08-18 - AUTOMATION PRIMITIVES: ONE KNOB MODULE, AND AN ORIGIN POSTURE THAT WINS OVER THE
+  CLOUD DEFAULT. Two new tier-5 modules inside `automation/`, built before the phases that
+  consume them (execution-plane plan P2/P3/P4) so those phases read a decision instead of
+  re-taking it. (1) `automation/budgets.ts` is now the ONLY home of an engine limit.
+  `REHEARSAL_BUDGET` moved here verbatim from `rehearsal.ts:322` (re-exported there, values
+  pinned by `api/tests/automation/budgets.test.ts`, so the move is provably behaviour-free) and
+  gained three siblings. Two are WIRED. `NORMAL_RUN_BUDGET.maxWallClockMs` (8 min) closes a real
+  hole: only rehearsal was time-capped, so a normal run whose page never settled held a browser
+  session until a human cancelled it. It reuses the rehearsal guard's exit - the existing
+  `runError` -> terminal `failed` path, no new terminal state - and subtracts `pausedTotalMs`, so
+  a nine-minute CAPTCHA or headed ceremony can never trip it. 8 minutes is deliberately twice
+  the rehearsal budget: rehearsal is capped tightly because the FIXER makes it slow, while a
+  normal run's length is mostly the SITE's, and cutting a legitimate ceremony short is the worse
+  failure. `STEP_RETRY_BUDGET` makes the engine's only retry explicit: one deterministic
+  re-attempt of the SAME resolved action before any vision/fixer escalation (most cache misses
+  are the page not having settled, and a re-attempt costs milliseconds against a model
+  round-trip), and the cache-then-vision re-ground becomes COUNTED per step INDEX via a per-run
+  `StepRetryLedger` - previously an invisible `catch`, so an index the fixer kept revisiting
+  bought a fresh vision call on every visit. Budgeted per index rather than per step id because
+  `replace_current` mints a new id: the budget belongs to getting PAST position N.
+  `DISCOVERY_BUDGET` is declared with NO consumer (discovery does not exist yet) so the phase
+  that builds it spends a reviewed budget instead of three inline literals. Rejected: leaving
+  `maxNormalPauses` on `REHEARSAL_BUDGET` as the shared read - each mode now reads its own knob
+  (identical values today) so the two can diverge later without either changing now.
+  (2) `automation/origin-posture.ts` answers "permissive or adversarial" ONCE, for three later
+  decisions that must agree (P4.1 cloud-egress opt-in, P4.2 bridge-only routing + preferred
+  ceremony pairing, P3.3 typist-vs-attended re-auth). DEFAULT ADVERSARIAL/CLOSED. The
+  declaration is an additive optional per-action field on `IntegrationAction` (`posture?`,
+  `authProfile?`), deliberately NOT in `shared/` for the same reason as `backingType` - it is a
+  server-side policy label, and on the wire it would become client-supplied. Resolved AT USE,
+  stored resolved nowhere: the discipline the deleted `declaredOrigins` allow-list left behind
+  (`definition-store.ts:176`). `cloudEgressAllowed` is clamped in the module's ONE constructor
+  and the result frozen, so `adversarial` + cloud egress is unconstructible rather than merely
+  discouraged. THE PRECEDENCE DECISION, taken here so P4 consumes it: `resolveStepDeclaration`
+  defaults `target: 'cloud'` (`types.ts:317`), which combined with adversarial-closed is a
+  contradiction - POSTURE WINS. A legacy automation that declared nothing must not silently earn
+  cloud egress against a site that scores IPs; `resolveTargetPosture` is the single place that
+  says so (plan trap T9). Second decision the plan did not cover, recorded because it is the
+  whole security surface of the resolver: an action's posture applies ONLY to the origin the
+  action is about - for an action carrying an `httpConfig.baseUrl`, that origin and no other
+  (a `permissive` label cannot follow a redirect, an OAuth hop or a third-party embed); for a
+  browser-steps action, which has no origin of its own, it applies to the origin the caller
+  passes, so callers must pass the action they are actually running. `origin-posture.ts` reads
+  the declaration through a STRUCTURAL type rather than importing `IntegrationAction` (the
+  `schedules/supervisor.ts` pattern), so `automation/` still reaches `integrations/` only
+  through seams; the posture union is declared on both sides and pinned identical by a
+  compile-time assertion in `api/tests/automation/origin-posture.test.ts` (api tests are
+  typechecked by `tsconfig.test.json`, so it is a real gate). NO consumer is wired for posture
+  yet - `getBrowser` stays untouched; that is P4. FIXED-12:
+  `docs/diagrams/02-module-map.excalidraw` gains the AS-BUILT annotation in this same unit of
+  work. Suites: `api/tests/automation/budgets.test.ts`,
+  `api/tests/automation/origin-posture.test.ts`, and the `run budgets` block in
+  `api/tests/automation/engine.test.ts` (normal-run cap trips and fails through `runError` with
+  no rehearsal summary; the 4-min and 8-min caps proven distinct; human-pause time proven free;
+  the deterministic retry proven to complete without a model call; the re-ground proven counted;
+  a cache MISS proven NOT counted). No `shared/` change, so no contract/OpenAPI regeneration.

@@ -65,8 +65,14 @@ import {
   proposePatch,
   applyPatch,
   detectHumanActionable,
-  REHEARSAL_BUDGET,
 } from './rehearsal.js';
+import {
+  REHEARSAL_BUDGET,
+  NORMAL_RUN_BUDGET,
+  STEP_RETRY_BUDGET,
+  createStepRetryLedger,
+  type StepRetryLedger,
+} from './budgets.js';
 import type {
   AppliedPatch,
   Automation,
@@ -485,6 +491,10 @@ async function runOrRehearse(
   // an infinite loop when a page keeps re-prompting the user for the
   // same action.
   let pauseForUserCount = 0;
+  // What STEP_RETRY_BUDGET has already been spent, per step index. One per run: the budget
+  // bounds THIS run's recovery, and the rehearsal fixer revisiting an index must not get a
+  // fresh allowance each time it comes back.
+  const retryLedger: StepRetryLedger = createStepRetryLedger();
 
   try {
     const stepRecords: StepRecord[] = [];
@@ -513,12 +523,20 @@ async function runOrRehearse(
         });
       }
 
-      // Wall-clock budget check (rehearsal only). Subtract pausedTotalMs
-      // so time spent waiting for the user during a CAPTCHA / MFA pause
-      // doesn't count.
-      if (isRehearsal && (Date.now() - Date.parse(startedAt) - pausedTotalMs) > REHEARSAL_BUDGET.maxWallClockMs) {
+      // Wall-clock budget check. BOTH modes are capped now - a normal run used to have no
+      // ceiling at all, so a run whose page never settled sat here holding a browser session
+      // until a human noticed and cancelled it. Rehearsal keeps its tighter (fixer-driven)
+      // budget; a normal run gets the looser one, because its length is mostly the site's.
+      //
+      // pausedTotalMs is subtracted in both: time the user spent solving a CAPTCHA / MFA / a
+      // headed ceremony is not the run being slow, and a cap that counted it would make a long
+      // legitimate pause fatal. The exit is the EXISTING runError -> terminal `failed` path;
+      // a normal run manufactures no rehearsal summary (buildRehearsalSummary answers undefined
+      // when isRehearsal is false).
+      const wallClockCapMs = isRehearsal ? REHEARSAL_BUDGET.maxWallClockMs : NORMAL_RUN_BUDGET.maxWallClockMs;
+      if ((Date.now() - Date.parse(startedAt) - pausedTotalMs) > wallClockCapMs) {
         stuckAtIndex = i;
-        rehearsalReason = `wall-clock budget of ${REHEARSAL_BUDGET.maxWallClockMs}ms exhausted`;
+        rehearsalReason = `wall-clock budget of ${wallClockCapMs}ms exhausted`;
         await persistRefinedSteps(automation, workingSteps, isRehearsal);
         await finalize(runId, automationId, 'failed', stepRecords, startedAt, undefined, {
           isRehearsal,
@@ -588,6 +606,7 @@ async function runOrRehearse(
         ctx,
         inputs,
         previousStep,
+        retryLedger,
         // ALWAYS supplied: the accumulator needs every chunk even when no SSE emitter exists.
         // Forwarding to the stream stays exactly as before when one does.
         emitOutputChunk: (info) => {
@@ -806,7 +825,7 @@ async function runOrRehearse(
         //      and any case the verifier / regex missed.
         if (
           shouldAttemptFix(record, step) &&
-          pauseForUserCount < REHEARSAL_BUDGET.maxNormalPauses
+          pauseForUserCount < (isRehearsal ? REHEARSAL_BUDGET.maxNormalPauses : NORMAL_RUN_BUDGET.maxNormalPauses)
         ) {
           const verifierHumanAction = record.humanAction;
           const regexDetected = !verifierHumanAction
@@ -1296,6 +1315,13 @@ interface ExecuteStepArgs {
    */
   previousStep?: { step: Step; record: StepRecord };
   /**
+   * Per-run record of what `STEP_RETRY_BUDGET` has already been spent on, keyed by step index.
+   * Owned by the run loop (one per run) so a step index the rehearsal fixer keeps returning to
+   * cannot re-ground with vision on every visit. Optional so a caller that does not retry (there
+   * is one today: the run loop) is not forced to fabricate one.
+   */
+  retryLedger?: StepRetryLedger;
+  /**
    * Optional sink for live stdout / stderr chunks from local_command
    * steps. Wired by the run emitter so the UI sees streaming output as
    * commands execute. Other step types ignore this.
@@ -1441,7 +1467,7 @@ async function executeStep(args: ExecuteStepArgs): Promise<StepRecord> {
 
       case 'browser': {
         if (!browser) return awaitingDaemonRecord(baseRecord, stepStart, index, 'browser');
-        return await executeBrowserStep({ browser, daemonConnected, automation, step, index, runId, ctx, inputs, baseRecord, stepStart });
+        return await executeBrowserStep({ browser, daemonConnected, automation, step, index, runId, ctx, inputs, baseRecord, stepStart, retryLedger: args.retryLedger });
       }
 
       case 'verify': {
@@ -1539,31 +1565,66 @@ async function executeBrowserStep(args: BrowserVerifyContext): Promise<StepRecor
   const fingerprint = browser.fingerprint();
   const scopedMemories = await loadScopedMemorySnippets(automation.id, step.description, ctx);
 
-  // 2. Tier 1: cache hit
+  // 2. Tier 1: cache hit - with STEP_RETRY_BUDGET.deterministicRetries plain re-attempts of the
+  // SAME action before anything expensive. Most cache misses are timing, not drift: the locator
+  // was right and the page had not finished settling. One more act() costs milliseconds; the
+  // vision re-ground below costs a model round-trip AND a fresh chance to resolve to something
+  // subtly different from what this run already decided to do. Re-attempt, never re-decide.
   const cached = await lookupActionCache(automation.id, step.id, fingerprint, actor);
   if (cached) {
-    try {
-      await browser.act(cached.action, { stepId: step.id });
-      const screenshotPath = await snap(browser, automation.id, runId, index);
-      // Refresh successCount / lastUsedAt
-      await writeActionCache({
-        automationId: automation.id,
-        stepId: step.id,
-        fingerprint,
-        action: cached.action,
-        actor,
-        confidence: cached.confidence,
-      });
-      return finishRecord(baseRecord, 'completed', stepStart, {
-        tier: 'cache',
-        fingerprint,
-        screenshotPath,
-        resolvedAction: cached.action,
-      });
-    } catch (err) {
-      // Fall through to vision (tier 'cache-then-vision')
-      console.warn(`[automation] cache action failed for ${automation.id}/${step.id}, falling back to vision: ${errMsg(err)}`);
+    const attempts = 1 + STEP_RETRY_BUDGET.deterministicRetries;
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        await browser.act(cached.action, { stepId: step.id });
+        const screenshotPath = await snap(browser, automation.id, runId, index);
+        // Refresh successCount / lastUsedAt
+        await writeActionCache({
+          automationId: automation.id,
+          stepId: step.id,
+          fingerprint,
+          action: cached.action,
+          actor,
+          confidence: cached.confidence,
+        });
+        return finishRecord(baseRecord, 'completed', stepStart, {
+          tier: 'cache',
+          fingerprint,
+          screenshotPath,
+          resolvedAction: cached.action,
+        });
+      } catch (err) {
+        if (attempt < attempts) {
+          console.warn(`[automation] cache action failed for ${automation.id}/${step.id} (attempt ${attempt}/${attempts}), re-attempting: ${errMsg(err)}`);
+          continue;
+        }
+        // Deterministic retries spent. Fall through to vision (tier 'cache-then-vision').
+        console.warn(`[automation] cache action failed for ${automation.id}/${step.id} after ${attempts} attempt(s), falling back to vision: ${errMsg(err)}`);
+      }
     }
+  }
+
+  // 2b. The vision RE-GROUND is a budgeted step, not a fallthrough. Reaching here with a cache hit
+  // means the cached action was wrong (or the page drifted) and we are about to spend a model call
+  // re-deciding it. STEP_RETRY_BUDGET.visionRegroundsPerStep bounds that per step INDEX, so an
+  // index the rehearsal fixer keeps returning to cannot re-ground on every visit: a second
+  // re-ground at the same index would only re-learn that the cache is not the problem. Refuse
+  // RECOVERABLY - the fixer is still free to patch the step, it just does not get another vision
+  // call to arrive at the same place. A cache MISS is not a re-ground: that is the ordinary tier-2
+  // resolution and is not counted here.
+  if (cached && args.retryLedger && !args.retryLedger.claimVisionReground(index)) {
+    const screenshotPath = await snap(browser, automation.id, runId, index);
+    return finishRecord(baseRecord, 'failed', stepStart, {
+      tier: 'cache-then-vision',
+      fingerprint,
+      screenshotPath,
+      resolvedAction: cached.action,
+      error: {
+        message:
+          `vision re-ground budget of ${STEP_RETRY_BUDGET.visionRegroundsPerStep} exhausted at step ${index + 1} ` +
+          '- the cached action keeps failing and re-resolving it has already been tried',
+        recoverable: true,
+      },
+    });
   }
 
   // 3. Tier 2: vision (EXPERT on max effort). The screenshot fed to vision

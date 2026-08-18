@@ -327,8 +327,11 @@ describe('runAutomation', () => {
       lastUsedAt: '2026-04-01T00:00:00Z',
       confidence: 'high',
     });
-    // Cached action fails, then a fresh resolution succeeds.
+    // Cached action fails BOTH deterministic attempts (STEP_RETRY_BUDGET.deterministicRetries is
+    // one re-attempt on top of the first), then a fresh resolution succeeds. Failing it only once
+    // no longer reaches vision at all - that case is the retry spec below.
     hoisted.act
+      .mockRejectedValueOnce(new Error('selector not found'))
       .mockRejectedValueOnce(new Error('selector not found'))
       .mockResolvedValueOnce(undefined);
     hoisted.resolvePlaywrightAction.mockResolvedValueOnce({
@@ -1318,5 +1321,206 @@ describe('write rails - the run pauses on an unapproved write', () => {
     } finally {
       fetchSpy.mockRestore();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// budgets.ts wiring: the normal-run wall-clock cap, and the per-step retry.
+// ---------------------------------------------------------------------------
+
+/**
+ * Both knobs existed only for rehearsal before `automation/budgets.ts`. A normal run had NO
+ * wall-clock ceiling at all, and the only retry in the engine - the cache-then-vision fallthrough -
+ * was an uncounted `catch`. These specs pin the two behaviours the wiring introduced, and the two
+ * it must NOT have changed (rehearsal's own budget, and human-pause time staying free).
+ */
+describe('run budgets', () => {
+  /** Advance the engine's clock without touching `new Date()` (which produces `startedAt`). */
+  function skewClock(): { advance: (ms: number) => void; restore: () => void } {
+    const realNow = Date.now.bind(Date);
+    let skew = 0;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + skew);
+    return { advance: (ms: number) => { skew = ms; }, restore: () => spy.mockRestore() };
+  }
+
+  const silentEmit = () => ({
+    stepUpdate: () => {}, runComplete: () => {}, runError: () => {}, runPaused: () => {},
+  });
+
+  it('a NORMAL run trips NORMAL_RUN_BUDGET.maxWallClockMs and fails through runError', async () => {
+    hoisted.automations.set('auto-1', automation([
+      { id: 's1', description: 'go', type: 'navigate', url: 'https://x.com/one' },
+      { id: 's2', description: 'go again', type: 'navigate', url: 'https://x.com/two' },
+    ]));
+
+    const clock = skewClock();
+    // The first navigate burns nine minutes of wall clock; the guard at the top of the loop sees
+    // it before step two ever starts.
+    hoisted.act.mockImplementation(async () => { clock.advance(9 * 60 * 1000); });
+
+    const errors: string[] = [];
+    try {
+      const result = await runAutomation('auto-1', ctx(), {
+        emit: { ...silentEmit(), runError: (_id, e) => { errors.push(e); } },
+      });
+
+      expect(result.status).toBe('failed');
+      expect(result.error).toMatch(/wall-clock budget of 480000ms exhausted/);
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toMatch(/wall-clock budget of 480000ms exhausted/);
+
+      const run = hoisted.runs.get('auto-1:' + result.runId);
+      expect(run.status).toBe('failed');
+      // Step two never ran, and a normal run manufactures NO rehearsal summary on the way out.
+      expect(run.steps).toHaveLength(1);
+      expect(run.rehearsalSummary).toBeUndefined();
+    } finally {
+      clock.restore();
+    }
+  });
+
+  it('the two caps are distinct: 5 minutes trips rehearsal (4 min) and not a normal run (8 min)', async () => {
+    const steps = () => ([
+      { id: 's1', description: 'go', type: 'navigate' as const, url: 'https://x.com/one' },
+      { id: 's2', description: 'go again', type: 'navigate' as const, url: 'https://x.com/two' },
+    ]);
+
+    const clock = skewClock();
+    hoisted.act.mockImplementation(async () => { clock.advance(5 * 60 * 1000); });
+    try {
+      hoisted.automations.set('auto-1', automation(steps()));
+      const rehearsal = await rehearseAutomation('auto-1', ctx(), { goal: 'go', emit: silentEmit() });
+      expect(rehearsal.status).toBe('failed');
+      expect(rehearsal.error).toMatch(/wall-clock budget of 240000ms exhausted/);
+      expect(rehearsal.rehearsal.status).toBe('budget_exhausted');
+
+      hoisted.automations.set('auto-2', automation(steps(), 'auto-2'));
+      const normal = await runAutomation('auto-2', ctx(), { emit: silentEmit() });
+      expect(normal.status).toBe('completed');
+    } finally {
+      clock.restore();
+    }
+  });
+
+  it('time the human spent paused is subtracted, so a nine-minute CAPTCHA never trips the cap', async () => {
+    hoisted.automations.set('auto-1', automation([
+      { id: 's1', description: 'verify ready', type: 'verify', expectedOutcome: 'no captcha' },
+    ]));
+
+    const clock = skewClock();
+    hoisted.verifyOutcome
+      .mockResolvedValueOnce({ passed: false, reasoning: 'The page shows a Google reCAPTCHA verification page' })
+      .mockResolvedValueOnce({ passed: true, reasoning: 'CAPTCHA cleared' });
+
+    try {
+      const result = await runAutomation('auto-1', ctx({
+        // The human takes nine minutes to solve it - past the eight-minute run cap - and then
+        // resumes. Every millisecond of that is pause time, not run time.
+        resumeSignal: { shouldResume: () => { clock.advance(9 * 60 * 1000); return true; }, clear: () => {} },
+      }), { emit: silentEmit() });
+
+      expect(result.status).toBe('completed');
+      expect(hoisted.verifyOutcome).toHaveBeenCalledTimes(2);
+    } finally {
+      clock.restore();
+    }
+  });
+
+  it('a cached action that fails once is re-attempted deterministically - no vision, no model call', async () => {
+    hoisted.automations.set('auto-1', automation([{
+      id: 's1', description: 'click save', type: 'browser',
+    }]));
+    const cachedAction = { kind: 'click', locator: { strategy: 'css', selector: '.save' } };
+    hoisted.lookupActionCache.mockResolvedValueOnce({
+      kind: 'action-cache',
+      fingerprint: { origin: 'https://x.com', pathname: '/', pathSuffix: '', titleHash: 'h', headingHash: 'h', domShapeHash: 'h', viewport: { w: 1280, h: 800 } },
+      fingerprintKey: 'https://x.com|h',
+      action: cachedAction,
+      successCount: 4,
+      lastUsedAt: '2026-08-01T00:00:00Z',
+      confidence: 'high',
+    });
+    // The page had not settled: the same action succeeds on the re-attempt.
+    hoisted.act
+      .mockRejectedValueOnce(new Error('element is not stable'))
+      .mockResolvedValueOnce(undefined);
+
+    const result = await runAutomation('auto-1', ctx(), { emit: silentEmit() });
+
+    expect(result.status).toBe('completed');
+    // Two acts, both of the SAME resolved action: a retry, never a re-decision.
+    expect(hoisted.act).toHaveBeenCalledTimes(2);
+    expect(hoisted.act.mock.calls[0]![0]).toEqual(cachedAction);
+    expect(hoisted.act.mock.calls[1]![0]).toEqual(cachedAction);
+    // The expensive tier was never reached.
+    expect(hoisted.resolvePlaywrightAction).not.toHaveBeenCalled();
+    const run = hoisted.runs.get('auto-1:' + result.runId);
+    expect(run.steps[0].tier).toBe('cache');
+  });
+
+  it('the vision re-ground is COUNTED per step index: the second one at the same index is refused', async () => {
+    hoisted.automations.set('auto-1', automation([{
+      id: 's1', description: 'click save', type: 'browser',
+    }]));
+    const cachedEntry = {
+      kind: 'action-cache',
+      fingerprint: { origin: 'https://x.com', pathname: '/', pathSuffix: '', titleHash: 'h', headingHash: 'h', domShapeHash: 'h', viewport: { w: 1280, h: 800 } },
+      fingerprintKey: 'https://x.com|h',
+      action: { kind: 'click', locator: { strategy: 'css', selector: '.stale' } },
+      successCount: 1,
+      lastUsedAt: '2026-08-01T00:00:00Z',
+      confidence: 'high',
+    };
+    // Every visit to index 0 hits the cache, and the cached action always fails.
+    hoisted.lookupActionCache.mockResolvedValue(cachedEntry);
+    hoisted.act.mockRejectedValue(new Error('selector not found'));
+    // The one re-ground the budget allows resolves to something that also fails to execute, so
+    // the fixer is invited and sends the run back to the same index.
+    hoisted.resolvePlaywrightAction.mockResolvedValue({
+      action: { kind: 'click', locator: { strategy: 'role', role: 'button', name: 'Save' } },
+      reasoning: 'try the button',
+      confidence: 'high',
+    });
+    hoisted.proposePatch.mockResolvedValue({
+      kind: 'replace_current',
+      reasoning: 'try a different phrasing',
+      newStep: { id: 's1b', type: 'browser', description: 'click the Save button' },
+    });
+
+    const result = await rehearseAutomation('auto-1', ctx(), { goal: 'save it', emit: silentEmit() });
+
+    expect(result.status).toBe('failed');
+    // THE POINT: however many times the fixer sends the run back to index 0, vision re-grounds
+    // that index exactly once. Before this was counted, every visit bought another model call.
+    expect(hoisted.resolvePlaywrightAction).toHaveBeenCalledTimes(1);
+    const run = hoisted.runs.get('auto-1:' + result.runId);
+    expect(run.steps[0].tier).toBe('cache-then-vision');
+    expect(run.steps[0].error.message).toMatch(/vision re-ground budget of 1 exhausted/);
+    expect(run.steps[0].error.recoverable).toBe(true);
+  });
+
+  it('a cache MISS is not a re-ground: an ordinary tier-2 resolution is never counted', async () => {
+    hoisted.automations.set('auto-1', automation([{
+      id: 's1', description: 'click save', type: 'browser',
+    }]));
+    // No cache entry at any point, and the vision-resolved action keeps failing to execute, so the
+    // fixer revisits index 0 repeatedly - each visit resolving with vision as it always has.
+    hoisted.lookupActionCache.mockResolvedValue(null);
+    hoisted.act.mockRejectedValue(new Error('selector not found'));
+    hoisted.resolvePlaywrightAction.mockResolvedValue({
+      action: { kind: 'click', locator: { strategy: 'role', role: 'button', name: 'Save' } },
+      reasoning: 'the save button',
+      confidence: 'high',
+    });
+    hoisted.proposePatch.mockResolvedValue({
+      kind: 'replace_current',
+      reasoning: 'try a different phrasing',
+      newStep: { id: 's1b', type: 'browser', description: 'click the Save button' },
+    });
+
+    const result = await rehearseAutomation('auto-1', ctx(), { goal: 'save it', emit: silentEmit() });
+
+    expect(result.status).toBe('failed');
+    expect(hoisted.resolvePlaywrightAction.mock.calls.length).toBeGreaterThan(1);
   });
 });

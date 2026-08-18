@@ -79,6 +79,23 @@ export interface IntegrationActionAutomationBinding {
  */
 export type IntegrationActionBackingType = 'api-call' | 'bash-cli' | 'browser-steps';
 
+/**
+ * HOW THE ORIGIN BEHIND AN ACTION TREATS AUTOMATION - the policy label, declared by the action's
+ * author. `permissive` is a site that tolerates being driven (a documented API, our own tenant's
+ * app, a partner portal); `adversarial` is one that fights it (bot-checks, IP reputation, device
+ * fingerprinting), and is what an undeclared origin resolves to.
+ *
+ * The union is restated here rather than imported from `automation/origin-posture.ts` (which owns
+ * the RESOLVER) because integrations/ is a lower tier than automation/ and the dependency runs one
+ * way: the same structural-type discipline `schedules/supervisor.ts` uses for automation outcomes.
+ * `tests/automation/origin-posture.test.ts` asserts the two unions stay identical, so the
+ * duplication cannot silently drift.
+ *
+ * Deliberately NOT in `shared/`, for the same reason `backingType` is not: it is a server-side
+ * policy label, and putting it on the wire would turn a review decision into a client-supplied one.
+ */
+export type IntegrationActionOriginPosture = 'permissive' | 'adversarial';
+
 /** One deterministic guardrail an authored action was judged against (see `authored-action.ts`). */
 export interface IntegrationActionAuthoringCheck {
   name: string;
@@ -182,6 +199,28 @@ export interface IntegrationAction {
    * `IntegrationActionAuthoring` and `integrations/authored-action.ts`.
    */
   authoring?: IntegrationActionAuthoring;
+  /**
+   * The origin's posture toward automation. ABSENT ⇒ `adversarial`, resolved by
+   * `automation/origin-posture.ts` at USE - never stored resolved, and never defaulted open. The
+   * closed default is the whole point: an action nobody classified must not silently earn cloud
+   * egress or an in-process browser against a site that fingerprints both.
+   *
+   * Additive (Rule 7): no shipped package declares one, and not declaring one is exactly today's
+   * behaviour made explicit. Downgrading `permissive` → `adversarial` is automatic (discovery can
+   * learn a site fights back); the upgrade is an author decision, the same shape as every other
+   * closed-default-opens-on-assent guardrail in this repo.
+   */
+  posture?: IntegrationActionOriginPosture;
+  /**
+   * WHAT THE ORIGIN'S LOGIN DEMANDS. `attended: true` marks a login gated by OTP / MFA / CAPTCHA -
+   * something only a human in front of a headed browser can clear, so re-establishing the session
+   * is an attended ceremony and NEVER an unattended typist replay, whatever grant is live.
+   *
+   * Separate from `posture` because the two answer different questions: a permissive site can
+   * still demand an OTP, and an adversarial one can have a plain password form. Collapsing them
+   * would mean either refusing typist re-auth everywhere or attempting it where it cannot work.
+   */
+  authProfile?: { attended: boolean };
 }
 
 /**

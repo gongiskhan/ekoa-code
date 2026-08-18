@@ -203,6 +203,16 @@ action/assertion cache keyed `(automationId, stepId, pageFingerprint)` makes ful
 consume zero tokens. Webhook ingress is `/hooks/:triggerId` (mounted first, raw-body parser so the
 HMAC verifier sees unmodified bytes).
 
+Every retry, cap and ceiling the engine honours is a named field in `automation/budgets.ts` - the one
+knob module (`REHEARSAL_BUDGET`, `STEP_RETRY_BUDGET`, `NORMAL_RUN_BUDGET`, `DISCOVERY_BUDGET`); a
+limit written inline is a limit nobody can find or change deliberately. Both run modes are
+wall-clock capped, with human-pause time subtracted, and a failed cap exits through the ordinary
+`runError` -> terminal `failed` path. `automation/origin-posture.ts` answers "permissive or
+adversarial" once, for the egress, routing and re-auth decisions that must agree: default
+adversarial/closed, resolved at use from an optional per-action declaration on `IntegrationAction`
+(never stored resolved), with cloud egress structurally impossible on an adversarial origin and
+posture overriding `StepDeclaration`'s `cloud` default.
+
 ## Integrations
 
 `integrations/` connects external systems: OAuth flows (Google, Microsoft, Adobe), AES-encrypted
