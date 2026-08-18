@@ -45,6 +45,7 @@ import {
   baselineSkillMd,
   redactSecrets,
   scrubSecretText,
+  actionsWithoutRecipes,
   type IntegrationDefinition,
   type ActiveIntegrationCatalog,
 } from './definitions.js';
@@ -184,7 +185,14 @@ export function definitionFromDoc(rawDoc: IntegrationDefinitionDoc, actor?: Acto
     category: doc.category,
     userCreated: true,
     configSchema: doc.configSchema ?? [],
-    actions: doc.actions ?? [],
+    // THE COMPILED RECIPE IS SERVER-SIDE STATE AND STOPS HERE (P2.0). `actions` rides the wire as an
+    // open record (`shared/src/integrations.ts` types it `z.record(z.unknown())`), so a new field on
+    // the stored action would otherwise reach every client with no contract change to notice it -
+    // and a recipe is one tenant's learned map of a portal's private API, which nothing outside this
+    // process has a use for. Dropped at THIS projection because it is the one every reader funnels
+    // through (the list route, `resolveDefinition`, the planner catalog, the executor). Replay reads
+    // the recipe from `recipe-store.ts` instead, which is org-scoped by construction.
+    actions: actionsWithoutRecipes(doc.actions),
     credentialGuide: doc.credentialGuide,
     sessionConnect: doc.sessionConnect,
     webhookConfig: doc.webhookConfig,

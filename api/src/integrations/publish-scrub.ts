@@ -60,6 +60,7 @@
  * could differ from the publish would be worse than no preview at all.
  */
 import {
+  actionsWithoutRecipes,
   isCredentialKeyName,
   looksLikePastedSecret,
   redactSecretsWith,
@@ -651,7 +652,13 @@ export function packageConfigFromDoc(doc: IntegrationDefinitionDoc): Integration
     ...(doc.provider !== undefined ? { provider: doc.provider } : {}),
     ...(doc.category !== undefined ? { category: doc.category } : {}),
     configSchema: doc.configSchema ?? [],
-    actions: doc.actions ?? [],
+    // A COMPILED RECIPE NEVER CROSSES ORGS (P2.0, Capability Contract rule 5). It is not a package
+    // field the author wrote: it is what discovery learned inside THIS tenant's authenticated
+    // session - a map of a portal's private API, its pagination, and which header carries its
+    // session token. Publishing freezes what every other org then reads, so the recipe is dropped
+    // from the publishable content rather than scrubbed within it. Nothing is lost to the author:
+    // the recipe stays on their live row, and `publishSnapshot` writes only the snapshot field.
+    actions: actionsWithoutRecipes(doc.actions),
     ...(doc.credentialGuide !== undefined ? { credentialGuide: doc.credentialGuide } : {}),
     ...(doc.sessionConnect !== undefined ? { sessionConnect: doc.sessionConnect } : {}),
     ...(doc.webhookConfig !== undefined ? { webhookConfig: doc.webhookConfig } : {}),

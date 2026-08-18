@@ -263,7 +263,14 @@ export function redactBodyByName(raw: string): string {
       /* not JSON — fall through to the form-encoded pass */
     }
   }
-  return raw.replace(/([\w.-]+)=([^&\s]+)/g, (match, key: string, value: string) =>
+  // THE LOOKBEHIND IS A PERFORMANCE FIX, NOT A SEMANTIC ONE (P2.0). Without it, `[\w.-]+` retries
+  // at every position inside a long word-character run, backtracking the whole run each time -
+  // quadratic, and ~2.4s on a 40KB run of one repeated character (a captured HTML/JSON response
+  // body is exactly that shape, and this function is on the capture-persist path). Anchoring the key
+  // to the START of its run makes each failing position O(1). The match SET is unchanged: a maximal
+  // run either is followed by `=`, in which case the run-start attempt already matched it, or is
+  // not, in which case no suffix of it could match either.
+  return raw.replace(/(?<![\w.-])([\w.-]+)=([^&\s]+)/g, (match, key: string, value: string) =>
     SECRET_KEY_PATTERN.test(key) ? `${key}=${maskUnknownSecret(safeDecode(value))}` : match,
   );
 }

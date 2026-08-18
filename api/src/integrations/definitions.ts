@@ -149,6 +149,81 @@ export interface IntegrationActionAuthoring {
   trustedAt?: string;
 }
 
+/**
+ * ONE REPLAYABLE INTERNAL CALL of a compiled recipe, AS STORED (slice P2.0).
+ *
+ * THE LOAD-BEARING PROPERTY IS `headerNames`. Discovery learns WHICH header carries the session
+ * token - that name IS the learning, and it is worth keeping. The token itself is worth nothing to
+ * a later run (it has expired) and is a durable credential disclosure if written down, so a
+ * captured header VALUE never enters this shape: there is no field it could occupy. The engine-side
+ * type (`automation/recipe.ts`) additionally makes the names a BRANDED type whose only constructor
+ * reads the keys of a header map, so a value cannot be smuggled in as a name by a typo either, and
+ * `recipe-store.ts` re-proves both at the persistence boundary.
+ *
+ * `method`/`locator`/`action` are widened to `string`/`unknown` HERE and narrowed back by
+ * `automation/recipe.ts` (whose `InjectedCall`/`ScriptedStep` EXTEND these interfaces, so the two
+ * cannot drift). The widening is the tier rule, not laziness: `integrations/` is tier 3 and
+ * `automation/` is tier 5 (docs/architecture.md), so this file may not import the engine's
+ * `ApiCallMethod`/`Locator`/`PlaywrightAction` unions - the same reason `schedules/supervisor.ts`
+ * types its automation outcomes structurally.
+ */
+export interface IntegrationActionInjectedCall {
+  /** The engine's `ApiCallMethod` (`GET` | `POST` | …), widened - see the interface note. */
+  method: string;
+  /** origin+path with `{{input.*}}` holes. Holds REFERENCES, never a resolved value. */
+  urlTemplate: string;
+  /** NAMES ONLY: which headers to forward from the live session. NEVER their values. */
+  headerNames: string[];
+  /** A json/text body template, `{{…}}`-holed on the same terms as `urlTemplate`. */
+  bodyTemplate?: string;
+  /** A descriptor of the expected JSON response, for the run-level goal-verify (P2.1). */
+  expectShape?: unknown;
+  /** GET/HEAD/OPTIONS. Gates unattended replay: a write replays only through the write gate. */
+  idempotent: boolean;
+}
+
+/** One learned DOM interaction of a compiled recipe, for what cannot be done as a call. */
+export interface IntegrationActionScriptedStep {
+  /** The engine's `Locator` union, widened - see `IntegrationActionInjectedCall`. */
+  locator: unknown;
+  /** The engine's `PlaywrightAction['kind']`, widened. */
+  action: string;
+  value?: string;
+}
+
+/**
+ * THE COMPILED RECIPE of one action: what a first, expensive, vision-first discovery pass LEARNED,
+ * distilled to the bounded form a later run replays deterministically (slice P2.0).
+ *
+ * WHY IT LIVES ON THE ACTION. It is per-action knowledge with exactly the action's lifecycle (it is
+ * born with the action's first successful discovery and dies with the action), and it is BOUNDED -
+ * templates, locators and short lessons. The RAW captures it was distilled from are none of those
+ * things, so they live in their own collection (`captured-calls-store.ts`); see the note there.
+ *
+ * IT IS TENANT DATA, AND IT IS NOT CALLER CONTENT. Three consequences, each enforced rather than
+ * documented: it never reaches the wire (`definition-registry.definitionFromDoc` drops it from every
+ * projection), it never enters a published cross-org snapshot (`publish-scrub.packageConfigFromDoc`
+ * drops it), and a definition WRITE cannot author or destroy one (`IntegrationDefinitionStore.create`
+ * carries the stored recipe forward and ignores any the caller supplies). The one writer is
+ * `recipe-store.ts`, which also owns `version` - a monotonic counter a caller must not be able to
+ * fake, since it is what the supersede lineage is read from.
+ */
+export interface IntegrationActionRecipe {
+  /** Monotonic per (orgId, integrationKey, actionName). Stamped by the store; a supersede bumps it. */
+  version: number;
+  /** The goal the discovery pass was driving at, in the author's words. */
+  goal: string;
+  injectedCalls: IntegrationActionInjectedCall[];
+  scriptedSteps: IntegrationActionScriptedStep[];
+  /** Short free-text learnings: pagination shape, which header carries the session token, rate hints. */
+  lessons: string[];
+  /** `captureId` INTO the separate captures collection - a pointer, never the evidence itself. */
+  capturedCallsRef?: string;
+  compiledAt: string;
+  /** One-hop lineage of the recipe this one replaced (the `publishSnapshot` shape, tenant-scoped). */
+  supersedes?: { version: number; reason: string };
+}
+
 export interface IntegrationAction {
   actionName: string;
   description: string;
@@ -221,6 +296,30 @@ export interface IntegrationAction {
    * would mean either refusing typist re-auth everywhere or attempting it where it cannot work.
    */
   authProfile?: { attended: boolean };
+  /**
+   * What discovery LEARNED about running this action (slice P2.0). ABSENT ⇒ the action has never
+   * been discovered and runs exactly as it does today (Rule 7, additive: no shipped package, no
+   * stored row and no wire shape changes by this field existing). Written ONLY by
+   * `recipe-store.ts` - see `IntegrationActionRecipe` for why a definition save cannot author one.
+   */
+  recipe?: IntegrationActionRecipe;
+}
+
+/**
+ * The action set with every compiled recipe removed - the ONE implementation of "a recipe does not
+ * leave this process", used by all three boundaries that must hold it: the read projection
+ * (`definition-registry.definitionFromDoc`, so no wire read carries one), the publishable content
+ * (`publish-scrub.packageConfigFromDoc`, so a tenant's learning never freezes into a cross-org
+ * snapshot), and the definition write seam (`definition-store.create`, so a caller cannot author
+ * one). Three call sites, one rule; re-deriving it in each is exactly the drift that turns a
+ * boundary into a hole.
+ */
+export function actionsWithoutRecipes(actions: IntegrationAction[] | undefined): IntegrationAction[] {
+  return (actions ?? []).map((action) => {
+    if (action.recipe === undefined) return action;
+    const { recipe: _dropped, ...rest } = action;
+    return rest;
+  });
 }
 
 /**

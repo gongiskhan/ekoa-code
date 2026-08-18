@@ -401,6 +401,60 @@ describe('GET /api/v1/integration-builder/package (load)', () => {
     // no round trip can destroy the original and the scrub costs nothing.
     expect(JSON.stringify(load)).not.toContain(foreign);
   });
+
+  it('the editable package carries NO compiled recipe, and an edit cycle does not destroy the stored one (P2.0)', async () => {
+    await mkUser('admin', 'org-admin');
+    const t = await tokenFor('admin');
+
+    // A recipe is machine-authored replay state, not something an author edits - and this package
+    // is both rendered to the client and fed to the builder agent.
+    const iso = new Date().toISOString();
+    await integrationDefinitions.insert({
+      _id: definitionIdFor('orgA', 'my-portal'),
+      orgId: 'orgA', userId: 'admin', visibility: 'private', key: 'my-portal',
+      displayName: 'My Portal', description: 'd', authType: 'api_key', provider: 'X', category: 'test',
+      configSchema: [{ key: 'api_key', label: 'K', type: 'password', required: true, secret: true }],
+      credentialGuide: '1. x',
+      actions: [{
+        actionName: 'ping', description: 'd', mutates: false,
+        httpConfig: { method: 'GET', baseUrl: 'https://api.z.example', path: '/p' },
+        recipe: {
+          version: 2,
+          goal: 'listar tudo',
+          injectedCalls: [{
+            method: 'GET',
+            urlTemplate: 'https://interno.z.example/api/v2/tudo?page={{input.page}}',
+            headerNames: ['cookie'],
+            idempotent: true,
+          }],
+          scriptedSteps: [],
+          lessons: ['a sessao viaja no cookie'],
+          compiledAt: iso,
+          supersedes: { version: 1, reason: 'drift' },
+        },
+      }],
+      skillMd: '# portal\n', origin: { kind: 'authored' }, createdAt: iso, updatedAt: iso,
+    } as never);
+
+    const load = await readJson(await authed('/api/v1/integration-builder/package?integrationKey=my-portal', t));
+    const gp = load.generatedPackage as { config?: { actions?: Array<Record<string, unknown>> } };
+    // Non-tautology: the action itself IS there (this is the byte-exact own-row branch)…
+    expect(gp.config?.actions?.[0]?.actionName).toBe('ping');
+    // …and its recipe is not, in any form.
+    expect(gp.config?.actions?.[0]).not.toHaveProperty('recipe');
+    expect(JSON.stringify(load)).not.toContain('interno.z.example');
+
+    // The ordinary edit cycle saves this package back - and the stored recipe survives it, because
+    // the definition store carries it forward rather than taking the caller's word for the actions.
+    const save = await authed('/api/v1/integration-builder/package', t, {
+      method: 'PUT', body: JSON.stringify({ builderSessionId: load.builderSessionId }),
+    });
+    expect(save.status).toBe(200);
+    const row = (await integrationDefinitions.get(definitionIdFor('orgA', 'my-portal'))) as IntegrationDefinitionDoc;
+    expect(row.actions[0]?.recipe?.version).toBe(2);
+    expect(row.actions[0]?.recipe?.injectedCalls[0]?.urlTemplate).toContain('interno.z.example');
+    expect(row.actions[0]?.recipe?.supersedes).toEqual({ version: 1, reason: 'drift' });
+  });
 });
 
 /**

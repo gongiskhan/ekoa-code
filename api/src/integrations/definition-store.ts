@@ -231,6 +231,38 @@ export function definitionIdFor(orgId: string, key: string): string {
   return createHash('sha256').update(JSON.stringify([orgId, key])).digest('hex');
 }
 
+/**
+ * The action set with every compiled recipe removed - what a CALLER is allowed to write.
+ *
+ * The same rule as `actionsWithoutRecipes` (definitions.ts), RESTATED here rather than imported:
+ * this module's whole standing claim is that it holds no RUNTIME dependency on the file-based
+ * registry (see the module header), and `definitions.ts` sits inside the integrations import cycle
+ * that publish-scrub.ts documents. A four-line restatement is the cheaper of the two prices.
+ */
+function withoutRecipes(actions: IntegrationAction[]): IntegrationAction[] {
+  return (actions ?? []).map((action) => {
+    if (action.recipe === undefined) return action;
+    const { recipe: _dropped, ...rest } = action;
+    return rest;
+  });
+}
+
+/** Re-attach each stored recipe to the incoming action of the same name (see `create`'s replace
+ *  branch). `incoming` has already been through `withoutRecipes`, so this is the ONLY way a recipe
+ *  can be on a document this seam writes. */
+function carryRecipesForward(
+  incoming: IntegrationAction[],
+  existing: IntegrationAction[] | undefined,
+): IntegrationAction[] {
+  if (!existing || existing.length === 0) return incoming;
+  const stored = new Map(existing.filter((a) => a.recipe !== undefined).map((a) => [a.actionName, a.recipe]));
+  if (stored.size === 0) return incoming;
+  return incoming.map((action) => {
+    const recipe = stored.get(action.actionName);
+    return recipe === undefined ? action : { ...action, recipe };
+  });
+}
+
 type VisibilityView = Pick<IntegrationDefinitionFields, 'orgId' | 'userId' | 'visibility'> &
   Partial<Pick<IntegrationDefinitionFields, 'publishRequest'>>;
 
@@ -361,6 +393,12 @@ export class IntegrationDefinitionStore {
     const _id = definitionIdFor(input.orgId, input.key);
     const doc: IntegrationDefinitionDoc = {
       ...input,
+      // A COMPILED RECIPE IS NOT CALLER CONTENT (P2.0), the same rule the publication record below
+      // is held to, for a sharper reason: a hand-written `recipe` would be a caller-supplied list of
+      // URLs and header names that the replay path (P2.3) later dials WITH THE LIVE SESSION'S
+      // headers attached. Authoring one is `recipe-store.ts`'s job and nobody else's, so every
+      // create/replace/fork/import through this seam drops whatever the caller supplied.
+      actions: withoutRecipes(input.actions),
       _id,
       createdAt: input.createdAt ?? nowIso,
       updatedAt: input.updatedAt ?? nowIso,
@@ -397,6 +435,13 @@ export class IntegrationDefinitionStore {
     // becomes belt-and-braces instead of the only thing holding it.
     return this.store.put({
       ...doc,
+      // …and the LEARNING about an action survives a rewrite of that action for the same reason the
+      // publication record does: an ordinary builder save posts the package the author edited, which
+      // has never carried a recipe, so without this every save would silently throw away an
+      // expensive discovery pass and quietly return the action to re-deriving its flow every run.
+      // Carried per action NAME - a save that removes an action drops its recipe with it, which is
+      // correct: the recipe describes that action and nothing else.
+      actions: carryRecipesForward(doc.actions, existing?.actions),
       ...(doc.publishedSnapshot === undefined && existing?.publishedSnapshot !== undefined
         ? { publishedSnapshot: existing.publishedSnapshot } : {}),
       ...(doc.publishRequest === undefined && existing?.publishRequest !== undefined

@@ -766,3 +766,47 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   no rehearsal summary; the 4-min and 8-min caps proven distinct; human-pause time proven free;
   the deterministic retry proven to complete without a model call; the re-ground proven counted;
   a cache MISS proven NOT counted). No `shared/` change, so no contract/OpenAPI regeneration.
+- 2026-08-18 - COMPILED RECIPES: WHERE THE LEARNING LIVES, AND WHY THE EVIDENCE DOES NOT LIVE
+  WITH IT (P2.0, the storage layer under the discovery -> capture -> replay engine spine). A
+  browser-steps action re-derives its whole flow every run today. The spine being built around
+  this slice discovers the flow once, captures the private API underneath it, and replays the
+  captured calls deterministically thereafter. TWO HOMES, ON A LIFECYCLE ARGUMENT: the BOUNDED
+  compiled recipe (templates, learned locators, short lessons) folds back onto its action inside
+  `integration_definitions` - it has exactly the action's lifecycle, which is the same reason
+  `definition-store.ts` REJECTED a separate collection for publish snapshots; the RAW captured
+  calls get a NEW collection `integration_captured_calls`, one document per call, because they do
+  have an independent lifecycle (capture -> learn -> compile -> discard the raw) and are
+  unbounded, append-only evidence that would otherwise grow the definition document toward the
+  16MB limit, be re-serialised on every CAS of it and re-walked by `redactSecrets` on every read
+  of it. NAMES, NEVER VALUES: "which header carries the session token" is the learning and is
+  kept; the token is worthless next run and a durable disclosure if written down, so it is
+  refused at three layers - a BRANDED `HeaderName` in `automation/recipe.ts` whose only
+  constructors validate the RFC 7230 token grammar or read a header map's KEYS, an input type in
+  `captured-calls-store.ts` with no field a value could occupy, and a persistence-boundary proof
+  (`assertCarriesNoValues`) that REFUSES rather than redacts, using the run's `SecretRegistry`
+  plus the publish floor's own `looksLikeLiteralSecret` (reused, not re-derived). NOTHING REACHES
+  THE WIRE: the `actions` array rides the wire as an open record, so a new stored field would
+  otherwise reach every client with no contract change to notice it - `definitionFromDoc` drops
+  the recipe from every projection and `packageConfigFromDoc` drops it from publishable content,
+  which also makes a recipe tenant data even on a `global` row (Rule 5). NOT CALLER CONTENT: a
+  hand-written recipe would be a caller-supplied list of URLs and header names that the future
+  replay path dials WITH THE LIVE SESSION'S headers, so `definition-store.create` drops any
+  recipe a caller supplies and carries the stored one forward per action name (the argument the
+  publication record already travels on). SUPERSEDE IS NOT PUBLISH: `supersedeRecipe` bumps a
+  store-owned `version` and stamps the one-hop `supersedes {version, reason}` lineage - the
+  `publishSnapshot` SHAPE, deliberately not that function, whose gate is super-admin and whose
+  effect is `global` visibility; a recipe write touches neither visibility nor the publication
+  record. Rejected: (a) a `shared/` wire projection of "this action has a recipe" - it buys no
+  consumer anything and would drag an OpenAPI + client regeneration into a storage slice; (b) one
+  document per capture SESSION with an appended array - the same 16MB trap one level down, plus
+  CAS contention on every append. Accepted residuals: the write path's tenancy check is doubled
+  (pre-check + in-mutator re-assert), so the isolation suite cannot fail on the deletion of
+  either half alone - measured and recorded in that suite's header; captured bodies are capped at
+  64KB with `truncated: true` rather than chunked. Suites:
+  api/tests/security/captured-calls-isolation.test.ts (Rule 5, memvault class),
+  api/tests/security/recipe-no-values.test.ts (T8 redaction proof, real SecretRegistry),
+  api/tests/integrations/recipe-store.test.ts. FIXED-12: 02-module-map + 05-data-model gain the
+  AS-BUILT annotations in this same unit of work. Also fixed in passing: `redactBodyByName`
+  (security/redaction.ts) was quadratic on a long word-character run (~2.4s on 40KB, and a
+  captured response body is exactly that shape) - the key is now anchored to the start of its run
+  with a lookbehind, same match set, linear.

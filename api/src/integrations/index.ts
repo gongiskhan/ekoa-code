@@ -38,6 +38,7 @@ export {
   integrationSkillMd,
   integrationAutomationTemplate,
   reservedIntegrationKeys,
+  actionsWithoutRecipes,
   type IntegrationDefinition,
   type IntegrationPackageConfig,
   type IntegrationAction,

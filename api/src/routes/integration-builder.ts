@@ -35,6 +35,7 @@ import {
 } from '../agents/integration-builder.js';
 import { validateConfig } from '../agents/integration-builder-parser.js';
 import {
+  actionsWithoutRecipes,
   reservedIntegrationKeys,
   saveAuthoredDefinition,
   resolveDefinition,
@@ -72,7 +73,13 @@ function definitionToConfig(def: PackageConfigSource): IntegrationPackageConfig 
     provider: def.provider,
     category: def.category,
     configSchema: def.configSchema,
-    actions: def.actions,
+    // THE COMPILED RECIPE IS NOT PART OF THE EDITABLE PACKAGE (P2.0). The byte-exact branch above
+    // hands this the RAW stored row, and this package is both shown to the author and fed to the
+    // builder agent - so a recipe would ride to a client and into a model prompt for no gain: it is
+    // machine-authored replay state (`integrations/recipe-store.ts`), not something an author
+    // edits. Dropping it also cannot lose it: `IntegrationDefinitionStore.create` carries the
+    // stored recipe forward across the save this package comes back through.
+    actions: actionsWithoutRecipes(def.actions),
     credentialGuide: def.credentialGuide,
     sessionConnect: def.sessionConnect,
     webhookConfig: def.webhookConfig,

@@ -149,6 +149,21 @@ export const integrationConfigs = new Store<Doc>('integration_configs');
  *  its sibling `integrationConfigs`; the typed document shape (`IntegrationDefinitionDoc`) and the
  *  actor-scoped resolver live in integrations/definition-store.ts, which WRAPS this collection. */
 export const integrationDefinitions = new Store<Doc>('integration_definitions');
+/**
+ * RAW captured network calls from a discovery pass (slice P2.0). One document per captured call,
+ * `_id` deterministic over (orgId, integrationKey, actionName, captureId, seq) - the §4.3.2
+ * insert-as-claim pattern, so a retried append is refused rather than duplicated. Untyped
+ * `Store<Doc>` house currency; the typed document (`CapturedCallDoc`) and the tenant-scoped surface
+ * live in integrations/captured-calls-store.ts, which WRAPS this collection.
+ *
+ * ITS SIBLING HAS NO COLLECTION, DELIBERATELY. The COMPILED recipe those calls are distilled into is
+ * bounded, per-action and has exactly the action's lifecycle, so it folds back onto the action inside
+ * `integration_definitions` (integrations/recipe-store.ts wraps that collection for it), on the same
+ * argument definition-store.ts used to reject a snapshots collection. The RAW captures are unbounded,
+ * append-only and end their life at `discardCapture` once a recipe is compiled - an independent
+ * lifecycle, which is what earns a second collection here. See the captured-calls-store header.
+ */
+export const integrationCapturedCalls = new Store<Doc>('integration_captured_calls');
 /** Integration-builder chat sessions (ch03 §3.8.14). PERSISTED — the old cortex builder kept an
  *  in-memory Map that died on restart; load-by-key durability requires a store. Holds the running
  *  transcript + the last generated package/skill so a session can be reloaded and edited. */
