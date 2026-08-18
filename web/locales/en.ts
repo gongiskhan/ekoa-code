@@ -1307,7 +1307,6 @@ What would make your day easier?`,
     },
     viewAll: 'View all',
     showLess: 'Show less',
-    suggestionsLabel: 'Suggestions',
     turnOffGuidedMode: 'Turn off guided mode',
     enableGuidedMode: 'Turn on guided mode',
     loadingMessages: [

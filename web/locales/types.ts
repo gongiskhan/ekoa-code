@@ -1395,7 +1395,6 @@ export interface Translations {
     };
     viewAll: string;
     showLess: string;
-    suggestionsLabel: string;
     turnOffGuidedMode: string;
     enableGuidedMode: string;
     loadingMessages: string[];

@@ -137,7 +137,6 @@ export default function UnifiedChatPage() {
 
   // -- Input state (purely local) --
   const [chatInput, setChatInput] = useState("");
-  const [promptStripCollapsed, setPromptStripCollapsed] = useState(false);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   // FC-400 (run s6): reference tokens attached to the NEXT outgoing message (D4).
   const [referenceTokens, setReferenceTokens] = useState<PendingReference[]>([]);
@@ -389,9 +388,7 @@ export default function UnifiedChatPage() {
     window.history.replaceState({}, "", cleanPath);
   }, [searchParams, activeSessionId, addMessage, language]);
 
-  // Reset prompt strip collapse state when switching sessions so new sessions start expanded
   useEffect(() => {
-    setPromptStripCollapsed(false);
     // Each session starts following the auto side-panel signal again; the user's
     // manual force-open/closed shouldn't leak across navigation.
     setForceSidePanelOpen(null);
@@ -950,8 +947,6 @@ export default function UnifiedChatPage() {
                   <PromptSuggestionsStrip
                     mode="chat"
                     onSelectPrompt={handleSelectPrompt}
-                    collapsed={promptStripCollapsed}
-                    onToggleCollapsed={() => setPromptStripCollapsed((c) => !c)}
                   />
                 )}
 

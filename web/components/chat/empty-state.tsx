@@ -7,7 +7,6 @@ import {
   MessageSquare,
   Hammer,
   ArrowRight,
-  ChevronDown,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -38,8 +37,6 @@ export interface WelcomeStateProps {
 export interface PromptSuggestionsStripProps {
   mode: ChatMode;
   onSelectPrompt: (prompt: string, mode: ChatMode) => void;
-  collapsed: boolean;
-  onToggleCollapsed: () => void;
 }
 
 interface PromptCard {
@@ -269,16 +266,13 @@ export function WelcomeMessageBubble(_props: { templateId?: string } = {}) {
 
 // ============================================
 // PROMPT SUGGESTIONS STRIP
-// Compact collapsible pill row shown above the input area
+// Compact pill row shown above the input area
 // ============================================
 
 export function PromptSuggestionsStrip({
   mode,
   onSelectPrompt,
-  collapsed,
-  onToggleCollapsed,
 }: PromptSuggestionsStripProps) {
-  const { emptyState } = useTranslation();
   const profile = useVerticalProfile();
   const { build, chat } = profile.examplePrompts;
 
@@ -291,33 +285,26 @@ export function PromptSuggestionsStrip({
   }, [isMixed, mode, build, chat]);
 
   return (
-    <div>
-      <button
-        onClick={onToggleCollapsed}
-        className="flex items-center gap-1 text-[11px] text-neutral-400 hover:text-neutral-600 transition-colors mb-2 cursor-pointer select-none"
-      >
-        <span>{emptyState.suggestionsLabel}</span>
-        <ChevronDown
-          size={11}
-          className={`transition-transform duration-200 ${collapsed ? "" : "rotate-180"}`}
-        />
-      </button>
-
-      {!collapsed && (
-        <div className="flex flex-wrap gap-2">
-          {pills.map((card) => (
-            <button
-              key={`${card.category}-${card.prompt}`}
-              onClick={() => onSelectPrompt(card.prompt, card.category)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs bg-surface text-neutral-700 border border-line shadow-card hover:border-line-strong hover:bg-neutral-50 transition-all whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1"
-              title={card.prompt}
-            >
-              <span aria-hidden className="w-2 h-2 rounded-sm bg-teal-500 flex-shrink-0" />
-              <span className="max-w-[260px] truncate">{card.prompt}</span>
-            </button>
-          ))}
-        </div>
-      )}
+    // One row, never wrapped and never scrolled (MAX_VISIBLE_PILLS = 3): the pills
+    // keep their natural width until the row runs out of space, then shrink and
+    // ellipsize together. min-w-0 on both the button and its label is what allows
+    // that - a flex item defaults to min-width:auto and would otherwise refuse to
+    // shrink below its text. The full prompt stays available via the title.
+    <div className="flex flex-nowrap gap-2">
+      {pills.map((card, idx) => (
+        <button
+          key={`${card.category}-${card.prompt}`}
+          onClick={() => onSelectPrompt(card.prompt, card.category)}
+          // Below sm the third pill is dropped rather than squeezed: three chips in
+          // 390px leave ~9 characters each ("Quero con..."), which reads as broken
+          // rather than as a suggestion. Two keep enough words to be worth tapping.
+          className={`${idx >= 2 ? "hidden sm:flex" : "flex"} min-w-0 items-center gap-2 px-3 py-1.5 rounded-full text-xs bg-surface text-neutral-700 border border-line shadow-card hover:border-line-strong hover:bg-neutral-50 transition-all whitespace-nowrap cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1`}
+          title={card.prompt}
+        >
+          <span aria-hidden className="w-2 h-2 rounded-sm bg-teal-500 flex-shrink-0" />
+          <span className="min-w-0 max-w-[260px] truncate">{card.prompt}</span>
+        </button>
+      ))}
     </div>
   );
 }

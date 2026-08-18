@@ -1308,7 +1308,6 @@ O que tornaria o seu dia mais fácil?`,
     },
     viewAll: 'Ver tudo',
     showLess: 'Ver menos',
-    suggestionsLabel: 'Sugestões',
     turnOffGuidedMode: 'Desativar modo guiado',
     enableGuidedMode: 'Ativar modo guiado',
     loadingMessages: [
