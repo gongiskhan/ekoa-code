@@ -47,14 +47,23 @@ export function bridgeTokenRouter(): Router {
       return res.status(400).json({ error: { code: 'VALIDATION_FAILED', message: 'Identificador de emparelhamento inválido.' } });
     }
     const { token, expiresIn } = mintBridgeToken({ sub: req.user!.sub }, pairingId);
-    // R-8: hand the daemon its pairing's own signing secret. Only the OWNER of a live, non-revoked
-    // pairing gets one; an unknown or revoked pairing simply omits it, and the daemon then fails
-    // closed (its verifier refuses an empty secret) rather than falling back to anything.
+    // R-8: hand the daemon its pairing's own signing secret AND the org that pairing is scoped to.
+    // Only the OWNER of a live, non-revoked pairing gets them; an unknown or revoked pairing simply
+    // omits both, and the daemon then fails closed (its verifier refuses an empty secret) rather
+    // than falling back to anything.
+    //
+    // The org travels WITH the secret because the daemon needs both to accept a task: its verifier
+    // checks the signature first and cross-org addressing second, so a daemon holding the secret
+    // and no org denies every delegated task on a check the signature failure used to mask. The org
+    // is the authenticated caller's own (`req.user.orgId`), never a request-body value, and this is
+    // already the owner-bound TLS exchange the daemon makes before every dial - no new trust surface.
     const signingSecret = await getPairingSigningSecret(pairingId, req.user!.orgId);
     const payload: BridgeTokenResponse = {
       token,
       expiresIn,
-      ...(signingSecret && (await ownsPairing(req.user!.sub, pairingId)) ? { signingSecret } : {}),
+      ...(signingSecret && (await ownsPairing(req.user!.sub, pairingId))
+        ? { signingSecret, org: req.user!.orgId }
+        : {}),
     };
     res.json(payload);
   });

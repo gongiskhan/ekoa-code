@@ -55,6 +55,15 @@ export const BridgeTokenResponse = z.object({
    * daemon fails closed rather than falling back to anything.
    */
   signingSecret: z.string().optional(),
+  /**
+   * The org the pairing is scoped to - delivered on the SAME owner-gated exchange as
+   * `signingSecret`, because the daemon needs both to accept a real task. Its verifier checks the
+   * signature first and cross-org addressing second (`verify-task.ts`), so a daemon that learned
+   * the secret but not the org denies every delegated task on the second check while the first one
+   * masks the cause. Optional for the same reason `signingSecret` is: an unknown or revoked pairing
+   * simply omits the pair and the daemon fails closed.
+   */
+  org: z.string().optional(),
 });
 export type BridgeTokenResponse = z.infer<typeof BridgeTokenResponse>;
 
