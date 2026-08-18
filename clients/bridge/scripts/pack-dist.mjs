@@ -50,12 +50,17 @@ await build({
   format: 'esm',
   target: 'node20',
   external,
-  // The CLI entry carries `#!/usr/bin/env node`; esbuild preserves a leading shebang, but the
-  // banner is belt and braces for the day the entry stops having one.
   sourcemap: false,
   legalComments: 'none',
 });
 chmodSync(outfile, 0o755);
+
+// The `bin` is executed directly, so it must keep the entry's `#!/usr/bin/env node`. esbuild
+// preserves a leading shebang, but a silent loss here produces a globally-installed command that
+// the shell tries to run as a shell script, so assert it rather than assume it.
+if (!readFileSync(outfile, 'utf8').startsWith('#!')) {
+  throw new Error('pack-dist: the bundle lost its shebang - the installed bin would not be executable');
+}
 
 // A bundle that still names the workspace dependency would fail on the laptop exactly as the
 // unbundled one did, so assert the inlining actually happened rather than trusting the config.
