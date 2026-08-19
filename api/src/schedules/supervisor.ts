@@ -230,15 +230,17 @@ export class ScheduleSupervisor {
       if (!plannedFor) continue;
       stillDue.add(schedule._id);
       const stale = this.firstSeenDue(schedule._id, plannedFor, nowMs) - new Date(plannedFor).getTime() > SKIP_GRACE_MS;
-      // Only an actual EXECUTION costs a slot: a stale verdict and a manual task (which fires
-      // nothing) must never queue behind a slow automation. A deferred occurrence keeps its
-      // `seenDue` entry, so the next pass judges it by the grace it had when we first saw it -
-      // and the due list is ordered by `nextRunAt`, so the oldest deferral wins the next slot.
-      if (!stale && schedule.target.kind !== 'manual' && this.inFlight.size >= maxConcurrent) {
+      // Only an actual EXECUTION costs a slot: a stale verdict, a manual task and a COOLING
+      // schedule (all three of which fire nothing) must never queue behind a slow automation. A
+      // deferred occurrence keeps its `seenDue` entry, so the next pass judges it by the grace it
+      // had when we first saw it - and the due list is ordered by `nextRunAt`, so the oldest
+      // deferral wins the next slot.
+      const cooling = this.coolingUntilMs(schedule) > nowMs;
+      if (!stale && !cooling && schedule.target.kind !== 'manual' && this.inFlight.size >= maxConcurrent) {
         deferred += 1;
         continue;
       }
-      await this.claimAndFire(schedule, gen, { stale, nowMs });
+      await this.claimAndFire(schedule, gen, { stale, cooling, nowMs });
       this.seenDue.delete(schedule._id);
     }
 
@@ -266,10 +268,21 @@ export class ScheduleSupervisor {
     return nowMs;
   }
 
+  /** When this schedule's neutral cooldown ends, in ms; 0 when it is not cooling. ONE expression,
+   *  because the pass reads it to keep a cooling schedule out of the slot gate (it fires nothing,
+   *  so it must not queue behind a slow automation) and `claimAndFire` reads it to skip the claim.
+   *  Two copies could disagree, and the disagreement would be a schedule that occupies a slot it
+   *  never uses. A corrupt stamp answers 0: fail OPEN here, because a cooldown that cannot be read
+   *  must not be able to stop a schedule for ever. */
+  private coolingUntilMs(schedule: ScheduleDoc): number {
+    const at = schedule.neutralBackoffUntil ? Date.parse(schedule.neutralBackoffUntil) : 0;
+    return Number.isFinite(at) ? at : 0;
+  }
+
   private async claimAndFire(
     schedule: ScheduleDoc,
     gen: number,
-    judged: { stale: boolean; nowMs: number },
+    judged: { stale: boolean; cooling: boolean; nowMs: number },
   ): Promise<void> {
     const plannedFor = schedule.nextRunAt;
     if (!plannedFor) return;
@@ -294,9 +307,8 @@ export class ScheduleSupervisor {
     //     nothing: the occurrence leaves NO trace, which is the point - neutrality is what stops
     //     the ceiling pausing a working schedule, and this is what stops it being unbounded.
     //     The schedule stays enabled and resumes by itself at the far side.
-    const coolingUntil = schedule.neutralBackoffUntil ? Date.parse(schedule.neutralBackoffUntil) : 0;
-    if (Number.isFinite(coolingUntil) && coolingUntil > judged.nowMs) {
-      await this.advance(schedule._id, plannedFor, coolingUntil);
+    if (judged.cooling) {
+      await this.advance(schedule._id, plannedFor, this.coolingUntilMs(schedule));
       return;
     }
 

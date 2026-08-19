@@ -643,6 +643,49 @@ describe('a neutral block is bounded by a cooldown, not by the ceiling', () => {
     expect(after.neutralBackoffUntil).toBeNull();
   });
 
+  it('a COOLING schedule does not occupy a fire slot - it fires nothing, so it must not queue', async () => {
+    // The slot gate's own rule is "only an actual EXECUTION costs a slot". A cooling schedule
+    // claims nothing and runs nothing, so gating it would let one slow automation delay the
+    // pointer advance of every cooling schedule behind it - and count them in the "all slots busy"
+    // log, which would then be describing schedules that never wanted a slot.
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    let slowStarted = false;
+    const deps = makeDeps({
+      maxConcurrent: 1,
+      runAutomation: async (s) => {
+        if (s.name === 'lenta') { slowStarted = true; await gate; return { status: 'ok' }; }
+        return mapAutomationOutcome({ outcome: 'blocked', code: 'awaiting_daemon', permanent: false, runId: 'arun_n' });
+      },
+    });
+    const sup = new ScheduleSupervisor(deps);
+    // `lenta` is due FIRST (the due list is ordered by nextRunAt), so it takes the one slot and is
+    // still in flight when the pass reaches the cooling schedule behind it.
+    const slow = await seedSchedule({ name: 'lenta', nextRunAt: new Date(clock - 1000).toISOString() });
+    const cooled = await seedSchedule({
+      name: 'arrefecida',
+      spec: { kind: 'recurring', rule: { every: 'minute', interval: 1, timezone: 'Europe/Lisbon' } },
+      consecutiveNeutralBlocks: 3,
+      neutralBackoffUntil: new Date(clock + 10 * 60_000).toISOString(),
+    });
+    const dueAt = cooled.nextRunAt!;
+
+    const pass = sup.tick(); // not awaited: the slow fire must still hold the slot
+    await waitFor(() => slowStarted);
+    await pass;             // the pass finished while the slow fire is STILL in flight
+    release();
+    await sup.stop();
+
+    // The cooling schedule advanced past its own cooldown rather than being deferred behind the
+    // slow fire, and it claimed nothing on the way.
+    const after = (await schedules.get(cooled._id)) as unknown as ScheduleDoc;
+    expect(after.nextRunAt).not.toBe(dueAt);
+    expect(Date.parse(after.nextRunAt!)).toBeGreaterThanOrEqual(Date.parse(after.neutralBackoffUntil!));
+    expect(await scheduleRuns.find({ scheduleId: cooled._id })).toEqual([]);
+    // The slow one did take the slot, which is what made this a real queue.
+    expect((await scheduleRuns.find({ scheduleId: slow._id })).length).toBe(1);
+  });
+
   it('a NON-neutral block is unaffected: it still fires every occurrence and still auto-pauses', async () => {
     // The cooldown is earned by the environment saying "wait". A block on a HUMAN ACT is already
     // capped - by the ceiling - and must not be quietly slowed as well, because slowing it would
