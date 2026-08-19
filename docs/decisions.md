@@ -1322,3 +1322,38 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   the module it constrains - `shared/` may not import `api/` under FIXED-1 - it moved to the module
   that holds the invariant rather than staying as decoration.
 
+- 2026-08-19 - App registry: ONE filesystem watcher for the whole registry, and watch failures
+  never reach the process. Two decisions in one change, recorded together because the second is the
+  one that actually fixed anything and the first is the one that looks like it did.
+  DECISION 1 - the watcher always carries an `error` listener. `api/src/apps/app-registry.ts` had
+  none. chokidar reports an `fs.watch` failure as an `error` event, and under Node's default
+  `--unhandled-rejections=throw` that becomes an unhandled rejection that ends the process. So a
+  host at its per-user `fs.inotify.max_user_instances` cap (128, and ordinary browser/dev-server
+  load on a workstation holds 92-122 of them) could take down the API server, and did make the api
+  contract lane exit 1 with every test passing. Watching is a hot-reload convenience; serving reads
+  from disk and does not depend on it, so EMFILE/ENOSPC now degrades to one warning and the apps
+  stay registered and served. See findings `artifact-family-test-leaks-watchers` for the corrected
+  root cause and the deterministic repro.
+  DECISION 2 - the per-app `Map<appId, FSWatcher>` collapses to a single lazily-created watcher
+  driven with `add()`/`unwatch()`, with events routed back to an app by LONGEST matching
+  watched-path prefix (whole path segments, never a bare `startsWith`, so a nested project gets its
+  own events and `/apps/site` cannot claim `/apps/site-backup`). Watched paths are refcounted, so
+  unregistering one of two apps over the same tree does not blind the other.
+  THE ONE BEHAVIOUR CHANGE, named so review can weigh it: with independent per-app watchers, a file
+  inside BOTH an outer app's dist and a nested inner app's tree notified BOTH apps; routing by
+  longest prefix notifies only the inner one. That is the intended reading of a nested project and
+  the reason routing is prefix-based rather than first-match, but it is a change, not a refactor.
+  Everything else is preserved exactly: the 100 ms debounce keyed `${appId}:${filePath}`, add/change
+  through the debounce and unlink immediately, `ignoreInitial`, the `ignored` pattern, and the
+  dist-change listener contract.
+  WHAT DECISION 2 IS NOT FOR, stated because the opposite is widely assumed and was the premise
+  this change was requested under: it does NOT reduce inotify INSTANCES and does not raise any
+  "~128 served apps" ceiling. libuv keeps one inotify instance per event loop and every `fs.watch`
+  adds a watch DESCRIPTOR to it - measured here at 300 chokidar watchers = 1 instance (chokidar
+  5.0.0 / Node 20.19.4 / Linux 6.17). The cap a many-app host can genuinely reach is
+  `max_user_watches`, a function of the PATHS watched, which is unchanged. What decision 2 does buy
+  is real but smaller: one object and one set of listeners instead of N, and one report per failure
+  condition instead of one per app.
+  ALSO CLOSED HERE: `register()` is serialised per appId. It guarded on `apps.has(appId)` and then
+  AWAITED `readManifest`, so two concurrent registers for one id both passed the guard and the
+  second overwrote the first's bookkeeping, leaving the first's paths watched forever.

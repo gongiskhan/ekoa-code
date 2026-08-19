@@ -6,6 +6,41 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`f5-crawl-specs-race-the-background-runner`** (2026-08-19, OPEN, MEDIUM, test-estate - found by
+  the api contract lane going red on a loaded box while closing
+  `artifact-family-test-leaks-watchers`; **NOT caused by that work**, proven below). Two specs in
+  `api/tests/contract/f5-ui-endpoints.test.ts` fail under CPU load and pass on an idle box:
+
+  1. *"a second POST while one is in flight answers alreadyRunning:true"* - `expected true to be
+     false`. It fires POST #1 without awaiting it, then POST #2. The crawl it starts fails
+     immediately (`Blocked host: 127.0.0.1`, no network by design), so on a loaded event loop run
+     #1 has already SETTLED before request #2 is even issued, and #2 legitimately starts a new run.
+     Nothing pins the "in flight" precondition the spec's name asserts.
+  2. *"GET /sources/:id/crawl ... no run yet: running:false, no progress"* - `expected {…} to be
+     undefined`, with a `startedAt` from the PREVIOUS spec. `runner.ts`'s `state.done` `finally`
+     does `lastProgress.set(sourceId, finalProgress)`; spec 1 awaits only the HTTP response, never
+     the background run, so that write lands AFTER the next `beforeEach` calls
+     `__resetCrawlRunnerForTests()` and repopulates the map the reset just cleared.
+
+  **Attribution, measured rather than assumed.** With 24 busy worker threads pinning the CPU,
+  `npx vitest run tests/contract/f5-ui-endpoints.test.ts` fails **identically on `main`'s
+  unmodified `app-registry.ts`** (2 failed / 16 passed) and on the watcher-collapse branch
+  (1-2 failed / 16-17 passed). Idle, both are green (18 passed). The suite touches no app-registry
+  path; the shared cause is the crawl runner's un-awaited background task.
+
+  **Why it is worth a row rather than a shrug:** this is the same failure MODE the corrected
+  `artifact-family-test-leaks-watchers` entry is about - a lane that goes red for a reason unrelated
+  to the change under test trains people to discount its exit code. It is load-sensitive and this
+  box routinely runs several agent sessions at once: observed firing in a full-lane run at load
+  average ~11 and in an isolated run under 24 busy threads, while an idle full lane at 02:38 the
+  same night was 61/61 green. Expect it to recur, and expect it to be blamed on whatever change
+  happens to be in the tree.
+
+  **CLOSE BY** (left undone here only because this branch's scope is `api/src/apps/**`): give the
+  suite an `afterEach` that does `await cancelCrawlAndWait('s1')` before the runner reset, so no
+  background run can write after the clear; and make spec 1's precondition real - hold run #1 open
+  with a lookup seam that does not resolve until the spec releases it - instead of racing it.
+
 - **`workspace-scoped-verification-misses-two-workspaces`** (2026-08-18, OPEN as a PROCESS gap; the
   two red pins it hid are FIXED). Twice now a change has grown the public surface, left a pin red,
   and been declared green by a reviewer who ran `npm test --workspace api` and
@@ -1287,7 +1322,72 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   not being measured. CLOSE BY: call `observeCredentialShadow(actor, config, fields)` after
   `decryptCredentialFields` in `action-executor.ts`, then re-read the census.
 
-- **`artifact-family-test-leaks-watchers`** (OPEN 2026-08-02, MEDIUM, test-estate — found by an
+- **`artifact-family-test-leaks-watchers`** - **SLUG RETAINED AS AN ANCHOR ONLY; THE NAME IS PART
+  OF WHAT WAS WRONG.** The observable it recorded (contract lane: all tests pass, exit 1, unhandled
+  `EMFILE ... watch`) was real and is now **FIXED 2026-08-19**. Its DIAGNOSIS was wrong on the
+  mechanism AND on the culprit, and the entry is corrected in place rather than deleted, because
+  the wrong diagnosis is the more useful half of the record. Original text preserved at the bottom.
+
+  **What was actually wrong, measured rather than inferred.**
+
+  1. *Not a leak, and not that suite.* `api/tests/contract/artifact-family.test.ts` calls
+     `appRegistry.stop()` in `afterAll`, and `api/tests/contract/build-failure.test.ts` calls it in
+     BOTH `afterAll` and `beforeEach`; `stop()` closed every watcher it had opened. The paths in
+     the EMFILE reports are under `/tmp/ekoa-bf-*`, which is `build-failure.test.ts`'s temp root -
+     the other suite. Both halves of "that suite creates watchers it never closes" are false.
+  2. *Watchers are not the resource.* libuv keeps ONE inotify instance per EVENT LOOP and every
+     `fs.watch` in the process adds a watch DESCRIPTOR to it. Measured on this host (chokidar
+     5.0.0 / Node 20.19.4 / Linux 6.17): **300 chokidar watchers in one process = 1 inotify
+     instance**, and 8 worker threads each watching one path = 8 instances. So even a genuine leak
+     of N per-app watchers could not consume N instances, and no per-app-watcher count can exhaust
+     `fs.inotify.max_user_instances`.
+  3. *The real cause is the resource being taken by OTHER processes, plus our own missing error
+     handler.* `max_user_instances` is 128 and is **per USER, not per process**. Ordinary use of
+     this dev box (browsers, `next` dev servers, webpack, concurrent agent sessions) sits at 92-122
+     of 128 - measured repeatedly while closing this. When it is at the cap, the vitest fork cannot
+     obtain its ONE instance, so EVERY `fs.watch` inside it fails `EMFILE`. `app-registry.ts`
+     attached **no `error` listener** to its chokidar watchers, so each failure became an unhandled
+     rejection; vitest fails a run on unhandled rejections even when every test passes. The count
+     (~11) tracked REGISTRATIONS - measured at one report per watcher created, so ~11 reports meant
+     ~11 `register()` calls in that lane - not leaked watchers.
+  4. *The ledger already had the right answer, one entry earlier.* `npm-ci-has-been-broken-on-main`
+     (2026-08-01) records exactly this: "105 long-lived headless chromium processes from a parallel
+     tool held 96 [instances] ... All 3376 tests passed; only watcher creation failed." The
+     2026-08-02 entry cited it and explicitly ruled it out. That is the expensive lesson here: the
+     correct diagnosis was already written down and was dismissed in favour of a plausible one that
+     nobody measured.
+
+  **This was never only a test problem.** Under Node's default `--unhandled-rejections=throw`, the
+  identical condition on a server host kills the API process - for a hot-reload convenience whose
+  absence costs nothing, since serving reads from disk.
+
+  **Deterministic repro** (the original was reproducible only by luck of host load): occupy the
+  instance pool from a helper process - worker threads work, one instance each - until a fresh
+  `fs.watch(os.tmpdir(), () => {})` throws `EMFILE`, then run
+  `npx vitest run tests/contract/build-failure.test.ts` from `api/`. Before the fix: 5 tests pass,
+  5 unhandled EMFILE rejections, **exit 1**. After: 5 tests pass, 0 unhandled, **exit 0**, one
+  `[app-registry] host is out of filesystem watch capacity (EMFILE)` warning, all 5 apps still
+  registered and served.
+
+  **FIXED** in `api/src/apps/app-registry.ts`: (a) the watcher carries an `error` listener that
+  degrades EMFILE/ENOSPC to a single warning - the actual fix for both the lane and the server;
+  (b) the per-app `Map<appId, FSWatcher>` is collapsed to ONE lazily-created watcher driven with
+  `add()`/`unwatch()`, with events routed back to an app by longest matching watched-path prefix,
+  which bounds the failure reports to one per condition instead of one per app and removes the
+  per-app bookkeeping; (c) `register()` is serialised per appId, closing the guard-then-`await`
+  window that let two concurrent registers for one id orphan a watch. Pinned by
+  `api/tests/apps/app-registry-watcher.test.ts` (chokidar mocked: one watcher for N apps, routing
+  incl. nested and same-prefix-sibling trees, unregister isolation, stop-then-register re-arming,
+  no surviving timers, the error listener) and `api/tests/apps/app-registry-watch-live.test.ts`
+  (real chokidar + real fs; skips, rather than reddening, when the host itself cannot watch).
+
+  **NOT fixed, because it does not exist:** a "~128 apps" production ceiling. Per (2) above, the
+  per-user cap a Cortex host serving many apps can actually reach is `max_user_watches` (65536
+  here; one per watched file and directory), which is a function of the PATHS watched and is
+  identical before and after this change.
+
+  ORIGINAL FINDING FOLLOWS, VERBATIM. **`artifact-family-test-leaks-watchers`** (OPEN 2026-08-02,
+  MEDIUM, test-estate — found by an
   adversarial reviewer running the contract lane, not by the lane failing informatively).
   `npm run test --workspace api -- --run tests/contract` reports **all tests passing** and then
   **exits 1** on ~11 unhandled `EMFILE ... watch` rejections from chokidar attributed to
