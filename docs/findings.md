@@ -4842,11 +4842,12 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   no live org currently holds a grant of any kind. Both narrow the blast radius; neither is a reason
   to leave the path unguarded, and the grant surface that has not been written yet now cannot be
   written without naming the address it authorises.
-  Pinned by `api/tests/security/egress-endpoint-authorisation.test.ts` (16 assertions across the
-  shape table, the attack, the changed-endpoint reconnect and the registry's storage rules) plus the
-  three ingress cases added to `api/tests/bridge/hello-advertisement.test.ts`. Both halves were
-  verified by mutating the source: dropping the grant-endpoint comparison reddens the attack and the
-  reconnect cases; gutting the host policy reddens six.
+  Pinned by `api/tests/security/egress-endpoint-authorisation.test.ts` (16 cases across the shape
+  table, the attack, the changed-endpoint reconnect and the registry's storage rules) plus two new
+  ingress cases in `api/tests/bridge/hello-advertisement.test.ts` - and one strengthened there, whose
+  name claimed to assert the stored endpoint and did not. Every half was verified by mutating the
+  source: dropping the grant-endpoint comparison reddens 2 cases (the attack, the reconnect); gutting
+  the host policy reddens 6; restoring keep-the-previous-endpoint reddens 2.
 
 - **`no-admin-route-grants-a-bridge-capability-at-all`** (OPEN 2026-08-19, MEDIUM, gap - recorded
   while fixing the finding above). `grantCapability` / `revokeCapability` / `grantedCapabilities`
