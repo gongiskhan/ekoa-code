@@ -329,7 +329,8 @@ removes the only cap on REPEATING it, so a neutral fire earns a COOLDOWN
 pointer WITHOUT claiming - no schedule-run row, no automation run, no notification - and the
 schedule stays enabled and self-heals on the far side. Without it a per-minute schedule pointed at
 a bridge-only automation with no daemon wrote ~2880 durable rows and 1440 notifications a day,
-for ever, in two stores that have no retention. The notification carries the same bound: the first
+for ever, in two stores that have no retention - ~96 blocked fires a day at the cap instead of
+1440. The notification carries the same bound: the first
 block of a streak tells the owner at once, a continuing one at most daily
 (`lastNeutralNotifiedAt`), because a push at the fire rate is the unbounded thing one channel over.
 The cap is deliberately below any hand-authored cadence, so an hourly or nightly schedule never

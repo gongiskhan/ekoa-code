@@ -4871,8 +4871,10 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   without claiming, so those occurrences leave no row, no run and no notification, and the schedule
   stays ENABLED and resumes by itself on the far side (streak resets on any non-neutral outcome, and
   on an owner re-enable). The notification takes the same bound: first block of a streak immediately,
-  a continuing one at most daily (`lastNeutralNotifiedAt`). Worst case for a per-minute schedule
-  falls from ~2880 rows + 1440 pushes a day to ~96 rows + 2 pushes; the cost of the halt becomes
+  a continuing one at most daily (`lastNeutralNotifiedAt`). Counted in FIRES, which is the
+  unambiguous unit: a per-minute schedule falls from 1440 blocked fires a day to ~96 - so ~192
+  durable rows a day across the two stores instead of ~2880, and 2 pushes instead of 1440. The
+  cost of the halt becomes
   latency, capped at 15 minutes, which is the honest price of waiting. The cap sits deliberately
   below any hand-authored cadence, so hourly and nightly schedules are unaffected, and a NON-neutral
   block is not cooled at all - slowing it would delay the auto-pause that is how its owner finds out.
