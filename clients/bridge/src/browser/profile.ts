@@ -285,6 +285,15 @@ export class ProfileManager {
    * Bounded FIFO - a Map iterates in insertion order, so the oldest key is the one to evict.
    */
   private readonly endedRuns = new Map<string, LeaseEnd>();
+  /**
+   * leaseId -> what to drop when that lease ends (slice P2.2).
+   *
+   * Registered BY THE MODULE THAT CREATES THE THING, not wired at the composition root, because
+   * "who cleans this up" and "who made it" must not be two different files - the first version of
+   * the network recorder was disposed only by the frame handler, and the two routes that send no
+   * frame (the idle backstop, `closeAll`) left it resident with live header values in it.
+   */
+  private readonly leaseEndHooks = new Map<string, () => void>();
   private closed = false;
 
   constructor(private readonly deps: ProfileManagerDeps) {}
@@ -292,6 +301,30 @@ export class ProfileManager {
   /** `<home>/profiles/<profileId>`, created 0700. Exposed so tests can assert WHERE it lands. */
   userDataDirFor(profileId: string): string {
     return join(this.deps.home, 'profiles', sanitizeProfileId(profileId));
+  }
+
+  /**
+   * REGISTER A PER-LEASE HOLDING to be dropped when the lease ends - by ANY of the three routes.
+   *
+   * `releaseRun` is the one funnel: the explicit end-of-run frame, the idle backstop and `closeAll`
+   * at shutdown all go through it. One hook per lease; re-registering replaces it, so an arm/re-arm
+   * cycle cannot stack callbacks.
+   */
+  onLeaseEnd(leaseId: string, drop: () => void): void {
+    this.leaseEndHooks.set(leaseId, drop);
+  }
+
+  /** Fire and forget this lease's hook, once. A throwing hook is reported, never propagated: a
+   *  lease ends whether or not its cleanup liked it. */
+  private fireLeaseEnd(leaseId: string): void {
+    const drop = this.leaseEndHooks.get(leaseId);
+    if (!drop) return;
+    this.leaseEndHooks.delete(leaseId);
+    try {
+      drop();
+    } catch (err) {
+      this.deps.log?.(`aviso: a limpeza do fim de sessão falhou: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /**
@@ -365,10 +398,15 @@ export class ProfileManager {
       return;
     }
     this.assertScope(hold, opts.profileId);
+    const reason = opts.reason ?? 'released';
+    // ANYTHING WHOSE LIFETIME IS THIS LEASE GOES NOW, and it goes on ALL THREE end routes because
+    // they all land here: the explicit frame, the idle backstop, and `closeAll`. Fired BEFORE the
+    // wipe is attempted, so even a release that throws cannot leave a per-lease holding behind.
+    this.fireLeaseEnd(leaseId);
     // Tombstone FIRST, and with the real reason, so a step racing the teardown is refused with the
     // message that names what actually happened. A lease id belongs to ONE execution pass, so this
     // can never refuse a resumed run.
-    this.markRunEnded(leaseId, opts.reason ?? 'released');
+    this.markRunEnded(leaseId, reason);
     this.runs.delete(leaseId);
     if (hold.idleTimer) clearTimeout(hold.idleTimer);
     const lease = await hold.lease.catch(() => null);

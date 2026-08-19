@@ -32,5 +32,11 @@ export {
   LocalToolInvokeInput,
   LocalBrowserObservation,
   LocalBashObservation,
+  // The discovery spine's two additions (P2.2/P2.3): network capture underneath a discovery pass,
+  // and the in-page replay of one learned call.
+  LocalBrowserCaptureOp,
+  LocalBrowserCapture,
+  LocalBrowserInjectedCall,
+  LocalBrowserInjectedCallResult,
 } from '@ekoa/shared';
 export { signDelegatedTask, verifyDelegatedTaskSig } from './signing.js';

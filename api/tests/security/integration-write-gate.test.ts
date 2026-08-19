@@ -366,3 +366,60 @@ describe('the write gate and the origin binding are separate refusals', () => {
     expect(ff.calls).toHaveLength(0);
   });
 });
+
+// =============================================================================================
+// C. THE ASSENT THAT CROSSES THE AUTOMATION SEAM (slice P2.3, trap T4)
+//
+// A compiled recipe can replay a call that WRITES, and an unattended replay of a write is how one
+// recipe becomes ten duplicate submissions. The replay's gate therefore needs a key, and the key
+// is the answer this executor's own consent gate already produced - carried across the seam rather
+// than re-derived on the other side, so there is exactly one write approval for an action however
+// it ends up executing.
+//
+// THE FAILURE THIS PINS is not "the gate is missing". It is subtler and it is what the first
+// attempt shipped: a gate whose key nothing sets (a permanent refusal that reads as protection),
+// or a key derived from `consent.allowed` alone - which is TRUE for a read, because a read is never
+// gated at all. An action declared `mutates: false` whose learned recipe contains a POST must still
+// stop, because nobody was ever asked about that POST.
+// =============================================================================================
+
+describe('the write assent crosses the automation seam, and only when a human gave one', () => {
+  const boundAutomationAction = (mutates: boolean, actionName: string): IntegrationAction => ({
+    actionName,
+    description: 'via automação',
+    mutates,
+    automationBinding: { automationId: 'auto-x' },
+  });
+
+  /** Run an automation-backed action and report what the seam was handed. */
+  async function seamSaw(actionName: string, mutates: boolean, approve: boolean): Promise<{ writeAssent?: boolean } | null> {
+    const action = boundAutomationAction(mutates, actionName);
+    await seed('autokey', [action], { userId: OWNER, orgId: ORG }, 'none');
+    if (approve) await approveAction({ orgId: ORG, userId: OWNER }, describeAction('autokey', action), 'always');
+    let seen: { writeAssent?: boolean } | null = null;
+    await executeUserIntegrationAction(
+      { orgId: ORG, ownerUserId: OWNER, integrationKey: 'autokey', actionName, args: {} },
+      {
+        runAutomationBackedAction: async (b) => {
+          seen = { ...(b.writeAssent !== undefined ? { writeAssent: b.writeAssent } : {}) };
+          return { success: true };
+        },
+      },
+    );
+    return seen;
+  }
+
+  it('a READ carries NO assent - `not_mutating` is not an approval of anything', async () => {
+    expect(await seamSaw('list_via_auto', false, false)).toEqual({ writeAssent: false });
+  });
+
+  it('an APPROVED write carries the assent', async () => {
+    expect(await seamSaw('send_via_auto', true, true)).toEqual({ writeAssent: true });
+  });
+
+  it('an UNAPPROVED write never reaches the seam at all', async () => {
+    // The gate refuses before the automation seam is called, so there is no assent to carry and
+    // no run to carry it to.
+    expect(await seamSaw('unapproved_via_auto', true, false)).toBeNull();
+  });
+});

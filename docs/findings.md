@@ -4890,3 +4890,60 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   A retention policy (age or per-schedule count, with the run detail preserved on the schedule's
   `lastRun` either way) belongs with whichever slice owns operational data lifecycle; it is out of
   scope here and recorded rather than left implicit.
+
+- **`p2-first-cut-spine-was-unreachable`** (CLOSED 2026-08-19, CRITICAL, dead-surface - closed by the
+  P2 re-cut). The first cut of the discovery spine mounted a replay on the hot path but no production
+  path could WRITE a recipe: the only writer was `discoverIntegrationAction`, and nothing called it.
+  The replay therefore always answered `no-recipe`, and the whole slice - the goal loop, the goal
+  gate, the capture arm, the heal - was added attack surface with no behaviour. Closed by making the
+  ordinary automation run the learning pass (`RunAutomationOptions.observeNetwork`) and deleting the
+  three modules whose only entry was the unreachable one; the reachability itself is pinned by
+  `tests/automation/discovery-replay-acceptance.test.ts`, which enters at
+  `executeUserIntegrationAction` rather than at any spine module, and by the mutation that removes
+  the instrumentation (it turns nine assertions red across two suites). See docs/decisions.md
+  2026-08-19 (b).
+
+- **`p2-first-cut-posture-resolved-once-per-recipe`** (CLOSED 2026-08-19, HIGH, authorisation -
+  a decision scoped to the wrong unit). `replay-action.ts` classified the origin of the recipe's
+  FIRST call and handed that one verdict to the executor, which applied it to every call in the list.
+  A recipe whose opening hop was to a `permissive` origin therefore authorised server-side egress to
+  every later host it touched, including third-party ones nobody had classified. Closed by making
+  `ReplayInput.classify` a FUNCTION asked per call, and by resolving the whole ladder before the
+  first call is sent. Pinned in `tests/automation/injected-call-replay.test.ts` (three cases, one of
+  them wired through the real `classifyOrigin`) and `tests/security/discovery-replay-isolation.test.ts`.
+
+- **`p2-first-cut-write-gate-had-no-key`** (CLOSED 2026-08-19, HIGH, gate-that-is-not-a-gate). The
+  replay's `writeAssent` was read but never set by any caller, so the write gate could not open - a
+  permanent refusal that reads as protection - and scripted DOM steps replayed with no gate at all,
+  in both the executor and the heal. Closed by carrying the answer `integrations/action-consent.ts`
+  already produces across the automation seam (true only for `approved_once`/`approved_always`;
+  `not_mutating` is NOT an assent), and by counting a page-changing scripted step as a write in both
+  places. Pinned in `tests/security/integration-write-gate.test.ts` (section C),
+  `tests/automation/injected-call-replay.test.ts` and `tests/automation/self-heal.test.ts`.
+
+- **`p2-first-cut-recorder-outlived-its-lease`** (CLOSED 2026-08-19, HIGH, credential lifetime). The
+  machine-side `NetworkRecorder` holds the only live header VALUES on the daemon. It was disposed on
+  the two lease-ending routes that send a frame and left resident on the two that do not - the idle
+  backstop and `closeAll` at shutdown - so a remembered credential survived the session it was read
+  from, for the lifetime of the process. Closed with `ProfileManager.onLeaseEnd`, fired from
+  `releaseRun` (the single funnel for all three routes) and registered by the recorder itself when it
+  is armed. Pinned in `clients/bridge/test/browser/recorder-lifetime.test.ts`.
+
+- **`p2-first-cut-credential-check-was-inert-in-production`** (CLOSED 2026-08-19, MEDIUM, safety
+  check wired only in tests). `assertNoCredentialRodeIn` proves no live credential rode into a
+  resolved URL or body, and the mount never passed the run's `SecretRegistry` - so it ran only where
+  a test built one. Closed by building the registry from the run's resolved `credentialFields` in
+  `runAutomationForAction` and passing it to both the replay and the engine.
+
+- **`p2-first-cut-missing-argument-widened-the-replayed-query`** (CLOSED 2026-08-19, MEDIUM,
+  fail-open). `interpolate` renders an unsupplied `{{input.ref}}` as the empty string, so a replay
+  missing an argument fetched `?ref=` - "every row" on most APIs - and reported success. Closed by
+  refusing any call whose template names a hole the run did not supply. Pinned at the unit level and
+  in the acceptance, where the assertion is on what the fixture SERVER received.
+
+- **`p2-first-cut-zero-model-calls-was-proved-at-one-door-of-three`** (CLOSED 2026-08-19, MEDIUM,
+  unfalsifiable headline claim). The acceptance asserted "ZERO model calls" with a spy on
+  `runOneShot`, one of the three functions over the chokepoint transport. Closed by counting at the
+  transport itself - `streamAgent` + `oneShot` + `messages`. The mutation that demonstrates the gap
+  is a `completeFast` call inserted into the replay path: the new assertion catches it, the old one
+  could not have.

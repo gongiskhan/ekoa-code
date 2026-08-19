@@ -115,11 +115,44 @@ export interface EkoaActionResolved {
   manifestRev: string;
 }
 
+/**
+ * A REPLAYED internal call's resolved form (slice P2.3) - one entry of a compiled recipe, with its
+ * `{{input.*}}` holes filled for this run.
+ *
+ * WHY IT IS NOT AN `ApiCallResolved`. The two are the same idea at different layers, and collapsing
+ * them would lose the two facts that matter. `ApiCallResolved` carries `headers` - a resolved map,
+ * VALUES AND ALL, persisted onto the step record; this carries `headerNames` only, because the
+ * values are read on the machine from the live session and never travel hosted-side at all. And
+ * `route` records WHICH rung of the replay ladder carried the call, which is the one thing a reader
+ * of a run record cannot re-derive - "the second run was deterministic" is a claim about the route.
+ */
+export interface InjectedCallResolved {
+  kind: 'injected_call';
+  method: ApiCallMethod;
+  /** Absolute, holes filled. Never carries a resolved credential: the template cannot hold one. */
+  url: string;
+  /** Which headers the machine forwards from the live session. NAMES, never values. */
+  headerNames: string[];
+  body?: string;
+  /** GET/HEAD/OPTIONS. Compiled once, at discovery; the replay path never re-derives it. */
+  idempotent: boolean;
+  /**
+   * The rung of the ladder that carried it (`executors/injected-call.ts`).
+   *   - `in-page`   the authenticated page's own `fetch` - the default, and the only rung that
+   *                 inherits cookies, SameSite and the page's TLS session (trap T3);
+   *   - `node-http` a plain server-side request, permitted ONLY for a permissive origin.
+   */
+  route: 'in-page' | 'node-http';
+  /** Which recipe version was replayed - the lineage a drift report is read against. */
+  recipeVersion: number;
+}
+
 export type ResolvedAction =
   | PlaywrightAction
   | LocalCommandResolved
   | ApiCallResolved
-  | EkoaActionResolved;
+  | EkoaActionResolved
+  | InjectedCallResolved;
 
 // ============================================================================
 // Cache layer — Assertions (for verify-outcome steps)

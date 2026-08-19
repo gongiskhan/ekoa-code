@@ -160,7 +160,7 @@ import {
   setDaemonConnectionResolver,
   setAutomationContentSections,
   startRunForTrigger,
-  runAutomationForAction,
+  automationBackedActionHandler,
   buildAutomationCatalog,
   formatCatalogForPrompt,
   automationStepEventPayload,
@@ -503,16 +503,11 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   //    `integration` step below AND the listener supervisor's user-defined poll (2A-S4). An
   //    executor call site that omits it silently breaks every automation-backed action of that
   //    integration (e.g. citius, whose poll action is automation-backed), so there is exactly one.
-  const runAutomationBackedAction: AutomationBackedHandler = async (b) => {
-    const out = await runAutomationForAction({
-      binding: b.binding as { automationId: string; argMap?: Record<string, string>; passCredentials?: boolean },
-      args: b.args,
-      credentialFields: b.credentialFields,
-      orgId: b.orgId,
-      ownerUserId: b.ownerUserId,
-    });
-    return { success: out.success, ...(out.code ? { code: out.code } : {}), ...(out.error ? { error: out.error } : {}), ...(out.data !== undefined ? { data: out.data } : {}) };
-  };
+  //    The mapping itself lives in `automation/service.ts` (`automationBackedActionHandler`) rather
+  //    than inline here: which fields cross this seam is a security decision - the action's
+  //    identity and the owner's write assent both ride it - and a mapping that exists only inside
+  //    this function is one no test can enter through.
+  const runAutomationBackedAction: AutomationBackedHandler = automationBackedActionHandler();
   setIntegrationActionExecutor(async (call) => {
     const owner = (await users.get(call.ownerUserId)) as { orgId?: string } | null;
     // REFUSE an org-less caller (A2 review F4). Before A2 an empty orgId merely missed a credential

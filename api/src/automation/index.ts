@@ -35,6 +35,30 @@ export {
 // --- Rehearsal fixer (budget + fast-path detector) --------------------------
 export { REHEARSAL_BUDGET, detectHumanActionable } from './rehearsal.js';
 
+// --- The discovery spine (P2), and there is exactly ONE loop in it: the ordinary automation run.
+//
+//     A browser-steps action with no recipe runs the way it always did, with the machine's network
+//     recorder armed underneath (`RunAutomationOptions.observeNetwork`); what the page's own
+//     JavaScript asked the server for is compiled into a recipe (`network-capture.ts`) and stored.
+//     Every later run replays that recipe with no model in the loop at all
+//     (`replayIntegrationAction`, mounted first inside `runAutomationForAction`). A site whose
+//     private API moves reports `drift`, the next instrumented run re-learns it, and the new recipe
+//     SUPERSEDES the old one in-tenant (`healDriftedRecipe`).
+//
+//     NOTHING HERE IS A SECOND, GOAL-DRIVEN EXPLORATION PASS. The first attempt at this slice built
+//     one; no production path could reach it, and the authored steps plus `rehearsal.ts` already do
+//     that job. See `self-heal.ts` and docs/decisions.md. -----------------------------------------
+export { replayIntegrationAction } from './replay-action.js';
+export { replayCompiledAction, scriptedStepWrites, type ReplayResult } from './executors/injected-call.js';
+export {
+  healDriftedRecipe,
+  applyHealedRecipe,
+  classifyReplayDrift,
+  writesIn,
+  type HealResult,
+  type ReplayFailureClass,
+} from './self-heal.js';
+
 // --- The credential halt's observer half (P3.1). `server.ts` binds `onCredentialEstablished` to
 //     the Cofre-side notifier seam and `setCredentialResumeDriver` to the run re-dispatcher, which
 //     is how a Cofre mint reaches a waiting run without `cofre/` importing `automation/`. ---------
@@ -91,6 +115,9 @@ export {
   revokeApprovedCommand,
   startRunForTrigger,
   runAutomationForAction,
+  // The ONE mapping from the executor's automation seam onto a run (P2). `server.ts` binds it;
+  // the acceptance suite enters through it, so a field dropped from it fails a test.
+  automationBackedActionHandler,
   __resetAutomationServiceForTests,
   type TriggerRunInput,
   type ActionRunInput,

@@ -283,6 +283,9 @@ export class DaemonRuntime {
       ...(this.deps.defaultWorkRoot !== undefined ? { defaultWorkRoot: this.deps.defaultWorkRoot } : {}),
       ...(this.deps.profileIdFor ? { profileIdFor: this.deps.profileIdFor } : {}),
       ...(this.deps.sessionStateFor ? { sessionStateFor: this.deps.sessionStateFor } : {}),
+      // Bound as a method reference on THIS runtime's redactor, not a snapshot of its state: a
+      // credential delivered after capture was armed must be masked by the very next body.
+      redactOutbound: (text: string) => this.redactor.redactText(text),
       ...(this.deps.now ? { now: this.deps.now } : {}),
       ...(this.deps.log ? { log: this.deps.log } : {}),
     };

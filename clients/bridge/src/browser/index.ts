@@ -16,6 +16,22 @@ export {
   BrowserStepError,
   type PageObservation,
 } from './executor.js';
+export {
+  NetworkRecorder,
+  MAX_CAPTURE_BODY_CHARS,
+  MAX_BUFFERED_EXCHANGES,
+  originOf,
+  type CapturePage,
+  type CaptureRequest,
+  type CaptureResponse,
+  type NetworkRecorderDeps,
+} from './capture.js';
+export {
+  runInjectedCall,
+  forwardableHeaderNames,
+  InjectedCallError,
+  MAX_INJECTED_BODY_CHARS,
+} from './inject.js';
 export type {
   PersistentLauncher,
   PersistentLaunchOptions,

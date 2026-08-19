@@ -25,7 +25,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { RunCredentialRequest, type Actor } from '@ekoa/shared';
+import { RunCredentialRequest, type Actor, type LocalBrowserCapture } from '@ekoa/shared';
 import { loadAutomationConfig } from './config.js';
 import {
   cofrePortalDeepLink,
@@ -120,6 +120,7 @@ import type {
   StepRecord,
   StepStatus,
   StepTier,
+  StepType,
 } from './types.js';
 import { resolveStepDeclaration } from './types.js';
 
@@ -367,7 +368,29 @@ export interface RunAutomationOptions {
    * Absent → 0, which is every other caller and every pre-existing behaviour.
    */
   resumeFromStepIndex?: number;
+  /**
+   * LEARN WHAT THIS RUN'S PAGE ASKS THE SERVER FOR (slice P2).
+   *
+   * When present, the run arms the machine's network recorder before the first step that drives a
+   * browser, and hands everything it recorded to this sink as the run ends - whatever the run's
+   * outcome, because only the CALLER knows whether the pass is worth compiling a recipe from.
+   *
+   * WHY THE LEARNING PASS IS THE ORDINARY RUN, instrumented, rather than a pass of its own: an
+   * automation-backed action already drives its authored steps vision-first on every run. A
+   * separate goal-driven exploration would pay for a second expensive pass, adapt worse than
+   * `rehearsal.ts` already does, and - the reason it is not here - have no production caller. A
+   * passive listener on the run that was going to happen anyway costs one frame, and what it
+   * compiles makes every later run of that action free.
+   *
+   * ARMED LAZILY AND ONLY FOR A BROWSER-DRIVING STEP. Arming takes the machine's lease, so doing it
+   * at run start would open a headed profile for an api_call-only automation that never wanted one.
+   */
+  observeNetwork?: (captures: LocalBrowserCapture[]) => void;
 }
+
+/** Step types that put a page in front of the machine, and therefore the ones worth arming the
+ *  network recorder for. Anything else runs without a browser and would only pay for a lease. */
+const BROWSER_DRIVING_STEP_TYPES: ReadonlySet<StepType> = new Set<StepType>(['browser', 'navigate', 'verify']);
 
 export interface RunAutomationResult {
   runId: string;
@@ -720,6 +743,29 @@ async function runOrRehearse(
     return browser;
   };
 
+  // ── THE LEARNING LISTENER (slice P2) ──────────────────────────────────────────────────────
+  //
+  // Armed at most once, and only when the caller asked to observe AND the step about to run is one
+  // that drives a page. `startCapture` is a lifecycle frame: it takes the machine's lease, so
+  // arming for an integration-only automation would open a headed profile nobody wanted.
+  //
+  // A FAILURE TO ARM IS NOT A FAILURE TO RUN. A daemon that predates the capture frames answers an
+  // error; the run carries on uninstrumented and the caller compiles nothing, which is exactly the
+  // behaviour before this existed.
+  let captureArmed = false;
+  const armNetworkCapture = async (step: Step): Promise<void> => {
+    if (!options.observeNetwork || captureArmed) return;
+    if (!BROWSER_DRIVING_STEP_TYPES.has(step.type)) return;
+    const session = getBrowser();
+    if (!session || typeof session.startCapture !== 'function') return;
+    captureArmed = true;
+    try {
+      await session.startCapture();
+    } catch {
+      captureArmed = false;
+    }
+  };
+
   // Working copy of steps — rehearsal mutates this in place. Normal runs
   // never touch it, so the user's saved spec is preserved either way until
   // we persist at the end.
@@ -949,6 +995,10 @@ async function runOrRehearse(
         },
         runId,
       );
+
+      // ARM THE RECORDER BEFORE THE FIRST PAGE-DRIVING STEP, never after: an exchange the page
+      // made before the listener attached is one the compile never sees.
+      await armNetworkCapture(step);
 
       // Hand the most recent successful step over so a verify can
       // short-circuit after a side-effect (integration / sub_automation)
@@ -1780,6 +1830,23 @@ async function runOrRehearse(
     });
   } finally {
     ctx.visitedAutomationIds.delete(automationId);
+    // ── HAND THE LEARNING OVER, THEN DISARM (slice P2) ──────────────────────────────────────
+    //
+    // BEFORE `dispose`, because the drain reads the session's own accumulated buffer. The sink is
+    // called whatever the run's outcome: this function does not know whether the pass is worth
+    // compiling from, and the caller does. A throwing sink must not take the run's cleanup down
+    // with it, so it is caught here rather than trusted.
+    if (captureArmed) {
+      const session = browser as BrowserSession | null;
+      try {
+        options.observeNetwork?.(session?.drainCaptures?.() ?? []);
+      } catch (err) {
+        console.warn(`[automation] the network-capture sink threw: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      // The machine drops the recorder on the lease release below too (`tool-executor.ts`); this is
+      // the polite half, and it is what disarms a lease this pass does not own.
+      await session?.stopCapture?.().catch(() => undefined);
+    }
     // This pass's own session: the in-process one closes its per-run page so pages
     // don't accumulate; the daemon one stops its keepalive heartbeat.
     await (browser as BrowserSession | null)?.dispose?.();

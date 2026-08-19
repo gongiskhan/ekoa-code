@@ -428,6 +428,93 @@ export const LocalBrowserLeaseOp = z.enum(['release', 'keepalive']);
 export type LocalBrowserLeaseOp = z.infer<typeof LocalBrowserLeaseOp>;
 
 /**
+ * NETWORK CAPTURE, the two lifecycle operations (slice P2.2).
+ *
+ * Discovery drives a page vision-first and, underneath, listens to what the page's own JavaScript
+ * asks the server for. That listening is what a compiled recipe is distilled FROM - the private
+ * API a portal's UI already uses is the thing a later run replays instead of re-driving the DOM.
+ *
+ * It is a LIFECYCLE arm, not a page verb, for the same structural reason `leaseOp` is: everything
+ * in `LocalBrowserAction` is something a model can emit for a step, and "start recording every
+ * request this page makes" must never be one bad completion away from being turned on by a
+ * resolver. Capture is armed by the DISCOVERY DRIVER and by nothing else.
+ *
+ * `stop` also DROPS the machine-side buffer, including the live header values the injected-call
+ * replay reads (see `LocalBrowserInjectedCall`). Releasing the lease drops it too - the buffer can
+ * never outlive the authenticated jar it was recorded from.
+ */
+export const LocalBrowserCaptureOp = z.enum(['start', 'stop']);
+export type LocalBrowserCaptureOp = z.infer<typeof LocalBrowserCaptureOp>;
+
+/**
+ * ONE captured exchange, as it crosses the wire toward Cortex.
+ *
+ * WHAT IS NOT HERE IS THE POINT: there is no field for a header VALUE, in either direction. The
+ * machine reads the header names off the live request and drops the values before the frame is
+ * built, so a value cannot reach Cortex, the captures collection, a run record or a model prompt
+ * even by mistake - the wire shape cannot express it. Which header carries the session token is
+ * the learning; the token is a durable credential disclosure the moment it is written down.
+ *
+ * Bodies DO ride, because the response body is what teaches the shape a replay expects. They pass
+ * the machine's outbound redactor on the way out and the run's `SecretRegistry` on the way in
+ * (`automation/network-capture.ts`), and an exchange whose redacted form still contains a live
+ * value is REFUSED at the store rather than stored.
+ */
+export const LocalBrowserCapture = z.object({
+  method: z.string(),
+  url: z.string(),
+  requestHeaderNames: z.array(z.string()),
+  responseHeaderNames: z.array(z.string()),
+  status: z.number().optional(),
+  requestBody: z.string().optional(),
+  responseBody: z.string().optional(),
+  contentType: z.string().optional(),
+  /** Playwright's resource type (`xhr`, `fetch`, `document`…) - how the learner tells an internal
+   *  API call from a page load without re-deriving it from the URL. */
+  resourceType: z.string().optional(),
+  durationMs: z.number().optional(),
+  /** A body hit the machine's per-body cap and is a PREFIX. Recorded, never silent. */
+  truncated: z.boolean().optional(),
+});
+export type LocalBrowserCapture = z.infer<typeof LocalBrowserCapture>;
+
+/**
+ * REPLAY ONE LEARNED CALL INSIDE THE AUTHENTICATED PAGE (slice P2.3, trap T3).
+ *
+ * The call is issued by `fetch` running in the page's own JavaScript context, so it inherits the
+ * page's origin, its cookie jar, its SameSite rules and its TLS session. A bare Node request from
+ * Cortex would inherit none of those: same-origin XHR would become a cross-origin one, SameSite
+ * cookies would be dropped, and the site would see a different TLS fingerprint from a different IP.
+ *
+ * `headerNames` IS NAMES ONLY, and that is what makes the replay possible without ever writing a
+ * credential down. The machine holds the last observed value for each header name on the capture
+ * buffer - in memory, for the life of the lease, never on the wire - and forwards the named ones.
+ * Cortex asks for `["x-csrf-token"]`; the machine supplies whatever that header currently is.
+ */
+export const LocalBrowserInjectedCall = z.object({
+  method: z.string(),
+  url: z.string(),
+  /** Which headers the machine should forward from the live session. NAMES, never values. */
+  headerNames: z.array(z.string()),
+  body: z.string().optional(),
+  contentType: z.string().optional(),
+  timeoutMs: z.number().finite().positive().optional(),
+});
+export type LocalBrowserInjectedCall = z.infer<typeof LocalBrowserInjectedCall>;
+
+/** What the in-page fetch answered. Header NAMES again - the response's values are no more
+ *  storable than the request's. */
+export const LocalBrowserInjectedCallResult = z.object({
+  status: z.number(),
+  ok: z.boolean(),
+  bodyText: z.string(),
+  contentType: z.string().optional(),
+  responseHeaderNames: z.array(z.string()),
+  truncated: z.boolean().optional(),
+});
+export type LocalBrowserInjectedCallResult = z.infer<typeof LocalBrowserInjectedCallResult>;
+
+/**
  * The browser step's payload: the owner it runs for, and EITHER one page action to run OR one
  * lifecycle operation on the run's lease. Two arms, never both.
  *
@@ -459,6 +546,16 @@ export const LocalBrowserStepInput = z.union([
     owner: z.string(),
     leaseId: z.string().optional(),
     leaseOp: LocalBrowserLeaseOp,
+  }),
+  z.object({
+    owner: z.string(),
+    leaseId: z.string().optional(),
+    captureOp: LocalBrowserCaptureOp,
+  }),
+  z.object({
+    owner: z.string(),
+    leaseId: z.string().optional(),
+    injectedCall: LocalBrowserInjectedCall,
   }),
 ]);
 export type LocalBrowserStepInput = z.infer<typeof LocalBrowserStepInput>;
@@ -506,6 +603,15 @@ export const LocalBrowserObservation = z.object({
   accessibilitySnapshot: z.string().optional(),
   viewport: z.object({ w: z.number(), h: z.number() }).optional(),
   assertionPassed: z.boolean().optional(),
+  /**
+   * Exchanges the page made since the previous frame, when capture is armed (slice P2.2). Drained
+   * with the observation rather than fetched by a separate verb: the capture belongs to the act
+   * that provoked it, and a separate drain would race the next act's requests into the wrong step.
+   * ABSENT on every frame of an unarmed lease, which is every frame a pre-P2.2 daemon ever sends.
+   */
+  captures: z.array(LocalBrowserCapture).optional(),
+  /** The verdict of an `injectedCall` frame (slice P2.3). Absent on every other frame. */
+  injectedCall: LocalBrowserInjectedCallResult.optional(),
 });
 export type LocalBrowserObservation = z.infer<typeof LocalBrowserObservation>;
 

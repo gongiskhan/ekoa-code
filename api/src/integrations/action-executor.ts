@@ -162,6 +162,29 @@ export type AutomationBackedHandler = (input: {
   credentialFields: Record<string, unknown>;
   orgId: string;
   ownerUserId: string;
+  /**
+   * WHICH action this is (slice P2.3). Additive-optional, and here for one reason: the automation
+   * seam's first move is now to ask whether this action carries a COMPILED RECIPE, and a recipe is
+   * keyed on (org, integrationKey, actionName). The `binding` names the automation to run when
+   * there is no recipe; it cannot say which action asked.
+   *
+   * Optional so no existing implementer of this type changes, and a handler that ignores the two
+   * fields behaves exactly as it did before.
+   */
+  integrationKey?: string;
+  actionName?: string;
+  /**
+   * THE OWNER APPROVED THIS ACTION'S WRITES (slice P2.3, trap T4).
+   *
+   * `true` only when `checkActionConsent` above answered `approved_once`/`approved_always` - i.e.
+   * a human was actually asked and actually said yes. A read is `not_mutating`, which is NOT an
+   * assent: an action declared `mutates: false` whose learned recipe contains a POST must still
+   * stop, because nobody was ever asked about that POST.
+   *
+   * It is the key to the replay's write gate. Without it the gate could never open and would be a
+   * permanent refusal that reads, to a reviewer, as protection.
+   */
+  writeAssent?: boolean;
 }) => Promise<ExecuteIntegrationActionResult>;
 
 export interface ExecutorDeps {
@@ -407,6 +430,16 @@ export async function executeUserIntegrationAction(
       credentialFields: resolvedFields,
       orgId: input.orgId,
       ownerUserId: input.ownerUserId,
+      // Names the action so the seam can look for its compiled recipe (P2.3). Carries no new
+      // authority: both values were already the caller's own verified inputs to this function.
+      integrationKey: input.integrationKey,
+      actionName: input.actionName,
+      // THE WRITE ASSENT, carried rather than re-derived. `checkActionConsent` above is the ONE
+      // approval gate for this action's writes and it has already run; a replayed write is the
+      // same write by a cheaper route, so it rides the same answer. `not_mutating` is excluded on
+      // purpose - a read that was never gated is not an approval of anything.
+      // (`consent.allowed` is already narrowed to `true` here - the refusal returned above.)
+      writeAssent: consent.reason !== 'not_mutating',
     });
   }
 

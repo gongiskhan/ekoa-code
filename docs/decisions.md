@@ -2043,3 +2043,161 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   bounds the RATE a blocked schedule writes at, which was the acute problem; a healthy per-minute
   schedule still grows both stores without limit, and that belongs to whichever slice owns
   operational data lifecycle.
+
+
+- 2026-08-19 - THE DISCOVERY SPINE (P2.1-P2.4): AN ACTION IS LEARNED ONCE AND REPLAYED WITHOUT A
+  MODEL, AND THE THING THAT IS LEARNED CARRIES NO VALUES.
+  THE INVERSION, first. A `browser-steps` action re-derived its whole flow on every run: screenshot,
+  EXPERT vision resolve, act, repeat, for every step, forever. The cost and the latency were
+  proportional to how often the action ran, which is the wrong shape for something a schedule fires
+  hourly. The spine inverts it. The FIRST run drives the page vision-first from a GOAL while the
+  machine records what the page's own JavaScript asks the server for; the distilled recipe of those
+  calls is what every LATER run replays. Discovery is expensive because it happens once.
+  DISCOVERY IS A SIBLING OF THE REHEARSAL LOOP, NOT A REUSE OF IT (the plan left this open;
+  `automation/discovery.ts` decides it). `runOrRehearse` PATCHES an existing step list, and the fixer
+  it calls may only edit the CURRENT index and may only author browser/verify/navigate/wait steps.
+  Discovery has no step list - it is handed a goal and authors a recipe - so routing it through
+  `runOrRehearse` would mean synthesising a fake one-step automation and then asking the fixer to
+  "insert" an entire flow into it, which is precisely what the fixer's contract forbids. What IS
+  shared is everything underneath: `BrowserSession`, the vision resolver, the fixer (for ONE failed
+  act, the job it exists for), `SecretRegistry`, and `budgets.ts`.
+  A RUN-LEVEL GOAL GATE, which did not exist anywhere before (`discovery-goal-verify.ts`). The
+  per-step verifier answers "does the page show what this STEP said"; nothing answered "did the pass
+  achieve the GOAL". Without that, a loop finishes on a sign-in wall or an empty result page,
+  compiles a recipe from whatever it captured, and hands every later run something that replays
+  nothing. The gate is one EXPERT verify against the goal PLUS the network evidence - how many
+  internal calls answered, and the value-free SHAPE of the last one - because a page can look right
+  having fetched nothing, and vision alone sees only the first half. Self-heal reuses it verbatim.
+  FOUR BUDGETS, and `maxStepsPerPlan` is new (`budgets.ts`, pinned). A wall clock alone does not
+  bound a loop whose every act is cheap and wrong: it would spend the full six minutes and every
+  vision call inside it before the gate ran once. The clock is a DELTA of an injected `now()`, never
+  `Date.now() - Date.parse(startedAt)` (trap T5).
+  THE REPLAY LADDER IS ORDERED ON RELIABILITY, NOT ONLY COST (`executors/injected-call.ts`).
+  1. IN-PAGE `fetch` on the daemon: it inherits the origin, the cookie jar including HttpOnly and
+  SameSite=Strict, the TLS session and the IP (trap T3). 2. RAW NODE HTTP, and ONLY for an origin
+  classified PERMISSIVE, because it inherits none of those - against a site that scores callers a
+  datacenter request with no jar is not a slower path, it is a 401 and a detection event. 3. SCRIPTED
+  DOM steps. 4. VISION IS NOT A RUNG: it is the CALLER's fall-through, so a replay advertised as
+  deterministic cannot quietly spend tokens. Every non-`ok` outcome falls through to the old path, so
+  the worst case of the whole optimisation is the run as it was before this slice.
+  THE WRITE GATE IS CHECKED OVER THE WHOLE RECIPE BEFORE ANY CALL RUNS (trap T4). `idempotent` was
+  decided once, at compile time, from the method. Stopping at call four of six would leave the site
+  with three calls applied and a run to resume into an unknown state, so the refusal is up front. It
+  does NOT fall through to the automation - routing around it would make it decorative.
+  SELF-HEAL SUPERSEDES IN-TENANT, NEVER `publishSnapshot` (trap T1). That function looks right and
+  is not: its gate is super-admin AND it flips the definition row to `global`, so a tenant-private
+  heal would either be refused at a scheduled run or would publish one tenant's learning to the whole
+  platform. Drift (`expectShape` mismatch, a non-2xx, a call that could not be made) is classified as
+  `recipe_drift` and routed to re-discovery rather than burning the fixer budget re-deriving, one
+  local edit at a time, a conclusion the drift signal already stated. A read-only heal lands
+  silently; a heal that re-authors a recipe containing a NON-IDEMPOTENT call is HELD and needs human
+  assent before it goes live - the system rewriting its own instructions to write to somebody's
+  account, unattended, is the self-extension shape and gets the self-extension guardrail.
+  SECRETS: TWO INDEPENDENT REDACTION LEGS PLUS A REFUSAL (trap T8). The machine's leg knows what was
+  DELIVERED to it; the hosted `SecretRegistry` knows what the RUN resolved; neither is a superset of
+  the other. Header NAMES survive both and VALUES exist in exactly one place - `NetworkRecorder.live`,
+  in RAM, per lease, per origin - which is what lets a valueless recipe reconstitute a working
+  authenticated call: Cortex asks for `x-csrf-token` and the machine answers with whatever it
+  currently is. `captureOp:'stop'` and the lease release both drop it. A login-shaped call (a
+  secret-shaped FIELD NAME in its body) is DROPPED from the compile rather than stored with a blanked
+  body: a login with no password is not a call worth replaying. `assertNoCredentialRodeIn` re-proves
+  the RESOLVED url/body at send time, because a `{{input.*}}` hole is filled from caller arguments.
+  CAPTURE IS A LIFECYCLE ARM, NOT A PAGE VERB (`LocalBrowserCaptureOp`, beside `leaseOp`). Everything
+  in `LocalBrowserAction` is something a resolver or the vision tier can EMIT for a step, so "record
+  every request this authenticated page makes" sitting in that union would be one bad model
+  completion away from being switched on. It is armed by the discovery driver and by nothing else.
+  DISCOVERY IS EXPLICIT, NEVER AUTOMATIC. A pass drives a real headed browser for minutes and spends
+  a stack of EXPERT calls, so it is asked for by a human or justified by a drift signal. The replay
+  mount FALLS THROUGH when there is no recipe; it does not go and make one.
+  NO NEW HTTP ENDPOINT, therefore no schema-coverage entry, no `EXPECTED_PENDING_COUNT` change and no
+  OpenAPI regeneration - stated because their absence is a claim. A recipe never reaches the public
+  wire by construction (`actionsWithoutRecipes` strips it at all three read boundaries) and discovery
+  is an internal service entry. The DAEMON wire did change, additively, and lands with its contract
+  test (`tests/contract/local-browser-capture.contract.test.ts`).
+  ACCEPTANCE, and what is honestly faked in it. `tests/automation/discovery-replay-acceptance.test.ts`
+  runs a real `node:http` fixture serving a real private API behind a real CSRF check: run 1
+  discovers and compiles, run 2 replays and is asserted at ZERO calls through a spy on `runOneShot` -
+  the chokepoint every model call in this repo must pass (FIXED-3), never a timing assertion. Then
+  the fixture MOVES its endpoint, the replay reports drift at zero model cost, the heal re-learns and
+  supersedes to v2, and the next run is deterministic again. What is faked is the BROWSER: there is
+  no Chromium in CI. The machine-side capture and in-page fetch are exercised for real in
+  `clients/bridge/test/browser/{capture,inject}.test.ts` and the frames both ends exchange are pinned
+  by the contract suite; a headed pass is live verification, not a lane.
+  Rule 5: `tests/security/discovery-replay-isolation.test.ts` attacks the NEW read paths (the P2.0
+  suite attacks the stores) - including the sharpest one, the origin POSTURE the replay resolves,
+  where one org declaring `permissive` must not authorise another org's server-side egress.
+  DIAGRAM CHECK (FIXED-12): `02-module-map` (the new modules and where the replay mounts) and
+  `11-delegation-security` (the two new wire arms and the redaction legs) carry as-built annotations.
+
+- 2026-08-19 (b) - P2 RE-CUT: THE LEARNING PASS IS THE ORDINARY RUN, AND THE GOAL-DRIVEN DISCOVERY
+  LOOP IS DELETED. Supersedes the 2026-08-19 entry above on the points named here; everything that
+  entry says about the stores, the capture layer, the value-free recipe and the daemon wire stands.
+  WHY. Verification of the first cut found that NOTHING IN PRODUCTION COULD REACH THE SPINE. The
+  mount was in place, but the only thing that writes a recipe was `discoverIntegrationAction`, and
+  nothing called it - so the replay could never find a recipe and the whole slice was added surface.
+  That is not a wiring oversight to patch: `runAutomationForAction` ALWAYS holds an automation
+  binding, so a goal-driven loop has no entry there, and the honest reading is that the second loop
+  should never have existed. `automation/discovery.ts`, `discovery-goal-verify.ts` and
+  `discovery-service.ts` are deleted; `DISCOVERY_BUDGET.maxStepsPerPlan` reverts with them.
+  WHAT REPLACES IT. `RunAutomationOptions.observeNetwork`: the automation runs exactly as it always
+  did, with the machine's recorder armed underneath, and hands its captured exchanges to the caller
+  as it ends. `runAutomationForAction` compiles them and stores the recipe. THREE ARGUMENTS for this
+  over a second pass. (1) It costs one frame, not a second expensive vision pass - the economics of
+  "one costly pass for unbounded cheap ones" hold with the costly pass being one that was going to
+  happen. (2) The authored step list plus `rehearsal.ts` already adapt when the UI moves, which is
+  the job the goal loop was doing worse and in parallel. (3) It is REACHABLE, which the goal loop
+  was not, and reachability is the property that makes the other two matter.
+  THE GOAL GATE IS THE RUN'S OWN STATUS, which is stricter than the vision gate it replaces: a
+  recipe is compiled only from a run the engine reports `completed`. Two further refusals keep a bad
+  pass from becoming a permanent bad recipe - nothing is written when the pass captured no internal
+  API call (storing a zero-call recipe would be storing "this action is DOM-only", which `putRecipe`
+  then refuses to overwrite, so the action could never learn again), and nothing is written when the
+  run failed.
+  DRIFT NOW HEALS ON THE NEXT RUN rather than in a pass of its own. `classifyReplayDrift` still
+  separates "the site changed" from "the route is missing"; when it says drift, the compile from that
+  run's instrumented pass goes through `supersedeRecipe` instead of `putRecipe`, carrying the drift
+  reason as the lineage payload. `healDriftedRecipe` keeps the assent guardrail and now counts a
+  SCRIPTED DOM STEP as a write - the first cut inspected only `injectedCalls`, so a re-learned click
+  on a Submit button would have gone live unattended.
+  THE WRITE GATE HAS A KEY NOW. The first cut's `writeAssent` was never set by anything, so the gate
+  could not open: a permanent refusal that read, to a reviewer, as protection. It is now produced by
+  `integrations/action-consent.ts` - the ONE write approval this repo has - and carried across the
+  automation seam. It is true only for `approved_once`/`approved_always`; `not_mutating` is
+  explicitly NOT an assent, because a read that was never gated is not an approval of the POST its
+  learned recipe might contain. The gate also covers scripted DOM steps, which the first cut replayed
+  with no gate at all, in both the executor and the heal.
+  POSTURE IS RESOLVED PER CALL. The first cut resolved one classification from the recipe's FIRST
+  call and applied it to every call - so a permissive opening hop authorised server-side egress to
+  every later host, including ones nobody classified. `ReplayInput.classify` is a FUNCTION, asked
+  once per call about that call's own origin, and the whole ladder is resolved before the first call
+  is sent so an unreachable later call cannot leave a half-replay behind.
+  TWO MORE THINGS AN ARGUMENT MAY NOT DECIDE. A `{{input.*}}` hole the run did not supply now
+  REFUSES: `interpolate` renders it as '', and `?ref=` on most APIs means "every row", so the replay
+  would have quietly fetched a superset and reported success. And a resolved URL whose origin differs
+  from its template's literal origin refuses - the compile never puts a hole in an origin, and a
+  stored template that did would let a caller's argument point the authenticated page's own `fetch`
+  at any host.
+  THE RECORDER'S LIFETIME IS THE LEASE'S, ON ALL THREE ROUTES. It holds the only live header VALUES
+  on the machine. The first cut dropped it on the two routes that send a frame and left it resident
+  on the two that do not - the daemon's idle backstop and `closeAll` at shutdown. `releaseRun` is the
+  single funnel for all of them, so `ProfileManager.onLeaseEnd` hangs off it, and the recorder
+  registers its own disposal at the moment it is armed rather than being wired at the composition
+  root: whoever creates a per-lease holding registers its cleanup in the same breath.
+  `assertNoCredentialRodeIn` IS LIVE NOW. The mount passes the run's `SecretRegistry`, built from the
+  resolved `credentialFields`. It was wired only in tests before, which is worse than absent because
+  it reads as covered.
+  THE SEAM IS ONE NAMED FUNCTION. `automationBackedActionHandler` (automation/service.ts) is the only
+  mapping from the executor's automation seam onto a run; `server.ts` binds it. It moved out of
+  `buildApp` because WHICH fields cross that seam is a security decision - the action's identity and
+  the owner's write assent both ride it - and a mapping that lives only inside the composition root
+  is one no test can enter through. The acceptance suite now enters at
+  `executeUserIntegrationAction` and goes through this function, so a field dropped from it turns a
+  test red instead of silently disabling the spine.
+  ACCEPTANCE, RE-AIMED. `tests/automation/discovery-replay-acceptance.test.ts` enters at the
+  production entry point and counts model calls AT THE CHOKEPOINT ITSELF - all three
+  `ChokepointTransport` methods (`streamAgent`, `oneShot`, `messages`), not a spy on one of their
+  callers. The first cut spied `runOneShot` alone, which left two doors a "deterministic" replay
+  could have walked through unobserved; the mutation that proves the difference is a `completeFast`
+  call added to the replay path, which the old assertion would not have seen.
+  DIAGRAM CHECK (FIXED-12): `02-module-map` carries an appended as-built annotation superseding the
+  first cut's, naming the deletions and the three new seams.

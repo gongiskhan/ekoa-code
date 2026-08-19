@@ -27,6 +27,7 @@ import type {
   StepFeedbackResponse as WireStepFeedbackResponse,
   RevokeApprovedCommandResponse as WireRevokeResponse,
   RunLogsResponse as WireRunLogsResponse,
+  LocalBrowserCapture,
 } from '@ekoa/shared';
 import { automations, automationRuns, automationRunIdempotency } from '../data/stores.js';
 import { logActivity } from '../data/activity.js';
@@ -38,6 +39,25 @@ import { evictCacheForFingerprint } from './cache.js';
 import { approveCommandShape, revokeCommandShape, listApprovedShapes, listApprovedCommandRecords } from './consent.js';
 import { runEventEmitterFactory } from './seams.js';
 import { clearCredentialWaiter } from './credential-waiters.js';
+import { replayIntegrationAction } from './replay-action.js';
+import { classifyReplayDrift, healDriftedRecipe, type HealDeps } from './self-heal.js';
+import {
+  compileInjectedCalls,
+  deriveLessons,
+  redactCaptures,
+  type CapturedExchange,
+} from './network-capture.js';
+import {
+  capturedCallsStore,
+  type CaptureKey,
+  type CapturedCallsStore,
+} from '../integrations/captured-calls-store.js';
+import {
+  integrationRecipeStore,
+  type RecipeDraft,
+  type RecipeWriteResult,
+} from '../integrations/recipe-store.js';
+import { secretRegistryFromValues, type SecretRegistry } from '../security/redaction.js';
 import { screenshotUrlFromPath, runLogsFromSteps } from './persistence.js';
 import type { Automation, Step, StepType, RunRecord, StepRecord } from './types.js';
 
@@ -1206,13 +1226,99 @@ export interface ActionRunInput {
   credentialFields: Record<string, unknown>;
   orgId: string;
   ownerUserId: string;
+  /** Which action asked (slice P2). Present ⇒ its compiled recipe is tried before the automation
+   *  runs, and the run that does happen is instrumented so the action can learn one. Absent ⇒
+   *  exactly the pre-P2 behaviour: straight to the automation, learning nothing. */
+  integrationKey?: string;
+  actionName?: string;
+  /**
+   * The owner's answer to THIS action's write approval, as `integrations/action-consent.ts` gave
+   * it - `true` only when a human actually approved a mutating action, never for a read that
+   * simply was not gated.
+   *
+   * It is the KEY to the replay's write gate. Without it that gate has no way to ever open, which
+   * is not a gate: it is a permanent refusal that a reviewer reads as protection.
+   */
+  writeAssent?: boolean;
 }
 
 export interface ActionRunResult {
   success: boolean;
-  code?: 'unknown_automation' | 'forbidden' | 'automation_failed';
+  code?: 'unknown_automation' | 'forbidden' | 'automation_failed' | 'awaiting_consent';
   error?: string;
   data?: unknown;
+}
+
+/** Injected so the unit lane can drive the whole spine without a store, a daemon or a browser. */
+export interface ActionRunDeps {
+  replay?: typeof replayIntegrationAction;
+  /** The engine entry. Injected only so the learn/heal wiring can be driven deterministically. */
+  run?: typeof runAutomation;
+  /** The org-scoped recipe writes. Default: the real store. */
+  putRecipe?: (orgId: string, key: string, actionName: string, draft: RecipeDraft, opts: { secrets?: SecretRegistry }) => Promise<RecipeWriteResult>;
+  supersedeRecipe?: HealDeps['supersedeRecipe'];
+  /** Where the raw evidence lands. Default: the real captures collection. */
+  captures?: Pick<CapturedCallsStore, 'appendCapturedCall'>;
+  captureId?: () => string;
+}
+
+/** What the executor's automation seam hands over. Declared structurally rather than imported from
+ *  `integrations/action-executor.ts`, which is a lower tier this module does not depend on. */
+export interface AutomationBackedCall {
+  binding: unknown;
+  args: Record<string, unknown>;
+  credentialFields: Record<string, unknown>;
+  orgId: string;
+  ownerUserId: string;
+  integrationKey?: string;
+  actionName?: string;
+  writeAssent?: boolean;
+}
+
+/**
+ * THE SEAM, as one named thing (Capability Contract rule 1).
+ *
+ * `server.ts` binds the executor's `runAutomationBackedAction` to this, and it is the ONLY mapping
+ * from the executor's call shape onto `ActionRunInput`. It lives here rather than inline in
+ * `buildApp` for one reason: which fields cross the seam is a security decision - the action's
+ * identity and the owner's write assent both ride it - and a mapping that exists only inside a
+ * 3000-line composition root is a mapping no test can enter through. The acceptance suite drives
+ * the real executor through THIS function, so a field dropped here fails a test rather than
+ * silently disabling the spine in production.
+ *
+ * `deps` is empty in production and is how the suite supplies its stores and its engine.
+ */
+export function automationBackedActionHandler(deps: ActionRunDeps = {}) {
+  return async (b: AutomationBackedCall): Promise<{
+    success: boolean;
+    /** Exactly `ActionRunResult`'s codes - every one of them is an `IntegrationErrorCode`, which is
+     *  what lets `server.ts` bind this straight onto the executor's seam with no widening cast. */
+    code?: ActionRunResult['code'];
+    error?: string;
+    data?: unknown;
+  }> => {
+    const out = await runAutomationForAction({
+      binding: b.binding as ActionRunBinding,
+      args: b.args,
+      credentialFields: b.credentialFields,
+      orgId: b.orgId,
+      ownerUserId: b.ownerUserId,
+      // Names the action so the seam can try its compiled recipe before running the automation,
+      // and so the run it does perform can learn one. Absent from a caller that predates the
+      // fields, which is exactly the old behaviour.
+      ...(b.integrationKey !== undefined ? { integrationKey: b.integrationKey } : {}),
+      ...(b.actionName !== undefined ? { actionName: b.actionName } : {}),
+      // The owner's answer to this action's write approval, decided once by the executor's own
+      // gate. Absent from a caller that predates the field, which is the closed direction.
+      ...(b.writeAssent !== undefined ? { writeAssent: b.writeAssent } : {}),
+    }, deps);
+    return {
+      success: out.success,
+      ...(out.code ? { code: out.code } : {}),
+      ...(out.error ? { error: out.error } : {}),
+      ...(out.data !== undefined ? { data: out.data } : {}),
+    };
+  };
 }
 
 /** Surface the run's structured output (last api_call/ekoa_action step output), old semantics. */
@@ -1243,7 +1349,62 @@ async function extractActionRunOutput(runId: string): Promise<unknown> {
  * owner-only regardless of visibility — so a private automation is already unreachable to anyone
  * but its owner on this path.
  */
-export async function runAutomationForAction(input: ActionRunInput): Promise<ActionRunResult> {
+export async function runAutomationForAction(
+  input: ActionRunInput,
+  deps: ActionRunDeps = {},
+): Promise<ActionRunResult> {
+  // The run's live credential values, as ONE registry. Built here rather than inside the replay so
+  // the proof that no credential rode into a resolved URL runs against the values that actually
+  // exist on this run - the check was inert until this line existed, because the mount passed none.
+  const secrets = secretRegistryFromValues(Object.values(input.credentialFields));
+  /** Named ⇒ this action can carry a recipe. Unnamed callers behave exactly as they did pre-P2. */
+  const learnable = Boolean(input.integrationKey && input.actionName);
+
+  // ── 1. REPLAY FIRST (slice P2.3) ───────────────────────────────────────────────────────────
+  //
+  // If this action has learned a recipe, it replays the site's own API calls with no model in the
+  // loop - which is the entire point of the spine. Everything except `ok` and `write-gate` falls
+  // THROUGH to the automation below, so the worst case of a replay that cannot proceed is exactly
+  // the run this function performed before the recipe existed.
+  //
+  // `write-gate` does not fall through: it is a refusal (something non-idempotent cannot replay
+  // unattended, trap T4), and running the write by the other path would make the gate decorative.
+  let driftReason: string | undefined;
+  if (learnable) {
+    const replay = deps.replay ?? replayIntegrationAction;
+    const result = await replay({
+      orgId: input.orgId,
+      ownerUserId: input.ownerUserId,
+      integrationKey: input.integrationKey!,
+      actionName: input.actionName!,
+      args: input.args,
+      secrets,
+      ...(input.writeAssent !== undefined ? { writeAssent: input.writeAssent } : {}),
+    }).catch((err: unknown) => {
+      // A replay that THREW is a fall-through like any other. It is an optimisation on the hot
+      // path of every automation-backed action; a defect in it must not be able to break actions
+      // that worked before it existed.
+      console.warn(`[automation] recipe replay failed for ${input.integrationKey}/${input.actionName}: ${err instanceof Error ? err.message : String(err)}`);
+      return { outcome: 'no-recipe', reason: 'replay threw' } as const;
+    });
+    if (result.outcome === 'ok') {
+      return { success: true, data: { replayed: true, recipeVersion: result.recipeVersion, output: result.data } };
+    }
+    if (result.outcome === 'write-gate') {
+      return {
+        success: false,
+        code: 'awaiting_consent',
+        error: `"${input.actionName}" replays ${result.blocked}, which writes; a human has to approve this action before it runs unattended.`,
+      };
+    }
+    // DRIFT ROUTES TO A HEAL. `classifyReplayDrift` is what separates "the site changed" (re-learn
+    // it) from "the route is missing" (re-learning would fail the same way) and from a refusal a
+    // heal must never route around.
+    if (classifyReplayDrift(result) === 'recipe_drift') {
+      driftReason = (result as { reason: string }).reason;
+    }
+  }
+
   const automation = (await automations.get(input.binding.automationId)) as { ownerUserId?: string } | null;
   if (!automation) {
     return { success: false, code: 'unknown_automation', error: `automation not found: ${input.binding.automationId}` };
@@ -1268,12 +1429,40 @@ export async function runAutomationForAction(input: ActionRunInput): Promise<Act
     triggeredBy: 'agent',
     visitedAutomationIds: new Set(),
     traceId: randomUUID(),
+    // The registry the replay above already used, handed to the engine so both legs of this
+    // function redact against the same live values (the engine seeds it further from
+    // `inputs.credentials` as it goes).
+    secrets,
   };
   const runId = randomUUID();
   const emit = runEventEmitterFactory(runId);
-  const result = await runAutomation(input.binding.automationId, ctx, { runId, inputs, ...(emit ? { emit } : {}) });
+
+  // ── 2. THE RUN, INSTRUMENTED (slice P2.1/P2.2) ─────────────────────────────────────────────
+  //
+  // The automation drives its authored steps exactly as it always has. Underneath it, the machine
+  // records what the page's own JavaScript asks the server for, and the sink below collects it.
+  // This is the LEARNING pass, and it is the run that was going to happen anyway.
+  const captured: LocalBrowserCapture[] = [];
+  const run = deps.run ?? runAutomation;
+  const result = await run(input.binding.automationId, ctx, {
+    runId,
+    inputs,
+    ...(emit ? { emit } : {}),
+    ...(learnable ? { observeNetwork: (batch: LocalBrowserCapture[]) => { captured.push(...batch); } } : {}),
+  });
   const status: string = result.status;
   if (status === 'completed' || status === 'succeeded') {
+    // ── 3. COMPILE WHAT THE PASS SAW ─────────────────────────────────────────────────────────
+    //
+    // Only from a run that SUCCEEDED. A recipe distilled from a pass that ended on a sign-in wall
+    // replays nothing and reports success forever, which is worse than having no recipe at all -
+    // the run's own status is the goal gate, and it is a stricter one than a second vision opinion.
+    if (learnable) {
+      await learnFromRun({ input, secrets, captured, driftReason, deps }).catch((err: unknown) => {
+        // Learning is a by-product. A store hiccup must not turn a run that WORKED into a failure.
+        console.warn(`[automation] could not compile a recipe for ${input.integrationKey}/${input.actionName}: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }
     const output = await extractActionRunOutput(result.runId);
     return { success: true, data: { runId: result.runId, status: result.status, summary: result.summary, output } };
   }
@@ -1284,4 +1473,112 @@ export async function runAutomationForAction(input: ActionRunInput): Promise<Act
     error: result.error || result.summary || `automation ${input.binding.automationId} did not complete (status=${result.status})`,
     data: { runId: result.runId, status: result.status },
   };
+}
+
+/**
+ * WHAT THE RUN LEARNED, written down (slices P2.1, P2.2, P2.4).
+ *
+ * The compile is pure and model-free (`network-capture.ts`), which is exactly why the second run
+ * costs nothing: no part of turning captured exchanges into a recipe consults a model.
+ *
+ * THREE DECISIONS LIVE HERE.
+ *
+ *  - NOTHING IS WRITTEN WHEN NOTHING WAS LEARNED. A pass that captured no internal API call
+ *    compiles zero replayable calls, and storing that would be storing a permanent "this action is
+ *    DOM-only" - which `putRecipe` then refuses to overwrite, so the action could never learn again
+ *    even after the site started using an API. Writing nothing keeps the next run's learning free.
+ *  - A DRIFT SUPERSEDES; everything else PUTS. `putRecipe` refuses to overwrite by design, so that
+ *    every replacement carries the `supersedes` lineage - which means the only legitimate way to
+ *    replace a recipe is through the heal, and the only thing that justifies a heal is drift.
+ *  - THE EVIDENCE IS WRITTEN FIRST. The recipe carries `capturedCallsRef` pointing INTO the
+ *    evidence, so writing the recipe first would publish a pointer to evidence that may not land.
+ */
+async function learnFromRun(args: {
+  input: ActionRunInput;
+  secrets: SecretRegistry;
+  captured: LocalBrowserCapture[];
+  driftReason?: string;
+  deps: ActionRunDeps;
+}): Promise<void> {
+  const { input, secrets, captured, driftReason, deps } = args;
+  const integrationKey = input.integrationKey!;
+  const actionName = input.actionName!;
+  if (captured.length === 0) return;
+
+  const exchanges = redactCaptures(captured, secrets);
+  const injectedCalls = compileInjectedCalls(exchanges, { inputs: input.args });
+  if (injectedCalls.length === 0) return;
+
+  const captureId = (deps.captureId ?? randomUUID)();
+  const draft: RecipeDraft = {
+    // PROVENANCE, never an input to anything: which action this recipe belongs to. The learning
+    // pass is the action's own automation, so there is no separate goal statement to record - and
+    // inventing prose here would put a string nobody wrote into a stored document.
+    goal: `replay of ${integrationKey}/${actionName}`,
+    injectedCalls,
+    // NO SCRIPTED STEPS. A locator learned from ONE pass on ONE page state is precisely the brittle
+    // artefact the injected-call path exists to avoid, and the flow's DOM work is already the
+    // automation's authored steps - which still run whenever the replay cannot.
+    scriptedSteps: [],
+    lessons: deriveLessons(exchanges),
+    capturedCallsRef: captureId,
+  };
+
+  const captures = deps.captures ?? capturedCallsStore;
+  await persistEvidence(captures, { orgId: input.orgId, integrationKey, actionName, captureId }, exchanges, secrets);
+
+  if (driftReason !== undefined) {
+    const supersedeRecipe = deps.supersedeRecipe
+      ?? ((orgId, key, action, next, opts) => integrationRecipeStore.supersedeRecipe(orgId, key, action, next, opts ?? {}));
+    const healed = await healDriftedRecipe(
+      {
+        orgId: input.orgId,
+        integrationKey,
+        actionName,
+        reason: driftReason,
+        secrets,
+        // A heal that re-authors a WRITE needs the same human answer a replayed write needs. The
+        // owner's approval of this action IS that answer; absent it the draft is held, not applied.
+        ...(input.writeAssent !== undefined ? { writeAssent: input.writeAssent } : {}),
+      },
+      draft,
+      { supersedeRecipe },
+    );
+    if (healed.outcome !== 'healed') {
+      console.warn(`[automation] the re-learned recipe for ${integrationKey}/${actionName} did not go live: ${healed.outcome}`);
+    }
+    return;
+  }
+
+  const putRecipe = deps.putRecipe
+    ?? ((orgId, key, action, d, opts) => integrationRecipeStore.putRecipe(orgId, key, action, d, opts));
+  await putRecipe(input.orgId, integrationKey, actionName, draft, { secrets });
+}
+
+/**
+ * Append the pass's evidence, one document per exchange.
+ *
+ * A FAILED APPEND IS NOT A FAILED LEARN. The evidence is diagnostic - it exists so a human can see
+ * what the recipe was distilled from - while the recipe is the artefact that makes runs work.
+ * Losing an exchange to a duplicate `_id` or a store hiccup must not throw away what the pass
+ * learned, so each append is individually tolerant.
+ *
+ * A REFUSED append is different in kind and is deliberately not distinguished here: the store
+ * refuses an exchange whose redacted form still carries a live credential, which is the third leg
+ * doing its job. That exchange is dropped; the recipe (which carries no values by construction, and
+ * is re-proven at its own store) is unaffected.
+ */
+async function persistEvidence(
+  captures: Pick<CapturedCallsStore, 'appendCapturedCall'>,
+  key: CaptureKey,
+  exchanges: readonly CapturedExchange[],
+  secrets: SecretRegistry,
+): Promise<void> {
+  for (let seq = 0; seq < exchanges.length; seq += 1) {
+    try {
+      await captures.appendCapturedCall(key, seq, exchanges[seq]!, { secrets });
+    } catch (err) {
+      console.warn(`[automation] evidence ${seq} of ${key.integrationKey}/${key.actionName} was not stored: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 }

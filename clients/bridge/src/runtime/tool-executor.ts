@@ -33,6 +33,8 @@ import {
   LocalToolInvokeInput,
   type BridgeCapability,
   type LocalBashObservation,
+  type LocalBrowserCaptureOp,
+  type LocalBrowserInjectedCall,
   type LocalBrowserLeaseOp,
   type LocalBrowserObservation,
 } from '../wire/index.js';
@@ -41,7 +43,10 @@ import {
   observePage,
   parseSessionState,
   runBrowserAction,
+  runInjectedCall,
+  NetworkRecorder,
   ProfileManager,
+  type CapturePage,
 } from '../browser/index.js';
 import type { GrantTable } from '../session/index.js';
 import type { EgressLedger } from '../ledger/index.js';
@@ -84,6 +89,17 @@ export interface ToolExecutorDeps {
   profileIdFor?: (input: { capability: 'browser' | 'bash'; runId: string; owner?: string }) => string;
   /** The Cofre session to wear for this run, when Cortex supplied one. */
   sessionStateFor?: (runId: string) => unknown;
+  /**
+   * The machine's OUTBOUND redaction leg, applied to every captured body before it can ride a frame
+   * (slice P2.2, trap T8). It is the daemon's `OutboundRedactor.redactText`, which knows every
+   * credential value delivered TO this machine.
+   *
+   * Injected rather than reached for, and optional, because it is one of TWO independent legs:
+   * this one knows what was DELIVERED here, the hosted `SecretRegistry` knows what the RUN resolved,
+   * and neither is a superset of the other. A daemon wired without it still captures - the hosted
+   * leg and the store's own refusal still stand - it simply contributes nothing of its own.
+   */
+  redactOutbound?: (text: string) => string;
   now?: () => number;
   log?: (message: string) => void;
 }
@@ -169,6 +185,10 @@ async function runBrowserStep(
   const leaseId = parsed.data.leaseId ?? envelope.runId;
 
   if ('leaseOp' in parsed.data) return await runLeaseOp(parsed.data.leaseOp, leaseId, profileId, ctx, deps);
+  if ('captureOp' in parsed.data) return await runCaptureOp(parsed.data.captureOp, leaseId, profileId, ctx, deps);
+  if ('injectedCall' in parsed.data) {
+    return await runInjectedCallOp(parsed.data.injectedCall, leaseId, profileId, envelope.runId, ctx, deps);
+  }
 
   const { action } = parsed.data;
   try {
@@ -194,6 +214,11 @@ async function runBrowserStep(
       },
       async (lease) => {
         const page = await lease.page();
+        // RE-ATTACH ON EVERY ACT, not only on `captureOp:'start'`. A navigation can replace the
+        // page object underneath a lease, and a recorder still listening to the old one records
+        // nothing while reporting success - a discovery pass that silently learns nothing. `attach`
+        // is a no-op when the page has not changed, so this costs nothing on the common path.
+        recorderFor(leaseId, deps)?.attach(page as unknown as CapturePage);
         let assertionPassed: boolean | undefined;
         let failure: string | undefined;
         try {
@@ -211,9 +236,14 @@ async function runBrowserStep(
         // page as it actually is; handing it nothing because the action threw is what turns one
         // failed step into a stalled run.
         const observation = await observePage(page);
+        // DRAIN AFTER THE OBSERVATION, not before: the requests an act provoked are still landing
+        // while the page settles, and observing first is what gives them time to arrive. They ride
+        // the frame of the act that caused them, which is what makes a capture attributable.
+        const captures = recorderFor(leaseId, deps)?.drain() ?? [];
         const data: LocalBrowserObservation = {
           ...observation.data,
           ...(assertionPassed !== undefined ? { assertionPassed } : {}),
+          ...(captures.length > 0 ? { captures } : {}),
         };
 
         ledgerAutomation(
@@ -273,7 +303,12 @@ async function runLeaseOp(
     }
   }
 
-  // END OF RUN. The one moment a whole run's injected session leaves a jar that outlives it.
+  // END OF RUN. The one moment a whole run's injected session leaves a jar that outlives it - and
+  // therefore the moment the capture buffer must go too. The recorder holds the live header VALUES
+  // an injected replay forwards; a buffer that survived its lease would be remembered credentials
+  // for a session that no longer exists. Dropped BEFORE the release is attempted, so even a release
+  // that fails cannot leave one behind.
+  disposeNetworkRecorder(leaseId);
   try {
     await deps.profiles.releaseRun(leaseId, { profileId });
   } catch (err) {
@@ -289,6 +324,152 @@ async function runLeaseOp(
   }
   ledgerAutomation(ctx, 'browser', 'release', 'ran');
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// network capture (P2.2) + injected-call replay (P2.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * leaseId -> its network recorder. Process-local and keyed exactly as the lease is, so a recorder
+ * has the lifetime of the authenticated jar it observes and no longer.
+ *
+ * A MAP RATHER THAN A FIELD ON THE LEASE, deliberately: `ProfileLease` is the profile module's
+ * contract and describes a browser profile, not a learning pass. Capture is armed by exactly one
+ * caller on a small minority of leases, and threading an always-absent recorder through the profile
+ * manager's whole lifecycle would make every lease carry a concern that belongs to one phase.
+ *
+ * ── EVERY EXIT DROPS IT, NOT JUST THE POLITE ONE ─────────────────────────────────────────────
+ *
+ * The recorder holds the live header VALUES an injected replay forwards. There are FOUR ways the
+ * thing it is observing can end, and all four dispose it:
+ *
+ *   1. `captureOp:'stop'`               - the hosted side disarming (`runCaptureOp`);
+ *   2. `leaseOp:'release'`              - end of run (`runLeaseOp`);
+ *   3. the daemon's IDLE BACKSTOP       - nobody sent a frame; `ProfileManager` reaps the lease;
+ *   4. daemon SHUTDOWN                  - `closeAll` releases every live lease.
+ *
+ * 3 and 4 send no frame at all, so wiring only 1 and 2 - which is what the first version of this
+ * slice did - left a remembered credential resident for the lifetime of the process. They are
+ * covered by `ProfileManager.onLeaseEnd`, which all three lease-ending routes funnel through, and
+ * the hook is registered HERE, at the moment the recorder is created (`runCaptureOp`), rather than
+ * at the composition root: whoever makes a per-lease holding registers its disposal in the same
+ * breath, so there is no second file to remember to edit.
+ */
+const recorders = new Map<string, NetworkRecorder>();
+
+function recorderFor(leaseId: string, _deps: ToolExecutorDeps): NetworkRecorder | undefined {
+  return recorders.get(leaseId);
+}
+
+/**
+ * Drop one lease's recorder and the live header values in it. Idempotent, and safe to call for a
+ * lease that never armed one - which is the common case, since it is bound to EVERY lease's end.
+ */
+export function disposeNetworkRecorder(leaseId: string): void {
+  const recorder = recorders.get(leaseId);
+  if (!recorder) return;
+  recorder.detach();
+  recorders.delete(leaseId);
+}
+
+/** Whether a lease currently holds a recorder. Exported for the suite, which has to be able to
+ *  assert the ABSENCE of one after an idle reap - a property with no other observable. */
+export function hasNetworkRecorder(leaseId: string): boolean {
+  return recorders.has(leaseId);
+}
+
+/**
+ * ARM or DISARM the network recorder for a lease.
+ *
+ * `start` takes the lease (so the page exists to listen to) and attaches. It is idempotent: a
+ * second `start` re-attaches to the current page rather than doubling every exchange.
+ *
+ * Ledgered like every other remote instruction about this machine, and named in the ledger, because
+ * "a remote party asked this machine to record every request an authenticated page makes" is
+ * precisely the kind of thing an audit trail exists for.
+ */
+async function runCaptureOp(
+  op: LocalBrowserCaptureOp,
+  leaseId: string,
+  profileId: string,
+  ctx: Tier2Context,
+  deps: ToolExecutorDeps,
+): Promise<ToolExecutionResult> {
+  if (op === 'stop') {
+    disposeNetworkRecorder(leaseId);
+    ledgerAutomation(ctx, 'browser', 'capture:stop', 'ran');
+    return { ok: true, output: {} };
+  }
+  try {
+    return await deps.profiles.withRunLease({ leaseId, profileId }, async (lease) => {
+      const page = await lease.page();
+      let recorder = recorders.get(leaseId);
+      if (!recorder) {
+        recorder = new NetworkRecorder(
+          // The machine's own redaction leg: the outbound redactor already knows every credential
+          // this daemon was delivered, so a body carrying one is masked before it can ride a frame.
+          deps.redactOutbound ? { redactBody: deps.redactOutbound } : {},
+        );
+        recorders.set(leaseId, recorder);
+        // REGISTERED IN THE SAME BREATH AS THE CREATION. `releaseRun` fires this on all three
+        // lease-ending routes - the explicit frame, the idle backstop, and shutdown - so the live
+        // header values in this recorder cannot outlive the authenticated jar they were read from
+        // even when nobody sends a `stop`.
+        deps.profiles.onLeaseEnd(leaseId, () => disposeNetworkRecorder(leaseId));
+      }
+      recorder.attach(page as unknown as CapturePage);
+      ledgerAutomation(ctx, 'browser', 'capture:start', 'ran');
+      return { ok: true, output: {} };
+    });
+  } catch (err) {
+    const reason = errorText(err);
+    ledgerAutomation(ctx, 'browser', 'capture:start', 'error', undefined, reason);
+    return { ok: false, error: reason };
+  }
+}
+
+/**
+ * REPLAY ONE LEARNED CALL inside the authenticated page.
+ *
+ * The result rides `observation.data.injectedCall` rather than a bespoke envelope so it lands in the
+ * same slot every other browser frame's payload does - `DaemonBrowserSession.ingest` already reads
+ * that object, and a second envelope shape would be a second thing to keep in step.
+ *
+ * NO PAGE OBSERVATION is taken here, and that is not an omission: an injected call does not touch
+ * the DOM, so a screenshot and a fingerprint after it would be the same page as before it, taken at
+ * the cost of a screenshot per call. A replay of twelve calls would pay twelve of them for nothing.
+ */
+async function runInjectedCallOp(
+  call: LocalBrowserInjectedCall,
+  leaseId: string,
+  profileId: string,
+  runId: string,
+  ctx: Tier2Context,
+  deps: ToolExecutorDeps,
+): Promise<ToolExecutionResult> {
+  try {
+    return await deps.profiles.withRunLease(
+      { leaseId, profileId, session: () => parseSessionState(deps.sessionStateFor?.(runId)) },
+      async (lease) => {
+        const page = await lease.page();
+        const recorder = recorders.get(leaseId);
+        const result = await runInjectedCall(page, call, (origin, names) =>
+          recorder ? recorder.headerValuesFor(origin, names) : {},
+        );
+        ledgerAutomation(ctx, 'browser', 'inject', result.ok ? 'ran' : 'error');
+        const data: LocalBrowserObservation = { url: safeUrl(page.url.bind(page)), injectedCall: result };
+        // `ok` follows the STEP, not the HTTP status: a 404 from a replayed call ran perfectly and
+        // is a drift signal the hosted side classifies (`automation/self-heal.ts`). Collapsing the
+        // two here would send every drift back as a machine failure.
+        return { ok: true, output: data };
+      },
+    );
+  } catch (err) {
+    const reason = errorText(err);
+    ledgerAutomation(ctx, 'browser', 'inject', 'error', undefined, reason);
+    return { ok: false, error: reason };
+  }
 }
 
 /** A thrown value as one line of text. */

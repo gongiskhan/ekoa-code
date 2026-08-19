@@ -29,6 +29,11 @@
  * preserving the existing cache key `(automationId, stepId, fingerprint)`.
  */
 
+import type {
+  LocalBrowserCapture,
+  LocalBrowserInjectedCall,
+  LocalBrowserInjectedCallResult,
+} from '@ekoa/shared';
 import type { DaemonConnection, ResultEnvelope } from './seams.js';
 import { fingerprintFromParts } from './fingerprint.js';
 import type {
@@ -55,6 +60,10 @@ interface BrowserObservationData {
   viewport?: { w?: number; h?: number; width?: number; height?: number };
   /** Assertion verdict, when the act was a PlaywrightAssertion. */
   assertionPassed?: boolean;
+  /** Exchanges the page made since the previous frame, when capture is armed (slice P2.2). */
+  captures?: LocalBrowserCapture[];
+  /** The verdict of an `injectedCall` frame (slice P2.3). */
+  injectedCall?: LocalBrowserInjectedCallResult;
 }
 
 export interface BrowserActOptions {
@@ -115,6 +124,33 @@ export interface BrowserSession {
    * browser down under the parent the moment a sub-automation finished.
    */
   dispose?(): Promise<void>;
+
+  // --- the discovery spine's additions (P2.2 / P2.3) --------------------------
+  //
+  // ALL OPTIONAL, and they must stay that way. `LocalBrowserSession` (the in-process fallback) has
+  // no daemon to arm a recorder on, and every fake session in the suite predates them; a required
+  // member here would break both for a capability only the discovery driver ever asks for. The
+  // driver treats an absent member as "this session cannot capture", which is the honest reading.
+
+  /**
+   * Arm the machine's network recorder for this lease. Everything the page requests from now on is
+   * buffered there and drained onto each subsequent observation.
+   *
+   * ARMED BY THE DISCOVERY DRIVER AND NOTHING ELSE. It is not a page verb and no resolver can emit
+   * it (see `LocalBrowserCaptureOp`): "record every request this authenticated page makes" is a
+   * decision a phase takes, never one a model reaches.
+   */
+  startCapture?(opts?: BrowserActOptions): Promise<void>;
+  /** Disarm, and drop the machine-side buffer including the live header values it held. */
+  stopCapture?(opts?: BrowserActOptions): Promise<void>;
+  /** Everything captured since the last drain. Draining EMPTIES: an exchange belongs to exactly one
+   *  observation, so the calls a step provoked are attributable to that step. */
+  drainCaptures?(): LocalBrowserCapture[];
+  /**
+   * Replay one learned call INSIDE the authenticated page (trap T3). The values of the named
+   * headers are resolved ON THE MACHINE from the live session; nothing here has ever held them.
+   */
+  injectCall?(call: LocalBrowserInjectedCall, opts?: BrowserActOptions): Promise<LocalBrowserInjectedCallResult>;
 }
 
 /**
@@ -217,6 +253,14 @@ export class DaemonBrowserSession implements BrowserSession {
   private last: BrowserObservationData = {};
   private lastScreenshotB64 = '';
   private observed = false;
+  /**
+   * Exchanges accumulated from every observation since the last drain.
+   *
+   * ACCUMULATED HERE rather than read off `last`, because `ingest` MERGES observations: a frame that
+   * omits `captures` would otherwise leave the previous frame's captures in place and the driver
+   * would read the same exchanges twice, once per step, for the rest of the pass.
+   */
+  private captured: LocalBrowserCapture[] = [];
 
   constructor(opts: {
     connection: DaemonConnection;
@@ -275,6 +319,39 @@ export class DaemonBrowserSession implements BrowserSession {
     }
   }
 
+  async startCapture(opts?: BrowserActOptions): Promise<void> {
+    await this.lifecycle({ captureOp: 'start' }, 'arm network capture', opts);
+  }
+
+  async stopCapture(opts?: BrowserActOptions): Promise<void> {
+    await this.lifecycle({ captureOp: 'stop' }, 'stop network capture', opts);
+  }
+
+  drainCaptures(): LocalBrowserCapture[] {
+    return this.captured.splice(0, this.captured.length);
+  }
+
+  /**
+   * Replay one learned call in the page. The result comes back on `observation.data.injectedCall`,
+   * the same slot every other browser frame's payload lands in.
+   *
+   * A NON-2xx IS NOT A FAILURE HERE. The daemon answers `ok:true` for any call it managed to make,
+   * because a 404 from a replayed call ran perfectly and means the recipe has DRIFTED - a signal
+   * `self-heal.ts` classifies and acts on. Throwing on it would erase the distinction between
+   * "the machine could not make the call" and "the site answered differently than the recipe expects".
+   */
+  async injectCall(
+    call: LocalBrowserInjectedCall,
+    opts?: BrowserActOptions,
+  ): Promise<LocalBrowserInjectedCallResult> {
+    const env = await this.lifecycle({ injectedCall: call }, 'replay a learned call', opts);
+    const result = this.last.injectedCall;
+    if (!result) {
+      throw new Error(env.error?.message ?? 'the machine answered no verdict for the replayed call');
+    }
+    return result;
+  }
+
   async ensureObserved(opts?: BrowserActOptions): Promise<void> {
     if (this.observed) return;
     await this.observe(opts);
@@ -328,13 +405,56 @@ export class DaemonBrowserSession implements BrowserSession {
 
   // --- internals ------------------------------------------------------------
 
+  /**
+   * Clear the fields that describe THIS FRAME'S outcome, before sending one.
+   *
+   * `ingest` merges, so a field the next observation omits keeps its previous value - which is
+   * correct for everything describing the page (url, title, viewport) and WRONG for a per-frame
+   * verdict. Without this, an assert whose observation omits `assertionPassed` inherits an earlier
+   * `true`, and an injected call whose frame omits `injectedCall` is handed the previous call's
+   * answer as if it were its own.
+   *
+   * Called from BOTH send paths. It lived inline in `dispatch` alone until `lifecycle` was added
+   * beside it, and the injected-call half of the hazard reappeared immediately - which is why it is
+   * one named method now rather than two lines repeated in two places.
+   */
+  private resetPerFrameVerdicts(): void {
+    this.last.assertionPassed = undefined;
+    this.last.injectedCall = undefined;
+  }
+
+  /**
+   * Send a NON-PAGE frame (a capture op, an injected call) and absorb whatever observation came
+   * back. It shares `ingest` with the page path so captures and injected-call verdicts land in the
+   * same place a page act's do, and it MARKS THE LEASE USED for the same reason `dispatch` does -
+   * arming a recorder or replaying a call takes the machine's lease exactly as a click does, and a
+   * lease taken has to be given back.
+   */
+  private async lifecycle(
+    input: Record<string, unknown>,
+    what: string,
+    opts?: BrowserActOptions,
+  ): Promise<ResultEnvelope> {
+    this.resetPerFrameVerdicts();
+    const env = await this.conn.runStep({
+      capability: 'browser',
+      input: { owner: this.ownerUserId, leaseId: this.lease.id, ...input },
+      ...(opts?.stepId !== undefined ? { stepId: opts.stepId } : {}),
+      runId: this.runId,
+    });
+    this.lease.used = true;
+    this.ingest(env);
+    if (!env.ok) {
+      throw new Error(env.error?.message ?? `the machine could not ${what}`);
+    }
+    return env;
+  }
+
   private async dispatch(
     input: PlaywrightAction | PlaywrightAssertion,
     opts?: BrowserActOptions,
   ): Promise<ResultEnvelope> {
-    // Reset the per-act assertion verdict so a stale `true` from a prior
-    // assert never leaks into a later one whose observation omits the field.
-    this.last.assertionPassed = undefined;
+    this.resetPerFrameVerdicts();
     const env = await this.conn.runStep(
       {
         capability: 'browser',
@@ -425,6 +545,13 @@ export class DaemonBrowserSession implements BrowserSession {
       this.lastScreenshotB64 = obs.screenshotB64;
     }
     const data = (obs.data ?? {}) as BrowserObservationData;
+    // CAPTURES ACCUMULATE, they do not merge. Every other field on the observation describes the
+    // page as it is NOW and is correct to overwrite; captures are a LOG of what happened between
+    // two frames, so the merge below (which keeps a previous value when the new frame omits one)
+    // would re-deliver the same exchanges on every subsequent step.
+    if (Array.isArray(data.captures) && data.captures.length > 0) {
+      this.captured.push(...data.captures);
+    }
     // Merge so a screenshot-only observe that omits some fields keeps the
     // last known values (the daemon should always send url/fingerprint,
     // but be defensive at the trust boundary).
@@ -449,6 +576,10 @@ export class DaemonBrowserSession implements BrowserSession {
         assertionPassed:
           typeof data.assertionPassed === 'boolean'
             ? data.assertionPassed
+            : undefined,
+        injectedCall:
+          data.injectedCall && typeof data.injectedCall === 'object'
+            ? data.injectedCall
             : undefined,
       }),
     };

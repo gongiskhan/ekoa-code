@@ -246,9 +246,18 @@ describe('LocalBrowserObservation - exactly what DaemonBrowserSession.ingest rea
 
   it('names every field ingest reads - an omitted field is silently DROPPED hosted-side', () => {
     // api/src/automation/browser-session.ts `ingest` reads exactly these keys off observation.data.
+    //
+    // `captures` and `injectedCall` joined the set in P2.2/P2.3 (the discovery spine). They are
+    // ADDITIVE - a daemon that predates them sends neither, and the contract suite asserts an old
+    // observation still parses - but they belong in this list for the reason the list exists: a key
+    // the daemon sends and `ingest` does not read is work that produces nothing, so updating this
+    // pin is the moment somebody has to confirm the hosted reader was updated too.
     const shape = Object.keys(LocalBrowserObservation.shape).sort();
     expect(shape).toEqual(
-      ['accessibilitySnapshot', 'assertionPassed', 'domShapeSketch', 'heading', 'title', 'url', 'viewport'].sort(),
+      [
+        'accessibilitySnapshot', 'assertionPassed', 'captures', 'domShapeSketch',
+        'heading', 'injectedCall', 'title', 'url', 'viewport',
+      ].sort(),
     );
   });
 });

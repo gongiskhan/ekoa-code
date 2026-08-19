@@ -167,7 +167,15 @@ const API_CALL_METHODS: readonly string[] = ['GET', 'POST', 'PUT', 'PATCH', 'DEL
 
 const LOCATOR_STRATEGIES: readonly string[] = ['role', 'text', 'label', 'placeholder', 'testid', 'css', 'altText', 'title'];
 
-const PLAYWRIGHT_ACTION_KINDS: readonly string[] = [
+/**
+ * Every verb a STORED scripted step may claim.
+ *
+ * Exported because it is the census the write gate is judged against: `scriptedStepWrites`
+ * classifies each of these as read-only or not, and the suite iterates THIS list rather than a
+ * hand-written copy of it - so a verb added here without a classification fails the suite instead
+ * of silently replaying ungated.
+ */
+export const PLAYWRIGHT_ACTION_KINDS: readonly string[] = [
   'navigate', 'click', 'dblclick', 'fill', 'press', 'select', 'check', 'uncheck',
   'hover', 'wait', 'wait_for', 'scroll', 'screenshot', 'noop',
 ];

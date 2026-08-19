@@ -419,6 +419,55 @@ after it unlocks a credential. An origin whose login is OTP / MFA / CAPTCHA gate
 `mode: 'ceremony'` and is established by the human in a headed window; there is no typed-OTP path and
 `cofre/relay.ts` deliberately ships the login prompt's producer with no completion half.
 
+### The discovery spine: learn an action once, replay it without a model
+
+A `browser-steps` action used to re-derive its whole flow, vision-first, on every run - so its cost
+and latency were proportional to how often it ran. It is now learned ONCE and replayed thereafter.
+
+THERE IS ONE DRIVING LOOP, AND IT IS THE ORDINARY RUN. The learning pass is the automation the action
+was going to run anyway, with the machine's network recorder armed underneath it
+(`RunAutomationOptions.observeNetwork`, armed lazily before the first step whose type drives a page,
+because arming takes the machine's lease). An earlier cut of this slice added a second, goal-driven
+exploration loop; it had no production caller - `runAutomationForAction` always holds an automation
+binding - and the authored steps plus `rehearsal.ts` already adapt when a site's UI moves. The
+decision and its reasoning are in `docs/decisions.md` (2026-08-19).
+
+Underneath the run, the machine records what the page's own JavaScript asks the server for
+(`clients/bridge/src/browser/capture.ts`, armed by a `captureOp` LIFECYCLE frame that is deliberately
+not a member of the page-action vocabulary a model can emit). `automation/network-capture.ts` is the
+hosted redaction boundary and the learner: it distils the site's own calls into templated
+`InjectedCall`s and a handful of lessons, with NO model involved - which is why the second run costs
+nothing. Header NAMES are the learning and are kept; header VALUES exist only in RAM on the machine,
+per lease and per origin, and are forwarded into the replayed call there. The recorder's lifetime is
+the lease's: `ProfileManager.onLeaseEnd` fires on all three ways a lease ends (the explicit frame,
+the idle backstop, daemon shutdown), and the recorder registers its own disposal when it is armed.
+
+`automation/executors/injected-call.ts` replays, cheapest-reliable first: an in-page `fetch` (which
+inherits the origin, the cookie jar, SameSite and the TLS session), then a plain server-side request
+for PERMISSIVE origins only, then the recipe's scripted DOM steps. Vision is not a rung - it is the
+caller's fall-through. Posture is resolved PER CALL, against the origin that call targets, and the
+whole ladder is resolved before the first call is sent: a recipe spans hosts, so one verdict for the
+list would let a permissive first hop authorise egress to a third-party host nobody classified. Two
+things an ARGUMENT may not decide are refused there too - a hole the run did not supply (rendering it
+empty widens `?ref={{input.ref}}` into `?ref=`, which most APIs read as "everything") and a resolved
+URL whose origin differs from the template's literal one.
+
+`replay-action.ts` mounts the replay inside `runAutomationForAction`, reading the recipe through
+`recipe-store` (org-scoped; the definition projection strips recipes so they cannot reach the wire).
+Every outcome except `ok` and `write-gate` falls through to the run, so the worst case is the run as
+it was before; `write-gate` refuses, because anything non-idempotent - a POST, or a scripted DOM step
+that changes the page - needs a human, and routing around it would make the gate decorative. The
+gate's key is `writeAssent`, produced by `integrations/action-consent.ts` and carried across the
+automation seam by `automationBackedActionHandler`; it is true only when a human approved a MUTATING
+action, never merely because a read was not gated.
+
+`automation/self-heal.ts` classifies drift (an `expectShape` mismatch, a non-2xx, a call that cannot
+be made) as `recipe_drift`. The next instrumented run re-learns the flow, and the new recipe is
+superseded through `recipe-store.supersedeRecipe` - tenant-scoped, version bumped, lineage stamped -
+and never through `publishSnapshot`, whose gate is super-admin and whose effect is `global`
+visibility. A read-only heal lands silently; one that re-authors a recipe containing a write is held
+for the same human assent.
+
 ## Integrations
 
 `integrations/` connects external systems: OAuth flows (Google, Microsoft, Adobe), AES-encrypted
