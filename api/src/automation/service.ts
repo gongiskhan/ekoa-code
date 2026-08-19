@@ -44,7 +44,9 @@ import { classifyReplayDrift, healDriftedRecipe, writesIn, type HealDeps } from 
 import {
   compileInjectedCalls,
   deriveLessons,
+  internalApiCalls,
   redactCaptures,
+  MAX_COMPILED_CALLS,
   type CapturedExchange,
 } from './network-capture.js';
 import {
@@ -1212,6 +1214,24 @@ export async function startRunForTrigger(input: TriggerRunInput): Promise<Trigge
 
 // --- Automation-backed integration actions (integração-por-automação; carried B25) -----------
 
+/**
+ * How many captured exchanges ONE RUN may hold in this process before the oldest are dropped.
+ *
+ * The machine bounds its recorder per LEASE at 400 (`clients/bridge/src/browser/capture.ts`) and
+ * drains onto every frame, so without a bound here a run of N browser steps could accumulate N*400
+ * exchanges of up to ~128KB each - inside the API process every tenant shares. Generous against the
+ * compile, which distils at most `MAX_COMPILED_CALLS` distinct calls out of whatever it is handed.
+ */
+export const MAX_RUN_CAPTURED_EXCHANGES = 400;
+
+/**
+ * How many evidence documents one learn may write. The evidence is what a human reads next to the
+ * recipe, and a recipe is at most `MAX_COMPILED_CALLS` calls; twice that leaves room for the
+ * repeats (a paginated list, a retried call) that explain what the compile deduplicated, and still
+ * bounds one pass to a few dozen documents rather than one per request a heavy page made.
+ */
+export const MAX_PERSISTED_EVIDENCE = MAX_COMPILED_CALLS * 2;
+
 export interface ActionRunBinding {
   automationId: string;
   /** Maps automationInputName -> argKey; absent = pass args through. */
@@ -1266,6 +1286,51 @@ export interface ActionRunResult {
   code?: 'unknown_automation' | 'forbidden' | 'automation_failed' | 'awaiting_consent';
   error?: string;
   data?: unknown;
+}
+
+/**
+ * THE ONE ENVELOPE an automation-backed action answers in - from BOTH legs of this function.
+ *
+ * A replay must be indistinguishable from the run it replaces, and the envelope is the first thing
+ * a consumer touches. The replay leg used to answer `{replayed, recipeVersion, output}` while the
+ * automation leg answered `{runId, status, summary, output}`, and the consumers are written against
+ * the second: `integrations/event-sources/user-defined-poll.ts` unwraps `output` only when it sees
+ * BOTH a string `runId` and a string `status`, so a replayed poll resolved the package's
+ * `listenerConfig` paths against the ENVELOPE instead of the action's output - every path read
+ * `undefined`, the listener adopted no cursor and reported an empty provider, forever (nothing
+ * clears a recipe that keeps succeeding). That is the silent-empty failure mode that module exists
+ * to avoid, reached by the one path it could not see.
+ *
+ * So there is one shape and one constructor, and the two legs differ only in the fields that say
+ * WHICH leg ran.
+ */
+export interface ActionRunEnvelope {
+  /**
+   * The execution this answer came from. An automation run's id on the automation leg; on the
+   * replay leg the `replay-…` id the replay's own browser lease and daemon frames are ledgered
+   * under - so it names something real either way. The prefix is what distinguishes them: there is
+   * no `automationRuns` document behind a replay, because no engine run happened.
+   */
+  runId: string;
+  status: string;
+  summary?: string;
+  /** The action's OWN answer - what every consumer's field paths are written against. */
+  output: unknown;
+  /** Present and `true` only on the replay leg. */
+  replayed?: boolean;
+  /** Which compiled recipe answered. Present only on the replay leg. */
+  recipeVersion?: number;
+}
+
+function actionRunEnvelope(e: ActionRunEnvelope): ActionRunEnvelope {
+  return {
+    runId: e.runId,
+    status: e.status,
+    ...(e.summary !== undefined ? { summary: e.summary } : {}),
+    output: e.output,
+    ...(e.replayed !== undefined ? { replayed: e.replayed } : {}),
+    ...(e.recipeVersion !== undefined ? { recipeVersion: e.recipeVersion } : {}),
+  };
 }
 
 /** Injected so the unit lane can drive the whole spine without a store, a daemon or a browser. */
@@ -1444,12 +1509,18 @@ export async function runAutomationForAction(
   let driftReason: string | undefined;
   if (named) {
     const replay = deps.replay ?? replayIntegrationAction;
+    // THE REPLAY'S OWN EXECUTION ID, minted here rather than inside the browser helper, because it
+    // is now two things: the id the daemon ledgers this replay's frames and lease under, and the
+    // `runId` of the envelope below. One id for one execution - a second one invented at the
+    // envelope would name nothing an operator could look up.
+    const replayRunId = `replay-${randomUUID()}`;
     const result = await replay({
       orgId: input.orgId,
       ownerUserId: input.ownerUserId,
       integrationKey: input.integrationKey!,
       actionName: input.actionName!,
       args: input.args,
+      runId: replayRunId,
       secrets,
       ...(input.writeAssent !== undefined ? { writeAssent: input.writeAssent } : {}),
       mutates: mutating,
@@ -1461,14 +1532,43 @@ export async function runAutomationForAction(
       return { outcome: 'no-recipe', reason: 'replay threw' } as const;
     });
     if (result.outcome === 'ok') {
-      return { success: true, data: { replayed: true, recipeVersion: result.recipeVersion, output: result.data } };
+      return {
+        success: true,
+        // THE SAME ENVELOPE THE AUTOMATION LEG ANSWERS IN. See `ActionRunEnvelope`: a consumer that
+        // has to recognise a second shape is a consumer that will one day fail to, silently.
+        data: actionRunEnvelope({
+          runId: replayRunId,
+          status: 'completed',
+          summary: `replayed ${result.calls.length} call(s) of recipe v${result.recipeVersion}`,
+          output: result.data,
+          replayed: true,
+          recipeVersion: result.recipeVersion,
+        }),
+      };
+    }
+    if (result.outcome === 'arguments-uncovered') {
+      // THE RECIPE IS TOO NARROW FOR THIS CALLER, AND IT OWNS THE ACTION'S ONLY SLOT. Cleared for
+      // exactly the reasons the two refusals below are: `putRecipe` refuses to overwrite and a
+      // supersede needs a drift that can never fire here, so leaving it in place means this action
+      // can never learn a recipe that serves this argument set - for the life of the row, silently.
+      // The listener shape reaches this on its SECOND tick: the establishing one calls with `{}`.
+      //
+      // A caller can therefore cost this action its optimisation by passing an argument the recipe
+      // has no hole for. That is a cost, not a hole: the caller already had the authority to run the
+      // action, the answer stays correct (the authored steps see every argument), and the very next
+      // pass learns a recipe from the wider set.
+      await clearRefusedRecipe(input, result.reason, deps);
     }
     if (result.outcome === 'write-gate') {
       // REFUSE THE RECIPE, KEEP THE ACTION. Cleared rather than left in place, because a recipe the
       // gate will not run is one this action would otherwise pay a doomed replay attempt for on
       // every single run - and `learnFromRun` below now declines to store its replacement, so this
       // settles rather than thrashing the store.
-      await clearRefusedRecipe(input, result.blocked, deps);
+      await clearRefusedRecipe(
+        input,
+        `it replays ${result.blocked}, which writes, and no human has been shown that call set`,
+        deps,
+      );
     }
     if (result.outcome === 'does-not-cover') {
       // THE READ-LEARNS-A-WRITE SHAPE, CAUGHT AT REPLAY. Falling through is not a fallback here, it
@@ -1477,7 +1577,7 @@ export async function runAutomationForAction(
       // (it can never run, so leaving it costs a doomed attempt every run) - and `learnFromRun`
       // declines to compile its replacement for a mutating action, so this settles rather than
       // thrashing. LOUD, because a capability the product advertises is off for this action.
-      await clearRefusedRecipe(input, 'a call set that does not perform this action\'s declared write', deps);
+      await clearRefusedRecipe(input, result.reason, deps);
     }
     // DRIFT ROUTES TO A HEAL. `classifyReplayDrift` is what separates "the site changed" (re-learn
     // it) from "the route is missing" (re-learning would fail the same way) and from a refusal a
@@ -1531,13 +1631,31 @@ export async function runAutomationForAction(
   // stored (see `storable` above) would hold those values, ship a full pass's request and response
   // bodies across the wire, redact them twice and compile them - to reach a refusal that was
   // already decidable before the run started. The wasted work is the least of it.
+  //
+  // AND IT IS BOUNDED. This array holds one pass's worth of request AND response bodies inside the
+  // SHARED API PROCESS, fed by a sink the machine drains onto every frame. The machine's own
+  // recorder is bounded for exactly this reason (`clients/bridge/src/browser/capture.ts`,
+  // "an unbounded recorder attached to a long headed session is a memory leak on somebody's
+  // laptop") - but it is bounded PER FRAME, and a run has as many frames as it has steps, so an
+  // unbounded accumulator here multiplied that bound by the length of the run and moved it onto a
+  // process every tenant shares. Oldest-first, the same discipline and for the same reason: a pass
+  // drives toward an outcome, and the calls that matter are the ones nearest it.
   const captured: LocalBrowserCapture[] = [];
   const run = deps.run ?? runAutomation;
   const result = await run(input.binding.automationId, ctx, {
     runId,
     inputs,
     ...(emit ? { emit } : {}),
-    ...(storable ? { observeNetwork: (batch: LocalBrowserCapture[]) => { captured.push(...batch); } } : {}),
+    ...(storable
+      ? {
+        observeNetwork: (batch: LocalBrowserCapture[]) => {
+          captured.push(...batch);
+          if (captured.length > MAX_RUN_CAPTURED_EXCHANGES) {
+            captured.splice(0, captured.length - MAX_RUN_CAPTURED_EXCHANGES);
+          }
+        },
+      }
+      : {}),
   });
   const status: string = result.status;
   if (status === 'completed' || status === 'succeeded') {
@@ -1546,14 +1664,21 @@ export async function runAutomationForAction(
     // Only from a run that SUCCEEDED. A recipe distilled from a pass that ended on a sign-in wall
     // replays nothing and reports success forever, which is worse than having no recipe at all -
     // the run's own status is the goal gate, and it is a stricter one than a second vision opinion.
+    //
+    // THE ANSWER IS READ FIRST, because the learn needs it. A recipe has to reproduce the answer
+    // this run gave, and the only way to know which captured call did that is to compare them - so
+    // `extractActionRunOutput` moved above the learn rather than below it.
+    const output = await extractActionRunOutput(result.runId);
     if (storable) {
-      await learnFromRun({ input, secrets, captured, driftReason, deps }).catch((err: unknown) => {
+      await learnFromRun({ input, secrets, captured, runOutput: output, driftReason, deps }).catch((err: unknown) => {
         // Learning is a by-product. A store hiccup must not turn a run that WORKED into a failure.
         console.warn(`[automation] could not compile a recipe for ${input.integrationKey}/${input.actionName}: ${err instanceof Error ? err.message : String(err)}`);
       });
     }
-    const output = await extractActionRunOutput(result.runId);
-    return { success: true, data: { runId: result.runId, status: result.status, summary: result.summary, output } };
+    return {
+      success: true,
+      data: actionRunEnvelope({ runId: result.runId, status: result.status, summary: result.summary, output }),
+    };
   }
   return {
     success: false,
@@ -1589,16 +1714,19 @@ async function learnFromRun(args: {
   input: ActionRunInput;
   secrets: SecretRegistry;
   captured: LocalBrowserCapture[];
+  /** What the run itself answered. The compile correlates it with the captured calls so the replay
+   *  can give the SAME answer; `undefined` means the run answered nothing, and so will the replay. */
+  runOutput: unknown;
   driftReason?: string;
   deps: ActionRunDeps;
 }): Promise<void> {
-  const { input, secrets, captured, driftReason, deps } = args;
+  const { input, secrets, captured, runOutput, driftReason, deps } = args;
   const integrationKey = input.integrationKey!;
   const actionName = input.actionName!;
   if (captured.length === 0) return;
 
   const exchanges = redactCaptures(captured, secrets);
-  const compiled = compileInjectedCalls(exchanges, { inputs: input.args });
+  const compiled = compileInjectedCalls(exchanges, { inputs: input.args, runOutput });
   if (compiled.refusedBecause !== undefined) {
     // NEVER SILENT. A refusal here means this action will keep paying for a full vision run forever,
     // which is a real (and correct) cost the operator should be able to see a reason for.
@@ -1621,6 +1749,12 @@ async function learnFromRun(args: {
     // artefact the injected-call path exists to avoid, and the flow's DOM work is already the
     // automation's authored steps - which still run whenever the replay cannot.
     scriptedSteps: [],
+    // WHICH CALL IS THE ANSWER, as the compile correlated it against this run's own output. Absent
+    // when the run answered nothing - which is every browser-only automation this repo ships, and
+    // is the honest thing for the replay to reproduce.
+    ...(compiled.answerCallIndex !== undefined
+      ? { answersWith: { callIndex: compiled.answerCallIndex, matchedBy: 'run-output-identity' as const } }
+      : {}),
     lessons: deriveLessons(exchanges),
     capturedCallsRef: captureId,
   };
@@ -1784,19 +1918,25 @@ async function discardEvidence(key: CaptureKey, deps: ActionRunDeps): Promise<vo
 }
 
 /**
- * A recipe the write gate refused, removed so it cannot cost a doomed replay on every later run.
+ * A recipe one of the replay's refusals will never run, removed so it cannot cost a doomed attempt
+ * on every later run - and so the action can learn a usable one instead.
+ *
+ * `reason` is the WHOLE explanation and is passed by each caller, because the three refusals that
+ * reach here are different facts: a call set that writes with nobody's assent, one that does not
+ * perform the action's declared write, and one too narrow for this run's arguments. A single
+ * hard-coded sentence here said "which writes" about all of them, which was false for two.
  *
  * Loud, because this is the system throwing away something it learned: the owner's action is fine
  * and keeps working, but a capability the product advertises (this action replays deterministically)
  * is not available for it, and the reason is worth a line in the log rather than a silent downgrade.
  */
-async function clearRefusedRecipe(input: ActionRunInput, blocked: string, deps: ActionRunDeps): Promise<void> {
+async function clearRefusedRecipe(input: ActionRunInput, reason: string, deps: ActionRunDeps): Promise<void> {
   const clearRecipe = deps.clearRecipe ?? ((o, k, a) => integrationRecipeStore.clearRecipe(o, k, a));
   try {
     const dropped = await clearRecipe(input.orgId, input.integrationKey!, input.actionName!);
     console.warn(
-      `[automation] the learned recipe for ${input.integrationKey}/${input.actionName} replays ${blocked}, ` +
-        `which writes, and no human has been shown that call set - ${dropped ? 'it has been discarded' : 'it was already gone'}. ` +
+      `[automation] the learned recipe for ${input.integrationKey}/${input.actionName} ` +
+        `${dropped ? 'has been discarded' : 'was already gone'}: ${reason}. ` +
         'The action runs its authored steps instead.',
     );
   } catch (err) {
@@ -1808,12 +1948,23 @@ async function clearRefusedRecipe(input: ActionRunInput, blocked: string, deps: 
 }
 
 /**
- * Append the pass's evidence, one document per exchange.
+ * Append the pass's evidence, one document per exchange - AND ONLY THE EXCHANGES THAT COULD MATTER.
  *
- * A FAILED APPEND IS NOT A FAILED LEARN. The evidence is diagnostic - it exists so a human can see
- * what the recipe was distilled from - while the recipe is the artefact that makes runs work.
- * Losing an exchange to a duplicate `_id` or a store hiccup must not throw away what the pass
- * learned, so each append is individually tolerant.
+ * WHAT IS WRITTEN, AND WHY IT IS NOT EVERYTHING. The evidence exists so a human can see what the
+ * recipe was distilled from, and the only exchanges a recipe is ever distilled from are the site's
+ * own internal API calls (`internalApiCalls` - the exact filter the compile applies). A heavy SPA
+ * makes hundreds of other requests per frame; writing one Mongo document each turned "keep the
+ * evidence for this recipe" into "mirror a browser session into the database", for data this
+ * pipeline is otherwise most careful about. Bounded on top of that, because the filter is a filter
+ * and not a ceiling: at most `MAX_PERSISTED_EVIDENCE` documents, the newest kept, so a paginated
+ * repeat of the same call is still visible next to the calls that became the recipe.
+ *
+ * The LESSONS are derived from the whole pass before this point (a 429 anywhere in it is a lesson),
+ * so nothing that informed the recipe is lost by writing less down.
+ *
+ * A FAILED APPEND IS NOT A FAILED LEARN. The evidence is diagnostic while the recipe is the artefact
+ * that makes runs work. Losing an exchange to a duplicate `_id` or a store hiccup must not throw
+ * away what the pass learned, so each append is individually tolerant.
  *
  * A REFUSED append is different in kind and is deliberately not distinguished here: the store
  * refuses an exchange whose redacted form still carries a live credential, which is the third leg
@@ -1826,9 +1977,11 @@ async function persistEvidence(
   exchanges: readonly CapturedExchange[],
   secrets: SecretRegistry,
 ): Promise<void> {
-  for (let seq = 0; seq < exchanges.length; seq += 1) {
+  const worthKeeping = internalApiCalls(exchanges);
+  const kept = worthKeeping.slice(Math.max(0, worthKeeping.length - MAX_PERSISTED_EVIDENCE));
+  for (let seq = 0; seq < kept.length; seq += 1) {
     try {
-      await captures.appendCapturedCall(key, seq, exchanges[seq]!, { secrets });
+      await captures.appendCapturedCall(key, seq, kept[seq]!, { secrets });
     } catch (err) {
       console.warn(`[automation] evidence ${seq} of ${key.integrationKey}/${key.actionName} was not stored: ${err instanceof Error ? err.message : String(err)}`);
     }

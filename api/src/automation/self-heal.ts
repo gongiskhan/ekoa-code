@@ -73,6 +73,11 @@ export function classifyReplayDrift(signal: ReplayFailureSignal): ReplayFailureC
     // A recipe that does not cover its action's declared write is not a site that changed, and a
     // heal would re-learn the same read-only call set from the same pass. It is a refusal.
     case 'does-not-cover': return 'refused';
+    // Nor is a recipe too NARROW for this run's arguments. The site is fine; the stored recipe was
+    // learned from a smaller argument set. A supersede would need a recipe to supersede, and the
+    // caller drops this one instead (see the outcome's own note) so the next pass can learn a wider
+    // one from scratch - which is a first compile, not a heal.
+    case 'arguments-uncovered': return 'refused';
     case 'unavailable': return 'needs_human';
     default: return 'transport';
   }

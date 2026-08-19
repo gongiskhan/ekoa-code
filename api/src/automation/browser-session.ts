@@ -191,6 +191,17 @@ export interface BrowserLease {
 export const BROWSER_KEEPALIVE_MS = 45_000;
 
 /**
+ * How many captured exchanges ONE SESSION may hold before the oldest are dropped.
+ *
+ * The same number the machine's own recorder buffers per lease (`MAX_BUFFERED_EXCHANGES`,
+ * `clients/bridge/src/browser/capture.ts`) - restated rather than imported, because `api/` may not
+ * import `clients/` (the lint-enforced zone). It bounds the MIRROR of that buffer: the machine caps
+ * what one lease holds on somebody's laptop, and this caps what the accumulation of every drained
+ * frame holds in the shared API process.
+ */
+export const MAX_SESSION_CAPTURED_EXCHANGES = 400;
+
+/**
  * END OF RUN on the daemon: drop the page, and WIPE the injected Cofre session
  * out of a cookie jar that outlives the run.
  *
@@ -551,6 +562,15 @@ export class DaemonBrowserSession implements BrowserSession {
     // would re-deliver the same exchanges on every subsequent step.
     if (Array.isArray(data.captures) && data.captures.length > 0) {
       this.captured.push(...data.captures);
+      // BOUNDED, oldest-first, exactly like the recorder on the other side of the wire. The machine
+      // caps what ONE LEASE buffers; this side accumulates across every frame of the session until
+      // something drains it, so an undrained (or slowly drained) session on a chatty page grows
+      // without limit inside the API process every tenant shares. Dropping the oldest is the same
+      // choice the machine makes and for the same reason: a pass drives toward an outcome, and the
+      // page-load noise at the front is what the compile discards anyway.
+      if (this.captured.length > MAX_SESSION_CAPTURED_EXCHANGES) {
+        this.captured.splice(0, this.captured.length - MAX_SESSION_CAPTURED_EXCHANGES);
+      }
     }
     // Merge so a screenshot-only observe that omits some fields keeps the
     // last known values (the daemon should always send url/fingerprint,

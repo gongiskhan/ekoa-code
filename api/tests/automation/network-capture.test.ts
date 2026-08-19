@@ -87,13 +87,21 @@ describe('internalApiCalls - what a recipe may be built from', () => {
   });
 });
 
-/** The compiled calls, when the compile was expected to succeed. Fails loudly on a refusal rather
- *  than letting an empty list read as "nothing matched". */
+/**
+ * The compiled calls, when the compile was expected to succeed. Fails loudly on a refusal rather
+ * than letting an empty list read as "nothing matched".
+ *
+ * `runOutput` defaults to `undefined` HERE and nowhere in production (the option is required at the
+ * function itself, so a caller that forgets is a compile error): these cases are about the
+ * DISTILLATION, and `undefined` is the honest statement that the run they stand for answered
+ * nothing at all. The correlation has its own describe block below, where the answer IS the subject.
+ */
+type CompileOpts = Omit<Parameters<typeof compileInjectedCalls>[1], 'runOutput'> & { runOutput?: unknown };
 function compiled(
   exchanges: ReturnType<typeof redactCaptures>,
-  opts: Parameters<typeof compileInjectedCalls>[1] = {},
+  opts: CompileOpts = {},
 ): ReturnType<typeof compileInjectedCalls>['calls'] {
-  const out = compileInjectedCalls(exchanges, opts);
+  const out = compileInjectedCalls(exchanges, { runOutput: undefined, ...opts });
   expect(out.refusedBecause).toBeUndefined();
   return out.calls;
 }
@@ -206,7 +214,7 @@ describe('compileInjectedCalls - a hole is a value slot, never a destination', (
   it('drops a captured URL carrying USERINFO rather than templating a credential into a recipe', () => {
     const out = compileInjectedCalls(
       redactCaptures([capture({ url: 'https://maria:hunter2@portal.example/api/cases?ref=2024-1' })]),
-      { inputs: { ref: '2024-1' } },
+      { inputs: { ref: '2024-1' }, runOutput: undefined },
     );
     expect(out.calls).toEqual([]);
     // Not a refusal-with-a-reason: there was simply no compilable call, and `ref` was never looked
@@ -222,7 +230,7 @@ describe('compileInjectedCalls - a hole is a value slot, never a destination', (
 // =============================================================================================
 describe('compileInjectedCalls - an unlocatable argument refuses the whole compile', () => {
   it('REFUSES when an argument appears nowhere in what the pass captured', () => {
-    const out = compileInjectedCalls(redactCaptures([capture()]), { inputs: { ref: 'NOT-IN-THE-URL' } });
+    const out = compileInjectedCalls(redactCaptures([capture()]), { inputs: { ref: 'NOT-IN-THE-URL' }, runOutput: undefined });
     expect(out.calls).toEqual([]);
     expect(out.refusedBecause).toContain('ref');
     expect(out.refusedBecause).toContain('constant');
@@ -244,7 +252,7 @@ describe('compileInjectedCalls - an unlocatable argument refuses the whole compi
   });
 
   it('REFUSES a non-scalar argument - there is no verbatim form of it to have found', () => {
-    const out = compileInjectedCalls(redactCaptures([capture()]), { inputs: { filter: { ref: '2024-1' } } });
+    const out = compileInjectedCalls(redactCaptures([capture()]), { inputs: { filter: { ref: '2024-1' } }, runOutput: undefined });
     expect(out.calls).toEqual([]);
     expect(out.refusedBecause).toContain('filter');
     expect(out.refusedBecause).toContain('scalar');
@@ -262,7 +270,7 @@ describe('compileInjectedCalls - an unlocatable argument refuses the whole compi
   });
 
   it('does not refuse when there was nothing to compile at all - that is not a constant recipe', () => {
-    const out = compileInjectedCalls(redactCaptures([capture({ resourceType: 'document' })]), { inputs: { ref: 'x' } });
+    const out = compileInjectedCalls(redactCaptures([capture({ resourceType: 'document' })]), { inputs: { ref: 'x' }, runOutput: undefined });
     expect(out.calls).toEqual([]);
     expect(out.refusedBecause).toBeUndefined();
   });

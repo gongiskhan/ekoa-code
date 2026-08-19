@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { LocalBrowserStepInput } from '@ekoa/shared';
-import { DaemonBrowserSession } from '../../src/automation/browser-session.js';
+import { DaemonBrowserSession, MAX_SESSION_CAPTURED_EXCHANGES } from '../../src/automation/browser-session.js';
 import type { DaemonConnection, DaemonStepRequest, ResultEnvelope } from '../../src/automation/seams.js';
 
 function connection(behaviour: (req: DaemonStepRequest) => ResultEnvelope): { conn: DaemonConnection; calls: DaemonStepRequest[] } {
@@ -81,6 +81,38 @@ describe('captures ACCUMULATE across observations and drain exactly once', () =>
     const drained = s.drainCaptures();
     expect(drained.map((c) => c.url)).toEqual(['https://portal.example/api/1', 'https://portal.example/api/2']);
     expect(s.drainCaptures()).toEqual([]);
+  });
+
+  /**
+   * AND THE ACCUMULATION IS BOUNDED, because it is the MIRROR of a buffer the machine already
+   * bounds. `clients/bridge/src/browser/capture.ts` caps one lease at `MAX_BUFFERED_EXCHANGES`
+   * (400, oldest dropped) under the note that "an unbounded recorder attached to a long headed
+   * session is a memory leak on somebody's laptop". This side accumulates ACROSS FRAMES until
+   * something drains it - and it is not somebody's laptop, it is the API process every tenant
+   * shares, so the same bound has to exist here or the machine's is multiplied by the length of
+   * the run.
+   */
+  it('keeps the NEWEST exchanges and drops the oldest, rather than growing with the session', async () => {
+    const total = MAX_SESSION_CAPTURED_EXCHANGES + 50;
+    const { conn } = connection(() => ({
+      ok: true,
+      observation: {
+        data: {
+          url: 'https://portal.example/',
+          captures: Array.from({ length: total }, (_, i) => ({ ...CAPTURE, url: `https://portal.example/api/${i}` })),
+        },
+      },
+    }));
+    const s = session(conn);
+    await s.act({ kind: 'click', locator: { strategy: 'testid', value: 'go' } });
+
+    const drained = s.drainCaptures();
+    expect(drained).toHaveLength(MAX_SESSION_CAPTURED_EXCHANGES);
+    // OLDEST-FIRST, the machine's own discipline: a pass drives toward an outcome, so the calls
+    // that matter are the ones nearest it and the page-load noise at the front is what the compile
+    // discards anyway.
+    expect(drained[0]!.url).toBe(`https://portal.example/api/${total - MAX_SESSION_CAPTURED_EXCHANGES}`);
+    expect(drained[drained.length - 1]!.url).toBe(`https://portal.example/api/${total - 1}`);
   });
 });
 

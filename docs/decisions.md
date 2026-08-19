@@ -2374,3 +2374,91 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   `(e)` is nevertheless appended to `docs/diagrams/02-module-map.excalidraw` naming all three, because WHEN a
   decision is taken and HOW A FIELD IS READ are flow facts that map asserts. Appended as a new
   element, as `(b)`/`(c)`/`(d)` were, so no existing element is rewritten.
+
+## 2026-08-20 - P2 round six: a replay is indistinguishable from the run it replaces
+
+THE UNIFYING PRINCIPLE, stated once because five separate defects were the same defect: a replay
+must be indistinguishable from the path it replaces, EXCEPT for being faster. Same envelope, same
+answer, same failure modes. Everything below is a place where it was not.
+
+**ONE ENVELOPE, BUILT IN ONE PLACE.** The replay leg answered `{replayed, recipeVersion, output}`
+and the automation leg `{runId, status, summary, output}`. DECISION: `ActionRunEnvelope` +
+`actionRunEnvelope()`, used by both legs, the two extra fields present only on the replay.
+CONSIDERED AND REJECTED: teaching `pollBody` (and every future consumer) to recognise a second
+shape - a consumer that has to know which leg ran is a consumer that will one day fail to. The
+replay's `runId` is the `replay-…` id its browser lease and daemon frames are already ledgered
+under, minted one hop earlier (`runAutomationForAction`) and threaded down, so it names a real
+execution; the prefix is what says there is no `automationRuns` document behind it, because no
+engine run happened. NOT DONE: writing a run record for a replay. That would make the replay a run
+in the runs list, the SSE union and the run-detail route - a product decision this slice has no
+mandate for, and one that would have to answer what a "step" of a replay is.
+
+**THE ANSWER IS CORRELATED AT COMPILE TIME, NOT GUESSED AT REPLAY TIME.** The replay returned the
+LAST call's body, in `page.on('response')` completion order. DECISION: the compile asks which
+captured call produced the run's OWN answer (`extractActionRunOutput`, now read before the learn
+rather than after it) and writes the verdict into the recipe as
+`answersWith: {callIndex, matchedBy: 'run-output-identity'}`. Three cases, and the third is the one
+that matters: the run answered nothing ⇒ no pointer, and the replay answers nothing too (every
+browser-only automation this repo ships is this case); the answer IS a captured body ⇒ that call;
+the answer is something no captured call produced ⇒ REFUSE TO LEARN, because such a recipe could
+only ever answer with a different call's body under the same `success: true`. Identity over
+canonical JSON, deliberately: "the same shape" or "the last JSON call" are guesses that answer a
+different question on the run where they are wrong, and paying for the expensive path forever is
+the cheaper mistake. `matchedBy` exists so a weaker matcher, if one is ever earned, is a NEW value
+rather than this one quietly meaning something else. `runOutput` is REQUIRED at
+`compileInjectedCalls`, so a caller that forgets is a compile error rather than a recipe that
+silently answers nothing.
+
+**AN ARGUMENT THE RECIPE CANNOT CARRY DROPS THE RECIPE; AN ARGUMENT NO RECIPE COULD CARRY DOES
+NOT.** The two halves of the coverage check had one outcome and one disposition, and the listener
+shape - `{}` on the establishing tick, `{since}` on every tick after - meant the narrow recipe held
+the action's only slot for the life of the row. DECISION: split them.
+`arguments-uncovered` (a fact about the RECIPE: it was learned from a narrower set, a wider one is
+learnable) clears the recipe, exactly as `write-gate` and `does-not-cover` do and for the same
+reason. `no-recipe` (a fact about the CALL: a non-scalar argument, which no compile can honour)
+does not. ACCEPTED COST: a caller can spend this action's optimisation by passing an argument the
+recipe has no hole for. It already had authority to run the action, the answer stays correct (the
+authored steps see every argument), and the next pass re-learns - so the cost is one expensive run,
+against a defect that was permanent and silent.
+
+**EVERY HOP OF THE HOSTED CAPTURE PATH IS BOUNDED, AND ONLY WHAT CAN MATTER IS PERSISTED.** The
+machine bounds its recorder per lease because it is a memory leak on somebody's laptop; the hosted
+mirror is the API process every tenant shares, fed once per frame for the length of a run, and it
+bounded nothing at three hops. DECISION: `MAX_SESSION_CAPTURED_EXCHANGES` (400, oldest-first - the
+machine's own number and discipline, RESTATED not imported, because `api/` may not import
+`clients/`), `MAX_RUN_CAPTURED_EXCHANGES` (400 across the run), and evidence limited to
+`internalApiCalls` - the exact set the compile can distil from, so everything else is evidence of
+nothing - bounded at `MAX_PERSISTED_EVIDENCE` = 2 x `MAX_COMPILED_CALLS`, newest kept, which leaves
+room for the repeats that explain what the compile deduplicated. The lessons are derived from the
+whole pass before that filter, so nothing that informed the recipe is lost by writing less down.
+
+**THE COMPOSITION-ROOT BINDING IS TESTED, NOT GREPPED.** One line in `server.ts` points production
+at this slice, and rebinding it to the pre-P2 inline mapping left the whole lane green with the
+slice dead. DECISION: the P4 pattern, exactly - boot the REAL `buildApp` with the seams reset and
+assert what is actually bound, through consequences (a stored recipe replays; an approved write's
+gate opens). The static text guard STAYS, because it covers a second call site whose dep bundle is
+private to the composition root and therefore unreachable from a test - but its docblock now says
+what it cannot catch, which is the class of defect that produced this decision.
+
+**THE `mutates` READING IS PINNED AS A CONTRACT, AND SAID TO BE ONE.** `input.mutates !== false` was
+an equivalent mutant: the only shipped caller normalises through `actionRequiresConsent`, so `===
+true` behaves identically. The reading is now pinned at the seam whose type explicitly permits an
+absent value (Rule 7), asserting both consequences. What is NOT claimed: that any shipped caller
+omits the field. The previous round's commit message described a consequence the change cannot
+have on today's callers, and this correction is recorded here rather than left implicit.
+
+WHAT REMAINS UNPROVABLE WITHOUT A DISPLAY OR A LIVE TARGET, restated: the hosted acceptance runs
+against a real loopback server through the real production entry point with a real chokepoint
+counter, and its daemon is a STAND-IN at the frame boundary (`api/**` may not import `clients/**`).
+The daemon half is proved separately against a real Chromium. Nothing in either lane exercises a
+real third-party portal, a real Cofre credential, or a headed display. AND ONE MORE, specific to
+this round: no test anywhere exercises a shipped browser-only automation producing a structured
+answer, because none of them can - see `citius-notificacoes-automation-produces-no-output` in
+`docs/findings.md`. The positive correlation is therefore proved at the mount, over a real run
+record typed as the engine's own `StepOutput`, and the acceptance proves the negative case (the run
+answered nothing; so does the replay) end to end.
+
+DIAGRAM CHECK (FIXED-12): the STORED SHAPE changed (`IntegrationActionRecipe.answersWith`) and the
+replay's outcome union gained a member, so `docs/diagrams/02-module-map.excalidraw` gains an
+as-built `(f)` annotation covering the envelope, the answer pointer, the new outcome and the three
+bounds. Appended as a new element, as `(b)`-`(e)` were, so no existing element is rewritten.

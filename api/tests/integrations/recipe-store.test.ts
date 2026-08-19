@@ -255,6 +255,36 @@ describe('the compile → store → replay round trip', () => {
     expect(parsed?.scriptedSteps[0]?.action).toBe('click');
   });
 
+  /**
+   * THE ANSWER POINTER SURVIVES THE ROUND TRIP AND IS RANGE-CHECKED AT BOTH ENDS.
+   *
+   * `answersWith` selects WHICH replayed body becomes the action's answer, so a pointer that does
+   * not index a call is not a cosmetic defect: it degrades an action to answering nothing, or - if
+   * anything ever read it loosely - to answering a neighbouring call. The store refuses to write
+   * one (the last point at which the pointer and the calls are still checkable against each other)
+   * and the parse refuses to read one, so a hand-edited or older document cannot half-replay.
+   */
+  it('carries the answer pointer through the store, and refuses one that indexes no call', async () => {
+    const withAnswer = { ...recipeDraft('v1'), answersWith: { callIndex: 0, matchedBy: 'run-output-identity' as const } };
+    expect((await recipes.putRecipe('orgA', 'citius', 'list_processos', withAnswer)).verdict).toBe('ok');
+    const stored = await recipes.getRecipe('orgA', 'citius', 'list_processos');
+    expect(stored!.answersWith).toEqual({ callIndex: 0, matchedBy: 'run-output-identity' });
+    expect(parseCompiledRecipe(stored)!.answersWith).toEqual({ callIndex: 0, matchedBy: 'run-output-identity' });
+
+    // The recipe carries ONE call, so index 1 names nothing. REFUSED at the write.
+    await expect(recipes.putRecipe('orgA', 'citius', 'consultar_processo', {
+      ...recipeDraft('v1'),
+      answersWith: { callIndex: 1, matchedBy: 'run-output-identity' as const },
+    })).rejects.toThrow(/answersWith\.callIndex/);
+
+    // …and unreadable at the parse, which is where a document written by an older build arrives.
+    const base = { ...recipeDraft('v1'), version: 1, compiledAt: '2026-08-18T00:00:00.000Z' };
+    expect(parseCompiledRecipe({ ...base, answersWith: { callIndex: 1, matchedBy: 'run-output-identity' } })).toBeNull();
+    expect(parseCompiledRecipe({ ...base, answersWith: { callIndex: 0, matchedBy: 'a-guess' } })).toBeNull();
+    // Absent is ORDINARY, not invalid: the run it was learned from answered nothing.
+    expect(parseCompiledRecipe(base)!.answersWith).toBeUndefined();
+  });
+
   it('refuses to parse a recipe whose method or locator this build does not implement', () => {
     const base = { ...recipeDraft('v1'), version: 1, compiledAt: '2026-08-18T00:00:00.000Z' };
     expect(parseCompiledRecipe(base)).not.toBeNull();

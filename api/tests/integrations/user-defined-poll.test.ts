@@ -35,7 +35,9 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
-import { eventQueue, listenerState, integrationConfigs } from '../../src/data/stores.js';
+import { eventQueue, listenerState, integrationConfigs, automations, automationRuns } from '../../src/data/stores.js';
+import { automationBackedActionHandler, type ActionRunDeps } from '../../src/automation/service.js';
+import type { StepOutput } from '../../src/automation/types.js';
 import { loadConfig, __resetConfigForTests } from '../../src/config.js';
 import { encrypt } from '../../src/data/crypto.js';
 import { refreshDefinitions } from '../../src/integrations/definitions.js';
@@ -162,7 +164,15 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  for (const s of [eventQueue, listenerState, integrationConfigs]) await s.deleteMany({});
+  for (const s of [eventQueue, listenerState, integrationConfigs, automations, automationRuns]) await s.deleteMany({});
+  // The automation the fixture package's `fetch_items_automation` binds to. `runAutomationForAction`
+  // resolves it and refuses one it does not own, so the automation-backed cases need a real row -
+  // the price of driving the REAL handler instead of a hardcoded answer.
+  await automations.insert({
+    _id: 'demo-poll-automation', id: 'demo-poll-automation', name: 'poll', description: 'poll',
+    ownerUserId: OWNER, orgId: ORG, steps: [],
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+  } as never);
   // The owner's CONNECTED credential rows (real crypto), so the executor takes the live path for
   // both packages — an `imap` failure below can only ever be the transport, never `not_connected`.
   await integrationConfigs.insert({
@@ -296,20 +306,79 @@ describe('pollUserDefinedSource — automation-backed poll actions (the citius s
    * the action's OWN output).
    */
   const AUTOMATION_TRIGGER = { ...TRIGGER, pollActionName: 'fetch_items_automation' };
-  const envelope = (output: unknown) => ({ runId: 'run-1', status: 'completed', summary: 'ok', output });
+  const AUTOMATION_ID = 'demo-poll-automation'; // what the fixture package's binding names
 
-  /** The production dep bundle WITH the automation seam — exactly what server.ts binds. */
-  function autoDeps(output: (args: Record<string, unknown>) => unknown) {
+  /**
+   * The production dep bundle WITH the automation seam - `automationBackedActionHandler`, the SAME
+   * function `server.ts` binds, so the ENVELOPE these tests read is the one production produces.
+   *
+   * WHY THAT MATTERS, AND WHAT IT REPLACED. This helper used to HARDCODE the seam's answer as
+   * `{runId:'run-1', status:'completed', summary:'ok', output}` - a literal of the automation leg's
+   * envelope. So the one test in this repo named for "resolve the paths against the OUTPUT, not the
+   * envelope" could not observe the envelope at all: it was reading back the constant beside it.
+   * The REPLAY leg answered a different shape entirely (`{replayed, recipeVersion, output}`), which
+   * `pollBody` does not unwrap, and this file stayed green while a replayed listener silently
+   * delivered nothing forever.
+   *
+   * `leg` selects which half of `runAutomationForAction` produces the answer:
+   *
+   *  - `'automation'` runs the real mapping over a real automation row and a real run record, with
+   *    the ENGINE injected (`deps.run` - the seam that exists for exactly this) and the replay left
+   *    alone: there is no recipe in the store for this action, so the real replay module honestly
+   *    answers `no-recipe` and falls through.
+   *  - `'replay'` supplies the replay's OUTCOME through the handler's own `replay` dep, typed as the
+   *    real `ReplayResult`. The envelope is still built by production code. That a real replay of a
+   *    real recipe reaches this leg with this shape is proved end to end, against a real server and
+   *    a real machine boundary, in `automation/discovery-replay-acceptance.test.ts`; what is proved
+   *    HERE is that the listener rail reads what that leg answers.
+   */
+  function autoDeps(
+    leg: 'automation' | 'replay',
+    output: (args: Record<string, unknown>) => unknown,
+  ) {
     const seen: Array<{ args: Record<string, unknown>; credentialFields: Record<string, unknown> }> = [];
+    let runSeq = 0;
     const deps = realDeps(respondWith({}).fn, {
       call: (input) =>
         executeUserIntegrationAction(
           { orgId: ORG, ownerUserId: OWNER, integrationKey: input.integrationKey, actionName: input.actionName, args: input.args },
           {
-            runAutomationBackedAction: async (b) => {
-              seen.push({ args: b.args, credentialFields: b.credentialFields });
-              return { success: true, data: envelope(output(b.args)) };
-            },
+            runAutomationBackedAction: automationBackedActionHandler({
+              ...(leg === 'replay'
+                ? {
+                  replay: (async (i) => {
+                    seen.push({ args: i.args, credentialFields: {} });
+                    return { outcome: 'ok', calls: [], data: output(i.args), recipeVersion: 4 };
+                  }) as ActionRunDeps['replay'],
+                }
+                : {
+                  run: (async (automationId, _ctx, opts) => {
+                    const runId = opts?.runId ?? `run-${++runSeq}`;
+                    // What the AUTOMATION was actually given, taken apart the way the binding puts
+                    // it together (`passCredentials` nests the decrypted fields under
+                    // `inputs.credentials`; the args pass through beside them).
+                    const { credentials, ...args } = (opts?.inputs ?? {}) as Record<string, unknown>;
+                    seen.push({ args, credentialFields: (credentials ?? {}) as Record<string, unknown> });
+                    // A REAL RUN RECORD, because `extractActionRunOutput` reads one - and its step
+                    // output is typed as the engine's own `StepOutput`, so a fixture that drifts
+                    // from what the engine writes is a compile error rather than a green test.
+                    const stepOutput: StepOutput = {
+                      kind: 'api_call',
+                      status: 200,
+                      responseHeaders: {},
+                      responseBody: JSON.stringify(output((opts?.inputs ?? {}) as Record<string, unknown>)),
+                      responseBodyIsJson: true,
+                      truncated: false,
+                      durationMs: 1,
+                    };
+                    await automationRuns.insert({
+                      _id: runId, id: runId, automationId, status: 'completed',
+                      steps: [{ stepId: 's1', index: 0, description: 'poll', status: 'completed', output: stepOutput }],
+                    } as never);
+                    return { runId, status: 'completed', summary: 'ok' };
+                  }) as ActionRunDeps['run'],
+                }),
+            }) as never,
           },
         ),
     });
@@ -327,7 +396,7 @@ describe('pollUserDefinedSource — automation-backed poll actions (the citius s
   });
 
   it('runs through the seam and resolves the listenerConfig paths against the run OUTPUT, not the envelope', async () => {
-    const { deps, seen } = autoDeps((args) =>
+    const { deps, seen } = autoDeps('automation', (args) =>
       args.since === undefined ? { items: [], next: '54' } : { items: [{ id: 'N1', assunto: 'notificação' }], next: '55' },
     );
 
@@ -344,12 +413,51 @@ describe('pollUserDefinedSource — automation-backed poll actions (the citius s
     expect(seen[1]!.credentialFields).toMatchObject({ api_key: API_KEY });
   });
 
+  /**
+   * THE SAME TICK, ANSWERED BY THE REPLAY LEG. This is the case the file could not have.
+   *
+   * A replayed action used to answer a DIFFERENT ENVELOPE - `{replayed, recipeVersion, output}` -
+   * and `pollBody` unwraps only when it sees both a string `runId` and a string `status`. So the
+   * package's field paths resolved against the envelope, `cursorField` and `eventArrayField` both
+   * read `undefined`, and the tick reported a quiet provider. Permanently: the replay keeps
+   * SUCCEEDING, so no drift ever fires, `putRecipe` refuses to overwrite, and nothing clears the
+   * recipe - the listener delivers nothing again for the life of the row, and the only signal is a
+   * `stalled` flag that also appears for ordinary empty polls.
+   *
+   * Everything here is the same as the case above except which leg answers, which is the point: a
+   * replay must be indistinguishable from the run it replaces.
+   */
+  it('a REPLAYED tick behaves exactly like the automation tick - the envelope is one shape', async () => {
+    const { deps, seen } = autoDeps('replay', (args) =>
+      args.since === undefined ? { items: [], next: '54' } : { items: [{ id: 'N1', assunto: 'notificação' }], next: '55' },
+    );
+
+    const first = await pollUserDefinedSource(AUTOMATION_TRIGGER, deps);
+    expect(first).toMatchObject({ initialized: true, enqueued: 0 });
+    // THE ESTABLISHING TICK ADOPTS THE PROVIDER'S CURSOR. Against the old envelope it adopted
+    // nothing (`readPath(envelope, 'next')` is `undefined`), armed the listener instead, and every
+    // later tick answered `{polled:true, enqueued:0, cursorAdvanced:false, stalled:true}`.
+    expect(await readListenerCursor(AUTOMATION_TRIGGER.id)).toBe('54');
+
+    const second = await pollUserDefinedSource(AUTOMATION_TRIGGER, deps);
+    expect(second).toMatchObject({ enqueued: 1, cursorAdvanced: true });
+    expect((await queuedRows()).map((r) => r.dedupKey)).toEqual(['N1']);
+    expect(await readListenerCursor(AUTOMATION_TRIGGER.id)).toBe('55');
+    expect(seen[1]!.args).toEqual({ since: '54' });
+  });
+
   it('GUARD: every composition-root call of the executor passes the automation seam', async () => {
     // The bug class, made machine-caught: the listener wiring called executeUserIntegrationAction
     // without `runAutomationBackedAction`, silently disabling every automation-backed action of
-    // every user-defined integration (citius' poll among them). A static guard is the honest tool
-    // here — the supervisor's dep bundle is private to the composition root, so there is nothing
-    // to assert at runtime without exporting production API for the test.
+    // every user-defined integration (citius' poll among them).
+    //
+    // WHAT THIS GUARD CAN AND CANNOT CATCH, because it read as more than it is. It is a TEXT scan,
+    // so it catches a call site that stops passing the seam - which is the failure it was written
+    // for, and which is otherwise unreachable from a test: the supervisor's dep bundle is private
+    // to the composition root. It does NOT catch a rebinding of that identifier to something else,
+    // and the identifier was in fact rebindable to the pre-P2 inline mapping - dropping the action
+    // identity, the write assent and `mutates` - with the whole lane green. THAT is pinned at
+    // runtime, against the real `buildApp`, by `automation/composition-root-action-seam.test.ts`.
     const src = await readFile(join(__dirname, '..', '..', 'src', 'server.ts'), 'utf8');
     const sites = src.split('executeUserIntegrationAction(').slice(1);
     expect(sites.length).toBeGreaterThanOrEqual(2); // automation `integration` step + listener poll

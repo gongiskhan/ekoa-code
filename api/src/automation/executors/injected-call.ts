@@ -53,7 +53,7 @@
  * around, hands it back, and reports SUCCESS while the caller's actual question went unasked. The
  * compile already refuses to LEARN that shape; refusing it only there leaves every recipe written
  * by an older build, and every caller that starts passing a new argument, replaying a constant
- * (`assertEveryArgumentHasAHole`).
+ * (`argumentCoverage`, whose two refusals are two OUTCOMES - see it for why they differ).
  *
  * ── THE RECIPE IS READ THROUGH `recipe-store`, NEVER THROUGH `resolveDefinition` ──────────────
  *
@@ -118,15 +118,34 @@ export interface ReplayedCall {
 }
 
 export type ReplayResult =
-  /** Every call ran and every expectation held. `data` is the LAST call's body - the same "last
-   *  meaningful output wins" rule `extractActionRunOutput` already applies to a run. */
+  /**
+   * Every call ran and every expectation held.
+   *
+   * `data` is the body of the call the RECIPE NAMES as the answer-bearing one (`answersWith`,
+   * correlated at compile time against the learning run's own output), or `undefined` when the
+   * recipe names none - which means the run it was learned from answered nothing either. It is
+   * emphatically NOT "the last call's body": the calls arrive in the order the page's own responses
+   * completed, so one extra internal call underneath the flow used to change the action's answer.
+   */
   | { outcome: 'ok'; calls: ReplayedCall[]; data: unknown; recipeVersion: number }
   /**
-   * No recipe, one this build cannot read, or one that cannot carry THIS run's arguments (a hole
-   * nothing supplied, an argument no hole can take). The caller runs the ordinary vision path,
-   * which sees every argument - so the answer is still right, it is merely not cheap.
+   * No recipe, or one this build cannot read. The caller runs the ordinary vision path, which sees
+   * every argument - so the answer is still right, it is merely not cheap.
    */
   | { outcome: 'no-recipe'; reason: string }
+  /**
+   * THE RECIPE CANNOT CARRY THIS RUN'S ARGUMENTS - a hole nothing supplied, or an argument no hole
+   * can take. Distinct from `no-recipe` because the DISPOSITION is different: there is a recipe, it
+   * is readable, and it will refuse this caller on every future run for as long as it is stored.
+   *
+   * The shape is ordinary, not exotic: a listener's establishing tick calls with `{}` and learns a
+   * hole-free recipe, and every tick after it calls with `{since: cursor}`. Answering `no-recipe`
+   * left that recipe in the action's ONE slot forever - `putRecipe` refuses to overwrite, a heal
+   * needs a drift that can never fire - so the action could never learn a usable one, silently, for
+   * the life of the row. So this clears the recipe, exactly as `write-gate` and `does-not-cover` do,
+   * and the pass that follows learns one from the wider argument set.
+   */
+  | { outcome: 'arguments-uncovered'; reason: string; recipeVersion: number }
   /** The site answered differently than the recipe expects. Routes to `self-heal.ts`. */
   | { outcome: 'drift'; reason: string; recipeVersion: number; failedIndex: number }
   /**
@@ -257,11 +276,13 @@ export async function replayCompiledAction(input: ReplayInput, deps: ReplayDeps)
   // ── EVERY ARGUMENT MUST BE ABLE TO REACH THE WIRE ─────────────────────────────────────────
   // Checked over the WHOLE recipe, before the per-call fill: an argument may legitimately be
   // honoured by the third call and by no other, so the question "can this argument land anywhere"
-  // has no answer at the level of one call. See `assertEveryArgumentHasAHole`.
-  try {
-    assertEveryArgumentHasAHole(recipe, input.args);
-  } catch (err) {
-    return { outcome: 'no-recipe', reason: err instanceof Error ? err.message : String(err) };
+  // has no answer at the level of one call. See `argumentCoverage` for why its two refusals are
+  // different outcomes rather than one.
+  const coverage = argumentCoverage(recipe, input.args);
+  if (!coverage.covered) {
+    return coverage.kind === 'uncovered'
+      ? { outcome: 'arguments-uncovered', reason: coverage.reason, recipeVersion: recipe.version }
+      : { outcome: 'no-recipe', reason: coverage.reason };
   }
 
   // ── RESOLVE AND ROUTE EVERY CALL FIRST ────────────────────────────────────────────────────
@@ -346,7 +367,27 @@ export async function replayCompiledAction(input: ReplayInput, deps: ReplayDeps)
   }
 
   await runScriptedSteps(recipe, input.browser);
-  return { outcome: 'ok', calls, data: calls[calls.length - 1]?.body, recipeVersion: recipe.version };
+  return { outcome: 'ok', calls, data: answerOf(recipe, calls), recipeVersion: recipe.version };
+}
+
+/**
+ * THE ANSWER, taken from the call the recipe NAMES - never from "the last one that finished".
+ *
+ * `calls` is in the recipe's own order, which is the order the compile put them in, which is the
+ * order the page's `response` events COMPLETED in. Nothing about that order says which call carried
+ * the action's answer, and reading the last one meant that adding one ordinary internal call to a
+ * page - a notification badge polled after a search - silently changed what this action returned,
+ * with `success: true` and no other symptom. The correlation is done once, at compile time, against
+ * the answer the learning run itself gave (`network-capture.ts`), and stored as `answersWith`.
+ *
+ * No pointer means the learning run answered nothing, so this answers nothing: a replay is
+ * indistinguishable from the path it replaces, and "the automation answered undefined" is part of
+ * what has to be reproduced. Fabricating an answer here would make the replayed run better than the
+ * run it stands in for, which is the same defect wearing a friendlier face.
+ */
+function answerOf(recipe: CompiledRecipe, calls: readonly ReplayedCall[]): unknown {
+  const index = recipe.answersWith?.callIndex;
+  return index === undefined ? undefined : calls[index]?.body;
 }
 
 // ------------------------------------------------------------------------------------------
@@ -744,9 +785,21 @@ function renderBodyTemplate(bodyTemplate: string, args: Record<string, unknown>)
  * build, one compiled for a narrower argument set, or an action whose caller simply passes a new
  * argument, all reach this function with a recipe that cannot honour what was asked.
  *
- * The refusal is a FALL-THROUGH (`no-recipe`), exactly as the missing-argument refusal is: the
- * caller then runs the action's authored steps, which DO see every argument. Refusing the replay
- * costs the optimisation; replaying regardless costs the answer.
+ * Either refusal is a FALL-THROUGH: the caller then runs the action's authored steps, which DO see
+ * every argument. Refusing the replay costs the optimisation; replaying regardless costs the answer.
+ *
+ * ── THE TWO REFUSALS ARE REPORTED SEPARATELY, BECAUSE THEIR DISPOSITION DIFFERS ──────────────
+ *
+ * An argument the recipe has NO HOLE FOR is a fact about the RECIPE: it was learned from a narrower
+ * argument set than this caller uses, and a wider one is learnable from the very next pass. That is
+ * `arguments-uncovered`, and the caller drops the recipe on it - otherwise the narrow one occupies
+ * the action's only slot forever (`putRecipe` refuses to overwrite; a heal needs a drift that can
+ * never fire), which is precisely what happened to every listener: its establishing tick calls with
+ * `{}` and every tick after it with `{since: cursor}`.
+ *
+ * A NON-SCALAR argument is a fact about the CALL: no recipe can honour one, so re-learning would
+ * refuse for the same reason (`unlocatable`, `network-capture.ts`) and dropping the recipe would
+ * cost the action its optimisation over a caller's mistake. That stays `no-recipe`.
  *
  * ── THE TWO EXEMPTIONS ARE THE COMPILE'S OWN, AND HAVE TO BE ─────────────────────────────────
  *
@@ -765,7 +818,14 @@ function renderBodyTemplate(bodyTemplate: string, args: Record<string, unknown>)
  * shown to honour one - and if a hole DID happen to bear its name, `String(value)` would put
  * `[object Object]` on the wire. Both readings say refuse.
  */
-function assertEveryArgumentHasAHole(recipe: CompiledRecipe, args: Record<string, unknown>): void {
+type ArgumentCoverage =
+  | { covered: true }
+  /** An argument no recipe could carry - the caller's shape, not this recipe's narrowness. */
+  | { covered: false; kind: 'unusable'; reason: string }
+  /** An argument THIS recipe has no hole for. A wider recipe is learnable; this one must go. */
+  | { covered: false; kind: 'uncovered'; reason: string };
+
+function argumentCoverage(recipe: CompiledRecipe, args: Record<string, unknown>): ArgumentCoverage {
   const holes = new Set<string>();
   for (const call of recipe.injectedCalls) {
     for (const name of inputHolesOf(call.urlTemplate)) holes.add(name);
@@ -782,20 +842,26 @@ function assertEveryArgumentHasAHole(recipe: CompiledRecipe, args: Record<string
     }
     if (!holes.has(name)) ignored.push(name);
   }
-  // Reported separately because they are different facts about the run, and the operator's fix
-  // differs: one is an argument shape no recipe can carry, the other a recipe that predates it.
+  // Reported separately because they are different facts about the run, and both the operator's fix
+  // and the CALLER'S DISPOSITION differ: one is an argument shape no recipe can carry, the other a
+  // recipe that predates the argument (see the note above - only the second drops the recipe).
   if (unusable.length > 0) {
-    throw new RecipeShapeError(
-      `the replayed call was given argument(s) ${unusable.sort().join(', ')} that are not scalar values, `
-      + 'so no compiled call can be shown to honour them - refusing to replay it',
-    );
+    return {
+      covered: false,
+      kind: 'unusable',
+      reason: `the replayed call was given argument(s) ${unusable.sort().join(', ')} that are not scalar values, `
+        + 'so no compiled call can be shown to honour them - refusing to replay it',
+    };
   }
   if (ignored.length > 0) {
-    throw new RecipeShapeError(
-      `the replayed call has no hole for argument(s) ${ignored.sort().join(', ')}, so it would return the `
-      + 'data it was compiled around whatever this caller asked for - refusing to replay it',
-    );
+    return {
+      covered: false,
+      kind: 'uncovered',
+      reason: `the replayed call has no hole for argument(s) ${ignored.sort().join(', ')}, so it would return the `
+        + 'data it was compiled around whatever this caller asked for - refusing to replay it',
+    };
   }
+  return { covered: true };
 }
 
 /**
@@ -806,7 +872,7 @@ function assertEveryArgumentHasAHole(recipe: CompiledRecipe, args: Record<string
  * of them" on most APIs - so the replay would quietly fetch a superset of what it was asked for and
  * report success. Every hole a template names must be supplied, or nothing is sent.
  *
- * The mirror of `assertEveryArgumentHasAHole` above; read the two together.
+ * The mirror of `argumentCoverage` above; read the two together.
  */
 function assertHolesSupplied(call: Pick<InjectedCall, 'urlTemplate' | 'bodyTemplate'>, args: Record<string, unknown>): void {
   const named = [...inputHolesOf(call.urlTemplate), ...(call.bodyTemplate ? inputHolesOf(call.bodyTemplate) : [])];

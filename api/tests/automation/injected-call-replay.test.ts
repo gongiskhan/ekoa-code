@@ -37,7 +37,7 @@ const permissiveOnly = (origin: string) => (asked: string) =>
   asked === origin ? PERMISSIVE : ADVERSARIAL;
 
 function recipe(over: Record<string, unknown> = {}): unknown {
-  return {
+  const merged: Record<string, unknown> = {
     version: 3,
     goal: 'read case {{input.ref}}',
     injectedCalls: [
@@ -54,6 +54,16 @@ function recipe(over: Record<string, unknown> = {}): unknown {
     compiledAt: '2026-08-18T10:00:00.000Z',
     ...over,
   };
+  // THE ANSWER POINTER, defaulted to the LAST call - which is exactly what these fixtures meant
+  // while the replay simply answered with the last call's body, so every case below goes on
+  // asserting what it always asserted. A case about the pointer overrides it. A recipe with no
+  // calls gets none: a pointer must index a call that exists, and `parseCompiledRecipe` refuses
+  // one that does not.
+  const calls = merged.injectedCalls;
+  if (merged.answersWith === undefined && Array.isArray(calls) && calls.length > 0) {
+    merged.answersWith = { callIndex: calls.length - 1, matchedBy: 'run-output-identity' };
+  }
+  return merged;
 }
 
 /**
@@ -459,7 +469,11 @@ describe('replayCompiledAction - falls through rather than half-executing', () =
 
   it('answers no-recipe when a template does not resolve to an absolute URL', async () => {
     const result = await replayCompiledAction(
-      { ...base, browser: session({ status: 200, bodyText: '{}' }), classify: always(ADVERSARIAL) },
+      // NO ARGUMENTS, so the ABSOLUTE-URL refusal is what this case reaches. The recipe below has
+      // no hole at all, so the default `{ ref }` of `base` would trip the argument-coverage refusal
+      // first and this assertion would pass while testing a different rule entirely - which it did
+      // until the two refusals became different outcomes.
+      { ...base, args: {}, browser: session({ status: 200, bodyText: '{}' }), classify: always(ADVERSARIAL) },
       { loadRecipe: async () => recipe({ injectedCalls: [{ method: 'GET', urlTemplate: '/api/cases', headerNames: [], idempotent: true }] }) },
     );
     expect(result.outcome).toBe('no-recipe');
@@ -503,7 +517,11 @@ describe('replayCompiledAction - what an ARGUMENT may not decide', () => {
       { ...base, args: { ref: '2024-1', status: 'closed' }, browser, classify: always(ADVERSARIAL) },
       { loadRecipe: async () => recipe() },
     );
-    expect(result.outcome).toBe('no-recipe');
+    // `arguments-uncovered`, NOT `no-recipe`: there IS a recipe, it is readable, and it will refuse
+    // this caller on every future run for as long as it is stored - so the caller drops it (proved
+    // at the mount, `replay-mount.test.ts`). `no-recipe` said "nothing to see here" about a recipe
+    // that had permanently taken the action's only slot.
+    expect(result.outcome).toBe('arguments-uncovered');
     // Anchored on the phrase, not on the bare argument name: a loose `toContain('status')` would
     // also match any message that happened to use the word, which is how the missing-argument case
     // above quietly matched "ref" inside "refusing".
@@ -587,6 +605,10 @@ describe('replayCompiledAction - what an ARGUMENT may not decide', () => {
       { ...base, args: { ref: { from: '2024-01', to: '2024-12' } }, browser, classify: always(ADVERSARIAL) },
       { loadRecipe: async () => recipe() },
     );
+    // STILL `no-recipe`, deliberately: this is a fact about the CALL, not about the recipe. No
+    // recipe can carry an object, so re-learning would refuse identically - dropping the stored one
+    // (which `arguments-uncovered` does) would cost the action its optimisation over a caller's
+    // mistake, and there would be nothing to replace it with.
     expect(result.outcome).toBe('no-recipe');
     expect((result as { reason: string }).reason).toMatch(/argument\(s\) ref that are not scalar values/);
     // The failure prevented is not an error - it is `?ref=%5Bobject%20Object%5D` returning the
@@ -728,7 +750,10 @@ describe('replayCompiledAction - what an ARGUMENT may not decide', () => {
 
     it('REFUSES a placeholder family the compile never emits, rather than sending it as a literal', async () => {
       const { result, calls } = await replayWith(
-        { ref: '2024-1' },
+        // NO ARGUMENTS: `{{integration.…}}` is not an `input.` hole, so `ref` would be an argument
+        // this recipe has no hole for and the coverage refusal would answer first - masking the
+        // refusal this case is named for.
+        {},
         recipe({ injectedCalls: [{ method: 'GET', urlTemplate: 'https://portal.example/api/cases?ref={{integration.portal.token}}', headerNames: [], idempotent: true }] }),
       );
       expect(result.outcome).toBe('no-recipe');

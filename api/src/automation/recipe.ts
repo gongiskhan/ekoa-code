@@ -210,16 +210,38 @@ export function parseCompiledRecipe(stored: unknown): CompiledRecipe | null {
     if (!parsed) return null;
     scriptedSteps.push(parsed);
   }
+  // THE ANSWER POINTER IS RANGE-CHECKED, never trusted. It selects WHICH replayed body becomes the
+  // action's answer, so a pointer off the end of the call list - an older document, a hand-edited
+  // row, a compile that lost a call - must not degrade to "no answer" and must certainly not slide
+  // onto a neighbouring call. A recipe that names an answer it cannot point at is one this build
+  // cannot replay, so it goes back through discovery like any other unreadable recipe.
+  const answers = parseAnswersWith(raw.answersWith, injectedCalls.length);
+  if (answers === 'invalid') return null;
   return {
     version: raw.version,
     goal: raw.goal,
     injectedCalls,
     scriptedSteps,
+    ...(answers !== undefined ? { answersWith: answers } : {}),
     lessons: [...raw.lessons],
     ...(typeof raw.capturedCallsRef === 'string' ? { capturedCallsRef: raw.capturedCallsRef } : {}),
     compiledAt: raw.compiledAt,
     ...(parseSupersedes(raw.supersedes) ?? {}),
   };
+}
+
+/** `undefined` = the recipe names no answer (the run it was learned from produced none);
+ *  `'invalid'` = it names one this build cannot honour, which invalidates the whole recipe. */
+function parseAnswersWith(
+  raw: unknown,
+  callCount: number,
+): CompiledRecipe['answersWith'] | 'invalid' {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== 'object') return 'invalid';
+  const { callIndex, matchedBy } = raw as { callIndex?: unknown; matchedBy?: unknown };
+  if (typeof callIndex !== 'number' || !Number.isInteger(callIndex) || callIndex < 0 || callIndex >= callCount) return 'invalid';
+  if (matchedBy !== 'run-output-identity') return 'invalid';
+  return { callIndex, matchedBy };
 }
 
 function parseSupersedes(raw: unknown): { supersedes: { version: number; reason: string } } | null {

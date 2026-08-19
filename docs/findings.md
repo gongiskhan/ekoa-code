@@ -5227,3 +5227,126 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   green, so neither could be shown to matter. Closed by removing the wrap and pinning the leg for
   BOTH bodies (`network-capture.test.ts`), verified by deleting the name pass inside `redactStream`
   and watching the two new cases go red.
+
+- **`p2-replayed-action-answers-a-different-envelope`** (CLOSED 2026-08-20, CRITICAL, silent data
+  loss on the listener rail). `runAutomationForAction` answered `{replayed, recipeVersion, output}`
+  on the replay short-circuit and `{runId, status, summary, output}` on the automation path. Every
+  consumer is written against the second: `user-defined-poll.ts` `pollBody` unwraps `output` ONLY
+  when it sees both a string `runId` and a string `status`, so a replayed poll resolved the
+  package's `listenerConfig` paths against the ENVELOPE, read `undefined` from `cursorField` and
+  `eventArrayField`, and reported a quiet provider. Permanently, and with no way out: the replay
+  keeps SUCCEEDING so no drift ever fires, `putRecipe` refuses to overwrite, and nothing clears a
+  recipe that works. `pollBody`'s own docblock names this as "the silent-empty failure mode this
+  module exists to avoid". Closed by ONE envelope constructor used by both legs
+  (`ActionRunEnvelope`), with the replay's `runId` being the `replay-…` id its browser lease and its
+  daemon frames are already ledgered under - so it names a real execution rather than an
+  `automationRuns` document that does not exist. Proved at three levels (the mount's whole-shape
+  `toEqual`, the acceptance's key-set comparison of the two legs, and a REPLAYED listener tick
+  through the real handler in `user-defined-poll.test.ts`), each verified by restoring the old
+  envelope and watching it go red.
+
+  QUALIFICATION, because the code disagrees with the shape of the report: for the SHIPPED citius
+  listener the observable difference is nil, and not because the defect was not real. Its automation
+  template (`api/assets/integrations/citius/automations/notificacoes.json`) is browser + verify steps
+  only, and `extractActionRunOutput` reads the last `api_call`/`ekoa_action` step - of which there
+  are none - so `consultar_notificacoes` answers `output: undefined` on the AUTOMATION path too, and
+  its listener stalls identically with no replay in sight. See the finding below; the envelope defect
+  bites any automation-backed action whose automation actually produces an output, which is every
+  user-authored one that ends in an api_call or an ekoa_action step.
+
+- **`citius-notificacoes-automation-produces-no-output`** (OPEN 2026-08-20, HIGH, shipped package).
+  `StepOutput` exists for exactly three step types (`local_command`, `api_call`, `ekoa_action`) and
+  `extractActionRunOutput` reads two of them. The shipped citius `notificacoes` template ends in a
+  `verify` step, so the action's answer is `undefined` whatever the run did - while the package's
+  `listenerConfig` reads `notificacoes` and `highWater` off it. The listener therefore delivers
+  nothing today, on both paths, and P2 neither caused that nor fixes it: the spine's job is to make
+  the replay answer WHAT THE RUN ANSWERED, which it now does exactly (`answersWith` absent ⇒ the
+  replay answers nothing either). NOT closed here because the fix is a package change - the template
+  needs a step that produces the structured list - and it belongs with whoever owns the citius
+  package and can check the answer against the real portal.
+
+- **`p2-replay-answered-with-an-arbitrary-captured-call`** (CLOSED 2026-08-20, CRITICAL, silent
+  wrong answer). `replayCompiledAction` returned `data: calls[calls.length - 1]?.body`, where `calls`
+  is in compile order = the machine's `page.on('response')` COMPLETION order. Nothing correlated that
+  with the action's own output. Reproduced: adding one ordinary internal call to the fixture page - a
+  notification-badge GET issued after the search - made run 2 answer `{"unread":7}` with
+  `success: true, replayed: true`. So once an action learns, its answer silently becomes whichever
+  captured call happened to finish last. `MAX_COMPILED_CALLS = 24` says multi-call recipes are
+  expected; the acceptance fixture emitted exactly one call per frame, so it structurally could not
+  see this, and it never asserted that run 2's answer equalled run 1's. Closed by correlating at
+  COMPILE time against the learning run's own output and writing the result into the recipe
+  (`answersWith: {callIndex, matchedBy: 'run-output-identity'}`, range-checked at parse and refused
+  at the store if it does not index a call): identity over canonical JSON, absent when the run
+  answered nothing, and a REFUSAL TO LEARN when the run answered something no captured call
+  produced - because such a recipe could only ever answer with a different call's body. The
+  acceptance now asserts run 2's answer equals run 1's, and has the badge case; both verified by
+  restoring `calls[calls.length - 1]`.
+
+- **`p2-composition-root-binding-was-a-surviving-mutant`** (CLOSED 2026-08-20, CRITICAL,
+  dead-in-production). `server.ts`'s `const runAutomationBackedAction: AutomationBackedHandler =
+  automationBackedActionHandler();` is the ONLY production line pointing at this slice. Replacing it
+  with the pre-P2 inline mapping - which type-checks, and drops `integrationKey`, `actionName`,
+  `writeAssent` and `mutates` - leaves `named` false on every call, so nothing is ever replayed or
+  learned, and the whole lane stayed green: the acceptance constructs the handler ITSELF (pinning the
+  MAPPING, not the BINDING) and the only other guard greps `server.ts` for the identifier, which a
+  rebinding of that identifier satisfies. Closed the way P4 closed its own two surviving bindings:
+  `automation/composition-root-action-seam.test.ts` boots the REAL `buildApp` with the seams reset
+  and enters at the bound `executeIntegrationAction`, asserting consequences (a stored recipe
+  replays; an approved write's gate opens; the unapproved control refuses). Verified by applying the
+  exact rebinding: 2 of its 3 cases go red while the acceptance and the poll suite stay green. The
+  text guard is kept - it covers a SECOND call site (the listener's dep bundle, private to the
+  composition root and unreachable from a test) - and its docblock now says what it cannot catch.
+
+- **`p2-hosted-capture-had-no-ceiling-at-any-hop`** (CLOSED 2026-08-20, MEDIUM, resource).
+  `clients/bridge/src/browser/capture.ts` bounds itself (400 exchanges FIFO, 64KB bodies) under the
+  note that "an unbounded recorder attached to a long headed session is a memory leak on somebody's
+  laptop". The hosted mirror bounded nothing: `DaemonBrowserSession.ingest` pushed uncapped,
+  `runAutomationForAction` pushed into a second uncapped array, and `persistEvidence` wrote one Mongo
+  document per exchange. A run with N browser frames on a heavy SPA therefore held N x 400 exchanges
+  of up to ~128KB in the SHARED API PROCESS and wrote that many documents, while only 24 can ever
+  become a recipe. Closed at all three hops: `MAX_SESSION_CAPTURED_EXCHANGES` (400, oldest dropped -
+  the machine's own number and discipline, restated rather than imported because `api/` may not
+  import `clients/`), `MAX_RUN_CAPTURED_EXCHANGES` (400 across the run's frames), and an evidence
+  write that persists only `internalApiCalls` - the exact set a recipe can be distilled from -
+  bounded at `MAX_PERSISTED_EVIDENCE` (2 x `MAX_COMPILED_CALLS`, newest kept). Each verified by
+  removing the bound and watching its case go red.
+
+- **`p2-a-narrow-recipe-owned-the-actions-only-slot-forever`** (CLOSED 2026-08-20, HIGH, silent
+  permanent degradation). A listener's ESTABLISHING tick calls with `args: {}` and learns a hole-free
+  recipe; every tick after it calls with `{since: cursor}`, which the replay's argument-coverage check
+  correctly refuses - and the refusal was `no-recipe`, which is NOT one of the verdicts that clears a
+  recipe (only `write-gate` and `does-not-cover` were). `putRecipe` refuses to overwrite and a
+  supersede needs a drift that can never fire, because the replay never runs. So the action could
+  never learn a usable recipe again, silently, for the life of the row - and paid for a doomed replay
+  attempt on every run. Closed with a distinct outcome, `arguments-uncovered`, which CLEARS the
+  recipe exactly as the other two refusals do, so the next ordinary pass learns one from the wider
+  argument set. The NON-SCALAR half of the same check deliberately stays `no-recipe`: an object
+  argument is a fact about the CALL (no recipe can carry one, and re-learning would refuse
+  identically), so dropping the recipe over it would cost the action its optimisation for a caller's
+  mistake. Verified by removing the clear and watching the acceptance's settle-and-relearn case fail.
+
+- **`p2-r6-three-more-unfailable-tests`** (CLOSED 2026-08-20, HIGH, test quality). (1)
+  `user-defined-poll.test.ts` "resolves the listenerConfig paths against the run OUTPUT, not the
+  envelope" - the one test named for that exact property - built its seam's answer from a HARDCODED
+  `{runId:'run-1', status:'completed', summary:'ok', output}` literal, so it was reading back the
+  constant beside it and could not observe the replay envelope that breaks the property. Closed by
+  driving the REAL `automationBackedActionHandler` on both legs (the automation leg over a real
+  automation row and a real run record whose step output is typed as the engine's own `StepOutput`;
+  the replay leg through the handler's declared `replay` dep, typed as the real `ReplayResult`), and
+  by adding the replayed tick as its own case. (2) the composition-root text guard - see the binding
+  finding above. (3) `service.ts` `const mutating = input.mutates !== false;` was an EQUIVALENT
+  MUTANT: `=== true` left 564 tests green, because the only shipped caller normalises through
+  `actionRequiresConsent` and always passes a boolean. Closed by pinning the ABSENT case at the seam
+  whose type explicitly permits it (Rule 7), asserting both consequences - the replay is told the
+  action writes, and no recorder is armed - and by saying plainly in the test that no shipped caller
+  omits the field today, so what is pinned is the OPTIONAL FIELD'S CONTRACT and not a live production
+  path. Verified with the `=== true` inversion.
+
+- **`p2-r6-two-acceptance-cases-tested-a-rule-they-did-not-name`** (CLOSED 2026-08-20, MEDIUM, test
+  quality). Making the argument-coverage refusal its own outcome exposed three cases whose stated
+  subject was masked by it firing first: `injected-call-replay.test.ts` "answers no-recipe when a
+  template does not resolve to an absolute URL" and "REFUSES a placeholder family the compile never
+  emits" both passed their default `{ref}` argument to a recipe with no hole for it, and the
+  acceptance's "a MISSING argument refuses the replay" passed `{unrelated:'x'}` - so all three were
+  green on the coverage rule while claiming to test another. Each now passes the argument set that
+  reaches the refusal it is named for, with a comment saying why.

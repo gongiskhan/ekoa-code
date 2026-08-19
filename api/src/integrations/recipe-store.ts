@@ -167,6 +167,7 @@ export class IntegrationRecipeStore {
     opts: { secrets?: SecretRegistry } = {},
   ): Promise<RecipeWriteResult> {
     assertCarriesNoValues(draft, opts.secrets);
+    assertAnswerPointsAtACall(draft);
     return this.writeRecipe(orgId, key, actionName, (current) => {
       if (current) return { refuse: { verdict: 'exists', recipe: current } };
       return { recipe: { ...cloneDraft(draft), version: 1, compiledAt: this.nowIso() } };
@@ -195,6 +196,7 @@ export class IntegrationRecipeStore {
       throw new RecipeStoreError('INVALID', 'a supersede must state why the previous recipe was replaced');
     }
     assertCarriesNoValues(draft, opts.secrets);
+    assertAnswerPointsAtACall(draft);
     return this.writeRecipe(orgId, key, actionName, (current) => {
       // Nothing to supersede is `notfound`, not an implicit first compile: a heal that believes it
       // is replacing something, and silently is not, is a lost signal about the action's history.
@@ -366,9 +368,35 @@ function cloneDraft(draft: RecipeDraft): RecipeDraft {
       action: s.action,
       ...(s.value !== undefined ? { value: s.value } : {}),
     })),
+    // The answer pointer, copied field by field like everything else here. It was PROVEN to index a
+    // call of this same draft by `assertAnswerPointsAtACall` at the write, before anything was read
+    // or written - see the two callers.
+    ...(draft.answersWith !== undefined
+      ? { answersWith: { callIndex: draft.answersWith.callIndex, matchedBy: draft.answersWith.matchedBy } }
+      : {}),
     lessons: [...draft.lessons],
     ...(draft.capturedCallsRef !== undefined ? { capturedCallsRef: draft.capturedCallsRef } : {}),
   };
+}
+
+/**
+ * THE ANSWER POINTER MUST POINT AT A CALL OF THE RECIPE IT TRAVELS WITH.
+ *
+ * `answersWith` selects WHICH replayed body becomes the action's answer, so a pointer that indexes
+ * nothing is not cosmetic: `parseCompiledRecipe` throws the whole recipe away on every later read,
+ * i.e. the action silently stops replaying for a reason nothing recorded. This is the last point at
+ * which the pointer and the calls are still checkable against each other - after it, the recipe is a
+ * document. Refused rather than repaired, like every other refusal in this module.
+ */
+export function assertAnswerPointsAtACall(draft: RecipeDraft): void {
+  if (draft.answersWith === undefined) return; // ordinary: the run it was learned from answered nothing
+  const { callIndex } = draft.answersWith;
+  if (!Number.isInteger(callIndex) || callIndex < 0 || callIndex >= draft.injectedCalls.length) {
+    throw new RecipeStoreError(
+      'INVALID',
+      `answersWith.callIndex (${callIndex}) does not name one of this recipe's ${draft.injectedCalls.length} injected call(s)`,
+    );
+  }
 }
 
 /**

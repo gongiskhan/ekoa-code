@@ -121,6 +121,14 @@ function startFixture(): Promise<void> {
       res.end(JSON.stringify({ items: [{ id: 41, ref, title: `case ${ref}` }], total: 1 }));
       return;
     }
+    if (url.pathname === '/api/badge') {
+      // AN ORDINARY SECOND INTERNAL CALL - a notification badge the page polls. Every portal has
+      // one. It is the same kind of call as the search (script-issued, 2xx, JSON), so a recipe
+      // captures it too, and it FINISHES LAST. See the case that uses it.
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      res.end('{"unread":7}');
+      return;
+    }
     res.writeHead(404, { 'content-type': 'text/html' });
     res.end('<html><body>not found</body></html>');
   });
@@ -153,7 +161,7 @@ function startFixture(): Promise<void> {
  * CORTEX NEVER SENDS A HEADER VALUE TO IT AND IT NEVER SENDS ONE BACK. `live` is this machine's;
  * frames carry names.
  */
-function daemonForFixture(): DaemonConnection & {
+function daemonForFixture(opts: { alsoPollsTheBadge?: boolean } = {}): DaemonConnection & {
   armed: boolean;
   leaseReleased: boolean;
   /** Every `captureOp` this machine was sent, in order. A LOG rather than the `armed` flag: the
@@ -248,6 +256,10 @@ function daemonForFixture(): DaemonConnection & {
       const action = input.action as { kind?: string } | undefined;
       if (action && action.kind !== 'screenshot' && action.kind !== 'noop') {
         await observeTraffic(`${origin}${apiPath}?ref=2024-1`);
+        // …and, when asked, the ONE extra internal call an ordinary portal page also makes. It is
+        // observed AFTER the search, so it is last in `page.on('response')` completion order -
+        // which is the order the capture, and therefore the compiled recipe, is built in.
+        if (opts.alsoPollsTheBadge) await observeTraffic(`${origin}/api/badge`);
       }
       const captures = buffered;
       buffered = [];
@@ -469,10 +481,86 @@ describe('ACCEPTANCE: learned on the run that was going to happen, replayed dete
     // a header value would put one here. (What it does NOT prove is redaction; see above.)
     expect(JSON.stringify(replayDaemon.injectFrames)).not.toContain('csrf-live-value');
 
-    // The replay got the REAL answer from the REAL server - the fixture checks the CSRF header, so
-    // this is also proof the name-only recipe reconstituted a working authenticated call.
-    expect((second.data as { output: unknown }).output).toEqual({ items: [{ id: 41, ref: '2024-1', title: 'case 2024-1' }], total: 1 });
+    // The replay reached the REAL server and the server accepted it - the fixture checks the CSRF
+    // header, so this is proof the name-only recipe reconstituted a working authenticated call.
     expect(requests[requests.length - 1]!.headers['x-csrf-token']).toBe('csrf-live-value');
+
+    // ══ AND IT IS INDISTINGUISHABLE FROM THE RUN IT REPLACED ════════════════════════════════
+    //
+    // SAME ENVELOPE. The replay used to answer `{replayed, recipeVersion, output}` while the
+    // automation answers `{runId, status, summary, output}` - and every consumer is written against
+    // the second. The listener rail unwraps `output` only when it sees BOTH a string `runId` and a
+    // string `status` (`user-defined-poll.ts`), so a replayed poll resolved its package's field
+    // paths against the envelope, read `undefined` from all of them, and reported a quiet provider
+    // on every tick forever. Compared as KEY SETS, because the defect was a missing key rather than
+    // a wrong value, and `toMatchObject` cannot see one.
+    const envelope1 = first.data as Record<string, unknown>;
+    const envelope2 = second.data as Record<string, unknown>;
+    expect(Object.keys(envelope1).sort()).toEqual(['output', 'runId', 'status', 'summary']);
+    expect(Object.keys(envelope2).sort()).toEqual(['output', 'recipeVersion', 'replayed', 'runId', 'status', 'summary']);
+    expect(typeof envelope2.runId).toBe('string');
+    expect(typeof envelope2.status).toBe('string');
+
+    // SAME ANSWER - the thing the action exists to produce, and the assertion this suite never made.
+    // This automation is the SHIPPED shape: browser steps only, no `api_call` and no `ekoa_action`,
+    // so the run itself answers NOTHING (`extractActionRunOutput` reads those two step outputs and
+    // there are none). A replay that helpfully hands back a captured body would therefore be a
+    // DIFFERENT action from the one it replaces - better-looking and wrong - so it answers nothing
+    // too, and the recipe records that (`answersWith` absent) rather than guessing.
+    //
+    // Against the old code this line fails immediately: it answered `calls[calls.length - 1].body`,
+    // which here is the search result. The badge case below is the same defect where the answer is
+    // not even the search.
+    expect(envelope2.output).toEqual(envelope1.output);
+    expect(envelope1.output).toBeUndefined();
+    expect((await recipes.getRecipe(actor.orgId, KEY, ACTION))!.answersWith).toBeUndefined();
+  }, 60_000);
+
+  /**
+   * ONE ORDINARY EXTRA CALL MUST NOT CHANGE THE ACTION'S ANSWER.
+   *
+   * THE DEFECT, reproduced end to end: the replay answered `calls[calls.length - 1].body`, and that
+   * list is in the order the page's own `response` events COMPLETED. Nothing correlated it with the
+   * action's answer. So adding a notification-badge poll after the search - a call every portal
+   * page makes, captured by the same three structural tests as the search (script-issued, 2xx,
+   * JSON) - made run 2 answer `{"unread":7}`, with `success: true` and `replayed: true` and no
+   * other symptom anywhere.
+   *
+   * The old acceptance could not see it: its fixture emitted exactly ONE call per frame, so "the
+   * last call" and "the answer" were the same body by construction, and it never compared run 2's
+   * answer to run 1's at all.
+   */
+  it('an ordinary SECOND internal call does not become the answer - the recipe names which call is', async () => {
+    const learn = daemonForFixture({ alsoPollsTheBadge: true });
+    setDaemonConnectionResolver(() => learn);
+    const first = await runTheAction();
+    expect(first.success).toBe(true);
+
+    // BOTH calls are in the recipe - this is not a filtering test. The badge is a real call the
+    // page makes and replaying it is harmless; what must not happen is it becoming the ANSWER.
+    const recipe = await recipes.getRecipe(actor.orgId, KEY, ACTION);
+    expect(recipe!.injectedCalls.map((c) => c.urlTemplate)).toEqual([
+      `${origin}/api/cases?ref={{input.ref}}`,
+      `${origin}/api/badge`,
+    ]);
+
+    transport = resetAgentState({ oneShotText: RESOLVER_JSON });
+    const replayDaemon = daemonForFixture({ alsoPollsTheBadge: true });
+    setDaemonConnectionResolver(() => replayDaemon);
+    const second = await runTheAction();
+
+    expect(second.success).toBe(true);
+    expect((second.data as { replayed?: boolean }).replayed).toBe(true);
+    expect(modelCalls()).toBe(0);
+    // The badge WAS replayed - so this is genuinely the "last call finished last" situation, not a
+    // fixture in which the badge never ran.
+    expect(replayDaemon.injectFrames.map((f) => f.url)).toEqual([
+      `${origin}/api/cases?ref=2024-1`,
+      `${origin}/api/badge`,
+    ]);
+    // …AND THE ANSWER IS STILL THE ONE THE ACTION GAVE. Against the old code this is `{unread: 7}`.
+    expect((second.data as { output: unknown }).output).toEqual((first.data as { output: unknown }).output);
+    expect(JSON.stringify(second.data)).not.toContain('unread');
   }, 60_000);
 
   it('a third and fourth run are the same again - determinism is not a one-off', async () => {
@@ -518,7 +606,12 @@ describe('ACCEPTANCE: learned on the run that was going to happen, replayed dete
     // `ref` is what the template asks for and this call does not supply it. The old behaviour was
     // to render the hole as '' - and `?ref=` on this API (as on most) means "every case in the
     // tenant". So the replay refuses and the ordinary automation runs instead.
-    const result = await runTheAction({ unrelated: 'x' });
+    //
+    // NO ARGUMENTS AT ALL, so this is the missing-hole refusal and ONLY that one. Passing an
+    // UNRELATED argument instead - which is what this case used to do - trips the argument-COVERAGE
+    // refusal first, which is a different rule with a different disposition (it drops the recipe),
+    // so the case would have gone on passing while testing the other one.
+    const result = await runTheAction({});
     expect(result.success).toBe(true);
     expect((result.data as { replayed?: boolean }).replayed).toBeUndefined();
     // THE POINT: the widened request was never made. Asserted on what the SERVER saw, which is the
@@ -527,6 +620,12 @@ describe('ACCEPTANCE: learned on the run that was going to happen, replayed dete
     expect(requests.filter((r) => /[?&]ref=(&|$)/.test(r.url))).toEqual([]);
     // …and the run that did happen is a real one, so the fall-through is a fall-through.
     expect((result.data as { runId?: string }).runId).toBeTruthy();
+    // THE RECIPE SURVIVES, and that is the difference from the case below. A hole nobody filled is
+    // a fact about THIS CALL - the very next caller that supplies `ref` replays perfectly - so
+    // dropping the recipe over it would cost the action its optimisation for someone else's
+    // omission. An argument the recipe has NO HOLE FOR is a fact about the RECIPE, and that one
+    // does drop it.
+    expect(await recipes.getRecipe(actor.orgId, KEY, ACTION)).not.toBeNull();
   }, 60_000);
 
   it('an argument the recipe has NO HOLE for refuses too, rather than answering the question it was compiled around', async () => {
@@ -555,8 +654,28 @@ describe('ACCEPTANCE: learned on the run that was going to happen, replayed dete
     // gets a correct answer. Refusing the replay costs the optimisation, not the result.
     expect((result.data as { runId?: string }).runId).toBeTruthy();
 
-    // …and the CONTROL, in the same test so the two cannot drift: the same recipe, the same
-    // machine shape, the argument set the recipe was compiled for - and it replays.
+    // ── …AND THE NARROW RECIPE IS DROPPED, SO THE ACTION CAN LEARN AGAIN ────────────────────
+    //
+    // THE DEFECT THIS CLOSES, which is the ordinary listener shape and not an exotic one: a
+    // listener's ESTABLISHING tick calls with `{}` and learns a hole-free recipe; every tick after
+    // it calls with `{since: cursor}`. That second shape is refused here - correctly - and the
+    // refusal used to be `no-recipe`, which is NOT one of the verdicts that clears a recipe. So the
+    // narrow recipe sat in the action's ONE slot forever: `putRecipe` refuses to overwrite, a
+    // supersede needs a drift that can never fire because the replay never runs, and nothing else
+    // removes it. The action could never learn a usable recipe again, silently, for the life of the
+    // row - while every run went on paying for the doomed replay attempt first.
+    expect(await recipes.getRecipe(actor.orgId, KEY, ACTION)).toBeNull();
+
+    // AND IT SETTLES. This run's own pass could not compile a replacement (`status` appears nowhere
+    // in what the page fetched, so the compile refuses a recipe that would ignore it) - so the
+    // action is simply back to un-learned, and the next ordinary run learns one again and the one
+    // after that replays it. No thrash, no permanent loss.
+    transport = resetAgentState({ oneShotText: RESOLVER_JSON });
+    setDaemonConnectionResolver(() => daemonForFixture());
+    const relearn = await runTheAction({ ref: '2024-1' });
+    expect((relearn.data as { replayed?: boolean }).replayed).toBeUndefined();
+    expect((await recipes.getRecipe(actor.orgId, KEY, ACTION))!.version).toBe(1);
+
     transport = resetAgentState({ oneShotText: RESOLVER_JSON });
     const control = daemonForFixture();
     setDaemonConnectionResolver(() => control);

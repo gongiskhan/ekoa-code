@@ -151,6 +151,14 @@ export interface CompiledCalls {
   calls: InjectedCall[];
   /** Present ⇔ `calls` is empty BY REFUSAL rather than for want of material. */
   refusedBecause?: string;
+  /**
+   * WHICH compiled call produced the learning run's own answer, if any did. Indexes `calls`.
+   *
+   * Absent with a non-empty `calls` means the run produced NO structured answer to correlate (see
+   * `runOutput`), never "we could not find it": a run whose answer no captured call produced is a
+   * REFUSAL above, because a recipe that cannot reproduce the answer is a recipe that changes it.
+   */
+  answerCallIndex?: number;
 }
 
 /**
@@ -194,10 +202,27 @@ export interface CompiledCalls {
  * exactly the one that must not be replayable from a stored document; the call is dropped from the
  * compile, not stored with its body blanked, because a login with no password is not a call worth
  * replaying.
+ *
+ * ── AND THE COMPILE DECIDES WHICH CALL IS THE ANSWER ─────────────────────────────────────────
+ *
+ * `runOutput` is what the learning run ITSELF answered (`automation/service.ts`
+ * `extractActionRunOutput`), and it is REQUIRED rather than optional - a caller that cannot say
+ * would otherwise silently teach the recipe to answer nothing. Three cases, and the difference
+ * between them is the difference between a replay and a lie:
+ *
+ *   - the run answered nothing (`undefined`): there is nothing to correlate and nothing to
+ *     reproduce. `answerCallIndex` is absent and the replay answers nothing too, exactly as the
+ *     run it replaces did. Every browser-only automation this repo ships is this case.
+ *   - the run's answer IS one of the captured bodies: that call is the answer-bearing one. Matched
+ *     by IDENTITY (canonical JSON), because anything looser - "the same shape", "the last JSON
+ *     call" - is a guess that answers a different question on the run where it is wrong.
+ *   - the run answered something no captured call produced: REFUSED. The recipe could only ever
+ *     answer with some other call's body, so learning it would change what this action returns.
+ *     Paying for the expensive path forever is the cheaper mistake.
  */
 export function compileInjectedCalls(
   exchanges: readonly CapturedExchange[],
-  opts: { inputs?: Record<string, unknown>; max?: number } = {},
+  opts: { inputs?: Record<string, unknown>; max?: number; runOutput: unknown },
 ): CompiledCalls {
   const { holes, unlocatable } = inputHoles(opts.inputs ?? {});
   if (unlocatable.length > 0) {
@@ -208,47 +233,62 @@ export function compileInjectedCalls(
         'proven to honour them - refusing to learn a recipe that would ignore them',
     };
   }
-  const seen = new Set<string>();
+  /** Compiled-call index by `METHOD template`. The dedup key doubles as the correlation key: an
+   *  exchange that repeats a call already in the recipe still names that call. */
+  const indexByKey = new Map<string, number>();
   const out: InjectedCall[] = [];
   const placed = new Set<string>();
   const max = opts.max ?? MAX_COMPILED_CALLS;
+  /** The compiled call whose captured body IS the run's answer. LAST match wins, the same "last
+   *  meaningful output" rule the run's own answer is read by - and with identical bodies the choice
+   *  is only about which template is recorded, never about what the caller gets back. */
+  let answerCallIndex: number | undefined;
 
   for (const exchange of internalApiCalls(exchanges)) {
-    if (out.length >= max) break;
     if (exchange.requestBody !== undefined && bodyIsSecretShaped(exchange.requestBody)) continue;
     // A URL this module cannot take apart is not one it may template: the whole safety argument
     // below rests on origin/path/query being separable.
     const templated = templateUrl(exchange.url, holes);
     if (!templated) continue;
-    // Both halves record what they placed into a LOCAL set, merged only if the call is kept: an
-    // argument located solely in a call this compile then drops is not an argument the recipe
-    // honours, and counting it would let the located-argument check below pass on a call that is
-    // not in the recipe.
-    const bodyPlaced = new Set<string>();
-    const bodyTemplate = exchange.requestBody === undefined
-      ? undefined
-      : templateBody(exchange.requestBody, holes, bodyPlaced);
     // Deduplicate on the TEMPLATE, not the URL: a paginated list issues the same call ten times
     // with a different page, and once holed those are one call. Deduplicating on the raw URL would
     // put all ten in the recipe.
     const key = `${exchange.method} ${templated.template}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    for (const name of templated.placed) placed.add(name);
-    for (const name of bodyPlaced) placed.add(name);
-    const expectShape = expectShapeOf(exchange);
-    out.push(
-      injectedCallFromExchange({
-        method: exchange.method as ApiCallMethod,
-        urlTemplate: templated.template,
-        // THE ONE PLACE A HEADER MAP WOULD BE, AND THERE IS NONE. What arrives from the machine is
-        // already names; they are re-offered as a map with empty values purely because
-        // `injectedCallFromExchange` is the single constructor of a `HeaderName`, and it reads keys.
-        headers: Object.fromEntries(exchange.requestHeaderNames.map((n) => [n, ''])),
-        ...(bodyTemplate !== undefined ? { bodyTemplate } : {}),
-        ...(expectShape !== undefined ? { expectShape } : {}),
-      }),
-    );
+    let index = indexByKey.get(key);
+    if (index === undefined) {
+      // The CEILING stops the recipe GROWING, not the scan: an exchange past it is still asked
+      // whether it carried the run's answer, and if it did the compile refuses below rather than
+      // storing a recipe that answers with something else. Nothing else is computed for it - a
+      // body past the ceiling is never templated.
+      if (out.length < max) {
+        // Both halves record what they placed into a LOCAL set, merged only if the call is kept: an
+        // argument located solely in a call this compile then drops is not an argument the recipe
+        // honours, and counting it would let the located-argument check below pass on a call that
+        // is not in the recipe.
+        const bodyPlaced = new Set<string>();
+        const bodyTemplate = exchange.requestBody === undefined
+          ? undefined
+          : templateBody(exchange.requestBody, holes, bodyPlaced);
+        index = out.length;
+        indexByKey.set(key, index);
+        for (const name of templated.placed) placed.add(name);
+        for (const name of bodyPlaced) placed.add(name);
+        const expectShape = expectShapeOf(exchange);
+        out.push(
+          injectedCallFromExchange({
+            method: exchange.method as ApiCallMethod,
+            urlTemplate: templated.template,
+            // THE ONE PLACE A HEADER MAP WOULD BE, AND THERE IS NONE. What arrives from the machine
+            // is already names; they are re-offered as a map with empty values purely because
+            // `injectedCallFromExchange` is the single constructor of a `HeaderName`, and it reads keys.
+            headers: Object.fromEntries(exchange.requestHeaderNames.map((n) => [n, ''])),
+            ...(bodyTemplate !== undefined ? { bodyTemplate } : {}),
+            ...(expectShape !== undefined ? { expectShape } : {}),
+          }),
+        );
+      }
+    }
+    if (index !== undefined && isTheRunsAnswer(exchange, opts.runOutput)) answerCallIndex = index;
   }
 
   if (out.length === 0) return { calls: [] };
@@ -261,7 +301,55 @@ export function compileInjectedCalls(
         'compiled call would be a constant that returns this run\'s data for every later caller - refusing to learn it',
     };
   }
-  return { calls: out };
+  // ── THE ANSWER MUST BE REPRODUCIBLE, OR THERE IS NO RECIPE ───────────────────────────────
+  // A run that answered something none of these calls returned cannot be replayed by them: the
+  // replay would hand back a DIFFERENT call's body under the same `success: true`. That is the one
+  // failure mode a caller cannot see, so it is refused here rather than discovered in production.
+  if (opts.runOutput !== undefined && answerCallIndex === undefined) {
+    return {
+      calls: [],
+      refusedBecause:
+        'the run answered with something none of the captured calls returned, so a replay of them could only ever '
+        + 'answer with a different call\'s body - refusing to learn a recipe that changes this action\'s answer',
+    };
+  }
+  return { calls: out, ...(answerCallIndex !== undefined ? { answerCallIndex } : {}) };
+}
+
+/**
+ * Did THIS exchange produce the run's own answer?
+ *
+ * Identity over the parsed JSON, key order made irrelevant (`canonicalJson`) because two encodings
+ * of the same document are the same answer and a re-serialisation between the run record and the
+ * capture is not a difference the caller can ever see. Anything looser is a guess.
+ */
+function isTheRunsAnswer(exchange: CapturedExchange, runOutput: unknown): boolean {
+  if (runOutput === undefined) return false;
+  if (exchange.responseBody === undefined) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(exchange.responseBody);
+  } catch {
+    // Not JSON. `internalApiCalls` already filtered to JSON content types, so this is a truncated or
+    // malformed body - which teaches nothing and certainly does not prove it carried the answer.
+    return false;
+  }
+  return canonicalJson(parsed) === canonicalJson(runOutput);
+}
+
+/** A stable string for a JSON value: object keys sorted, array order preserved. `undefined` members
+ *  and non-JSON leaves collapse the same way on both sides, which is all identity needs here. */
+function canonicalJson(value: unknown): string {
+  const walk = (v: unknown, depth: number): unknown => {
+    if (depth > 32 || v === null || typeof v !== 'object') return v;
+    if (Array.isArray(v)) return v.map((entry) => walk(entry, depth + 1));
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(v as Record<string, unknown>).sort()) {
+      out[key] = walk((v as Record<string, unknown>)[key], depth + 1);
+    }
+    return out;
+  };
+  return JSON.stringify(walk(value, 0)) ?? 'undefined';
 }
 
 /**

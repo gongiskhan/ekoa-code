@@ -50,6 +50,19 @@ export interface ReplayActionInput {
   integrationKey: string;
   actionName: string;
   args: Record<string, unknown>;
+  /**
+   * THIS REPLAY'S EXECUTION ID, minted by the caller.
+   *
+   * It is the id the browser lease is taken under and the id every frame this replay sends is
+   * ledgered against on the machine - and it is also the `runId` the caller puts in the answer's
+   * envelope, because a replay must answer in the same envelope as the run it replaces. Minting it
+   * here instead would give the caller nothing to name the execution with, and an id invented at
+   * the envelope would name nothing an operator could look up.
+   *
+   * Optional so the un-threaded unit callers keep working; absent means "nobody needs to correlate
+   * this attempt", and the session helper mints its own.
+   */
+  runId?: string;
   /** The run's live credential values. Passed straight through so `assertNoCredentialRodeIn` runs
    *  against the values that actually exist on this run, not only where a test built a registry. */
   secrets?: SecretRegistry;
@@ -112,6 +125,7 @@ export async function replayIntegrationAction(
   const classify = classifierFor(action);
 
   const openSession = deps.openSession ?? openOwnerBrowserSession;
+  // The whole input, so the session helper reads THIS attempt's execution id off it (see `runId`).
   const session = await openSession(input);
   try {
     return await replayCompiledAction(
@@ -160,10 +174,12 @@ async function defaultLoadAction(actor: Actor, key: string, actionName: string):
  * the `finally` releases it whatever happened. Answering `null` when no daemon is paired is not a
  * failure; the executor then decides whether a permissive origin can be reached without one.
  */
-export async function openOwnerBrowserSession(input: { ownerUserId: string }): Promise<OpenedSession | null> {
+export async function openOwnerBrowserSession(input: { ownerUserId: string; runId?: string }): Promise<OpenedSession | null> {
   const conn = getDaemonConnection(input.ownerUserId);
   if (!conn) return null;
-  const runId = `replay-${randomUUID()}`;
+  // The CALLER'S execution id when it has one, so the frames the machine ledgers and the `runId`
+  // the caller answers with are the same string. A local one otherwise - the unit callers.
+  const runId = input.runId ?? `replay-${randomUUID()}`;
   const lease: BrowserLease = { id: runId, used: false };
   const browser = new DaemonBrowserSession({ connection: conn, runId, ownerUserId: input.ownerUserId, lease });
   return {

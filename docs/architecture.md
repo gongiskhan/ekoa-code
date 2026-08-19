@@ -522,7 +522,44 @@ what the live recipe came from. And because the evidence must be written BEFORE 
 points into it, a write that did not land would otherwise leave a whole pass's request and response
 bodies with nothing referring to them: that is the COMMON case, since `putRecipe` refuses to
 overwrite by design, so the same `discardEvidence` helper collects the orphan. Evidence is durable
-only once the thing it is evidence for is.
+only once the thing it is evidence for is. What is written down is bounded and filtered: only the
+exchanges `internalApiCalls` keeps - the exact set a recipe can be distilled from - and at most
+`MAX_PERSISTED_EVIDENCE` of them, because the alternative was one Mongo document per request a heavy
+page made. The two accumulators feeding it are bounded the same way and for the machine's own stated
+reason: `MAX_SESSION_CAPTURED_EXCHANGES` per session and `MAX_RUN_CAPTURED_EXCHANGES` per run,
+oldest dropped, mirroring the per-lease bound in `clients/bridge/src/browser/capture.ts` - which is
+a laptop, while this is the API process every tenant shares.
+
+A REPLAY IS INDISTINGUISHABLE FROM THE RUN IT REPLACES, except for being faster. Three things make
+that true, and each of them was, at one point, false.
+
+THE ENVELOPE IS ONE SHAPE, built by one constructor (`ActionRunEnvelope` / `actionRunEnvelope`) on
+both legs of `runAutomationForAction`: `{runId, status, summary?, output}`, plus
+`replayed`/`recipeVersion` on the replay leg. Consumers read `output` - the listener rail's
+`pollBody` unwraps it only for an envelope carrying both a string `runId` and a string `status` - so
+a second shape meant a replayed poll resolved its package's field paths against the envelope and
+reported a quiet provider forever. A replay's `runId` is the `replay-…` id its browser lease and its
+daemon frames are ledgered under, so it names a real execution; the prefix is what says there is no
+`automationRuns` document behind it, because no engine run happened.
+
+THE ANSWER IS CORRELATED AT COMPILE TIME. `IntegrationActionRecipe.answersWith`
+(`{callIndex, matchedBy}`) records WHICH compiled call carries the action's answer and why, decided
+by `compileInjectedCalls` against the learning run's own output (`extractActionRunOutput`, now read
+before the learn) by identity over canonical JSON. The replay reads that pointer instead of "the last
+call's body" - the order calls finish in says nothing about which one answered, so one ordinary extra
+internal call under a flow used to change what the action returned, silently, under `success: true`.
+Three outcomes, and the third is the important one: no pointer when the run answered nothing (so the
+replay answers nothing too - every browser-only automation this repo ships is that shape); the
+matching call when one produced the answer; and a REFUSAL TO LEARN when none did, because such a
+recipe could only ever answer with some other call's body.
+
+AND A RECIPE TOO NARROW FOR ITS CALLER IS DROPPED, not merely refused. `arguments-uncovered` is its
+own replay outcome (distinct from `no-recipe`, which a non-scalar argument still gets, because no
+recipe could carry one) and the mount clears the recipe on it, exactly as it does for `write-gate`
+and `does-not-cover`. Without that, a listener's establishing tick - which calls with `{}` and learns
+a hole-free recipe, while every tick after it calls with `{since: cursor}` - left that recipe in the
+action's ONE slot for the life of the row: `putRecipe` refuses to overwrite and a supersede needs a
+drift that can never fire, because the replay never runs.
 
 ## Integrations
 

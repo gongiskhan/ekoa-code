@@ -215,6 +215,27 @@ export interface IntegrationActionRecipe {
   goal: string;
   injectedCalls: IntegrationActionInjectedCall[];
   scriptedSteps: IntegrationActionScriptedStep[];
+  /**
+   * WHICH replayed call carries THIS ACTION'S ANSWER, and how that was decided.
+   *
+   * A replay must be indistinguishable from the run it replaces, and the ANSWER is half of that.
+   * Without this field the replay handed back the LAST call's body, where "last" is the order the
+   * page's own `response` events completed in - so one ordinary extra internal call underneath the
+   * flow (a notification badge polled after a search) silently changed the action's answer to that
+   * call's body, reported as `success: true`. Nothing correlated the compiled calls with the answer
+   * the learning run itself gave.
+   *
+   * So the compile correlates them and writes down what it found: `callIndex` indexes
+   * `injectedCalls`, and `matchedBy` says WHY that call was chosen - today only IDENTITY with the
+   * learning run's own output (`automation/service.ts extractActionRunOutput`), which is the only
+   * correlation strong enough to promise the same answer. A weaker matcher, if one is ever earned,
+   * is a NEW value here rather than this one quietly meaning something else.
+   *
+   * ABSENT means the learning run produced no structured answer at all - the shipped browser-only
+   * automations are exactly that shape - so its replay answers nothing either, which is precisely
+   * what the run it replaces answered.
+   */
+  answersWith?: { callIndex: number; matchedBy: 'run-output-identity' };
   /** Short free-text learnings: pagination shape, which header carries the session token, rate hints. */
   lessons: string[];
   /** `captureId` INTO the separate captures collection - a pointer, never the evidence itself. */

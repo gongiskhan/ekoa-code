@@ -24,11 +24,18 @@
  * a real server, entered through the real executor, is the acceptance suite.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import { runAutomationForAction, automationBackedActionHandler, type ActionRunDeps } from '../../src/automation/service.js';
+import {
+  runAutomationForAction,
+  automationBackedActionHandler,
+  MAX_RUN_CAPTURED_EXCHANGES,
+  MAX_PERSISTED_EVIDENCE,
+  type ActionRunDeps,
+} from '../../src/automation/service.js';
 import type { replayIntegrationAction } from '../../src/automation/replay-action.js';
 import type { runAutomation } from '../../src/automation/engine.js';
 import type { RecipeDraft } from '../../src/integrations/recipe-store.js';
-import { automations, integrationDefinitions, integrationCapturedCalls } from '../../src/data/stores.js';
+import { automations, automationRuns, integrationDefinitions, integrationCapturedCalls } from '../../src/data/stores.js';
+import type { StepOutput } from '../../src/automation/types.js';
 import { IntegrationRecipeStore } from '../../src/integrations/recipe-store.js';
 import { CapturedCallsStore } from '../../src/integrations/captured-calls-store.js';
 import { IntegrationDefinitionStore } from '../../src/integrations/definition-store.js';
@@ -85,7 +92,12 @@ function storeSpies() {
     verdict: 'ok' as const,
     recipe: { ...next, version: 2, compiledAt: 'now', supersedes: { version: 1, reason: next.reason } },
   }));
-  const appendCapturedCall = vi.fn(async () => ({ verdict: 'ok' as const }));
+  // Typed by its real parameters, so a case can assert WHAT was written and not merely how often.
+  const appendCapturedCall = vi.fn(async (
+    _key: { orgId: string; integrationKey: string; actionName: string; captureId: string },
+    _seq: number,
+    _call: { url: string },
+  ) => ({ verdict: 'ok' as const }));
   const discardCapture = vi.fn(async (_key: { orgId: string; integrationKey: string; actionName: string; captureId: string }) => 1);
   const deps: ActionRunDeps = {
     putRecipe: put as never,
@@ -132,7 +144,25 @@ describe('runAutomationForAction - the replay-first mount', () => {
     const result = await runAutomationForAction(base, { replay, run });
 
     expect(result.success).toBe(true);
-    expect(result.data).toEqual({ replayed: true, recipeVersion: 7, output: { items: [{ id: 41 }] } });
+    // THE SAME ENVELOPE THE AUTOMATION LEG ANSWERS IN, plus the two fields that say which leg ran.
+    // The replay used to answer `{replayed, recipeVersion, output}` - a SECOND shape - while every
+    // consumer is written against the first: `user-defined-poll.ts` unwraps `output` only when it
+    // sees BOTH a string `runId` and a string `status`, so a replayed poll resolved its field paths
+    // against the envelope and read `undefined` on every tick, forever. Asserted whole (`toEqual`,
+    // never `toMatchObject`) because the defect was a MISSING key, which a partial match cannot see.
+    const envelope = result.data as { runId: string };
+    expect(result.data).toEqual({
+      runId: envelope.runId,
+      status: 'completed',
+      summary: 'replayed 0 call(s) of recipe v7',
+      output: { items: [{ id: 41 }] },
+      replayed: true,
+      recipeVersion: 7,
+    });
+    // …and the id names THIS replay rather than an automation run that never happened: it is the
+    // same string the replay's browser lease and its daemon frames are ledgered under.
+    expect(envelope.runId).toMatch(/^replay-/);
+    expect(replay.mock.calls[0]![0]!.runId).toBe(envelope.runId);
     expect(run).not.toHaveBeenCalled();
     expect(replay).toHaveBeenCalledOnce();
     expect(replay.mock.calls[0]![0]).toMatchObject({ orgId: 'o1', integrationKey: 'portal', actionName: 'list_cases', args: { ref: '2024-1' } });
@@ -863,6 +893,53 @@ describe('runAutomationForAction - the write assent is carried, never invented',
     expect(replay.mock.calls[0]![0]).toMatchObject({ integrationKey: 'portal', actionName: 'list_cases' });
   });
 
+  /**
+   * `mutates` IS READ FAIL-CLOSED AT THIS SEAM, and that reading is OBSERVABLE here or nowhere.
+   *
+   * `runAutomationForAction` normalises it once - `input.mutates !== false`, the repo's one reading
+   * of the field (`integrations/action-consent.ts`) - and hands everything below a definite boolean.
+   * Inverting that line to `=== true` left 564 tests green, because the ONLY shipped caller of this
+   * seam already normalises through `actionRequiresConsent` and therefore always passes a boolean:
+   * `true` and `false` read identically either way, so the mutant was equivalent.
+   *
+   * The one input that separates them is an ABSENT `mutates`, which the seam's own type explicitly
+   * permits (Rule 7: an added field may not change an existing implementer) and documents as the
+   * pre-P2 caller shape. This pins that contract:
+   *
+   *   - the replay is told the action WRITES, so a read-only recipe cannot answer for it;
+   *   - nothing is learned, so no recorder is armed on a run whose recipe could never be stored.
+   *
+   * SAID PLAINLY: no shipped caller omits the field today, so this is the OPTIONAL FIELD'S CONTRACT
+   * rather than a live production path. It is worth pinning precisely because the alternative -
+   * "absent means not-a-write" - is the read-learns-a-write hole from the other side, and because
+   * the field is optional at this seam and will stay so.
+   */
+  it('reads an ABSENT `mutates` as a WRITE at the seam - the fail-closed contract of the optional field', async () => {
+    const replay = vi.fn<Replay>(async () => ({ outcome: 'no-recipe', reason: 'x' }));
+    const run = runObserving([EXCHANGE]);
+    const { deps, put } = storeSpies();
+    const handler = automationBackedActionHandler({ ...deps, replay, run });
+
+    const result = await handler({
+      binding: base.binding,
+      args: base.args,
+      credentialFields: {},
+      orgId: base.orgId,
+      ownerUserId: base.ownerUserId,
+      integrationKey: base.integrationKey,
+      actionName: base.actionName,
+      // NO `mutates`. The caller that predates the field.
+    });
+
+    expect(result.success).toBe(true);
+    expect(replay.mock.calls[0]![0].mutates).toBe(true);
+    // …and therefore no learning pass: `storable` is false, so the recorder is never armed and
+    // nothing is written down. With `=== true` this run would arm the machine's recorder - which
+    // holds the live header VALUES of an authenticated session while armed - and store a recipe.
+    expect(run.mock.calls[0]![2]?.observeNetwork).toBeUndefined();
+    expect(put).not.toHaveBeenCalled();
+  });
+
   it('hands the replay a registry built from THIS run\'s credential values', async () => {
     // The proof that no credential rode into a resolved URL was inert until the mount passed one.
     const replay = vi.fn<Replay>(async () => ({ outcome: 'no-recipe', reason: 'x' }));
@@ -873,5 +950,167 @@ describe('runAutomationForAction - the write assent is carried, never invented',
     const secrets = replay.mock.calls[0]![0].secrets;
     expect(secrets).toBeDefined();
     expect(secrets!.redact('carrying live-token-value-9f2 here')).not.toContain('live-token-value-9f2');
+  });
+});
+
+// =============================================================================================
+// THE ANSWER. A replay must be indistinguishable from the run it replaces, and the answer is the
+// half of that a caller actually consumes. Nothing correlated the compiled calls with the answer
+// the run gave: the replay returned `calls[calls.length - 1].body`, where "last" is the order the
+// page's own responses COMPLETED in. So one ordinary extra internal call under a flow silently
+// changed what the action returned, with `success: true`.
+// =============================================================================================
+describe('runAutomationForAction - the recipe records WHICH call is the answer', () => {
+  beforeAll(() => bootAgentTestDb('ekoa_automation_replay_answer'));
+  afterAll(shutdownAgentTestDb);
+  beforeEach(async () => {
+    resetAgentState({});
+    __resetAutomationSeamsForTests();
+    await automations.deleteMany({});
+    await automationRuns.deleteMany({});
+    await automations.insert({
+      _id: AUTOMATION_ID, id: AUTOMATION_ID, name: 'listar', description: 'lista', steps: [],
+      ownerUserId: OWNER, orgId: 'o1', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    } as never);
+  });
+
+  const noRecipe = vi.fn<Replay>(async () => ({ outcome: 'no-recipe', reason: 'never learned' }));
+
+  /**
+   * A run that succeeded, observed `captures`, AND left a real run record whose last step carries
+   * `answer` as its output - which is where `extractActionRunOutput` reads an action's answer from.
+   *
+   * The record's step output is typed as the engine's own `StepOutput`, so a fixture that drifts
+   * from what the engine actually writes is a compile error rather than a quietly green test.
+   */
+  function runAnswering(captures: unknown[], answer: unknown): ReturnType<typeof vi.fn<Run>> {
+    return vi.fn<Run>(async (_id, _ctx, options) => {
+      options?.observeNetwork?.(captures as never);
+      const output: StepOutput = {
+        kind: 'api_call',
+        status: 200,
+        responseHeaders: {},
+        responseBody: JSON.stringify(answer),
+        responseBodyIsJson: true,
+        truncated: false,
+        durationMs: 1,
+      };
+      await automationRuns.insert({
+        _id: 'run-answer', id: 'run-answer', automationId: AUTOMATION_ID, status: 'completed',
+        steps: [{ stepId: 's1', index: 0, description: 'collect', status: 'completed', output }],
+      } as never);
+      return { runId: 'run-answer', status: 'completed', durationMs: 1, summary: 'ok', lastStepIndex: 0 };
+    });
+  }
+
+  /** The badge: an ordinary second internal call that FINISHES LAST and is not the answer. */
+  const BADGE = {
+    ...EXCHANGE,
+    url: 'https://portal.example/api/badge',
+    responseBody: '{"unread":7}',
+  };
+
+  it('names the call whose body the RUN answered with, not the one that finished last', async () => {
+    const { deps, put } = storeSpies();
+    const answer = { items: [{ id: 41 }] }; // === EXCHANGE.responseBody, and NOT the badge's
+    await runAutomationForAction(base, { ...deps, replay: noRecipe, run: runAnswering([EXCHANGE, BADGE], answer) });
+
+    expect(put).toHaveBeenCalledOnce();
+    const draft = put.mock.calls[0]![3];
+    // BOTH calls are in the recipe - the badge is a real call the page makes and replaying it is
+    // harmless. What must not happen is it becoming the ANSWER.
+    expect(draft.injectedCalls.map((c) => c.urlTemplate)).toEqual([
+      'https://portal.example/api/cases?ref={{input.ref}}',
+      'https://portal.example/api/badge',
+    ]);
+    expect(draft.answersWith).toEqual({ callIndex: 0, matchedBy: 'run-output-identity' });
+  });
+
+  it('names NOTHING when the run answered nothing - and that is what the replay then answers', async () => {
+    // The shipped shape: a browser-only automation has no `api_call`/`ekoa_action` step, so
+    // `extractActionRunOutput` finds no answer. A recipe that named one anyway would make the
+    // replayed run answer something the automation never did.
+    const { deps, put } = storeSpies();
+    await runAutomationForAction(base, { ...deps, replay: noRecipe, run: runObserving([EXCHANGE, BADGE]) });
+
+    expect(put).toHaveBeenCalledOnce();
+    expect(put.mock.calls[0]![3].answersWith).toBeUndefined();
+  });
+
+  it('REFUSES to learn when no captured call produced the run\'s answer', async () => {
+    // The run answered something assembled from the page (an extraction, a reshape, a join). No
+    // replay of these calls can reproduce it, so a recipe would answer with SOME OTHER call's body
+    // under the same `success: true` - the one failure a caller cannot see. Refusing costs the
+    // optimisation forever; learning costs the answer.
+    const { deps, put, appendCapturedCall } = storeSpies();
+    const result = await runAutomationForAction(
+      base,
+      { ...deps, replay: noRecipe, run: runAnswering([EXCHANGE, BADGE], { processos: ['reshaped by the run'] }) },
+    );
+
+    expect(result.success).toBe(true); // the RUN is fine; only the learning is declined
+    expect(put).not.toHaveBeenCalled();
+    // …and nothing durable is left behind for a recipe that was never written.
+    expect(appendCapturedCall).not.toHaveBeenCalled();
+  });
+});
+
+// =============================================================================================
+// BOUNDS. The machine's recorder is bounded per lease because "an unbounded recorder attached to a
+// long headed session is a memory leak on somebody's laptop" (`clients/bridge/src/browser/
+// capture.ts`). The hosted mirror had no bound at any hop, and it is not somebody's laptop - it is
+// the API process every tenant shares, fed once per frame for the length of a run.
+// =============================================================================================
+describe('runAutomationForAction - the hosted capture path is bounded at every hop', () => {
+  beforeAll(() => bootAgentTestDb('ekoa_automation_replay_bounds'));
+  afterAll(shutdownAgentTestDb);
+  beforeEach(async () => {
+    resetAgentState({});
+    __resetAutomationSeamsForTests();
+    await automations.deleteMany({});
+    await automations.insert({
+      _id: AUTOMATION_ID, id: AUTOMATION_ID, name: 'listar', description: 'lista', steps: [],
+      ownerUserId: OWNER, orgId: 'o1', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    } as never);
+  });
+
+  const noRecipe = vi.fn<Replay>(async () => ({ outcome: 'no-recipe', reason: 'never learned' }));
+
+  /** `count` distinct internal API calls, numbered so which ones survived is observable. */
+  const manyExchanges = (count: number) =>
+    Array.from({ length: count }, (_, n) => ({ ...EXCHANGE, url: `https://portal.example/api/cases?ref=2024-1&n=${n}` }));
+
+  it('keeps the NEWEST exchanges of a long pass and drops the oldest, rather than growing forever', async () => {
+    const { deps, put } = storeSpies();
+    const total = MAX_RUN_CAPTURED_EXCHANGES + 100;
+    // Delivered in batches, the way the engine drains one frame at a time.
+    const run = vi.fn<Run>(async (_id, _ctx, options) => {
+      for (const x of manyExchanges(total)) options?.observeNetwork?.([x] as never);
+      return { runId: 'run-1', status: 'completed', durationMs: 1, summary: 'ok', lastStepIndex: 0 };
+    });
+    await runAutomationForAction(base, { ...deps, replay: noRecipe, run });
+
+    const draft = put.mock.calls[0]![3];
+    // The compile takes the FIRST distinct calls of what it is handed, so which ones appear says
+    // exactly which window survived: with the bound, the head is exchange #100 (the oldest 100 were
+    // dropped); without it, exchange #0 - and 500 exchanges of request+response bodies were resident
+    // in the shared process, which is what the bound is actually about.
+    expect(draft.injectedCalls[0]!.urlTemplate).toContain(`n=${total - MAX_RUN_CAPTURED_EXCHANGES}`);
+    expect(draft.injectedCalls.map((c) => c.urlTemplate).join()).not.toContain('n=0&');
+  });
+
+  it('persists only the exchanges that could matter, bounded - not one document per request', async () => {
+    const { deps, appendCapturedCall } = storeSpies();
+    // A heavy page: a few internal API calls buried in navigations and non-JSON responses. Only the
+    // first kind can ever become a recipe call - the compile's own filter - so only that kind is
+    // evidence of anything.
+    const noise = Array.from({ length: 40 }, (_, n) => ({ ...EXCHANGE, resourceType: 'document', url: `https://portal.example/page/${n}` }));
+    const api = manyExchanges(MAX_PERSISTED_EVIDENCE + 20);
+    await runAutomationForAction(base, { ...deps, replay: noRecipe, run: runObserving([...noise, ...api]) });
+
+    expect(appendCapturedCall).toHaveBeenCalledTimes(MAX_PERSISTED_EVIDENCE);
+    const written = appendCapturedCall.mock.calls.map((c) => c[2].url);
+    expect(written.every((u) => u.includes('/api/cases'))).toBe(true);
+    expect(written.some((u) => u.includes('/page/'))).toBe(false);
   });
 });
