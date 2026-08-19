@@ -194,13 +194,23 @@ export {
   type EgressRequirement,
   type EgressResolution,
 } from './egress-policy.js';
+// `sameRoute` is deliberately NOT here, and no longer exported from `locality.ts` either: it is the
+// route-switch decision's predicate, that decision now lives beside it inside `narrowLocalityForRun`,
+// and an export whose only caller was a test asserting the predicate in isolation was a stand-in for
+// the decision rather than the decision itself.
 export {
   resolveLocality,
+  narrowLocalityForRun,
   egressRequirementFor,
   hostedTypistPermitFor,
-  sameRoute,
+  refusalIsNeutral,
+  CLEARING_ACTS,
+  type ClearingAct,
+  type ClearingActFacts,
   type LocalityInput,
+  type LocalityRefusal,
   type LocalityVerdict,
+  type RunSoFar,
 } from './locality.js';
 
 export {

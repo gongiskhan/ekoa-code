@@ -1,10 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   resolveLocality,
+  narrowLocalityForRun,
   egressRequirementFor,
   hostedTypistPermitFor,
-  sameRoute,
+  refusalIsNeutral,
+  CLEARING_ACTS,
+  type ClearingAct,
   type LocalityInput,
+  type LocalityVerdict,
 } from '../../src/automation/locality.js';
 import { classifyOrigin } from '../../src/automation/origin-posture.js';
 import type { EgressCandidate, EgressResolution } from '../../src/automation/egress-policy.js';
@@ -506,9 +510,28 @@ describe('the hosted typist gets the work’s own door, or no door at all', () =
     expect(hostedTypistPermitFor(null)).toEqual({});
   });
 
+  /**
+   * REAL REFUSALS, not literals - and they have to be, which is itself the point.
+   *
+   * A `blocked` verdict carries a module-private brand (`REFUSAL_SITE`), so this file CANNOT write
+   * one: the two literals that used to stand here stopped compiling the day the brand landed. Every
+   * refusal in the product is therefore built inside `locality.ts`, which is what makes the census
+   * below a census of the product rather than of one exported function.
+   */
   it('a refused step gets no password typed for it', () => {
-    expect(hostedTypistPermitFor({ kind: 'blocked', clearedBy: 'start-a-machine', reason: 'x' })).toBeUndefined();
-    expect(hostedTypistPermitFor({ kind: 'blocked', clearedBy: 'pair-a-machine', reason: 'x' })).toBeUndefined();
+    const neutral = resolveLocality(input({ candidates: null }));            // start-a-machine
+    const terminal = resolveLocality(input({ candidates: [] }));             // pair-a-machine
+    const authored = narrowLocalityForRun(                                   // edit-the-automation
+      resolveLocality(input({ classification: PERMISSIVE })),
+      { liveUrl: 'https://bank.example.pt/x', declaredOrigin: 'portal.example.com', openedRoute: null },
+    );
+    for (const v of [neutral, terminal, authored]) {
+      expect(v.kind).toBe('blocked');
+      expect(hostedTypistPermitFor(v)).toBeUndefined();
+    }
+    // ...and they really are the three distinct acts, so this is not three copies of one case.
+    const acts = [neutral, terminal, authored].map((v) => (v.kind === 'blocked' ? v.clearedBy : null));
+    expect(acts).toEqual(['start-a-machine', 'pair-a-machine', 'edit-the-automation']);
   });
 
   /**
@@ -552,14 +575,76 @@ describe('the hosted typist gets the work’s own door, or no door at all', () =
   });
 });
 
-describe('sameRoute — a context launched for one route is not reused for another', () => {
-  const dc: EgressResolution = { outcome: 'datacenter', reason: 'no-requirement' };
-  const m1: EgressResolution = { outcome: 'machine', pairingId: 'p1', proxyUrl: 'http://a:1' };
-  const m2: EgressResolution = { outcome: 'machine', pairingId: 'p2', proxyUrl: 'http://b:1' };
-  it('two datacenter routes interchange', () => expect(sameRoute(dc, dc)).toBe(true));
-  it('a machine route is not a datacenter route', () => expect(sameRoute(dc, m1)).toBe(false));
-  it('two different machines are different routes', () => expect(sameRoute(m1, m2)).toBe(false));
-  it('the same machine is the same route', () => expect(sameRoute(m1, { ...m1 })).toBe(true));
+/**
+ * THE ROUTE SWITCH - a context launched for one route is not reused for another.
+ *
+ * DRIVEN THROUGH THE DECISION, NOT ITS PREDICATE. This block used to call an exported `sameRoute`
+ * on four hand-built `EgressResolution` literals, which proved a comparison and left the refusal
+ * that uses it untested from this file - and while the refusal itself lived in `engine.ts` there
+ * was no way to reach it here at all. `sameRoute` is private again; every case below resolves a
+ * REAL verdict and asks `narrowLocalityForRun` what happens when this run's context is already open
+ * on a given route.
+ */
+describe('a context launched for one route is not reused for another', () => {
+  const DC: EgressResolution = { outcome: 'datacenter', reason: 'no-requirement' };
+  /** A PERMISSIVE origin with no route requirement: the hosted browser, no proxy. */
+  const hostedOnDatacenter = (): LocalityVerdict => resolveLocality(input({ classification: PERMISSIVE }));
+  /** A PERMISSIVE origin pinned to one machine: the hosted browser, proxied through its line. */
+  const hostedThrough = (pairingId: string, endpoint: string): LocalityVerdict => resolveLocality(input({
+    classification: PERMISSIVE,
+    declaredTarget: { kind: 'pinned', pairingId },
+    candidates: [machine({ pairingId, egressEndpoint: endpoint })],
+  }));
+  /** What the run does with a verdict, given the route its context is already open on. */
+  const against = (v: LocalityVerdict, openedRoute: EgressResolution | null): LocalityVerdict =>
+    narrowLocalityForRun(v, { liveUrl: null, declaredOrigin: null, openedRoute });
+
+  const M1 = hostedThrough('pair_home', 'http://100.64.0.7:1080');
+  const M2 = hostedThrough('pair_other', 'http://100.64.0.8:1080');
+  const routeOf = (v: LocalityVerdict): EgressResolution =>
+    v.kind === 'in-process' ? v.egress : ((): never => { throw new Error(`expected in-process, got ${v.kind}`); })();
+
+  it('the fixtures really are the three distinct routes a run can open', () => {
+    // Guards the cases below against passing for the wrong reason: if a fixture silently stopped
+    // resolving to the hosted browser, `routeOf` throws rather than comparing two refusals.
+    expect(routeOf(hostedOnDatacenter())).toEqual(DC);
+    expect(routeOf(M1)).toEqual({ outcome: 'machine', pairingId: 'pair_home', proxyUrl: 'http://100.64.0.7:1080' });
+    expect(routeOf(M2)).toEqual({ outcome: 'machine', pairingId: 'pair_other', proxyUrl: 'http://100.64.0.8:1080' });
+  });
+
+  it('a run with no context open yet is never refused for its route', () => {
+    for (const v of [hostedOnDatacenter(), M1, M2]) expect(against(v, null)).toBe(v);
+  });
+
+  it('two datacenter routes interchange, so the refusal is not a blanket one', () => {
+    const v = hostedOnDatacenter();
+    expect(against(v, DC)).toBe(v);
+  });
+
+  it('the same machine is the same route', () => {
+    expect(against(M1, routeOf(M1))).toBe(M1);
+  });
+
+  it('a machine route is not a datacenter route, in either direction', () => {
+    expect(against(M1, DC).kind).toBe('blocked');
+    expect(against(hostedOnDatacenter(), routeOf(M1)).kind).toBe('blocked');
+  });
+
+  it('two different machines are different routes, and the refusal names the AUTHOR as the fix', () => {
+    const refused = against(M1, routeOf(M2));
+    expect(refused.kind).toBe('blocked');
+    // NOT `start-a-machine`. A route switch is a property of the step list: the next fire resolves
+    // the same declarations and blocks at the same index, so the neutral halt would be an unbounded
+    // retry against a condition only the automation's author can change.
+    expect(refused.kind === 'blocked' && refused.clearedBy).toBe('edit-the-automation');
+    expect(refused.kind === 'blocked' && refused.reason).toMatch(/different route out of the network/);
+  });
+
+  it('a BRIDGE verdict is untouched - there is no launch option to be stuck with', () => {
+    const bridge = resolveLocality(input({ classification: PERMISSIVE, daemonConnected: true, daemonPairingId: 'pair_home' }));
+    expect(bridge.kind).toBe('bridge');
+    expect(against(bridge, routeOf(M1))).toBe(bridge);
+  });
 });
 
 /**
@@ -628,21 +713,42 @@ describe('every locality refusal says which act can clear it', () => {
    *   3. no refusal answers BOTH ways, which would mean the same condition sometimes auto-pauses a
    *      schedule and sometimes does not.
    *
+   * WHY IT NOW WALKS TWO ENTRY POINTS. Because a census of ONE FUNCTION is not a census of the
+   * product, and the gap was not hypothetical: for six rounds `engine.ts` built a posture-drift
+   * refusal of its own, carrying the NEUTRAL act for a condition that is a property of the step list,
+   * and this block sailed past it green - it enumerated only what `resolveLocality` returns, and that
+   * refusal was assembled next door. The blocked member is now BRANDED, so `locality.ts` is the only
+   * module that can construct one at all, and every entry point that can return one is driven here:
+   * `resolveLocality` for the step list, `narrowLocalityForRun` for what the run has already done. A
+   * third entry point cannot appear without either failing to compile or failing this block.
+   *
    * Pairing ids are normalised out of the strings (they are inputs, not branches); everything else
    * is compared literally, so re-wording a refusal is a deliberate edit here rather than a silent
    * drift away from what the product tells people.
    */
   describe('a census over the whole input space, not a list of remembered cases', () => {
-    /** The one refusal no amount of waiting clears. Everything else is a machine being off. */
+    /** The refusal no amount of waiting clears, because there is no machine to wait for. */
     const NO_MACHINE =
       'no machine is paired to your account, and this step runs only on one - ' +
       'pair a machine, then establish this session from it';
 
-    type ClearingAct = 'start-a-machine' | 'pair-a-machine';
+    /** The run's hosted session has navigated off the origin its posture was declared for. */
+    const DRIFTED =
+      "this run's hosted browser is on bank.example.pt, which is not the origin this step's posture " +
+      'was declared for (portal.example.com) - it will not carry a step onto an undeclared site. ' +
+      'Declare the origin this automation actually reaches, or keep the run on the declared one.';
 
-    /** Every refusal `resolveLocality` can emit, with the act that clears it. Pairing ids normalised. */
+    /** A second route out, for a context whose proxy was fixed at launch. */
+    const ROUTE_SWITCH =
+      'this step needs a different route out of the network than the one this run already opened, ' +
+      'and the proxy is a launch option that cannot be re-pointed - declare one route for the ' +
+      'whole run, or split these steps into separate automations';
+
+    /** Every refusal this module can emit, with the act that clears it. Pairing ids normalised. */
     const EXPECTED: ReadonlyArray<readonly [string, ClearingAct]> = [
       [NO_MACHINE, 'pair-a-machine'],
+      [DRIFTED, 'edit-the-automation'],
+      [ROUTE_SWITCH, 'edit-the-automation'],
       ['this step is pinned to machine <pairing>; the machine currently connected is a different one', 'start-a-machine'],
       [
         'this step must run on the machine where its session was established, and a different machine ' +
@@ -718,7 +824,38 @@ describe('every locality refusal says which act can clear it', () => {
         ],
       ];
 
+      /**
+       * WHAT THE RUN HAS ALREADY DONE, crossed with every verdict above.
+       *
+       * `narrowLocalityForRun` is the SECOND entry point that can return a refusal, and it is the
+       * one the drift halt hid behind for six rounds while it lived in `engine.ts`. Its inputs are
+       * the run's live facts, so the space is small and stated exhaustively: a browser that has not
+       * navigated, one that is on the declared origin, one that has drifted, one on a URL that does
+       * not parse; a step whose origin never resolved; and a context already open on each route a
+       * run can have opened.
+       */
+      const liveUrls = [
+        null,                                  // no observation yet
+        'about:blank',                         // observed, but nowhere
+        'not a url at all',                    // unparseable - "nothing to compare", not a mismatch
+        'https://portal.example.com/inbox',    // still on the declared origin
+        'https://PORTAL.example.com/inbox',    // ...and the comparison is case-folded
+        'https://bank.example.pt/transfers',   // DRIFTED - a click, an OAuth hop, a 302
+      ];
+      const declaredOrigins = [null, 'portal.example.com'];
+      const openedRoutes: Array<EgressResolution | null> = [
+        null,                                                                        // nothing open
+        { outcome: 'datacenter', reason: 'no-requirement' },                          // open, no proxy
+        { outcome: 'machine', pairingId: 'pair_home', proxyUrl: 'http://100.64.0.7:1080' },
+        { outcome: 'machine', pairingId: 'pair_other', proxyUrl: 'http://100.64.0.8:1080' },
+      ];
+
       const seen = new Map<string, Set<string>>();
+      const record = (v: LocalityVerdict): void => {
+        if (v.kind !== 'blocked') return;
+        const key = normalise(v.reason);
+        (seen.get(key) ?? seen.set(key, new Set()).get(key)!).add(v.clearedBy);
+      };
       for (const classification of classifications) {
         for (const declaredTarget of declaredTargets) {
           for (const offlinePolicy of offlinePolicies) {
@@ -735,9 +872,18 @@ describe('every locality refusal says which act can clear it', () => {
                       ...daemon,
                       ...(preferredPairingId ? { preferredPairingId } : {}),
                     }));
-                    if (v.kind !== 'blocked') continue;
-                    const key = normalise(v.reason);
-                    (seen.get(key) ?? seen.set(key, new Set()).get(key)!).add(v.clearedBy);
+                    record(v);
+                    // ...and the same verdict again, once per thing this run might already have
+                    // done. Every verdict is narrowed, not only the refusals: a verdict that is
+                    // fine against the step list is exactly the one the run's own history can turn
+                    // into a refusal.
+                    for (const liveUrl of liveUrls) {
+                      for (const declaredOrigin of declaredOrigins) {
+                        for (const openedRoute of openedRoutes) {
+                          record(narrowLocalityForRun(v, { liveUrl, declaredOrigin, openedRoute }));
+                        }
+                      }
+                    }
                   }
                 }
               }
@@ -762,14 +908,53 @@ describe('every locality refusal says which act can clear it', () => {
       expect(ambiguous).toEqual([]);
     });
 
-    it('the ONLY refusal waiting cannot clear is the account with no machine in it', () => {
+    /**
+     * THE RULE, APPLIED TO THE WHOLE CENSUS: a refusal may be waited out only when it will clear
+     * WITHOUT ANYBODY BEING TOLD.
+     *
+     * A neutral fire leaves no durable trace - no counter movement, no auto-pause, only a toast on a
+     * page the owner may never have open - so the test is not "can a person fix this" (a person can
+     * fix all three) but whether it clears in the ordinary course. A shut laptop does; an account
+     * with no machine paired does not, because nobody pairs hardware they were never told was
+     * needed; and a cause that is a property of the STEP LIST cannot, because the next fire resolves
+     * the same declarations and halts at the same index. The three terminal refusals below are
+     * exactly the ones that fail that test. See `CLEARING_ACTS` for the clauses.
+     */
+    it('a refusal is neutral only when it will clear without anybody being told', () => {
       const seen = censusOfRefusals();
       const terminal = [...seen.entries()]
         .filter(([, answers]) => [...answers].some((a) => a !== 'start-a-machine'))
-        .map(([reason]) => reason);
-      // Everything else is "a machine of yours is off", which a schedule must be free to wait out:
-      // making them terminal would auto-pause schedules for owners whose only sin is a shut laptop.
-      expect(terminal).toEqual([NO_MACHINE]);
+        .map(([reason]) => reason)
+        .sort();
+      expect(terminal).toEqual([NO_MACHINE, DRIFTED, ROUTE_SWITCH].sort());
+      // ...and the complement is exactly "a machine of yours is off", which a schedule must be free
+      // to wait out: making those terminal would auto-pause schedules over a shut lid.
+      const neutral = [...seen.entries()].filter(([, a]) => [...a].every((x) => x === 'start-a-machine'));
+      expect(neutral.length).toBe(EXPECTED.length - 3);
+    });
+
+    /**
+     * THE PROPERTY BEHIND THE TABLE, checked against the collected refusals rather than restated.
+     * Whatever act a refusal names, `refusalIsNeutral` must answer from `CLEARING_ACTS` - so a new
+     * act that forgets to justify itself cannot compile, and one that justifies itself wrongly is
+     * visible here as a refusal that is neutral while nothing environmental is missing.
+     */
+    it('every act the census produced is one CLEARING_ACTS justifies out loud', () => {
+      const seen = censusOfRefusals();
+      const acts = new Set([...seen.values()].flatMap((s) => [...s]));
+      // Every act reachable in production is in the table...
+      for (const act of acts) expect(Object.keys(CLEARING_ACTS)).toContain(act);
+      // ...every act in the table is reachable in production (a justification for a refusal nothing
+      // can emit is documentation of a branch that does not exist)...
+      expect([...acts].sort()).toEqual(Object.keys(CLEARING_ACTS).sort());
+      // ...exactly one of them is neutral, and it is the environmental one...
+      const neutralActs = (Object.keys(CLEARING_ACTS) as ClearingAct[]).filter(refusalIsNeutral);
+      expect(neutralActs).toEqual(['start-a-machine']);
+      // ...and each carries a written reason, because "neutral: true" with no argument beside it is
+      // how this defaulted for six rounds.
+      for (const [act, facts] of Object.entries(CLEARING_ACTS)) {
+        expect(facts.because.length, act).toBeGreaterThan(80);
+      }
     });
 
     it('every refusal answers the way this file says it does', () => {

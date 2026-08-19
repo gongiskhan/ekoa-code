@@ -28,9 +28,23 @@
  *
  * `blocked` is a halt, never a failure: nothing about it is retryable by a machine, and the
  * schedule rail carries it as `blocked` rather than `failed`. Whether a given block is NEUTRAL
- * against the failure ceiling is the schedule rail's own judgement and depends on the cause - a
- * machine that is not connected is fixed by opening a laptop, a rejected credential is not fixed by
- * repeating it (`schedules/supervisor.ts` `NEUTRAL_BLOCKED_CODES`).
+ * against the failure ceiling is decided HERE, in `CLEARING_ACTS`, and not by the rail: the rail
+ * reads a CODE (`schedules/supervisor.ts` `NEUTRAL_BLOCKED_CODES`), and which code a refusal gets is
+ * `engine.ts` `refusalRecordFor` reading this module's table. It used to be described as the rail's
+ * own judgement, which is how three refusals ended up neutral without anyone deciding they should be.
+ *
+ * ================================ EVERY REFUSAL IS BUILT HERE ================================
+ * The blocked member carries a BRAND (`REFUSAL_SITE`), a module-private symbol, so the only code in
+ * the repository that can construct one is `refuse()` below. That is not decoration. Three times
+ * running, the same defect arrived as A REFUSAL BUILT SOMEWHERE ELSE inheriting neutrality by
+ * saying nothing, and the third one (`engine.ts`'s posture-drift halt) escaped a cross-product
+ * census of this whole module for exactly one reason: the census can only enumerate what this module
+ * returns, and that refusal was assembled next door. The brand makes "somewhere else" impossible to
+ * compile, which is what turns the census into a census of THE PRODUCT rather than of one function.
+ *
+ * The corollary is that decisions which need the RUN's live facts - the page the hosted browser
+ * actually drifted onto, the route its context is already open for - are made here too, as pure
+ * functions over those facts (`narrowLocalityForRun`). The engine gathers, this module judges.
  *
  * ================================ PREFERENTIAL BRIDGE (P4.2) ================================
  * A captured session was established from a particular vantage point, and the pairing where its
@@ -56,12 +70,14 @@
  * laptop and the next fire works, with nobody touching the schedule. That is why those halts are
  * NEUTRAL against the failure ceiling.
  *
- * An account whose fleet listing is KNOWN AND EMPTY withdraws the promise. There is no laptop to
- * open, so waiting cannot clear anything, and carrying such a halt as the neutral one is an
- * UNBOUNDED retry against a state that never changes on its own - the exact pathology this slice
- * exists to remove, re-created for the tenant least able to spot it (docs/findings.md
- * `an-org-whose-only-machine-is-revoked-retried-forever`). So a known-empty fleet refuses TERMINALLY
- * and names pairing a machine as the act.
+ * An account whose fleet listing is KNOWN AND EMPTY withdraws the promise. There is no laptop that
+ * gets opened tomorrow morning, so nothing clears in the ordinary course, and carrying such a halt
+ * as the neutral one is an UNBOUNDED retry against a state that never moves on its own - the exact
+ * pathology this slice exists to remove, re-created for the tenant least able to spot it
+ * (docs/findings.md `an-org-whose-only-machine-is-revoked-retried-forever`). So a known-empty fleet
+ * refuses TERMINALLY and names pairing a machine as the act. Note the argument that carries this is
+ * clause (ii) of `CLEARING_ACTS`, not "no act can clear it": pairing a machine plainly is an act the
+ * owner can take, and the point is that nobody takes it unprompted.
  *
  * `candidates: null` is the OTHER thing an empty answer can mean - this process does not know what
  * the org has, an unbound seam - and it keeps the neutral wait. Not-knowing may never escalate.
@@ -104,6 +120,112 @@ import {
   type EgressResolution,
 } from './egress-policy.js';
 
+/**
+ * THE ACT THAT CLEARS A REFUSAL - and, the half everything downstream turns on, WHETHER REPEATING
+ * THE RUN CAN EVER HELP.
+ *
+ *   - `start-a-machine`    - the ENVIRONMENT is what is missing: a laptop is shut, or the machine a
+ *                            session was made on is not the one dialled in. The owner opening it
+ *                            clears the block with nobody touching the schedule.
+ *   - `pair-a-machine`     - the account has NO machine (`fleetIsKnownEmpty`). There is nothing to
+ *                            start, so waiting can never clear it.
+ *   - `edit-the-automation`- the cause is a property of the STEP LIST, so replaying the same steps
+ *                            reproduces the same halt at the same index, forever. Only the author
+ *                            changing what the automation declares can clear it.
+ *
+ * IT NAMES THE ACT AND NOT THE ACTOR (it was `'machine' | 'human'`) because "a person must do
+ * something" is not enough to pick a halt with, and picking one is the only thing the consumer does
+ * with this field.
+ */
+export type ClearingAct = 'start-a-machine' | 'pair-a-machine' | 'edit-the-automation';
+
+/** What the schedule rail is entitled to conclude from a clearing act. */
+export interface ClearingActFacts {
+  /**
+   * NEUTRAL AGAINST THE FAILURE CEILING - the fire neither resets the counter nor increments it, so
+   * the schedule waits indefinitely and never auto-pauses (`schedules/supervisor.ts`
+   * `NEUTRAL_BLOCKED_CODES`, reached through the `awaiting_daemon` halt).
+   *
+   * WHAT NEUTRALITY REALLY BUYS, and therefore what it costs: a fire that leaves NO DURABLE TRACE.
+   * The only signal is a `schedule_blocked` toast on a page the owner may never have open. So the
+   * question is not "can a person fix this" - a person can fix all three of these - but "will this
+   * clear WITHOUT ANYBODY BEING TOLD". Three clauses, and all three must hold:
+   *
+   *   1. THE CAUSE IS A FACT ABOUT THE WORLD, not about the automation's declarations. Otherwise the
+   *      next fire resolves the same declarations, reaches the same index and halts identically:
+   *      replay is provably useless, and neutrality is an unbounded retry by construction.
+   *   2. IT IS EXPECTED TO CLEAR IN THE ORDINARY COURSE, unprompted. A laptop gets opened tomorrow
+   *      morning whether or not anyone knew a schedule wanted it. A machine nobody has been told to
+   *      pair is never paired; an automation nobody has been told is broken is never edited. This is
+   *      the clause the first two defects failed, and the one that is easy to miss because "a human
+   *      act clears it" is true of every refusal here.
+   *   3. AND WHEN IT CLEARS, THE SAME STEPS SUCCEED UNCHANGED - so the wait was the right thing to
+   *      have done.
+   *
+   * Fail any clause and the halt must be terminal, which is the loud direction: it drives the ceiling
+   * and eventually auto-pauses the schedule, which is how the owner finds out at all.
+   */
+  neutral: boolean;
+  /** Why that answer is the honest one for this act, against the three clauses above. Never parsed. */
+  because: string;
+}
+
+/**
+ * NEUTRALITY IS DECLARED HERE OR IT DOES NOT EXIST.
+ *
+ * WHAT THIS REPLACES, and why the shape is the fix. `clearedBy` used to be a two-value union whose
+ * single consumer asked `=== 'pair-a-machine'` and treated EVERYTHING ELSE as the neutral halt. So
+ * neutrality was the FALL-THROUGH: any refusal that failed to be the one terminal case inherited
+ * "retry forever" by saying nothing, and three separate defects arrived that way -
+ * `an-org-whose-only-machine-is-revoked-retried-forever`,
+ * `route-switch-refusal-is-neutral-but-repeats-identically`, and the posture-drift halt this table
+ * lands with. A `Record<ClearingAct, ...>` inverts it: a new act does not compile until its neutrality
+ * is written down beside the reason it is true, and `refusalIsNeutral` is a table read rather than
+ * an equality test, so the DEFAULT for anything unconsidered is now terminal - the direction whose
+ * failure mode is a schedule that pauses loudly rather than one that repeats silently.
+ */
+export const CLEARING_ACTS: Readonly<Record<ClearingAct, ClearingActFacts>> = Object.freeze({
+  'start-a-machine': {
+    neutral: true,
+    because:
+      'a machine of this account exists and is merely not connected. The cause is a fact about the ' +
+      'world, the laptop gets opened tomorrow morning whether or not anybody knew a schedule was ' +
+      'waiting for it, and when it does the same steps succeed unchanged. All three clauses hold, ' +
+      'and counting these would auto-pause a working schedule over a shut lid.',
+  },
+  'pair-a-machine': {
+    neutral: false,
+    because:
+      'the registry says this account has NO machine. The cause is a fact about the world, but it ' +
+      'fails the second clause: nobody pairs hardware they were never told was needed, so it will ' +
+      'not clear in the ordinary course. Silence here is an unbounded retry against a state that ' +
+      'cannot move on its own, aimed at the tenant least likely to spot it.',
+  },
+  'edit-the-automation': {
+    neutral: false,
+    because:
+      'the cause is a property of the STEP LIST, not of the world, so it fails the first clause ' +
+      'outright: the next fire resolves the same declarations, reaches the same index and halts ' +
+      'identically. It fails the second too - nobody edits an automation they were never told was ' +
+      'broken - and the only act that clears it is the author changing what it declares.',
+  },
+});
+
+/** Whether a refusal cleared by `act` may be carried as the neutral halt. A TABLE READ, on purpose:
+ *  see `CLEARING_ACTS` for why this is not an equality test against the one terminal case. */
+export function refusalIsNeutral(act: ClearingAct): boolean {
+  return CLEARING_ACTS[act].neutral;
+}
+
+/**
+ * THE BRAND THAT MAKES THIS MODULE THE ONLY REFUSAL SITE.
+ *
+ * A module-private `unique symbol`. Nothing outside this file can name it, so nothing outside this
+ * file can build a value assignable to the blocked member - the type system, rather than a review
+ * convention, is what keeps every refusal inside the census. See the module docblock.
+ */
+const REFUSAL_SITE: unique symbol = Symbol('locality.refusal');
+
 /** Where a step runs and how it leaves. */
 export type LocalityVerdict =
   /**
@@ -123,31 +245,36 @@ export type LocalityVerdict =
       reason: string;
       /**
        * THE ACT THAT CLEARS THIS BLOCK, and therefore whether REPEATING the run can ever help.
-       *
-       *   - `start-a-machine` - the environment is what is missing: a laptop is shut, or the machine
-       *     a session was made on is not the one dialled in. The owner opening it clears the block
-       *     with nobody touching the schedule, so the fire is NEUTRAL against the failure ceiling
-       *     (`schedules/supervisor.ts` `NEUTRAL_BLOCKED_CODES`) and the run halts in
-       *     `awaiting_daemon`.
-       *   - `pair-a-machine` - the account has NO machine (`fleetIsKnownEmpty`), so there is nothing
-       *     to start and waiting can never clear it. The run halts TERMINALLY, drives the ceiling,
-       *     and eventually auto-pauses the schedule loudly instead of re-firing nightly against a
-       *     state that cannot change on its own. WHICH terminal halt is the caller's judgement -
-       *     `engine.ts` `refusalRecordFor` asks for a ceremony only when the step actually declares
-       *     a credential, because a credential halt for a step that wants none sends a person to
-       *     the Cofre to fix something that is not broken.
+       * `CLEARING_ACTS` is where each act's neutrality is declared, with the reason it is true.
        *
        * REQUIRED, not optional, and that is the point. An optional field would let a new blocked
        * branch inherit "neutral, retry forever" by saying nothing - which is exactly how an account
        * with no machines in it inherited an unbounded wait for a machine that could never arrive.
        * Every refusal has to answer the question out loud.
        *
-       * IT NAMES THE ACT AND NOT THE ACTOR (it was `'machine' | 'human'`) because "a person must do
-       * something" is not enough to pick a halt with, and picking one is the only thing the consumer
-       * does with this field.
+       * WHICH terminal halt a non-neutral act produces is the caller's judgement - `engine.ts`
+       * `refusalRecordFor` asks for a ceremony only when the step actually declares a credential,
+       * because a credential halt for a step that wants none sends a person to the Cofre to fix
+       * something that is not broken.
        */
-      clearedBy: 'start-a-machine' | 'pair-a-machine';
+      clearedBy: ClearingAct;
+      /** The module brand. See `REFUSAL_SITE`: it is why this member cannot be built elsewhere. */
+      readonly [REFUSAL_SITE]: true;
     };
+
+/** The blocked member on its own, for the consumers that have already narrowed to it. */
+export type LocalityRefusal = Extract<LocalityVerdict, { kind: 'blocked' }>;
+
+/**
+ * THE ONE CONSTRUCTOR OF A REFUSAL. Every `blocked` verdict in this product comes from here.
+ *
+ * It takes the ACT first because the act is the decision: the sentence is what a person reads, and
+ * the act is what the schedule rail does. Writing them in that order is a small thing that keeps the
+ * important half from being an afterthought appended to a message.
+ */
+function refuse(clearedBy: ClearingAct, reason: string): LocalityRefusal {
+  return { kind: 'blocked', clearedBy, reason, [REFUSAL_SITE]: true };
+}
 
 export interface LocalityInput {
   /** The posture of the origin this step is ABOUT (`classifyOrigin`, resolved at use). */
@@ -288,18 +415,17 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
     if (!pinned || input.daemonPairingId === pinned) {
       return { kind: 'bridge', egress: bridgeEgressFor(input, requirement, resolution) };
     }
-    return {
-      kind: 'blocked',
-      // A machine IS dialled in, just not this one. Starting the right one clears this with nobody
-      // touching the schedule, so it is neutral - and it stays neutral whatever the listing says,
-      // because a connected daemon is itself proof that this account has hardware.
-      clearedBy: 'start-a-machine',
-      reason: authorPin
+    // A machine IS dialled in, just not this one. Starting the right one clears this with nobody
+    // touching the schedule, so it is neutral - and it stays neutral whatever the listing says,
+    // because a connected daemon is itself proof that this account has hardware.
+    return refuse(
+      'start-a-machine',
+      authorPin
         ? `this step is pinned to machine ${authorPin}; the machine currently connected is a different one`
         : 'this step must run on the machine where its session was established, and a different ' +
           'machine of yours is connected - start that machine, or establish this session again ' +
           'from the one you want to use',
-    };
+    );
   }
 
   // ---- 2. AN ACCOUNT WITH NO MACHINE IN IT ---------------------------------------------------
@@ -314,15 +440,11 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
   // That is why it is expressed as an adjustment to those branches rather than as a return of its
   // own - see `noMachineToStart`.
   const noMachineToStart = fleetIsKnownEmpty(input);
-  /** The refusal to use when a "start your machine" halt is about to be issued to an empty fleet. */
-  const noMachineInAccount: LocalityVerdict = {
-    kind: 'blocked',
-    // NOT `establish-the-session`: nothing here knows that a session is even involved, and a
-    // credential halt for a step that declared no credential sends a person to the Cofre to fix
-    // something that is not broken. The act is pairing hardware, and the halt says so.
-    clearedBy: 'pair-a-machine',
-    reason: NO_MACHINE_IN_ACCOUNT_REASON,
-  };
+  /** The refusal to use when a "start your machine" halt is about to be issued to an empty fleet.
+   *  NOT `establish-the-session`: nothing here knows that a session is even involved, and a
+   *  credential halt for a step that declared no credential sends a person to the Cofre to fix
+   *  something that is not broken. The act is pairing hardware, and the halt says so. */
+  const noMachineInAccount = refuse('pair-a-machine', NO_MACHINE_IN_ACCOUNT_REASON);
 
   // ---- 3. The hosted browser, gated by POSTURE and not by the environment --------------------
   if (!input.classification.cloudEgressAllowed) {
@@ -334,13 +456,12 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
     // first place. Naming the machine when there is one is the difference between an instruction
     // and a shrug.
     const pinned = requirement.kind === 'residential' ? requirement.pairingId : undefined;
-    return {
-      kind: 'blocked',
-      // Every branch here is "no machine of yours is connected" - the environment, which the owner
-      // fixes by opening a laptop rather than by establishing anything. (The owner who HAS no
-      // laptop was answered above; reaching this line means the account has hardware.)
-      clearedBy: 'start-a-machine',
-      reason: authorPin
+    // Every branch here is "no machine of yours is connected" - the environment, which the owner
+    // fixes by opening a laptop rather than by establishing anything. (The owner who HAS no laptop
+    // was answered above; reaching this line means the account has hardware.)
+    return refuse(
+      'start-a-machine',
+      authorPin
         ? `this origin is ${input.classification.posture}: the step is pinned to machine ${authorPin}, ` +
           'and that machine is not connected'
         : pinned
@@ -348,15 +469,11 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
             'session was established, and that machine is not connected'
           : `this origin is ${input.classification.posture}, so its browser steps run only on one of your ` +
             'machines, and none is connected',
-    };
+    );
   }
   if (!input.inProcessFallbackEnabled) {
     if (noMachineToStart) return noMachineInAccount;
-    return {
-      kind: 'blocked',
-      clearedBy: 'start-a-machine',
-      reason: 'no machine is connected and the in-process browser fallback is disabled',
-    };
+    return refuse('start-a-machine', 'no machine is connected and the in-process browser fallback is disabled');
   }
 
   // ---- 4. ...and the route out it gets -------------------------------------------------------
@@ -372,13 +489,110 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
       // Literally "waiting for a machine": the run stops and re-fires once one is back. An account
       // with none has nothing to wait for, so the queue is not a queue.
       if (noMachineToStart) return noMachineInAccount;
-      return { kind: 'blocked', clearedBy: 'start-a-machine', reason: `waiting for a machine: ${resolution.reason}` };
+      return refuse('start-a-machine', `waiting for a machine: ${resolution.reason}`);
     case 'refused':
     default:
       // The fleet cannot meet the declared requirement RIGHT NOW - a machine advertising
       // residential egress is missing, not retired. Registering or waking one clears it.
       if (noMachineToStart) return noMachineInAccount;
-      return { kind: 'blocked', clearedBy: 'start-a-machine', reason: resolution.reason };
+      return refuse('start-a-machine', resolution.reason);
+  }
+}
+
+/**
+ * ================================ WHAT THE RUN ITSELF HAS ALREADY DONE ================================
+ *
+ * `resolveLocality` judges the STEP LIST: a declaration, a posture, a fleet. Two facts it cannot see
+ * belong to the RUN IN FLIGHT, and both can make a verdict that was correct when resolved wrong by
+ * the time the step executes:
+ *
+ *   - the hosted browser has NAVIGATED. Posture is declared on an action and applies to the origin
+ *     that action is about (`classifyOrigin`'s whole contract). A `browser` step acts, an act can
+ *     navigate, and the next step inherits the same permissive label while the hosted Chromium now
+ *     sits somewhere else - a bank portal reached by a click, an OAuth hop, a 302. The label was
+ *     never about that host, so it does not license it.
+ *   - the hosted context is already OPEN, for one route out. The proxy is a LAUNCH option, so a
+ *     context cannot be re-pointed; reusing it for a step that resolved to a different door sends
+ *     that step's traffic out of a door it did not resolve to.
+ *
+ * BOTH REFUSALS USED TO BE BUILT IN `engine.ts`, and both were wrong in the same way: they were
+ * assembled outside this module, so the cross-product census in `tests/automation/locality.test.ts`
+ * could not see them, and both carried `clearedBy: 'start-a-machine'` - the neutral halt - for
+ * conditions that ARE PROPERTIES OF THE STEP LIST. Replaying produces the identical halt at the
+ * identical index, so the schedule re-fired forever, uncounted, printing a remediation ("start a
+ * machine") that named nothing wrong with any machine. They live here now, they are pure, and they
+ * name `edit-the-automation`.
+ */
+export interface RunSoFar {
+  /**
+   * The URL the hosted browser is on, or null when it has not observed one. RAW, not a host: the
+   * parse belongs beside the comparison, so a URL this module cannot read answers "nothing to
+   * compare" rather than reading as a mismatch somewhere else.
+   */
+  liveUrl: string | null;
+  /** The bare host this step's declaration is ABOUT (`resolveStepOrigin`), or null when none resolved. */
+  declaredOrigin: string | null;
+  /** The route the hosted context was LAUNCHED for, or null when this run has not opened one. */
+  openedRoute: EgressResolution | null;
+}
+
+/**
+ * Narrow a step-list verdict against what THIS RUN has already done. Returns the verdict unchanged
+ * when neither fact bites, which is the overwhelmingly common case.
+ *
+ * DRIFT IS CHECKED FIRST, preserving the order the engine had: a session sitting on an undeclared
+ * host is the more specific complaint, and the route it would have taken is beside the point once
+ * the destination is wrong.
+ *
+ * BOTH ARE CHECKED ONLY FOR THE HOSTED ROUTE. On a machine of the owner's there is no substitution
+ * to make - the work leaves by that machine's line wherever it navigates - and no launch option to
+ * be stuck with. NAMED LIMITATION, not a claim of completeness: the drift check stops the steps
+ * AFTER the drift, never the act that drifts (docs/findings.md).
+ */
+export function narrowLocalityForRun(verdict: LocalityVerdict, run: RunSoFar): LocalityVerdict {
+  if (verdict.kind !== 'in-process') return verdict;
+
+  // A step whose origin never resolved got `classifyOrigin('')`, which is CLOSED, so it is not
+  // `in-process` and cannot reach here in production. Answered explicitly anyway: there is nothing
+  // to have drifted FROM, and a live host compared against nothing is not a mismatch.
+  const declared = run.declaredOrigin;
+  const live = declared ? hostOf(run.liveUrl) : null;
+  if (declared && live && live !== declared) {
+    return refuse(
+      // NOT `start-a-machine`, which is what this said for six rounds. Nothing about a machine is
+      // wrong; the automation navigates somewhere its declarations never spoke about, and it will do
+      // so again on the next fire. (A machine happening to be connected next time WOULD sidestep it,
+      // by making the verdict `bridge` before this check runs - but that is an accident of the
+      // route, not the remediation, and it is unavailable to the owner who has no machine at all.)
+      'edit-the-automation',
+      `this run's hosted browser is on ${live}, which is not the origin this step's posture was ` +
+        `declared for (${declared}) - it will not carry a step onto an undeclared site. ` +
+        'Declare the origin this automation actually reaches, or keep the run on the declared one.',
+    );
+  }
+
+  if (run.openedRoute && !sameRoute(run.openedRoute, verdict.egress)) {
+    return refuse(
+      'edit-the-automation',
+      'this step needs a different route out of the network than the one this run already opened, ' +
+        'and the proxy is a launch option that cannot be re-pointed - declare one route for the ' +
+        'whole run, or split these steps into separate automations',
+    );
+  }
+  return verdict;
+}
+
+/**
+ * The bare host of a live page URL. Unparseable (or absent) answers null, which the caller reads as
+ * "nothing to compare" rather than as a mismatch: a browser that has not navigated anywhere yet
+ * (`about:blank`, an empty string) has not drifted off anything.
+ */
+function hostOf(raw: string | null): string | null {
+  if (!raw) return null;
+  try {
+    return new URL(raw).hostname.toLowerCase() || null;
+  } catch {
+    return null;
   }
 }
 
@@ -489,9 +703,13 @@ export function hostedTypistPermitFor(verdict: LocalityVerdict | null): { egress
  * A browser session is created once per run and then reused across steps, so a later step can
  * inherit a context that was launched for an earlier step's route. Two steps that resolve
  * differently must not share one: the proxy is a launch option, and a context launched for the
- * datacenter cannot be re-pointed at a machine afterwards. The engine refuses rather than reusing.
+ * datacenter cannot be re-pointed at a machine afterwards.
+ *
+ * PRIVATE. It used to be exported, and its only external caller was a suite asserting the predicate
+ * on four hand-built resolutions - which proved the comparison and not the refusal. The decision it
+ * serves is `narrowLocalityForRun`, one screen up, and that is what the suite drives now.
  */
-export function sameRoute(a: EgressResolution, b: EgressResolution): boolean {
+function sameRoute(a: EgressResolution, b: EgressResolution): boolean {
   if (a.outcome === 'machine' || b.outcome === 'machine') {
     return a.outcome === 'machine' && b.outcome === 'machine' && a.proxyUrl === b.proxyUrl;
   }

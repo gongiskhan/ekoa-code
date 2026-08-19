@@ -1904,3 +1904,61 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   refetches). And `resolveEgress`'s tenancy filter, which had degraded from a per-candidate org check
   to pairing-id-set membership, is restored: a boundary must not rest on an id being unique across
   tenants.
+
+- 2026-08-19 - P4 round seven, four decisions taken while closing a CLASS rather than a third
+  instance of it.
+  **(1) NEUTRALITY AGAINST THE FAILURE CEILING IS A DECLARED PROPERTY, NOT A FALL-THROUGH.** Three
+  rounds running, the same defect arrived in a new place: a refusal that was NEUTRAL against the
+  ceiling for a condition no waiting could change (an org with no machines; the mid-run route switch;
+  the posture-drift halt found this round). The shared cause was a shape, not three oversights -
+  `refusalRecordFor` asked `clearedBy === 'pair-a-machine'` and carried EVERYTHING ELSE as the
+  neutral halt, so any refusal that failed to be the one terminal case inherited "retry forever" by
+  saying nothing. `CLEARING_ACTS` (`automation/locality.ts`) is now
+  `Record<ClearingAct, { neutral, because }>`: a new act does not compile until its neutrality is
+  written down beside the reason it is true, `refusalIsNeutral` is a table read rather than an
+  equality test, and the DEFAULT for anything unconsidered is terminal. The direction is chosen:
+  the failure mode of a wrong terminal is a schedule that pauses loudly, and the failure mode of a
+  wrong neutral is one that repeats silently for ever.
+  **THE TEST OF NEUTRALITY IS WRITTEN DOWN, AND IT IS NOT "CAN A PERSON FIX THIS".** A person can fix
+  all three refusals, so that reading discriminates nothing. What neutrality actually buys is a fire
+  that leaves NO DURABLE TRACE - no counter movement, no auto-pause, only a `schedule_blocked` toast
+  on a page the owner may never have open - so the real test is whether it will clear WITHOUT ANYBODY
+  BEING TOLD. Three clauses, all required: (i) the cause is a fact about the WORLD and not about the
+  automation's declarations, else replay is provably identical; (ii) it is expected to clear in the
+  ordinary course, unprompted - a laptop gets opened tomorrow morning, a machine nobody was told to
+  pair never is, an automation nobody was told is broken never gets edited; (iii) when it clears, the
+  same steps succeed unchanged, so the wait was the right thing to have done.
+  **RE-EXAMINED UNDER THIS RULE**, round six's `pair-a-machine` stays terminal, but for a better-stated
+  reason than the one recorded then: its cause IS environmental (the fleet), and pairing IS an act
+  available to the owner, so the round-six wording ("no laptop can be opened") does not carry the
+  argument. It fails clause (ii), and that is the clause the earlier two defects failed as well.
+  **(2) A REFUSAL MAY ONLY BE CONSTRUCTED IN `locality.ts`,** enforced by a module-private `unique
+  symbol` brand on the blocked member rather than by review. This is what makes the cross-product
+  census in `tests/automation/locality.test.ts` a census OF THE PRODUCT: the posture-drift refusal
+  escaped that census for six rounds for exactly one reason, that it was assembled in `engine.ts`
+  and the census can only enumerate what the module returns. The corollary is that decisions needing
+  the RUN's live facts moved in too, as `narrowLocalityForRun` - a pure function over the URL the
+  hosted browser is on, the origin the step declared, and the route its context is already open for.
+  The engine gathers; this module judges. The brand was verified to bite: the only two external
+  construction sites in the repository (both in one test) stopped compiling.
+  **(3) `edit-the-automation` IS THE THIRD CLEARING ACT, AND IT NEEDED NO CONTRACT CHANGE.** Round
+  six's ledger deferred the route-switch fix on the grounds that an honest terminal state "means a
+  third `clearedBy` value with its own ceiling rule and its own badge copy - a contract decision that
+  deserves its own slice". The code won that argument: `localityTerminalFailureRecord` already exists,
+  is already terminal on the schedule rail, drives the ceiling and auto-pauses, and needs no new run
+  status, no SSE member, no badge copy and no ceiling rule. It is NEVER mapped to the ceremony halt -
+  re-establishing a session does not stop an automation navigating off its declared origin, and a
+  wrong specific instruction is worse than an honest general one.
+  **(4) `awaiting_consent` JOINS `BLOCKED_RUN_STATUSES`.** The two schedule rails disagreed about one
+  halt: an integration-action target answered `blocked` with code `awaiting_consent`
+  (`mapIntegrationOutcome`), while an AUTOMATION target that halted the same way answered `failed`,
+  so the owner's badge read "Failed" for a run waiting on their own approval - with the copy for the
+  correct string already shipped and already reachable from the other rail. Including it changes the
+  WORD and not the ceiling: `awaiting_consent` stays out of `NEUTRAL_BLOCKED_CODES`, so it still
+  counts and still auto-pauses, because nothing about waiting brings an approval closer.
+  **ALSO**: the `(integrationKey, actionName)` definition lookups behind `resolveStepOrigin` are
+  memoised per run (`engine.ts` `loadDeclarationOnce`, shared with the credential gate), keyed by the
+  LOOKUP and never by the step - the warning left in `docs/findings.md` when this was deferred, and
+  the shape that produced the run-level `preferredPairingId` defect. And `getBrowser`'s
+  `stepLocality?.kind !== 'in-process'` conjunct is removed: `resolveLocality` cannot answer
+  `in-process` while a daemon is connected, so it was never enterable.

@@ -6,16 +6,13 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
-- **`resolve-step-origin-runs-twice-per-gated-browser-step`** (OPEN 2026-08-19, LOW, cost - a
-  consequence of scoping the ceremony preference to its origin, named rather than optimised away).
-  Both `resolveLocalityForStep` and `evaluateCredentialGate` call `resolveStepOrigin` for the same
-  step index, and the post-gate re-resolution makes that three walks for a gated browser step. Each
-  walk can hit the `loadIntegrationActionDeclaration` seam once per integration step it passes.
-  **Deliberately not memoised.** The obvious cache is a per-run map keyed by step index, and a per-run
-  map holding a value resolved for one step and reused for another is precisely the shape that
-  produced the defect this round exists to fix (`preferredPairingId` was exactly that). The seam is a
-  definition lookup, not a network call, and the walk is bounded by the step list. Revisit only with
-  a profile, and if so cache the ORIGIN keyed by step index rather than anything derived from it.
+- **`resolve-step-origin-runs-twice-per-gated-browser-step`** (**FIXED 2026-08-19**, round seven;
+  see the round-seven fixed section). The walk still runs two to three times per gated browser step -
+  that is inherent to resolving locality before the gate and re-resolving after it - but its
+  DEFINITION-STORE READS are now memoised per `(integrationKey, actionName)` for the life of the run
+  (`engine.ts` `loadDeclarationOnce`), and the same memo is handed to the credential gate. The
+  warning in the original entry stands and was followed: the memo is keyed by the LOOKUP, never by
+  the step, so nothing resolved for one step is reused for another.
 
 - **`the-permit-is-withheld-where-the-old-shape-would-have-typed-from-the-datacenter`** (OPEN
   2026-08-19, LOW, an intended behaviour change with a real cost, recorded so it is not rediscovered
@@ -31,23 +28,6 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   needs-credentials one rather than "your machine cannot lend the login a matching line". A refusal
   that named its own cause would need the permit to carry a reason through the gate into the halt
   payload; not done here, because the payload is a contract shape and widening it is its own slice.
-
-- **`route-switch-refusal-is-neutral-but-repeats-identically`** (OPEN 2026-08-19, LOW, a named limit
-  of the `clearedBy` split, not a regression). `LocalityVerdict`'s blocked member answers WHICH ACT
-  clears it, so a refusal waiting cannot fix halts terminally instead of re-firing forever. The
-  mid-run ROUTE SWITCH refusal (`refusalRecordFor`, "this step needs a different route out of the
-  network than the one this run already opened") answers `start-a-machine`, which keeps it NEUTRAL
-  against the failure ceiling - and a route switch is a property of the STEP LIST, so the next fire
-  resolves identically and blocks at the same index. It therefore repeats without bound.
-
-  **Deliberately not changed here.** It is not the same defect as the two this slice closed: those
-  are cleared by a person pairing a machine or establishing a session, and the halts name both
-  precisely; a route switch is cleared by the automation's AUTHOR editing the step declarations, and
-  no existing halt says that. Giving it an honest terminal state means a third `clearedBy` value with
-  its own ceiling rule and its own badge copy - a contract decision that deserves its own slice. The
-  blast radius is bounded: it needs a run whose hosted context is already open for one route and a
-  later step declaring another, which requires a permissive origin AND an explicit
-  residential/pinned declaration on a later step.
 
 - **`retired-ceremony-halt-cannot-name-the-machine-in-the-fleet's-own-words`** (OPEN 2026-08-19,
   LOW, an honest limit of the message). The retirement halt says "the machine where this session was
@@ -3164,6 +3144,101 @@ silently absorbed into a ledger note):
   `sales-crm.png` ("Página não encontrada" 404 instead of the dashboard) - `booking-system` is
   disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
   `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
+
+## Recently fixed - 2026-08-19 neutrality stops being the fall-through (round seven)
+
+Rounds three to six each closed one refusal that was NEUTRAL against the failure ceiling for a
+condition no waiting could change. Round seven stops treating them as three incidents and closes the
+CLASS: neutrality is now a declared property of a named clearing act, refusals can only be built in
+one module, and the census that keeps them honest covers every construction site rather than one
+exported function. Each behaviour change is pinned by a test verified to fail against the unfixed
+source.
+
+- `posture-drift-refusal-is-neutral-but-repeats-identically` (**MAJOR**, the third sighting, found
+  and fixed this round). Fixture: `[integration(posture permissive, baseUrl https://portal.example.com),
+  wait, wait]`, no daemon. Permissive means locality answers `in-process` and the hosted Chromium
+  opens; the act in step 1 leaves the declared origin (a click, an OAuth hop, a 302), so the
+  post-action observation reports `https://bank.example.pt/...`. `resolveLocalityForStep` then built
+  `{ kind: 'blocked', clearedBy: 'start-a-machine' }` -> `awaiting_daemon` -> NEUTRAL. Two
+  consecutive `runAutomation` calls on an identical fixture both returned `awaiting_daemon`: the
+  cause is a property of the STEP LIST, so replaying reproduces the same halt at the same index, the
+  schedule re-fires nightly forever, the ceiling counts nothing, and the remediation it printed named
+  a machine. **`clearedBy: 'start-a-machine'` was also a false instruction**, though the code
+  corrects the report that no laptop can clear it at all: a connected daemon WOULD sidestep the check
+  by making the verdict `bridge` before it runs. That is an accident of the route rather than the
+  remediation, and it is unavailable to the owner with no machine, which is every owner running
+  hosted.
+  **HOW IT ESCAPED THE CENSUS.** `tests/automation/locality.test.ts` walks the cross product of
+  `resolveLocality`'s whole input space and asserts the exact set of refusals it emits. This refusal
+  was built in `engine.ts`, so the census could not see it. A census of one function is not a census
+  of the product.
+
+- `route-switch-refusal-is-neutral-but-repeats-identically` (was OPEN, LOW; **FIXED**). Same class,
+  recorded last round and deferred on the grounds that an honest terminal state "means a third
+  `clearedBy` value with its own ceiling rule and its own badge copy - a contract decision that
+  deserves its own slice". **The code won that argument**: `localityTerminalFailureRecord` already
+  existed, is already terminal on the schedule rail, and needs no new run status, no new badge copy
+  and no new ceiling rule. The deferral was costing more than the fix.
+
+**THE CLASS FIX**, in four parts that had to move together:
+
+  (a) `clearedBy` gains `edit-the-automation`, for a cause that is a property of the step list. The
+  engine maps it to the plain non-recoverable failure - terminal, drives the ceiling, auto-pauses
+  loudly - and never to a ceremony ask, because re-establishing a session does not stop an
+  automation navigating off its declared origin.
+
+  (b) NEUTRALITY IS DECLARED, NOT DEFAULTED. `refusalRecordFor` asked `clearedBy === 'pair-a-machine'`
+  and carried everything else as the neutral halt, so a refusal that failed to be the one terminal
+  case inherited "retry forever" by saying nothing - which is how all three defects arrived.
+  `CLEARING_ACTS` is now a `Record<ClearingAct, { neutral, because }>`: a new act does not compile
+  until its neutrality is written beside the reason it is true, `refusalIsNeutral` is a table read,
+  and the default for anything unconsidered is TERMINAL.
+
+  (c) EVERY REFUSAL IS BUILT IN `locality.ts`. The blocked member carries a module-private `unique
+  symbol` brand, so no other module can construct one - verified by the two test literals that
+  stopped compiling. The drift and route-switch decisions moved in with it as
+  `narrowLocalityForRun`, a pure function over the run's live facts (the URL the hosted browser is
+  on, the origin the step declared, the route its context is already open for); `engine.ts` gathers,
+  `locality.ts` judges.
+
+  (d) THE CENSUS COVERS BOTH ENTRY POINTS. It crosses every verdict from `resolveLocality` with
+  every state `narrowLocalityForRun` can be handed, asserts the exact set of refusals emitted, that
+  each answers one way, that the terminal set is exactly the three whose cause is not environmental,
+  and that every act in `CLEARING_ACTS` is reachable and every act reached is in `CLEARING_ACTS`.
+
+  MUTATIONS, all verified red: see the round-seven mutation table in the commit message.
+
+- `a-scheduled-automation-waiting-for-an-APPROVAL-reported-Failed` (MEDIUM, user-visible, FIXED).
+  `BLOCKED_RUN_STATUSES` (`automation/service.ts`) held `awaiting_daemon` and `needs_credentials`
+  but not `awaiting_consent`, so a scheduled AUTOMATION halting for an integration write approval
+  came back `outcome: 'failed'` and the owner's badge read "Failed" for a run sitting waiting on
+  their approval. The OTHER schedule target kind already answered `blocked` for the identical halt
+  (`mapIntegrationOutcome`), the schedules surface already carried `runBlocked.awaiting_consent`
+  copy for it, and `supervisor.ts`'s own docblock already named `awaiting_consent` beside
+  `needs_credentials` as a block on a human act - so the two rails disagreed about one halt.
+  **Correcting the report that raised this**: the copy is NOT dead, which is why the alternative
+  disposition ("drop it") was wrong - it is reached today through the integration-action rail. FIXED
+  by including the status. The ceiling is unaffected: `awaiting_consent` is deliberately NOT in
+  `NEUTRAL_BLOCKED_CODES`, so it still counts and still auto-pauses.
+
+- `getBrowser-guarded-on-a-condition-that-could-not-occur` (dead surface, removed). `if (connection
+  && stepLocality?.kind !== 'in-process')` - `resolveLocality` answers `bridge` or `blocked` whenever
+  `daemonConnected` is true, and `daemonConnected` IS `!!connection`, so a truthy `connection` and an
+  `in-process` verdict cannot co-occur and the conjunct was never enterable. The docblock directly
+  above it argues against exactly this ("an unpinnable guard reads as protection while providing
+  none"). Removed; provably equivalent, so no test changes.
+
+- `hostedTypistPermitForPortal-documented-a-branch-its-caller-cannot-reach` (docblock defect, fixed).
+  `classifyOrigin(baseUrl)` is called with NO action, and `classifyOrigin` returns the frozen CLOSED
+  classification before it looks at the url whenever `!action` - so `cloudEgressAllowed` is false for
+  every input and the `{ hostedTypist: {} }` branch is unreachable from this caller. The docblock
+  claimed the permit "becomes an ordinary YES the moment the sync is promoted onto a declared
+  integration action", which is false as written: declaring an action changes nothing while the call
+  site passes none. Corrected to say what it is (a constant NO), what would actually change it
+  (passing the action here), and why the call stays rather than collapsing to a literal (posture is
+  `origin-posture.ts`'s question; a literal is this rail deciding its own posture again, rule 3). The
+  contract test asserting the permit is absent is now annotated as asserting a CONSTANT, with what it
+  does pin - the wiring - said out loud.
 
 ## Recently fixed - 2026-08-19 an empty fleet was ignorance, so a solo tenant retried forever (round six)
 

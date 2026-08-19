@@ -171,13 +171,27 @@ function stripUndefined<T extends object>(o: T): T {
  * anyone had declared about the origin - which is both the substitution P4.1 exists to stop and a
  * per-consumer exemption from a rule everything else obeys (Capability Contract rule 3).
  *
- * NO ACTION DECLARATION IS PASSED, and there is none to pass: this rail runs a hard-coded portal
- * walk, not an `IntegrationAction`, so nobody has ever declared a posture for it.
- * `classifyOrigin(url)` with no action is CLOSED, so the answer today is a permit WITHHELD - the
- * typist route becomes `needs-human` and the session is established by a person, on a machine of
- * their own. That is the correct closed reading for a court portal, and it becomes an ordinary YES
- * the moment the sync is promoted onto a declared integration action (docs/findings.md
- * `citius-sync-establishes-its-session-outside-the-locality-decision`).
+ * TODAY THIS IS A CONSTANT NO, and the docblock is explicit about that because the previous version
+ * was not. `classifyOrigin(url)` with NO ACTION returns the frozen CLOSED classification before it
+ * looks at the url at all (`origin-posture.ts`: `if (!action) return CLOSED`), and this call site
+ * passes no action - so `cloudEgressAllowed` is false for EVERY input, the `{ hostedTypist: {} }`
+ * branch is unreachable from here, and the contract test asserting the permit is absent
+ * (`tests/contract/citius-sync.test.ts`) can only be asserting a constant. It is worth asserting
+ * anyway: it pins the WIRING, and the previous shape of this rail wrote `hostedTypist: {}` into the
+ * call unconditionally.
+ *
+ * WHAT WOULD ACTUALLY CHANGE THE ANSWER, corrected. The earlier note said this "becomes an ordinary
+ * YES the moment the sync is promoted onto a declared integration action". That is false as written:
+ * declaring an action changes nothing while this call site passes none. Promotion means the walk is
+ * driven BY an `IntegrationAction` and that action is handed to `classifyOrigin` here, at which
+ * point the branch becomes live and the answer is whatever its author declared. Until then the
+ * withheld permit is the correct closed reading for a court portal: the typist route is
+ * `needs-human` and the session is established by a person, on a machine of their own
+ * (docs/findings.md `citius-sync-establishes-its-session-outside-the-locality-decision`).
+ *
+ * THE CALL STAYS, rather than collapsing to a hard-coded `{}`. Posture is `origin-posture.ts`'s
+ * question to answer; a literal here would be this rail deciding its own posture again, which is
+ * precisely the per-consumer exemption the paragraph above describes (Capability Contract rule 3).
  */
 function hostedTypistPermitForPortal(baseUrl: string | undefined): { hostedTypist?: Record<string, never> } {
   const classification = classifyOrigin(baseUrl ?? CITIUS_MANDATARIOS_BASE_URL);

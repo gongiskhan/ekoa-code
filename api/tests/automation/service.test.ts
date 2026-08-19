@@ -13,6 +13,7 @@ import * as svc from '../../src/automation/service.js';
 import {
   setDaemonConnectionResolver,
   setScopedMemoryResolver,
+  setIntegrationActionExecutor,
   setPlatformIntegrationCaller,
   setRunEventEmitterFactory,
   __resetAutomationSeamsForTests,
@@ -651,6 +652,50 @@ describe('automation service surface (§3.8.18)', () => {
     expect(out.permanent).toBe(false);
     const run = await automationRuns.get(out.runId!);
     expect((run as { status?: string }).status).toBe('needs_credentials');
+  });
+
+  /**
+   * THE THIRD BLOCKED CAUSE, and the one the two schedule rails disagreed about.
+   *
+   * An integration step whose write is not approved halts the run in `awaiting_consent` - a
+   * deliberate, persisted halt that resolves when the owner approves the action and re-runs.
+   * `BLOCKED_RUN_STATUSES` did not contain it, so this rail reported `failed`.
+   *
+   * WHY THAT WAS VISIBLE RATHER THAN COSMETIC. The OTHER schedule target kind already answers
+   * `blocked` for the identical halt - `mapIntegrationOutcome` (`schedules/supervisor.ts`) maps
+   * `code: 'awaiting_consent'` to `status: 'blocked'` - the schedules surface carries copy for that
+   * code (`runBlocked.awaiting_consent`), and the supervisor's own docblock names it beside
+   * `needs_credentials` as a block on a human act. So a schedule pointed at an INTEGRATION ACTION
+   * said "waiting for your approval" while a schedule pointed at an AUTOMATION that halted the same
+   * way said "Failed", to the same owner, about the same approval.
+   *
+   * THE CEILING IS UNAFFECTED, which is why this belongs in `BLOCKED_RUN_STATUSES` and emphatically
+   * not in `NEUTRAL_BLOCKED_CODES`: `awaiting_consent` still counts and still auto-pauses, because
+   * nothing about waiting brings an approval closer.
+   */
+  it('a run waiting for an APPROVAL is blocked too, so both schedule rails say the same word', async () => {
+    setIntegrationActionExecutor(async () => ({
+      success: false,
+      error: 'esta ação precisa de aprovação',
+      // The write gate's code, read structurally off `details` - never from the prose.
+      details: 'awaiting_consent',
+    }));
+    await automations.insert({
+      _id: 'consent_auto', id: 'consent_auto', name: 'Needs an approval', description: '', ownerUserId: 'u1', orgId: 'o1',
+      steps: [{
+        id: 'i1', description: 'write to the tracker', type: 'integration',
+        integrationKey: 'tracker', integrationAction: 'create_issue',
+      }],
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    } as never);
+    const out = await svc.startRunForTrigger({ automationId: 'consent_auto', ownerUserId: 'u1', orgId: 'o1', triggeredBy: 'schedule' });
+
+    expect(out.outcome).toBe('blocked');
+    expect(out.code).toBe('awaiting_consent');
+    expect(out.permanent).toBe(false);
+    // The persisted run says the same thing in its own vocabulary - the two must not drift.
+    const run = await automationRuns.get(out.runId!);
+    expect((run as { status?: string }).status).toBe('awaiting_consent');
   });
 
   it('an ordinary step failure is still FAILED — blocked did not swallow the failure channel', async () => {

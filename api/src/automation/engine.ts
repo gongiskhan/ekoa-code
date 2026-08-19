@@ -31,6 +31,7 @@ import {
   cofrePortalDeepLink,
   evaluateCredentialGate,
   resolveStepOrigin,
+  type CredentialGateDeps,
   type CredentialGateInput,
   type CredentialGateVerdict,
 } from './credential-gate.js';
@@ -42,8 +43,9 @@ import { issueLoginRelayPrompt } from '../cofre/index.js';
 import { classifyOrigin } from './origin-posture.js';
 import {
   resolveLocality,
+  narrowLocalityForRun,
+  refusalIsNeutral,
   hostedTypistPermitFor,
-  sameRoute,
   type LocalityVerdict,
 } from './locality.js';
 import {
@@ -60,6 +62,7 @@ import {
   resolveScopedMemories,
   loadEgressCandidates,
   loadIntegrationActionDeclaration,
+  type IntegrationActionDeclaration,
 } from './seams.js';
 import { LocalBrowserSession } from './local-browser-session.js';
 import { rebaseSelfUrl } from './self-url.js';
@@ -637,6 +640,45 @@ async function runOrRehearse(
   const knownPairingsNow = async (): Promise<readonly string[] | null> => {
     return (await fleetNow())?.map((c) => c.pairingId) ?? null;
   };
+  /**
+   * THE ACTION DECLARATION SEAM, READ ONCE PER (integration, action) FOR THE LIFE OF THE RUN - the
+   * way `fleetNow` memoises the fleet listing, and for the same reason.
+   *
+   * `resolveStepOrigin` walks BACKWARDS from a step index to the nearest step that states a URL, and
+   * every `integration` step it passes costs one definition-store read. It runs two to three times
+   * per gated browser step (locality, the gate, and the post-gate re-resolution when the gate hands
+   * back a ceremony pairing), so a run of N browser steps behind one integration step paid O(N) store
+   * reads for the same row.
+   *
+   * KEYED BY THE LOOKUP, NOT BY THE STEP, and that distinction is load-bearing. A cache keyed by step
+   * index holds a value RESOLVED FOR ONE STEP AND REUSED FOR ANOTHER, which is precisely the shape
+   * that produced the run-level `preferredPairingId` defect (docs/findings.md
+   * `resolve-step-origin-runs-twice-per-gated-browser-step`, which warned against exactly that). This
+   * memoises the SEAM CALL: the same `(integrationKey, actionName)` under the same run actor is the
+   * same row, and nothing derived from a step is stored. The actor is fixed for the run, so it is not
+   * part of the key; the seam is per-run-actor for tenancy reasons and this memo never outlives one.
+   *
+   * THE PROMISE IS THE CACHE ENTRY, so two concurrent walks of the same key share one store read
+   * instead of racing to issue two. A rejected read is not cached - the entry is dropped so a later
+   * step re-asks rather than inheriting a transient failure for the whole run.
+   */
+  const declarationMemo = new Map<string, Promise<IntegrationActionDeclaration | null>>();
+  const loadDeclarationOnce: typeof loadIntegrationActionDeclaration = (integrationKey, actionName, actor) => {
+    // The separator is an ESCAPED NUL: it cannot occur in either component, so no pair of
+    // key/action can collide with another by concatenation. Written `\u0000` and never as a
+    // raw byte - a raw control byte makes the file BINARY to git, grep and every grep-based CI
+    // gate (`tests/security/binary-bytes-gate.test.ts`, which caught exactly this).
+    const key = `${integrationKey}\u0000${actionName}`;
+    const hit = declarationMemo.get(key);
+    if (hit) return hit;
+    const pending = loadIntegrationActionDeclaration(integrationKey, actionName, actor)
+      .catch((err: unknown) => {
+        declarationMemo.delete(key);
+        throw err;
+      });
+    declarationMemo.set(key, pending);
+    return pending;
+  };
   const getBrowser = (): BrowserSession | null => {
     if (!browser) {
       // NO `blocked` GUARD HERE, on purpose. A refused step never reaches `executeStep` at all -
@@ -644,7 +686,13 @@ async function runOrRehearse(
       // is a post-failure recovery path the awaiting-daemon halt already returned before. A branch
       // that cannot be entered is a branch no test can pin, and an unpinnable guard reads as
       // protection while providing none.
-      if (connection && stepLocality?.kind !== 'in-process') {
+      //
+      // WHICH IS WHY THE `stepLocality?.kind !== 'in-process'` CONJUNCT IS GONE from this line. It
+      // was never enterable: `resolveLocality` returns `bridge` or `blocked` whenever
+      // `daemonConnected` is true, and `daemonConnected` IS `!!connection`, so a truthy `connection`
+      // and an `in-process` verdict cannot co-occur. It read as a second opinion about which session
+      // to build while providing none - the exact thing the paragraph above rejects.
+      if (connection) {
         // Session injection is LOCAL-SESSION-ONLY today: the daemon owns its
         // own persistent profile and the bridge protocol has no cookie
         // channel yet, so `sessionState` is deliberately NOT forwarded here.
@@ -694,7 +742,7 @@ async function runOrRehearse(
       workingSteps,
       index,
       actorFromCtx(ctx),
-      loadIntegrationActionDeclaration,
+      loadDeclarationOnce,
     );
     // An origin that cannot be resolved is not a licence: `classifyOrigin('')` is CLOSED, which is
     // what an unknown destination has to be.
@@ -720,85 +768,67 @@ async function runOrRehearse(
       inProcessFallbackEnabled: loadAutomationConfig().localBrowserEnabled,
     });
 
-    // THE DECLARATION LICENSES ONE ORIGIN, AND THE PAGE MUST STILL BE ON IT.
+    // WHAT THIS RUN HAS ALREADY DONE, which the step list cannot state: the page the hosted browser
+    // has drifted onto, and the route its context is already open for. Both refusals are BUILT IN
+    // `locality.ts` (they used to be built here, which is exactly how the drift halt escaped that
+    // module's cross-product census for six rounds) - this is the gather, not the judgement.
     //
-    // Posture is declared on an ACTION and applies to the origin that action is about - that is
-    // `classifyOrigin`'s whole contract, and `resolveStepOrigin` honours it for the STEP LIST. It
-    // cannot honour it for the live page: a `browser` step acts, an act can navigate, and the next
-    // `wait`/`verify`/`browser` step inherits the same permissive label while the hosted Chromium
-    // now sits on somewhere else entirely - a bank portal reached by a click, an OAuth hop, a
-    // redirect. The label was never about that host, so it does not license it.
-    //
-    // Checked only for the hosted route, because that is the one where being wrong means a
-    // datacenter IP on a site that scores them; on a machine of the owner's there is no
-    // substitution to make. NAMED LIMITATION, not a claim of completeness: this stops the steps
-    // AFTER the drift, never the act that drifts (docs/findings.md).
-    if (verdict.kind === 'in-process' && browser?.hasObservation()) {
-      const live = hostOfUrlForPosture(browser.url());
-      if (live && live !== resolvedOrigin?.origin) {
-        return {
-          kind: 'blocked',
-          // The drift is a fact about THIS run's live session, and the next fire starts from a
-          // fresh one. Neutral, as it has always been.
-          clearedBy: 'start-a-machine',
-          reason:
-            `this run's hosted browser is on ${live}, which is not the origin this step's posture ` +
-            'was declared for - it will not carry a step onto an undeclared site',
-        };
-      }
-    }
-    return verdict;
+    // `inProcessRoute` is read HERE rather than at the refusal site it used to live at, and the two
+    // are the same value: nothing between this call and `refusalRecordFor` calls `getBrowser()`,
+    // which is the only writer.
+    return narrowLocalityForRun(verdict, {
+      liveUrl: browser?.hasObservation() ? browser.url() : null,
+      declaredOrigin: resolvedOrigin?.origin ?? null,
+      openedRoute: inProcessRoute,
+    });
   };
 
   /**
    * A locality verdict this loop must refuse, as the halt record the outer loop already knows.
    *
-   * THE VERDICT'S `clearedBy` PICKS THE HALT, and it is the only thing that does. A block WAITING
-   * CANNOT CLEAR must never be carried as the environment halt: `awaiting_daemon` is neutral against
-   * the failure ceiling by design - the laptop opens and the next fire works - and a condition no
-   * laptop can fix inherits that neutrality as an UNBOUNDED retry against a state that never changes
-   * (docs/findings.md `an-org-whose-only-machine-is-revoked-retried-forever`). Both terminal halts
-   * below drive the ceiling and auto-pause the schedule loudly instead; which one is used is about
-   * what the person is asked to DO, not about how it counts.
+   * NEUTRALITY IS A TABLE READ, NOT A FALL-THROUGH, and that inversion is the whole point. This
+   * asked `clearedBy === 'pair-a-machine'` and carried EVERYTHING ELSE as the environment halt, so a
+   * refusal that failed to be the one terminal case inherited "retry forever" by saying nothing -
+   * `awaiting_daemon` is neutral against the failure ceiling by design (the laptop opens and the
+   * next fire works), and three separate defects reached production through that default. It now
+   * asks `refusalIsNeutral`, which answers from `CLEARING_ACTS` where every act's neutrality is
+   * written beside the reason it is true, so the default for anything unconsidered is TERMINAL: a
+   * schedule that pauses loudly rather than one that repeats silently.
+   *
+   * WHICH terminal halt is a separate question, and it is about what the person is asked to DO
+   * rather than about how it counts.
    */
   const refusalRecordFor = (step: Step, index: number, verdict: LocalityVerdict): StepRecord | undefined => {
-    if (verdict.kind === 'blocked') {
-      if (verdict.clearedBy === 'pair-a-machine') {
-        // TERMINAL EITHER WAY - the property that matters, and the one `awaiting_daemon` would
-        // destroy. What is left is WHICH terminal halt, and that turns on whether a ceremony is an
-        // honest thing to ask this person for.
-        //
-        // A step that DECLARES a credential for a known origin is the case the whole branch exists
-        // for: the account's only machine was revoked after a session was established on it, so
-        // pairing a replacement is necessary and not sufficient, and `needs_credentials` is the halt
-        // that carries the portal's `/cofre` deep link to finish the job.
-        //
-        // A step that declares NONE gets the plain non-recoverable failure. Sending a person to the
-        // Cofre to establish a credential nothing asked for is a wrong specific instruction, which
-        // is worse than an honest general one - the same reasoning the blocked badge follows.
-        const wantsCredential = resolveStepDeclaration(step).credentialRefs.length > 0;
-        return stepOrigin && wantsCredential
-          ? localityNeedsCeremonyRecord(step, index, verdict.reason, stepOrigin, automation.name)
-          : localityTerminalFailureRecord(step, index, verdict.reason);
-      }
-      return localityBlockedRecord(step, index, verdict.reason);
+    // There is deliberately NO `bridge`-inherits-a-hosted-session branch here, nor a route/drift
+    // check: those are the RUN's own facts and `narrowLocalityForRun` has already folded them into
+    // the verdict. `connection` is read once per run, and `resolveLocality` only answers `bridge`
+    // when a daemon is connected and only `in-process` when none is - so within one run the two
+    // cannot both occur, and a branch that cannot be entered is one no test can pin.
+    if (verdict.kind !== 'blocked') return undefined;
+    if (refusalIsNeutral(verdict.clearedBy)) return localityBlockedRecord(step, index, verdict.reason);
+    if (verdict.clearedBy === 'pair-a-machine') {
+      // TERMINAL EITHER WAY - the property that matters, and the one `awaiting_daemon` would
+      // destroy. What is left is WHICH terminal halt, and that turns on whether a ceremony is an
+      // honest thing to ask this person for.
+      //
+      // A step that DECLARES a credential for a known origin is the case the whole branch exists
+      // for: the account's only machine was revoked after a session was established on it, so
+      // pairing a replacement is necessary and not sufficient, and `needs_credentials` is the halt
+      // that carries the portal's `/cofre` deep link to finish the job.
+      //
+      // A step that declares NONE gets the plain non-recoverable failure. Sending a person to the
+      // Cofre to establish a credential nothing asked for is a wrong specific instruction, which
+      // is worse than an honest general one - the same reasoning the blocked badge follows.
+      const wantsCredential = resolveStepDeclaration(step).credentialRefs.length > 0;
+      return stepOrigin && wantsCredential
+        ? localityNeedsCeremonyRecord(step, index, verdict.reason, stepOrigin, automation.name)
+        : localityTerminalFailureRecord(step, index, verdict.reason);
     }
-    // THE ROUTE SWITCH. The run already opened a hosted context on a different route out; the proxy
-    // is a LAUNCH option, so re-pointing it is not possible, and reusing the context anyway would
-    // send this step's traffic out of a door it did not resolve to - the silent substitution this
-    // whole slice exists to stop.
-    if (verdict.kind === 'in-process' && inProcessRoute && !sameRoute(inProcessRoute, verdict.egress)) {
-      return localityBlockedRecord(
-        step,
-        index,
-        'this step needs a different route out of the network than the one this run already opened',
-      );
-    }
-    // There is deliberately NO symmetric `bridge`-inherits-a-hosted-session branch. `connection` is
-    // read once per run, and `resolveLocality` only answers `bridge` when a daemon is connected and
-    // only answers `in-process` when none is - so within one run the two cannot both occur, and a
-    // branch that cannot be entered is one no test can pin.
-    return undefined;
+    // `edit-the-automation`, and every future non-neutral act until one argues for something else:
+    // the plain non-recoverable failure. NEVER a ceremony - re-establishing a session does not stop
+    // an automation navigating off its declared origin, and a wrong specific instruction is worse
+    // than an honest general one.
+    return localityTerminalFailureRecord(step, index, verdict.reason);
   };
 
   // Rehearsal accounting
@@ -983,7 +1013,9 @@ async function runOrRehearse(
             // attended session there is. See `residentialAvailableNow`.
             residentialAvailable: await residentialAvailableNow(),
             ...(hostedBrowser ? { hostedBrowser } : {}),
-          }, step, await knownPairingsNow(), automation.name);
+            // The SAME per-run memo locality resolves origins through, so the gate's own
+            // `resolveStepOrigin` walk re-reads no definition this run has already read.
+          }, step, await knownPairingsNow(), automation.name, { loadActionDeclaration: loadDeclarationOnce });
       if (!gate.record && gate.storageState !== undefined && !browser) {
         sessionState = gate.storageState;
       }
@@ -2498,6 +2530,12 @@ async function credentialGateRecord(
    */
   knownPairings: readonly string[] | null,
   automationName: string,
+  /**
+   * Seam overrides for the gate. The run loop passes its per-run declaration memo so the gate's
+   * `resolveStepOrigin` walk shares the reads locality already paid for; everything else stays the
+   * gate's own `REAL_DEPS`.
+   */
+  deps: Partial<CredentialGateDeps> = {},
 ): Promise<{
   record?: StepRecord;
   storageState?: unknown;
@@ -2508,7 +2546,7 @@ async function credentialGateRecord(
   const base: StepRecord = { stepId: step.id, index: input.index, status: 'running', tier: 'cache', durationMs: 0 };
   let verdict: CredentialGateVerdict;
   try {
-    verdict = await evaluateCredentialGate(input);
+    verdict = await evaluateCredentialGate(input, deps);
   } catch (err) {
     return {
       record: finishRecord(base, 'failed', stepStart, {
@@ -2709,19 +2747,6 @@ function localityTerminalFailureRecord(step: Step, index: number, reason: string
     tier: 'cache',
     error: { message: reason, recoverable: false },
   });
-}
-
-/**
- * The bare host of a live page URL, for the posture-drift check. Unparseable answers null, which
- * that check reads as "nothing to compare" rather than as a mismatch: a browser that has not
- * navigated anywhere yet (`about:blank`, an empty string) has not drifted off anything.
- */
-function hostOfUrlForPosture(raw: string): string | null {
-  try {
-    return new URL(raw).hostname.toLowerCase() || null;
-  } catch {
-    return null;
-  }
 }
 
 /** Build the awaiting_daemon failure record the outer loop converts to a halt. */

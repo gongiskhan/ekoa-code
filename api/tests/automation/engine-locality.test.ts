@@ -408,7 +408,8 @@ describe('a run does not switch the route out from under itself', () => {
     // first one for traffic that resolved elsewhere. Both are the substitution under test.
     expect(contextRequests).toHaveLength(1);
     expect(contextRequests[0]!.egress).toEqual({ outcome: 'datacenter', reason: 'no-requirement' });
-    expect(result.status).toBe('awaiting_daemon');
+    // TERMINAL, not `awaiting_daemon`. See the block below for why the neutral halt was wrong here.
+    expect(result.status).toBe('failed');
 
     const run = (await automationRuns.get(result.runId)) as unknown as {
       steps: Array<{ index: number; status: string; error?: { message?: string } }>;
@@ -426,6 +427,39 @@ describe('a run does not switch the route out from under itself', () => {
     const result = await runAutomation('a_same', ctx);
     expect(result.status).toBe('completed');
     expect(contextRequests).toHaveLength(1);
+  });
+
+  /**
+   * THE DEFINITION LOOKUP IS PAID FOR ONCE PER (integration, action) PER RUN.
+   *
+   * `resolveStepOrigin` walks BACKWARDS from a step to the nearest one that states a URL, and every
+   * `integration` step it passes costs a definition-store read. Locality resolves an origin for
+   * EVERY browser step, so a run of N browser steps behind one integration step made N identical
+   * reads of the same row - and a gated step makes two to three walks of its own.
+   *
+   * Asserted on the SEAM's own call count rather than on a timing, because that is the thing that
+   * regresses: a later edit that resolves origins through the unmemoised
+   * `loadIntegrationActionDeclaration` again is invisible in every other assertion in this file.
+   * The memo is keyed by the LOOKUP and never by the step - see `loadDeclarationOnce`.
+   */
+  it('reads each action declaration ONCE per run, however many steps ask for it', async () => {
+    const asked: string[] = [];
+    setIntegrationActionDeclarationResolver(async (key, action) => {
+      asked.push(`${key}.${action}`);
+      return { posture: 'permissive', httpConfig: { baseUrl: 'https://portal.example.com' } };
+    });
+    // Three browser steps, all inheriting their origin from the ONE integration step in front of
+    // them: three backwards walks that each reach the same declaration.
+    await seed('a_memo', [
+      integrationStep,
+      { ...waitStep, id: 's_m1' } as Step,
+      { ...waitStep, id: 's_m2' } as Step,
+      { ...waitStep, id: 's_m3' } as Step,
+    ]);
+    const result = await runAutomation('a_memo', ctx);
+
+    expect(result.status).toBe('completed');
+    expect(asked).toEqual(['portal.fetch']);
   });
 
   /**
@@ -576,32 +610,123 @@ describe('a run does not switch the route out from under itself', () => {
    * the next step inherits the same permissive label while the hosted Chromium now sits on a bank
    * portal reached by one click. The label was never about that host.
    */
-  it('a hosted browser that has DRIFTED off the declared origin carries no further steps', async () => {
+  const driftingSteps: Step[] = [
+    integrationStep,
+    { ...waitStep, id: 's_one' } as Step,
+    { ...waitStep, id: 's_two' } as Step,
+  ];
+
+  /** Wire a hosted context whose page NAVIGATES AWAY during step 1's post-action observation. */
+  function driftAt(host: string): void {
     const { context, page } = workingContext();
     setLocalBrowserContextProvider(async (ownerUserId, egress) => {
       contextRequests.push({ ownerUserId, ...(egress ? { egress } : {}) });
       return context;
     });
-    await seed('a_drift', [integrationStep, { ...waitStep, id: 's_one' } as Step, { ...waitStep, id: 's_two' } as Step]);
-
     // The act in step 1 navigated the session away - a click, an OAuth hop, a 302 - and the
     // POST-ACTION OBSERVATION is where that fact lands. Flipping the page at the moment of the
     // first capture IS that sequence: the step succeeds, and the session it leaves behind is
     // somewhere the declaration never spoke about.
-    const drifted = 'https://bank.example.pt/transfers';
     const screenshot = page.screenshot;
     page.screenshot = async () => {
-      page.url = () => drifted;
+      page.url = () => `https://${host}/transfers`;
       return screenshot();
     };
+  }
+
+  it('a hosted browser that has DRIFTED off the declared origin carries no further steps', async () => {
+    driftAt('bank.example.pt');
+    await seed('a_drift', driftingSteps);
 
     const result = await runAutomation('a_drift', ctx);
-    expect(result.status).toBe('awaiting_daemon');
+    expect(result.status).toBe('failed');
     const run = (await automationRuns.get(result.runId)) as unknown as {
       steps: Array<{ index: number; error?: { message?: string } }>;
     };
     expect(run.steps.find((s) => s.index === 2)?.error?.message).toMatch(/bank\.example\.pt/);
     expect(run.steps.find((s) => s.index === 2)?.error?.message).toMatch(/undeclared site/);
+  });
+
+  /**
+   * THE THIRD SIGHTING OF ONE DEFECT, AND WHY THIS ASSERTION IS THE ONE THAT MATTERS.
+   *
+   * The drift refusal halted `awaiting_daemon`, which the schedule rail treats as NEUTRAL against
+   * the failure ceiling (`NEUTRAL_BLOCKED_CODES`) on the grounds that opening a laptop clears it.
+   * Two things were wrong with that, and only the second is visible from a single run:
+   *
+   *   1. `clearedBy: 'start-a-machine'` was a FALSE INSTRUCTION. Nothing about a machine is wrong
+   *      here. (A connected daemon would in fact sidestep the check, by making the verdict `bridge`
+   *      before it runs - but that is an accident of the route, not the remediation, and it is
+   *      unavailable to the owner who has no machine at all, which is every owner running only in
+   *      the hosted browser.)
+   *   2. THE CAUSE IS THE STEP LIST. The automation navigates off its declared origin because of
+   *      what its steps DO, so the next fire resolves the same declarations, reaches the same index
+   *      and halts identically - while the ceiling, by design, counts none of them. A nightly
+   *      schedule therefore re-fires forever, never auto-pauses, and prints a remediation that
+   *      cannot work.
+   *
+   * TWO CONSECUTIVE RUNS ON AN IDENTICAL FIXTURE are what make (2) an observation rather than an
+   * argument: same automation, same seams, same everything, twice. Both refuse at index 2, and the
+   * status is the terminal one that DRIVES the ceiling rather than the neutral one that is exempt
+   * from it - so twenty of these auto-pause the schedule loudly instead of running until somebody
+   * notices by hand.
+   */
+  it('repeats identically on the next fire, so it must COUNT rather than wait forever', async () => {
+    driftAt('bank.example.pt');
+    await seed('a_drift_twice', driftingSteps);
+
+    const first = await runAutomation('a_drift_twice', ctx);
+    const second = await runAutomation('a_drift_twice', ctx);
+
+    // Same halt, same index, twice - replaying changes nothing, which is the whole argument.
+    expect([first.status, second.status]).toEqual(['failed', 'failed']);
+    for (const result of [first, second]) {
+      const run = (await automationRuns.get(result.runId)) as unknown as {
+        steps: Array<{ index: number; status: string; error?: { message?: string } }>;
+      };
+      expect(run.steps.find((s) => s.index === 2)?.status).toBe('failed');
+      expect(run.steps.find((s) => s.index === 2)?.error?.message).toMatch(/undeclared site/);
+      // NOT `awaiting_daemon`: that detail is what `startRunForTrigger` reports as a neutral
+      // `blocked` code, and it is the exemption that turned a repeat into an unbounded one.
+      expect(run.steps.find((s) => s.index === 2)?.error).not.toHaveProperty('details.kind', 'awaiting_daemon');
+    }
+  });
+
+  /**
+   * ...and the halt does NOT ask for a ceremony. `needs_credentials` is terminal too, so the ceiling
+   * would be satisfied either way - but it deep-links the owner to the Cofre to re-establish a
+   * session that is perfectly healthy. A wrong specific instruction is worse than an honest general
+   * one, which is the same reasoning the blocked badge follows.
+   */
+  it('names the automation as what must change, and does not send anyone to the Cofre', async () => {
+    driftAt('bank.example.pt');
+    await seed('a_drift_msg', driftingSteps);
+    const result = await runAutomation('a_drift_msg', ctx);
+
+    const run = (await automationRuns.get(result.runId)) as unknown as {
+      credentialRequest?: unknown;
+      steps: Array<{ index: number; error?: { message?: string; details?: { kind?: string } } }>;
+    };
+    const refused = run.steps.find((s) => s.index === 2);
+    expect(refused?.error?.details).toBeUndefined();
+    expect(run.credentialRequest).toBeUndefined();
+    // The message names the act that actually clears it: declaring the origin the run reaches.
+    expect(refused?.error?.message).toMatch(/Declare the origin this automation actually reaches/);
+    // ...and it names BOTH hosts, so the reader can tell which declaration is missing.
+    expect(refused?.error?.message).toMatch(/bank\.example\.pt/);
+    expect(refused?.error?.message).toMatch(/portal\.example\.com/);
+  });
+
+  /**
+   * THE OTHER DIRECTION, so the refusal is not simply "any second browser step halts". A run whose
+   * page stays on the declared origin completes, with one context and no refusal.
+   */
+  it('a session that stays on the declared origin is not refused', async () => {
+    driftAt('portal.example.com');
+    await seed('a_no_drift', driftingSteps);
+    const result = await runAutomation('a_no_drift', ctx);
+    expect(result.status).toBe('completed');
+    expect(contextRequests).toHaveLength(1);
   });
 });
 

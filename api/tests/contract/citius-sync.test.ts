@@ -189,6 +189,15 @@ describe('sync routes · the flag is the first gate, and it is default-OFF', () 
  * portal walk rather than a declared `IntegrationAction`, so nobody has ever declared it permissive
  * and the honest answer is NO. Asserted on the INPUT the rail actually received, because the seam is
  * injected here and a mock cannot be relied on to enforce what the real one would.
+ *
+ * SAID PLAINLY: THIS ASSERTS A CONSTANT, and it is worth having anyway. `classifyOrigin` returns the
+ * frozen CLOSED classification whenever no action is passed, and `hostedTypistPermitForPortal`
+ * passes none, so no `baseUrl` in the request body can make the permit appear - there is no input
+ * that would red this by exercising the other branch. What it pins is the WIRING: that the router
+ * composes the permit from posture at all rather than writing `hostedTypist: {}` into the call, which
+ * is what it did before, and which no type or gate would have caught. The day the walk is promoted
+ * onto a declared action and that action reaches `classifyOrigin` here, this stops being a constant
+ * and starts being a real branch - see the docblock on `hostedTypistPermitForPortal`.
  */
 describe('sync routes · the hosted typist gets no permit for an unclassified portal', () => {
   /**

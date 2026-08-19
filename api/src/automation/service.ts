@@ -1107,15 +1107,30 @@ export interface TriggerRunOutcome {
 /**
  * Run statuses that mean "waiting for the owner", not "failed".
  *
- * Both are halts the engine takes DELIBERATELY and persists, and both are resolved by a person
- * doing something - starting their machine, establishing a credential - rather than by anything
- * retrying. Every other non-`completed` status stays a failure.
+ * All three are halts the engine takes DELIBERATELY and persists, and all three are resolved by a
+ * person doing something - starting their machine, approving an action, establishing a credential -
+ * rather than by anything retrying. Every other non-`completed` status stays a failure.
  *
  * They are NOT interchangeable downstream, which is why `code` carries which one it was: waiting
- * for a machine resolves by itself the moment the laptop is opened, and waiting for a credential
- * does not resolve by waiting at all.
+ * for a machine resolves by itself the moment the laptop is opened, and waiting for a credential or
+ * an approval does not resolve by waiting at all.
+ *
+ * `awaiting_consent` WAS MISSING, and the omission was visible to users. The same halt already
+ * reports `blocked` from the OTHER schedule target kind - `mapIntegrationOutcome`
+ * (`schedules/supervisor.ts`) answers `status: 'blocked', code: 'awaiting_consent'` for an
+ * integration action, the schedules surface carries copy for that code, and the supervisor's own
+ * docblock lists `awaiting_consent` beside `needs_credentials` as a block on a human act. Only the
+ * AUTOMATION rail disagreed: a scheduled automation halting for first-time `local_command` consent
+ * came back `failed`, and the owner's badge read "Failed" for a run sitting waiting on their
+ * approval. Including it costs nothing on the ceiling - `awaiting_consent` is deliberately NOT in
+ * `NEUTRAL_BLOCKED_CODES`, so it still counts and still auto-pauses - and what changes is that the
+ * two rails now say the same word about the same halt.
  */
-const BLOCKED_RUN_STATUSES: ReadonlySet<string> = new Set(['awaiting_daemon', 'needs_credentials']);
+const BLOCKED_RUN_STATUSES: ReadonlySet<string> = new Set([
+  'awaiting_daemon',
+  'awaiting_consent',
+  'needs_credentials',
+]);
 
 /**
  * Run an automation under a trigger's server-trusted owner and AWAIT its terminal status. A
