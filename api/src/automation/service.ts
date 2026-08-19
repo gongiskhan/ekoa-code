@@ -1084,18 +1084,19 @@ export interface TriggerRunOutcome {
    * THREE outcomes, because "not completed" was hiding two different things (P4.1).
    *
    * `blocked` is a run that stopped ON PURPOSE, waiting for its owner: a browser step whose origin
-   * is bridge-only with no machine connected (`awaiting_daemon`), or a credential only a person can
-   * establish (`needs_credentials`). Nothing about either is retryable by a machine, and calling
-   * them `failed` was actively harmful on the schedule rail - twenty nights with the laptop shut
-   * would auto-pause a perfectly good schedule (`FAILURE_CEILING`), and the owner would find it
-   * disabled rather than waiting.
+   * is bridge-only with no machine connected (`awaiting_daemon`), an action awaiting a standing
+   * approval (`awaiting_consent`), or a credential only a person can establish
+   * (`needs_credentials`) - the three of `BLOCKED_RUN_STATUSES`. Nothing about any of them is
+   * retryable by a machine, and calling them `failed` was actively harmful on the schedule rail -
+   * twenty nights with the laptop shut would auto-pause a perfectly good schedule
+   * (`FAILURE_CEILING`), and the owner would find it disabled rather than waiting.
    */
   outcome: 'completed' | 'failed' | 'blocked';
   /**
-   * WHICH block, verbatim: the run status that produced it. Load-bearing, not a label - the two
-   * blocked causes get OPPOSITE treatment on the schedule rail (`schedules/supervisor.ts`), and
-   * collapsing them to one word is what removed the cap on repeated unattended logins. Present only
-   * for `outcome: 'blocked'`.
+   * WHICH block, verbatim: the run status that produced it. Load-bearing, not a label - the
+   * blocked causes get OPPOSITE treatment on the schedule rail (`schedules/supervisor.ts`, where
+   * only `awaiting_daemon` is in `NEUTRAL_BLOCKED_CODES`), and collapsing them to one word is what
+   * removed the cap on repeated unattended logins. Present only for `outcome: 'blocked'`.
    */
   code?: string;
   /** A permanent failure (e.g. the automation no longer exists) must NOT be retried by the delivery
@@ -1134,7 +1135,7 @@ const BLOCKED_RUN_STATUSES: ReadonlySet<string> = new Set([
 
 /**
  * Run an automation under a trigger's server-trusted owner and AWAIT its terminal status. A
- * non-`completed` terminal state is reported as a delivery failure EXCEPT the two that mean "this
+ * non-`completed` terminal state is reported as a delivery failure EXCEPT the three that mean "this
  * is waiting for you" (`BLOCKED_RUN_STATUSES`), which report `blocked` plus the status as `code`; a
  * missing automation is a PERMANENT failure (never retried). The engine runs one attempt - retry
  * lives in `events/`.

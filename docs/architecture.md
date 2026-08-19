@@ -245,12 +245,21 @@ may not, in every environment. `config.localBrowserEnabled` (default `!isProd`, 
 only an operator kill switch: it can CLOSE the fallback in any environment and it can never OPEN it
 for an adversarial origin, so posture is the gate and the environment is at most a second lock.
 `blocked` is a HALT, never a datacenter fallback and never a substitute machine, and it declares WHICH
-ACT can clear it: the verdict carries a REQUIRED `clearedBy: 'start-a-machine' | 'pair-a-machine'`.
+ACT can clear it: the verdict carries a REQUIRED
+`clearedBy: 'start-a-machine' | 'pair-a-machine' | 'edit-the-automation'`, and each act's neutrality
+is DECLARED in the `CLEARING_ACTS` table beside the reason it is true (`refusalIsNeutral` is a table
+read, not an equality test, so anything unconsidered is terminal by default).
 `start-a-machine` is the environment (a shut laptop, the wrong machine dialled in) and halts in
-`awaiting_daemon`, which the schedule rail treats as neutral against the failure ceiling.
+`awaiting_daemon`, the ONE neutral act: the laptop gets opened tomorrow morning whether or not
+anybody knew a schedule was waiting for it, and the same steps then succeed unchanged.
 `pair-a-machine` is an account whose fleet listing is KNOWN AND EMPTY - there is nothing to start, so
 waiting can never clear it - and halts TERMINALLY, driving the ceiling and auto-pausing loudly
-instead of re-firing against a state that cannot change. Required rather than optional, so a new
+instead of re-firing against a state that cannot change.
+`edit-the-automation` is a cause that is a property of the STEP LIST rather than of the world (the
+mid-run route switch, the posture drift onto another host): the next fire resolves the same
+declarations, reaches the same index and halts identically, so replay is provably useless and only
+the author changing what the automation declares clears it - terminal for that reason. Required
+rather than optional, so a new
 refusal cannot inherit "neutral, retry forever" by saying nothing; and it names the ACT rather than
 the actor, because its one consumer has to pick a halt with it (`engine.ts` `refusalRecordFor` asks
 for a ceremony only when the step declares a credential - a credential ask for a step that wants none
@@ -285,8 +294,9 @@ precisely the one that is gone. A posture inherited from a
 preceding step licenses ONE origin: a hosted session observed to have drifted onto another host
 carries no further steps.
 
-A scheduled run that ends in one of the two "waiting for the owner" statuses (`awaiting_daemon`,
-`needs_credentials`) reports `outcome: 'blocked'` from `startRunForTrigger`, CARRYING WHICH as
+A scheduled run that ends in one of the THREE "waiting for the owner" statuses (`awaiting_daemon`,
+`awaiting_consent`, `needs_credentials` - `BLOCKED_RUN_STATUSES` in `automation/service.ts`) reports
+`outcome: 'blocked'` from `startRunForTrigger`, CARRYING WHICH as
 `code`, and `schedules/supervisor.ts` maps that to a `blocked` fire outcome. Only an ENVIRONMENT
 block is neutral against the 20-strike `FAILURE_CEILING` (`NEUTRAL_BLOCKED_CODES` =
 `awaiting_daemon`): opening a laptop fixes it with nobody touching the schedule, so twenty nights of
