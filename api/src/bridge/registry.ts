@@ -105,7 +105,7 @@ export async function registerPairing(
     capabilities?: string[];
     /**
      * TRI-STATE, and the third state is a fix. `undefined` means "this registration is not an
-     * advertisement" — the CONNECT path registers a pairing before the machine has said anything
+     * advertisement" - the CONNECT path registers a pairing before the machine has said anything
      * about itself, and must not erase what it said last time. `null` (or an address that does not
      * validate) means "this advertisement offers no egress", which CLEARS the stored one.
      *

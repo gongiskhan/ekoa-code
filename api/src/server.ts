@@ -245,7 +245,7 @@ export interface RuntimeDeps {
   genId: () => string;
   /**
    * How this process opens the shared hosted Chromium. Defaults to `getSharedBrowser`, which is a
-   * real Playwright launch — so the ONE composition-root binding that turns a resolved egress route
+   * real Playwright launch - so the ONE composition-root binding that turns a resolved egress route
    * into an actual proxy could not be observed without launching a browser, and consequently was
    * observed by nothing (`tests/automation/composition-root-locality.test.ts` is what closes that).
    * Optional: every existing caller passes `{ now, genId }` and gets production's opener.

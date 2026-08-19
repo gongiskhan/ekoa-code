@@ -14,7 +14,7 @@ import {
 import { resolveEgress, proxyOptionFor } from '../../src/automation/egress-policy.js';
 
 /**
- * SECURITY SUITE — a machine's SELF-ASSERTED egress address is not an authorisation (Cofre I-3,
+ * SECURITY SUITE - a machine's SELF-ASSERTED egress address is not an authorisation (Cofre I-3,
  * the half that was missing).
  *
  * THE DEFECT. `hello.egressEndpoint` is a free string on the wire, and this branch gave

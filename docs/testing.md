@@ -211,7 +211,7 @@ restart**. After changing `api/`:
    `docs/operations-runbook.md`). `GET /health` should read `claudeAuth.ok=true`,
    `meteringAnomalies=0`, `gatewayUnmeteredCalls=0` before you trust a live model turn.
 
-### The composition root's own bindings (P4, 2026-08-19)
+## The composition root's own bindings (P4, 2026-08-19)
 
 A seam BODY being testable is not the same as its BINDING being tested, and the difference is a
 whole class of surviving mutant. Both P4 bindings in `api/src/server.ts` were deleted, one at a

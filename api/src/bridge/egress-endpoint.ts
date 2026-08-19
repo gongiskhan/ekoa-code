@@ -1,5 +1,5 @@
 /**
- * bridge/egress-endpoint.ts — what a machine's SELF-ASSERTED egress address is allowed to be.
+ * bridge/egress-endpoint.ts - what a machine's SELF-ASSERTED egress address is allowed to be.
  *
  * THE GAP THIS CLOSES. `hello.egressEndpoint` is typed in the wire contract as a free
  * `z.string().max(255).optional()`, and it was carried verbatim from the frame to `registerPairing`

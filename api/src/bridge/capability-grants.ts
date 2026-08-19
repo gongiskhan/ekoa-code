@@ -39,11 +39,11 @@ export interface CapabilityGrantDoc extends Doc {
   pairingId: string;
   capability: string;
   /**
-   * THE ADDRESS THIS GRANT AUTHORISES — `egress.residential` only, in canonical form.
+   * THE ADDRESS THIS GRANT AUTHORISES - `egress.residential` only, in canonical form.
    *
    * A residential-egress grant is not "this machine may carry traffic"; it is "this tenant's
    * traffic may leave by THIS DOOR". Without the address, the grant authorised the MACHINE and the
-   * machine then chose the destination — a self-assertion sitting exactly where an authorisation
+   * machine then chose the destination - a self-assertion sitting exactly where an authorisation
    * was supposed to be. A daemon could advertise an attacker's proxy and have the org's hosted
    * Chromium launch through it on the strength of an ordinary capability grant, and could move the
    * destination again on any reconnect with no new grant and nobody asked.

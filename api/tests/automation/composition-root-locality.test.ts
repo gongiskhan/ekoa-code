@@ -54,10 +54,16 @@ const cfg: Config = {
 
 /** Every `newContext` the composition root's provider asked for, with its options. */
 const CONTEXTS: Array<Record<string, unknown> | undefined> = [];
+/** Every `launchPersistentContext` it asked for. Must stay empty - see the non-persistent case. */
+const PERSISTENT: Array<unknown> = [];
 const fakeContext = { __marker: 'ctx' } as unknown as BrowserContext;
 const recordingBrowser = {
   newContext: async (options?: Record<string, unknown>) => {
     CONTEXTS.push(options);
+    return fakeContext;
+  },
+  launchPersistentContext: async (...args: unknown[]) => {
+    PERSISTENT.push(args);
     return fakeContext;
   },
 } as unknown as Browser;
@@ -86,6 +92,7 @@ const knownPairings = (listing: EgressCandidate[] | null): readonly string[] | n
 
 beforeEach(async () => {
   CONTEXTS.length = 0;
+  PERSISTENT.length = 0;
   await bridgePairings.deleteMany({});
   await bridgeCapabilityGrants.deleteMany({});
   __resetLiveConnectionsForTests();
@@ -151,10 +158,14 @@ describe('the local-browser context provider is bound to the real one', () => {
 
   it('is NON-PERSISTENT: the root hands back newContext, never a persistent profile', async () => {
     // `session-establishment.ts` calls `context.storageState()` right after a login and stores the
-    // result as a credential-equivalent Cofre item. Against a persistent per-owner profile that is
-    // a capture of the owner's WHOLE cross-site cookie jar.
-    expect('launchPersistentContext' in (recordingBrowser as unknown as Record<string, unknown>)).toBe(false);
+    // result as a credential-equivalent Cofre item. Against a persistent per-owner profile that
+    // call means "capture the owner's WHOLE cross-site cookie jar" - every site they were ever
+    // signed into, encrypted into one item bound to one portal. The browser this test hands the
+    // root OFFERS `launchPersistentContext`, so the assertion is that the shipped binding does not
+    // take it rather than that it could not.
+    await getLocalBrowserContext('u1', { outcome: 'machine', pairingId: 'p', proxyUrl: TAILNET });
     await getLocalBrowserContext('u1');
-    expect(CONTEXTS.length).toBe(1);
+    expect(CONTEXTS.length).toBe(2);
+    expect(PERSISTENT).toEqual([]);
   });
 });
