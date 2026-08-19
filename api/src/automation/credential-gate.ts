@@ -103,12 +103,21 @@ export type CredentialGateVerdict =
       storageState: unknown;
       /**
        * P4.2 - the pairing where this session's ceremony happened
-       * (`sessionMetadata.establishedBy.pairingId`, stamped by `bridge/attended.ts`). Carried
-       * through so the run loop can PREFER that machine for an adversarial origin. Absent for a
-       * cloud-established session, and ignored for a permissive one: a portable credential has no
-       * home, so it gets no preference.
+       * (`sessionMetadata.establishedBy.pairingId`, stamped by `bridge/attended.ts`), TOGETHER WITH
+       * THE ORIGIN IT BELONGS TO. Carried through so the run loop can PREFER that machine for an
+       * adversarial origin. Absent for a cloud-established session, and ignored for a permissive
+       * one: a portable credential has no home, so it gets no preference.
+       *
+       * THE ORIGIN IS PART OF THE VALUE, NOT A SEPARATE FIELD, and that is the fix for a defect
+       * this shape used to permit. A session belongs to ONE portal, and the pairing alone travels
+       * anywhere: the run loop stored it in a run-level variable and forwarded it to every later
+       * browser step, so a run touching two portals judged portal B's steps against portal A's
+       * ceremony machine. Retire that machine and the owner was told to re-establish portal B -
+       * which they could do, correctly, as often as they liked, and the next fire produced the
+       * identical halt. A pairing that cannot be held without its origin cannot be misfiled like
+       * that, so the coupling is structural rather than a comment asking the caller to remember.
        */
-      preferredPairingId?: string;
+      preferredPairing?: { origin: string; pairingId: string };
     }
   | { kind: 'needs-credentials'; request: RunCredentialRequest }
   | { kind: 'needs-machine'; reason: string };
@@ -212,8 +221,11 @@ export async function evaluateCredentialGate(
       // ONLY for an adversarial origin. A permissive origin's credential is portable by
       // definition, and attaching a machine preference to one would pin a run to a laptop for no
       // reason - the P4.2 constraint, applied at the one place both facts are in hand.
+      //
+      // `origin` is the one this gate just resolved and checked out a session for, so the pairing
+      // leaves here already labelled with the portal it is about.
       ...(classification.posture === 'adversarial' && verdict.establishedByPairingId
-        ? { preferredPairingId: verdict.establishedByPairingId }
+        ? { preferredPairing: { origin, pairingId: verdict.establishedByPairingId } }
         : {}),
     };
   }

@@ -49,12 +49,27 @@
  * wait for hardware nobody owns. It does NOT silently fall through to another machine: a retired
  * ceremony machine makes the session homeless, not portable.
  *
+ * A PREFERENCE BELONGS TO ONE ORIGIN, NEVER TO A RUN. `preferredPairingId` is read off ONE session,
+ * and a session is bound to ONE origin. A run that touches two portals therefore carries two
+ * independent answers, and the caller must hand this module the one for the origin THIS step is
+ * about (`engine.ts` keys them by origin for exactly that reason). Carrying a run-level preference
+ * across origins aims every later refusal at the wrong portal - it told the owner to re-establish
+ * portal B's session because portal A's ceremony machine was retired, and doing so changed nothing.
+ *
  * KNOWN LIMITATION, named rather than hidden (docs/findings.md
  * `daemon-seam-cannot-ask-for-a-specific-machine...`): the daemon seam answers "the newest live
  * socket for this owner" and cannot be asked for a particular machine, so a two-machine user whose
  * arbitrary pick is the wrong one HALTS here even though the preferred machine is dialled in.
  * `bridge/registry.ts` `selectConnectionForStep` is the (currently inert) primitive that closes it.
  * The failure direction is the safe one: refuse and name the machine, never execute on another.
+ *
+ * ================================ ONE PORTAL, ONE DOOR (P4.1) ================================
+ * A step resolves to a route out, and the LOGIN that step needs must leave by the same one. Two
+ * doors onto one portal - the work from a home line, the password typed from a datacenter, or from
+ * some other household's line entirely - is the substitution this module exists to stop, performed
+ * by the one act that hands over a secret. `bridgeEgressFor` and `hostedTypistPermitFor` are the two
+ * halves of that: the first says which door the WORK takes when it runs on a machine, the second
+ * says whether the typist may use it, and withholds the permit rather than quietly taking another.
  *
  * ================================ PURE ON PURPOSE ================================
  * Nothing here reads a store, a seam or an env var. Every input is an argument, so the whole
@@ -74,7 +89,14 @@ import {
 
 /** Where a step runs and how it leaves. */
 export type LocalityVerdict =
-  /** The owner's paired machine. `egress` is the fleet fact that was resolved alongside. */
+  /**
+   * The owner's paired machine.
+   *
+   * `egress` is THAT MACHINE's route out - see `bridgeEgressFor` - and not an independent pick from
+   * the fleet. The work is going to leave by the connected machine's line whatever this field says,
+   * so a field naming a different machine would describe a door nothing uses, and the one consumer
+   * (`hostedTypistPermitFor`, which routes the login) would send a password through it.
+   */
   | { kind: 'bridge'; egress: EgressResolution }
   /** The hosted Chromium. `egress` becomes the launch proxy option (`proxyOptionFor`). */
   | { kind: 'in-process'; egress: EgressResolution }
@@ -119,6 +141,11 @@ export interface LocalityInput {
    * (`sessionMetadata.establishedBy.pairingId`). A preference for adversarial origins only, and one
    * this module refuses DIFFERENTLY when the fleet listing says that machine is gone - see
    * `preferenceMachineRetired`.
+   *
+   * IT MUST BE THE PREFERENCE FOR `classification`'s OWN ORIGIN. A session belongs to one portal;
+   * handing this module another portal's ceremony machine makes every refusal below name the wrong
+   * site (see the module docblock). The caller keys them by origin - `engine.ts`
+   * `preferredPairingByOrigin` - and this module cannot check it, which is why it is said here.
    */
   preferredPairingId?: string;
   /** The org's machines, as the registry sees them (advertised INTERSECT granted). */
@@ -255,7 +282,7 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
     // on, which is precisely the swap the preference exists to prevent. A connection with no
     // `pairingId` cannot PROVE it is the right machine, and unprovable reads as no.
     if (!pinned || input.daemonPairingId === pinned) {
-      return { kind: 'bridge', egress: resolution };
+      return { kind: 'bridge', egress: bridgeEgressFor(input, requirement, resolution) };
     }
     return {
       kind: 'blocked',
@@ -319,6 +346,107 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
       // The fleet cannot meet the declared requirement RIGHT NOW - a machine advertising
       // residential egress is missing, not retired. Registering or waking one clears it.
       return { kind: 'blocked', clearedBy: 'machine', reason: resolution.reason };
+  }
+}
+
+/**
+ * THE ROUTE THE BRIDGE ITSELF LEAVES BY - which is a different question from the one `resolveEgress`
+ * answered above, and the one this module used to get wrong.
+ *
+ * WHAT WAS WRONG. `resolveEgress` chooses a machine to PROXY THROUGH: given `{ kind: 'residential' }`
+ * with no pairing it takes `usable[0]`, the first live candidate advertising residential egress. For
+ * the hosted browser that is exactly right - nothing else names a machine. For the BRIDGE it is a
+ * fiction: the work is going to run on the machine that is dialled in, on that machine's line, and
+ * no arbitrary pick from the fleet changes it. With `pair_office` listed first and `pair_home`
+ * connected, the verdict claimed a route through `pair_office` while every byte of work left from
+ * `pair_home` - and the one consumer of this field routes a LOGIN through it, so the password went
+ * out of one household's line and the session was then used from another's.
+ *
+ * SO THE REQUIREMENT NAMES THE CONNECTED MACHINE, and the answer is about that machine only:
+ * `machine` when it advertises a usable residential endpoint, `refused` when it does not.
+ *
+ * `offlinePolicy` IS DELIBERATELY NOT CONSULTED - it is hard-coded to `fail`. The offline policy
+ * answers "what should the RUN do when it cannot get the route it wants", and that question is
+ * already settled here: the run is going to proceed, on the bridge, because a machine is connected.
+ * The only thing left to decide is whether a route can be NAMED, and `queue` (there is nothing to
+ * wait for) and `datacenter` (which would hand the typist a door the work is not using - the exact
+ * hazard) are both wrong answers to it.
+ *
+ * A `refused` outcome here is NOT a halt. The verdict stays `bridge` and the work runs; what it
+ * costs is the hosted typist's permit (`hostedTypistPermitFor`), because a login has nowhere to go
+ * that matches.
+ */
+function bridgeEgressFor(
+  input: LocalityInput,
+  requirement: EgressRequirement,
+  resolution: EgressResolution,
+): EgressResolution {
+  // Nothing was asked of the route out (a permissive origin's default `any`). There is no door to
+  // match, so the resolution stands as it is - `datacenter`, meaning "no requirement".
+  if (requirement.kind !== 'residential') return resolution;
+  if (!input.daemonPairingId) {
+    // The seam handed back a connection that cannot say which machine it is (`pairingId` is
+    // optional on `DaemonConnection`). Unprovable reads as no, here as everywhere else in this
+    // module: an unnamed machine's line cannot be named either.
+    return {
+      outcome: 'refused',
+      reason: 'the connected machine does not identify itself, so the line it leaves by cannot be named',
+    };
+  }
+  return resolveEgress(
+    { requirement: { kind: 'residential', pairingId: input.daemonPairingId }, offlinePolicy: 'fail' },
+    input.candidates,
+    input.actorOrg,
+  );
+}
+
+/**
+ * MAY THE HOSTED TYPIST TYPE THIS STEP'S PASSWORD, AND THROUGH WHICH DOOR?
+ *
+ * `undefined` means NO HOSTED BROWSER AT ALL for this step: `credential-gate.ts` reads an absent
+ * `hostedBrowser` as "the typist is unreachable" and halts asking for a person. `{}` means the
+ * hosted browser with no proxy - the datacenter. `{ egress }` means through that route.
+ *
+ * ONE RULE, AND IT IS THE WHOLE FUNCTION: THE LOGIN LEAVES BY THE SAME DOOR AS THE WORK. A portal
+ * that sees a password submitted from a datacenter and the resulting session used from a home line
+ * (or from two different homes) is being shown two identities for one account, which is the
+ * detection event this slice exists to prevent - and it is worse than the ordinary substitution,
+ * because the act that diverges is the one that hands over the secret.
+ *
+ * WITHHOLDING IS THE CLOSED ANSWER, and it is available: a step whose login cannot be typed through
+ * the right door halts asking for a person, which is a state the product already has, already
+ * surfaces, and a person can already act on. Typing it through the wrong door is not.
+ */
+export function hostedTypistPermitFor(verdict: LocalityVerdict | null): { egress?: EgressResolution } | undefined {
+  // No browser-needing step in flight - an `integration` or `api_call` step, which resolves no
+  // locality at all. Nothing decided a door for the work, so there is none to diverge from and the
+  // typist behaves exactly as it did before locality existed.
+  if (!verdict) return {};
+  switch (verdict.kind) {
+    case 'in-process':
+      // Work and login are both hosted, and this IS the work's route. Same door by construction.
+      return { egress: verdict.egress };
+    case 'bridge':
+      switch (verdict.egress.outcome) {
+        case 'machine':
+          // The work runs ON that machine; proxying the login through its line is the same door.
+          return { egress: verdict.egress };
+        case 'datacenter':
+          // Nothing was required of the route out, so nothing is diverged from. The origin is
+          // permissive (posture is what let the typist be considered at all), which is precisely
+          // the declaration that a datacenter IP is acceptable here.
+          return {};
+        default:
+          // A residential line WAS required - an author's pin, a declared `egress.residential`, or
+          // an adversarial origin's ceremony machine - and the connected machine cannot provide
+          // one. Every route left is a different door from the work's, so there is no permit.
+          return undefined;
+      }
+    case 'blocked':
+    default:
+      // Not reachable from the run loop (a refused step never reaches the gate at all), and the
+      // closed answer regardless: a step that is not going to run gets no password typed for it.
+      return undefined;
   }
 }
 

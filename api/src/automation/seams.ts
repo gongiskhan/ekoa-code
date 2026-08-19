@@ -13,12 +13,13 @@
  * FIXED-3 note: NO seam here touches a model. All model calls in automation/ go through
  * `api/src/llm/` (vision.ts, planner.ts, rehearsal.ts). These seams are transport/persistence.
  */
-import type { BrowserContext } from 'playwright';
+import type { Browser, BrowserContext } from 'playwright';
 import type { Actor } from '@ekoa/shared';
 // Type-only import (erased at compile) — the run event emitter's shape lives in engine.ts, which
 // imports this module at RUNTIME; a type-only import back here creates no runtime cycle.
 import type { RunEventEmitter } from './engine.js';
 import type { EgressCandidate, EgressResolution } from './egress-policy.js';
+import { proxyOptionFor } from './egress-policy.js';
 
 // ============================================================================
 // Daemon bridge (ch02 `bridge/`, lands at G8A) — getDaemonConnection
@@ -423,6 +424,35 @@ export type LocalBrowserContextProvider = (
   ownerUserId: string,
   egress?: EgressResolution,
 ) => Promise<BrowserContext>;
+
+/**
+ * THE LAST MILE, as a function instead of a closure in the composition root - the one place where a
+ * resolved route becomes actually-proxied traffic.
+ *
+ * WHY IT MOVED HERE. It was three lines inside `setLocalBrowserContextProvider(async (...) => ...)`
+ * in `server.ts`, reaching straight out to `getSharedBrowser()`. Nothing could bind it, so nothing
+ * exercised it: reducing the body to `return browser.newContext()` - every residential run silently
+ * leaving from the datacenter, the precise outcome this slice exists to prevent - was caught by no
+ * suite in the repo. The direct import was what made it untestable, so the browser arrives as an
+ * ARGUMENT and the composition root passes `getSharedBrowser`. `tests/automation/local-browser-
+ * context.test.ts` then drives the real function with a recording browser.
+ *
+ * WHAT IT MUST KEEP DOING, both load-bearing:
+ *   - `newContext`, NEVER `launchPersistentContext`. See the section docblock above: the persistent
+ *     variant turns `session-establishment.ts`'s post-login `storageState()` into a capture of the
+ *     owner's whole cross-site cookie jar.
+ *   - the PROXY, when the resolution names a machine. `proxyOptionFor` answers undefined for every
+ *     non-machine outcome, so the datacenter route builds exactly the context it always did.
+ */
+export function localBrowserContextProviderUsing(
+  openBrowser: () => Promise<Browser>,
+): LocalBrowserContextProvider {
+  return async (_ownerUserId, egress) => {
+    const browser = await openBrowser();
+    const proxy = egress ? proxyOptionFor(egress) : undefined;
+    return browser.newContext(proxy ? { proxy } : {});
+  };
+}
 
 const defaultLocalBrowserContextProvider: LocalBrowserContextProvider = async () => {
   throw new Error('in-process automation browser context is not wired');

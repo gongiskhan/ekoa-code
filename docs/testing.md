@@ -67,6 +67,36 @@ where they touch the dashboard.
   it are pinned separately (`components/schedules-page.test.tsx`,
   `components/schedule-detail-page.test.tsx`), on the WORDS a person reads, because dropping the
   `code` prop leaves a component that is correct, tested and permanently on its generic fallback.
+- **Two fixture rules this slice learned the hard way, and both generalise.**
+  (1) DRIVE EVERY MEMBER OF A SET THAT GATES BEHAVIOUR, not the cheapest one. Every locality fixture
+  drove a `wait` step, so `STEP_TYPES_NEEDING_BROWSER` - the sole gate deciding which steps get a
+  locality verdict at all - could be cut to `new Set(['wait'])` with 94 files and 1324 tests still
+  green, leaving the three step types that actually drive a page (`navigate`, `browser`, `verify`)
+  covered by nothing. `engine-locality.test.ts` now runs one case per member, in both directions,
+  via `describe.each(browserNeedingSteps)`. The observable has to be the halt MESSAGE, never the run
+  status: a step waved past locality falls through to the executor's own "there is no browser here",
+  which ends the run in the SAME status with the same empty context log.
+  (2) A FIXTURE WITH ONE CANDIDATE CANNOT PROVE A CHOICE. The permit-route case used a fleet of one
+  machine which was also the connected daemon, so it passed identically whether the permit carried
+  the daemon's own line or `resolveEgress`'s independent `usable[0]` pick - there was only one thing
+  to pick. Any assertion about WHICH of several things was chosen needs the wrong answer to be
+  available and, better, listed first.
+- **A census must be a census.** `locality.test.ts`'s `clearedBy` coverage was five hand-written
+  inputs under a docblock claiming to cover every refusal the module produces; a new
+  `clearedBy: 'human'` branch could be added, reached, and leave it green. It now walks the CROSS
+  PRODUCT of the input space (postures, targets, offline policies, preferences, daemon states, fleet
+  listings, the kill switch), collects every distinct refusal actually emitted, and asserts the
+  collected set against an enumerated one - so a new refusal of either kind reddens it. A census
+  only catches what its space REACHES, which is not a formality: a branch conditioned on more than
+  two fleet candidates was missed by the first version of the space, which is why it carries a
+  larger fleet.
+- **`api/tests/automation/local-browser-context.test.ts`** - the LAST MILE, and the reason the
+  provider takes its browser as an argument. Deciding a route is proved everywhere; APPLYING it was
+  proved nowhere, because the application lived in an inline closure in `server.ts` that nothing
+  could bind - so reducing it to `return browser.newContext()`, every residential run silently
+  leaving from the datacenter, left the whole repository green. The seam is now
+  `localBrowserContextProviderUsing(openBrowser)` and this suite drives the real function with a
+  recording browser, asserting the launch options Chromium would actually have received.
 - **`api/tests/e2e/`** - node full-app e2e drivers (`*.e2e.mjs`): served-app plane, legal suite, and
   the deferred `erp-*` tenant-fork drivers (awaiting CUTOVER).
 - **`api/tests/journeys/`** - the zero-dependency HTTP journey probe kit (`_lib.mjs`, `j*.mjs`) plus

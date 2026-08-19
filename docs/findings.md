@@ -6,6 +6,32 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`resolve-step-origin-runs-twice-per-gated-browser-step`** (OPEN 2026-08-19, LOW, cost - a
+  consequence of scoping the ceremony preference to its origin, named rather than optimised away).
+  Both `resolveLocalityForStep` and `evaluateCredentialGate` call `resolveStepOrigin` for the same
+  step index, and the post-gate re-resolution makes that three walks for a gated browser step. Each
+  walk can hit the `loadIntegrationActionDeclaration` seam once per integration step it passes.
+  **Deliberately not memoised.** The obvious cache is a per-run map keyed by step index, and a per-run
+  map holding a value resolved for one step and reused for another is precisely the shape that
+  produced the defect this round exists to fix (`preferredPairingId` was exactly that). The seam is a
+  definition lookup, not a network call, and the walk is bounded by the step list. Revisit only with
+  a profile, and if so cache the ORIGIN keyed by step index rather than anything derived from it.
+
+- **`the-permit-is-withheld-where-the-old-shape-would-have-typed-from-the-datacenter`** (OPEN
+  2026-08-19, LOW, an intended behaviour change with a real cost, recorded so it is not rediscovered
+  as a bug). `hostedTypistPermitFor` withholds the hosted typist entirely when a step required a
+  residential line and the connected machine cannot lend one - a step pinned to a machine that does
+  not advertise `egress.residential`, which is an ordinary fleet shape since that capability is about
+  lending a line to others and most machines never grant it. Such a run now halts
+  `needs_credentials` asking for a person where it previously logged in from the datacenter and
+  carried on. That is the intended direction (the login was leaving by a different door than the work
+  and the portal was being shown two identities for one account), and the halt is a state the product
+  already surfaces and a person can act on. **The cost is availability**: an owner whose automation
+  used to run unattended now gets a ceremony ask, and the message they see is the generic
+  needs-credentials one rather than "your machine cannot lend the login a matching line". A refusal
+  that named its own cause would need the permit to carry a reason through the gate into the halt
+  payload; not done here, because the payload is a contract shape and widening it is its own slice.
+
 - **`route-switch-refusal-is-neutral-but-repeats-identically`** (OPEN 2026-08-19, LOW, a named limit
   of the `clearedBy` split, not a regression). `LocalityVerdict`'s blocked member now answers WHO
   clears it, so a refusal waiting cannot fix halts terminally instead of re-firing forever. The

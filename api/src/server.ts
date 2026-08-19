@@ -155,8 +155,8 @@ import {
   setArtifactResolver,
   setCatalogSources,
   setLocalBrowserContextProvider,
+  localBrowserContextProviderUsing,
   setEgressCandidateResolver,
-  proxyOptionFor,
   setDaemonConnectionResolver,
   setAutomationContentSections,
   startRunForTrigger,
@@ -672,17 +672,17 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   });
   // 9. The in-process local browser for browser-step automations (services/ shared pool).
   //
-  // P4.1: the context is now launched WITH the run's resolved route out. The proxy is a
-  // `newContext` option and cannot be applied afterwards, which is why the resolution travels down
-  // from the run loop (`automation/locality.ts` decided it; this only renders it). `proxyOptionFor`
-  // answers undefined for every non-machine outcome, so the datacenter route builds exactly the
-  // context it always did — and the non-persistent `newContext()` invariant
-  // (tests/security/browser-context-lifecycle.test.ts) is untouched either way.
-  setLocalBrowserContextProvider(async (_ownerUserId, egress) => {
-    const browser = await getSharedBrowser();
-    const proxy = egress ? proxyOptionFor(egress) : undefined;
-    return browser.newContext(proxy ? { proxy } : {});
-  });
+  // P4.1: the context is launched WITH the run's resolved route out. The proxy is a `newContext`
+  // option and cannot be applied afterwards, which is why the resolution travels down from the run
+  // loop (`automation/locality.ts` decided it; the provider only renders it).
+  //
+  // THE BODY IS NOT WRITTEN HERE ANY MORE, and that is deliberate: as an inline closure reaching
+  // straight for `getSharedBrowser()` it was the only place a resolved route became actually-proxied
+  // traffic and the only such place nothing could bind, so gutting it to a bare `newContext()` - a
+  // silent datacenter run for every residential automation - was caught by no suite.
+  // `localBrowserContextProviderUsing` takes the browser as an ARGUMENT, which is what makes it
+  // drivable from a test; this line is now only the binding.
+  setLocalBrowserContextProvider(localBrowserContextProviderUsing(getSharedBrowser));
   // 9b. The org's machines, for egress selection (Cofre WS-I). `egressCandidatesForOrg` already
   // returns the INTERSECTION of what each machine advertises and what the org granted (I-3), which
   // is the only list selection may ever see — an advertisement is a self-assertion, not an

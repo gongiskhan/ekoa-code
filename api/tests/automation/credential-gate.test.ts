@@ -251,6 +251,12 @@ describe('generality (Rule 3: no consumer special-casing)', () => {
  *
  * The gate is where both facts are in hand (the posture it just classified, the pairing checkout
  * reported), which is why the filter lives here rather than downstream.
+ *
+ * AND IT TRAVELS WITH ITS ORIGIN. A session belongs to ONE portal, so a bare pairing id is a value
+ * that can be misfiled - the run loop kept one in a run-level variable and applied it to every later
+ * browser step, so a run touching two portals judged portal B against portal A's ceremony machine.
+ * The gate emits `{ origin, pairingId }` together, which is what makes that misfiling impossible to
+ * express rather than merely discouraged.
  */
 describe('the ceremony pairing is a preference for adversarial origins only', () => {
   const ready = (pairingId?: string) => async () => ({
@@ -269,7 +275,35 @@ describe('the ceremony pairing is a preference for adversarial origins only', ()
         ensure: ready('pair_home'),
       },
     );
-    expect(verdict).toMatchObject({ kind: 'ready', preferredPairingId: 'pair_home' });
+    // THE ORIGIN COMES WITH IT. Without it the run loop has a machine and no idea which portal it
+    // is about, which is exactly the state in which it filed one portal's preference against
+    // another's steps.
+    expect(verdict).toMatchObject({
+      kind: 'ready',
+      preferredPairing: { origin: 'portal.example', pairingId: 'pair_home' },
+    });
+  });
+
+  it('...and the origin it names is the one this step was gated for, not some other step’s', async () => {
+    // Two portals in one step list, gated at the SECOND. `resolveStepOrigin` walks backwards from
+    // the index, so the pairing must be labelled `outra.example` - the site this step is about.
+    const verdict = await gate(
+      [
+        declared({ type: 'integration', integrationKey: 'portal', integrationAction: 'fetch' }),
+        declared({ type: 'integration', integrationKey: 'outra', integrationAction: 'fetch' }),
+      ],
+      1,
+      {
+        loadActionDeclaration: async (key) => ({
+          httpConfig: { baseUrl: key === 'outra' ? 'https://outra.example/api' : 'https://portal.example/api' },
+        }),
+        ensure: ready('pair_home'),
+      },
+    );
+    expect(verdict).toMatchObject({
+      kind: 'ready',
+      preferredPairing: { origin: 'outra.example', pairingId: 'pair_home' },
+    });
   });
 
   it('a permissive origin drops it — a portable credential has no home', async () => {
@@ -285,7 +319,7 @@ describe('the ceremony pairing is a preference for adversarial origins only', ()
       },
     );
     expect(verdict.kind).toBe('ready');
-    expect(verdict).not.toHaveProperty('preferredPairingId');
+    expect(verdict).not.toHaveProperty('preferredPairing');
   });
 
   it('a cloud-established session names no machine, so there is nothing to prefer', async () => {
@@ -298,7 +332,7 @@ describe('the ceremony pairing is a preference for adversarial origins only', ()
       },
     );
     expect(verdict.kind).toBe('ready');
-    expect(verdict).not.toHaveProperty('preferredPairingId');
+    expect(verdict).not.toHaveProperty('preferredPairing');
   });
 });
 

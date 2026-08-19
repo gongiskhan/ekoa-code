@@ -1686,3 +1686,86 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   existing treatment: it is not in this brief, and changing its ceiling behaviour would be a
   behaviour change nobody asked for. It is recorded as a finding instead
   (`route-switch-refusal-is-neutral-but-repeats-identically`).
+
+- 2026-08-19 - P4 ROUND FOUR: A CEREMONY PREFERENCE IS SCOPED TO ITS ORIGIN, A BRIDGE VERDICT NAMES
+  THE MACHINE THE BRIDGE WILL RUN ON, AND THE LAST MILE BECAME BINDABLE.
+
+  Three rounds of this slice each fixed what the previous review named, and the same underlying error
+  resurfaced somewhere adjacent every time: a value resolved in one context and applied in another.
+  Round four fixes that shape rather than its instances, and the fixes are structural where a
+  structure was available.
+
+  (1) THE PREFERENCE WAS RUN-SCOPED WHEN IT IS ORIGIN-SCOPED. `preferredPairingId` was a single
+  run-level `let` in the run loop, set by whichever gated step last reported a pairing, and
+  `resolveLocalityForStep` forwarded it into EVERY later browser-needing step regardless of that
+  step's origin. A session is bound to ONE portal, so a run touching two portals judged the second
+  portal's steps against the first portal's ceremony machine. Reproduced end to end through the real
+  engine: log into portal A with a session established on a machine since retired, then browse portal
+  B, and portal B's step halts `needs_credentials` naming PORTAL B and asking the owner to establish
+  that session again from a machine they still have. They can do exactly that, correctly, and the
+  next fire produces the identical halt - because the halt is about a machine belonging to a
+  different site's session. Worse, `needs_credentials` is deliberately NOT in
+  `NEUTRAL_BLOCKED_CODES`, so every misdirected fire drove the failure ceiling to the 20-strike
+  auto-pause, having pointed the owner at the wrong portal the whole way. The lesser variant - the
+  ceremony machine merely asleep - is the same cross-origin misdirection wearing the neutral halt.
+
+  THE FIX IS THE TYPE, not a rule. `CredentialGateVerdict.ready` carries
+  `preferredPairing?: { origin, pairingId }` - one value, so a pairing cannot be held without the
+  portal it is about - and the run loop files them in `preferredPairingByOrigin`, a Map keyed by
+  origin, read back per step from the origin THAT step resolved. A lookup that misses is the honest
+  answer for a portal no session was checked out for: "any machine of yours", not "some other
+  portal's ceremony machine". `resolveLocality` cannot check this itself, so `LocalityInput`
+  documents the caller's obligation at the field.
+
+  (2) THE SET DECIDING WHICH STEPS GET A VERDICT WAS PINNED BY NOTHING. `STEP_TYPES_NEEDING_BROWSER`
+  is the sole gate, and mutating it to `new Set(['wait'])` - so the three step types that actually
+  drive a page stop being judged at all - left 94 files and 1324 tests across tests/automation,
+  tests/schedules and tests/security entirely green. The cause was a systemic fixture flaw rather
+  than a missing assertion: every locality case drove a `wait` step. The fixtures now drive one case
+  per member of the set (`navigate`, `wait`, `browser`, `verify`) in both directions - the P4.1
+  posture refusal and the P4.2 re-judgement after the gate - and each type's removal is verified to
+  redden its own case. The observable is the halt MESSAGE, never the status: a step waved past
+  locality falls through to the executor's own "there is no browser here", which ends the run in the
+  same `awaiting_daemon` with the same empty context log, and a suite asserting only status cannot
+  see the difference. That is exactly why this went unnoticed for three rounds.
+
+  (3) A BRIDGE VERDICT CARRIED `resolveEgress`'S PICK, NOT THE MACHINE THE WORK RUNS ON - the same
+  error as (1) in a different shape, and found by re-reading it that way. `resolveEgress` answers
+  "which machine should the HOSTED browser proxy through" and, given a residential requirement with
+  no pairing, takes `usable[0]`. The bridge verdict carried that verbatim, so with `pair_office`
+  listed first and `pair_home` dialled in, the verdict named `pair_office` while every byte of work
+  left from `pair_home` - and the one consumer of that field routes the hosted typist's LOGIN through
+  it. Same portal, same session, two different doors, diverging at the one act in a run that hands
+  over a secret. `bridgeEgressFor` now resolves the route against `daemonPairingId` and nothing else,
+  and does NOT consult the offline policy: `queue` has nothing to wait for here and `datacenter`
+  would hand the typist precisely the wrong door, so the only outcomes are `machine` or `refused`.
+
+  A `refused` bridge route is not a halt - the work still runs on the machine - it costs the PERMIT.
+  `hostedTypistPermitFor` is the second half: one rule, the login leaves by the same door as the
+  work. In-process types through its own route; a bridge types through the connected machine's line
+  when there is one; a bridge types through the ordinary hosted browser when the step required
+  nothing of its route (the origin is permissive by construction, which is that declaration); and
+  when a residential line WAS required and the connected machine cannot lend one, THE PERMIT IS
+  WITHHELD and the run halts asking for a person. Withholding is the closed answer and an available
+  one, which is why it is preferred to the previous behaviour: `proxyOptionFor` answers undefined for
+  a refused resolution, so the old shape opened a plain datacenter context and typed the password
+  into it.
+
+  (4) THE LAST MILE HAD NO TEST BECAUSE IT HAD NO SEAM. The provider that turns a resolved route into
+  actually-proxied traffic was an inline closure in `server.ts` reaching straight for
+  `getSharedBrowser()`. Nothing could bind it, so nothing exercised it: reducing its body to
+  `return browser.newContext()` - every residential run silently leaving from the datacenter, the
+  precise outcome this slice exists to prevent - was caught by no suite in the repository. It is now
+  `automation/seams.ts` `localBrowserContextProviderUsing(openBrowser)`, taking the browser as an
+  argument, with the composition root doing nothing but binding `getSharedBrowser` into it. The
+  direct import WAS the defect, so removing it is the fix rather than a convenience.
+
+  (5) THE CENSUS IS NOW A CENSUS. `every ENVIRONMENT refusal stays neutral` was five hand-written
+  inputs under a docblock claiming to cover every refusal the module can produce; a new
+  `clearedBy: 'human'` branch - the exact regression it exists to catch - could be added, reached,
+  and leave it green. It now walks the cross product of the whole input space, collects every
+  distinct refusal actually emitted, and asserts the collected set: the `human` answers are exactly
+  the retirement, the FULL set is exactly the one enumerated, and no refusal answers both ways. A
+  census only catches what its space reaches, which is not a formality - a branch conditioned on more
+  than two fleet candidates was missed by the first version of the space, so the space carries a
+  larger fleet and the miss is recorded here rather than discovered again later.

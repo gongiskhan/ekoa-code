@@ -42,6 +42,7 @@ import { issueLoginRelayPrompt } from '../cofre/index.js';
 import { classifyOrigin } from './origin-posture.js';
 import {
   resolveLocality,
+  hostedTypistPermitFor,
   sameRoute,
   type LocalityVerdict,
 } from './locality.js';
@@ -537,11 +538,21 @@ async function runOrRehearse(
   const browserLease: BrowserLease = ctx.browserLease ?? { id: randomUUID(), used: false };
   const ownsBrowserLease = ctx.browserLease === undefined;
   /**
-   * P4.2 — the pairing where the session this run checked out was ESTABLISHED, when there is one.
-   * Read off the item (`sessionMetadata.establishedBy.pairingId`) by the credential gate, never
-   * invented here, and honoured as a preference for adversarial origins only.
+   * P4.2 - the pairing where each checked-out session's ceremony HAPPENED, KEYED BY THE ORIGIN THAT
+   * SESSION BELONGS TO. Read off the item (`sessionMetadata.establishedBy.pairingId`) by the
+   * credential gate, never invented here, and honoured as a preference for adversarial origins only.
+   *
+   * A MAP, AND NOT A `let`, BECAUSE A RUN IS NOT A PORTAL. This was one run-level variable set by
+   * whichever gated step last reported a pairing, and `resolveLocalityForStep` forwarded it into
+   * EVERY later browser step whatever origin that step was about. So a run that logs into portal A
+   * and then browses portal B judged portal B's steps against portal A's ceremony machine: retire
+   * that machine and the run halted `needs_credentials` naming PORTAL B, the owner re-established
+   * portal B exactly as instructed, and the next fire produced the identical halt - while every one
+   * of those fires counted against the failure ceiling (`needs_credentials` is deliberately NOT in
+   * `NEUTRAL_BLOCKED_CODES`) until the schedule auto-paused. A session is bound to one origin, so
+   * its preference is too, and the key is the origin the gate resolved it for.
    */
-  let preferredPairingId: string | undefined;
+  const preferredPairingByOrigin = new Map<string, string>();
   // The browser session is created lazily on first browser use so a run with
   // only api_call/integration steps still works without any browser.
   let browser: BrowserSession | null = null;
@@ -630,6 +641,11 @@ async function runOrRehearse(
       resolvedOrigin ? `https://${resolvedOrigin.origin}` : '',
       resolvedOrigin?.action ?? undefined,
     );
+    // THE PREFERENCE FOR *THIS* ORIGIN, and no other. A run touching two portals holds two
+    // independent answers, and a step gets the one belonging to the site it is about - a lookup
+    // that MISSES is the honest answer for a portal no session was checked out for, and means
+    // "any machine of yours", not "the machine some other portal's session was made on".
+    const preferredPairingId = resolvedOrigin ? preferredPairingByOrigin.get(resolvedOrigin.origin) : undefined;
     const verdict = resolveLocality({
       classification,
       declaredTarget: declaration.target,
@@ -862,6 +878,19 @@ async function runOrRehearse(
       // SKIPPED ENTIRELY for a step locality already refused: that step is not going to run, so
       // establishing a credential for it would be work nobody asked for done through a browser
       // nobody may open.
+      // THE HOSTED-BROWSER PERMIT. Half of the typist's permission; the other half is the origin's
+      // posture, applied inside the gate. Two independent conditions, both closed by default:
+      //
+      //   - this process must have a hosted browser to offer at all (`localBrowserEnabled`, off in
+      //     production), and
+      //   - the step's resolved locality must leave the typist a door that MATCHES the one the work
+      //     will use (`hostedTypistPermitFor`). An absent permit means the typist is unreachable and
+      //     the run halts asking for a person, which is the closed direction: typing a password out
+      //     of a different door than the session is then used from shows the portal two identities
+      //     for one account, and it is the one act in the run that hands over a secret.
+      const hostedBrowser = loadAutomationConfig().localBrowserEnabled
+        ? hostedTypistPermitFor(stepLocality)
+        : undefined;
       // Annotated rather than inferred: `{}` is assignable to the gate's all-optional result today,
       // so the union collapses silently - and would stop collapsing, as a confusing error at the
       // reads below, the day the gate grows a required field.
@@ -873,36 +902,16 @@ async function runOrRehearse(
             automationName: automation.name,
             steps: workingSteps,
             index: i,
-            // THE HOSTED-BROWSER PERMIT. Half of the typist's permission; the other half is the
-            // origin's posture, applied inside the gate. Present only when this process has a
-            // hosted browser to offer at all, and carrying the route the step resolved to when it
-            // resolved one, so a login is never performed out of a different door than the work.
-            //
-            // "WHEN IT RESOLVED ONE" MEANS EITHER VERDICT THAT CARRIES AN EGRESS, and it used to
-            // mean `in-process` alone - which silently dropped the route on every `bridge` step and
-            // contradicted this comment. It mattered: a PERMISSIVE origin whose step is pinned (or
-            // declares `egress.residential`) resolves to `bridge` with a MACHINE route, the work
-            // then runs on that machine's line, and the typist's login went out of the datacenter
-            // instead. Same portal, same session, two different doors - the substitution this whole
-            // slice exists to stop, performed by the one act that types a password.
-            //
-            // A `blocked` verdict carries no egress and never reaches here anyway (`localityRecord`
-            // is set, and this whole call is skipped); the narrowing is what makes that visible to
-            // the type checker rather than to a reader.
-            ...(loadAutomationConfig().localBrowserEnabled
-              ? {
-                  hostedBrowser: stepLocality && stepLocality.kind !== 'blocked'
-                    ? { egress: stepLocality.egress }
-                    : {},
-                }
-              : {}),
+            ...(hostedBrowser ? { hostedBrowser } : {}),
           }, step);
       if (!gate.record && gate.storageState !== undefined && !browser) {
         sessionState = gate.storageState;
       }
-      // P4.2: the pairing where this session's ceremony happened. It is a PREFERENCE, honoured for
-      // adversarial origins only, and it is recorded on the session item rather than invented here
-      // (`sessionMetadata.establishedBy.pairingId`, stamped by `bridge/attended.ts`).
+      // P4.2: the pairing where this session's ceremony happened, FILED UNDER THE ORIGIN IT BELONGS
+      // TO. It is a PREFERENCE, honoured for adversarial origins only, and it is recorded on the
+      // session item rather than invented here (`sessionMetadata.establishedBy.pairingId`, stamped
+      // by `bridge/attended.ts`). The gate hands back the origin with it, so a run touching several
+      // portals accumulates one answer per portal instead of overwriting a single run-level one.
       //
       // It arrives from the gate, i.e. AFTER locality was resolved, so the verdict is re-resolved
       // when it is new. Re-resolving can only NARROW: without the preference the requirement is
@@ -910,8 +919,9 @@ async function runOrRehearse(
       // one this loop must honour before a browser opens. No browser can have opened in between -
       // the gate only ever opens one for a PERMISSIVE origin, and a permissive origin never carries
       // a preference (`credential-gate.ts` drops it).
-      if (gate.preferredPairingId && gate.preferredPairingId !== preferredPairingId) {
-        preferredPairingId = gate.preferredPairingId;
+      const learned = gate.preferredPairing;
+      if (learned && preferredPairingByOrigin.get(learned.origin) !== learned.pairingId) {
+        preferredPairingByOrigin.set(learned.origin, learned.pairingId);
         if (stepLocality) {
           stepLocality = await resolveLocalityForStep(i, step);
           localityRecord = refusalRecordFor(step, i, stepLocality);
@@ -2401,7 +2411,12 @@ async function snap(
 async function credentialGateRecord(
   input: CredentialGateInput,
   step: Step,
-): Promise<{ record?: StepRecord; storageState?: unknown; preferredPairingId?: string }> {
+): Promise<{
+  record?: StepRecord;
+  storageState?: unknown;
+  /** P4.2 - the ceremony machine AND the portal it belongs to; never one without the other. */
+  preferredPairing?: { origin: string; pairingId: string };
+}> {
   const stepStart = Date.now();
   const base: StepRecord = { stepId: step.id, index: input.index, status: 'running', tier: 'cache', durationMs: 0 };
   let verdict: CredentialGateVerdict;
@@ -2422,7 +2437,7 @@ async function credentialGateRecord(
     case 'ready':
       return {
         storageState: verdict.storageState,
-        ...(verdict.preferredPairingId ? { preferredPairingId: verdict.preferredPairingId } : {}),
+        ...(verdict.preferredPairing ? { preferredPairing: verdict.preferredPairing } : {}),
       };
     case 'needs-machine':
       // Honest routing: a healthy session with no way out of the network is a MACHINE problem, and

@@ -258,7 +258,15 @@ and cannot be applied afterwards), with the fleet reaching `automation/` through
 `setEgressCandidateResolver` - bound to `bridge/registry.ts` `egressCandidatesForOrg`, default
 EMPTY, and empty refuses. An ADVERSARIAL session prefers the pairing its ceremony happened on
 (`sessionMetadata.establishedBy.pairingId`, reported by `ensureSession` and turned into a preference
-by `credential-gate.ts`): that machine or wait, never a colleague's. A portable credential resolves
+by `credential-gate.ts`): that machine or wait, never a colleague's. THE PREFERENCE IS SCOPED TO THE
+ORIGIN IT BELONGS TO, never to the run - a session is bound to one portal, so the gate emits it as
+`{ origin, pairingId }` and the run loop files it in `preferredPairingByOrigin`, a map keyed by the
+site each session is about. It was one run-level variable set by whichever gated step last reported
+a pairing and forwarded into every later browser step, so a run touching two portals judged portal
+B's steps against portal A's ceremony machine: with that machine retired, the halt named PORTAL B
+and asked for a ceremony the owner could perform correctly, for ever, with the next fire producing
+the identical halt - while `needs_credentials` (deliberately not neutral) drove the ceiling to the
+auto-pause. A portable credential resolves
 to `kind: 'any'` and prefers nothing. A preference whose machine the org's fleet listing no longer
 contains has been RETIRED, and the refusal changes accordingly - it is `clearedBy: 'human'`, so it
 halts TERMINALLY and names the act that fixes it (establish the session again from a machine you
@@ -292,10 +300,30 @@ that the gate forwards to `ensureSession` only if the origin's posture also allo
 `EnsureSessionInput.hostedTypist` is absent-means-no, so an unattended login into the hosted
 Chromium is impossible for an adversarial origin. The permit is offered ONLY when
 `config.localBrowserEnabled` says this process has a hosted browser at all - which is what keeps a
-password from being typed into one in production - and it CARRIES THE ROUTE the step resolved to
-for either verdict that has one (`bridge` as well as `in-process`), so a login never leaves by a
-different door than the work it belongs to. `config.localBrowserEnabled` keeps its `!isProd`
+password from being typed into one in production - and WHICH permit it is comes from
+`locality.hostedTypistPermitFor`, whose single rule is that THE LOGIN LEAVES BY THE SAME DOOR AS THE
+WORK. An `in-process` verdict types through the route its own work will take. A `bridge` verdict
+types through the CONNECTED machine's line when that machine has one (`bridgeEgressFor` resolves the
+route out against `daemonPairingId`, never against `resolveEgress`'s independent `usable[0]` pick,
+which named some other household's proxy while the work ran on the owner's); through the ordinary
+hosted browser when the step required nothing of its route at all, the origin being permissive by
+construction; and through NOTHING - the permit is withheld and the run halts asking for a person -
+when a residential line was required and the connected machine cannot lend one. Withholding is the
+closed answer and the available one: a halt for a person is a state the product already surfaces,
+and typing a password out of a door the session is not then used from is not.
+`config.localBrowserEnabled` keeps its `!isProd`
 default: posture is the gate, and this slice narrows without widening anything on the way past.
+
+THE LAST MILE. `locality.ts` decides a route and the engine carries it, but the only place it
+becomes actually-proxied traffic is the local-browser context provider, which renders the resolution
+into `newContext({ proxy })` (a launch option; it cannot be applied to a context that exists). That
+body lives in `automation/seams.ts` as `localBrowserContextProviderUsing(openBrowser)` and takes the
+browser as an ARGUMENT, with `server.ts` binding `getSharedBrowser` into it. It used to be an inline
+closure in the composition root reaching straight for `getSharedBrowser`, which made it the one
+security-critical step nothing could bind and nothing exercised - gutting it to a bare
+`newContext()`, every residential run silently leaving from the datacenter, left the repository
+green. `tests/automation/local-browser-context.test.ts` drives the real function with a recording
+browser.
 
 A run that needs a credential the Cofre does not hold halts in `needs_credentials`, a first-class
 `RunStatus` modelled on `awaiting_daemon` (halt and re-dispatch) rather than on `paused_for_user` (an
