@@ -70,6 +70,9 @@ export function classifyReplayDrift(signal: ReplayFailureSignal): ReplayFailureC
   switch (signal.outcome) {
     case 'drift': return 'recipe_drift';
     case 'write-gate': return 'refused';
+    // A recipe that does not cover its action's declared write is not a site that changed, and a
+    // heal would re-learn the same read-only call set from the same pass. It is a refusal.
+    case 'does-not-cover': return 'refused';
     case 'unavailable': return 'needs_human';
     default: return 'transport';
   }

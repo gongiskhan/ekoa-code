@@ -82,7 +82,6 @@
  */
 import { RecipeShapeError, parseCompiledRecipe, type CompiledRecipe, type InjectedCall } from '../recipe.js';
 import { parseResponseShape, shapeMismatch } from '../response-shape.js';
-import { interpolate } from '../template-vars.js';
 import { guardedFetch } from '../../services/url-fetcher.js';
 import type { SecretRegistry } from '../../security/redaction.js';
 import type { OriginClassification } from '../origin-posture.js';
@@ -124,6 +123,15 @@ export type ReplayResult =
    * this string reaches an error message and a resolved URL carries the caller's arguments.
    */
   | { outcome: 'write-gate'; blocked: string; recipeVersion: number }
+  /**
+   * THE RECIPE DOES NOT DO WHAT THE ACTION EXISTS TO DO (the read-learns-a-write shape).
+   *
+   * The action is declared `mutates`, and the recipe compiled from watching it contains no write at
+   * all. Replaying it would issue the reads, answer `ok`, and report SUCCESS while the write never
+   * happened - the worst failure shape this spine can have, because nobody finds out until somebody
+   * checks the far system. So the replay refuses, and the caller runs the path that DOES write.
+   */
+  | { outcome: 'does-not-cover'; reason: string; recipeVersion: number }
   /** There is a readable recipe but no route that may carry it (no session, adversarial origin). */
   | { outcome: 'unavailable'; reason: string; recipeVersion: number };
 
@@ -148,6 +156,14 @@ export interface ReplayInput {
    * stops at the gate. Never defaulted true, in any mode.
    */
   writeAssent?: boolean;
+  /**
+   * THE ACTION'S DECLARED EFFECT (`IntegrationAction.mutates`), carried down from the executor.
+   *
+   * Distinct from `writeAssent`, which says a human APPROVED the write. This says the action IS one,
+   * and it is what the coverage check below is judged against: a recipe with no write in it cannot
+   * be the whole of an action that writes, however freely it replays.
+   */
+  mutates?: boolean;
 }
 
 export interface ReplayDeps {
@@ -186,6 +202,26 @@ export async function replayCompiledAction(input: ReplayInput, deps: ReplayDeps)
   }
   if (recipe.injectedCalls.length === 0) {
     return { outcome: 'no-recipe', reason: 'the recipe compiled no replayable call (this flow is DOM-only)' };
+  }
+
+  // ── DOES THIS RECIPE DO THE ACTION'S JOB? ─────────────────────────────────────────────────
+  //
+  // Checked BEFORE the write gate, because the two answers mean opposite things and the caller
+  // dispatches on them differently: `write-gate` says "this recipe writes and nobody approved it",
+  // `does-not-cover` says "this recipe does NOT write and the action must". Only the second is a
+  // reason to go and run the expensive path so the write actually happens.
+  //
+  // `learnFromRun` refuses to STORE either shape for a mutating action, so in a healthy system this
+  // never fires. It is the second, independent line - for a recipe written by an older build, or
+  // one whose action was re-declared `mutates` after it was learned.
+  if (input.mutates === true && firstWrite(recipe) === undefined) {
+    return {
+      outcome: 'does-not-cover',
+      reason:
+        'this action is declared as writing and its compiled recipe contains no write - replaying it '
+        + 'would report success without performing the action',
+      recipeVersion: recipe.version,
+    };
   }
 
   // ── THE WRITE GATE, BEFORE ANYTHING RUNS (trap T4) ────────────────────────────────────────
@@ -421,8 +457,33 @@ function playwrightActionFor(kind: string, locator: Locator, value?: string): Pl
 // internals
 // ------------------------------------------------------------------------------------------
 
-/** Every `{{input.<name>}}` a template names. The gate for "was this hole actually supplied". */
+/** Every `{{input.<name>}}` a template names. Global, and therefore only ever used with `replace`
+ *  and `matchAll` - `test`/`exec` on a `/g` regex carries `lastIndex` between calls. */
 const INPUT_HOLE_RE = /\{\{\s*input\.([a-zA-Z0-9_]+)\s*\}\}/g;
+/** ANY placeholder, of any family. What a URL template may contain is a strict subset of this. */
+const ANY_HOLE_RE = /\{\{[^}]*\}\}/g;
+/** The one placeholder shape a URL template may carry, anchored. Non-global on purpose. */
+const INPUT_HOLE_EXACT = /^\{\{\s*input\.[a-zA-Z0-9_]+\s*\}\}$/;
+/**
+ * `scheme://authority[path][?query][#fragment]`, split WITHOUT `new URL`.
+ *
+ * A URL template is not a URL: `{` and `}` are in the WHATWG path percent-encode set, so
+ * `new URL('https://h/api/cases/{{input.id}}').pathname` is `/api/cases/%7B%7Binput.id%7D%7D` and
+ * every path hole silently stops being one. (Query holes survive, which is exactly why this was
+ * invisible - the compile's commonest output is a query hole.) So the template is taken apart by
+ * grammar and only the pieces that are real URLs are handed to the parser.
+ */
+const URL_TEMPLATE_RE = /^([A-Za-z][A-Za-z0-9+.-]*):\/\/([^/?#]*)([^?#]*)(\?[^#]*)?/;
+
+/** The stand-in a hole gets in the CONTROL render. Hole-free, encoding-stable, never empty - so the
+ *  control's structure is the template's structure with the arguments taken out of it. */
+const HOLE_SENTINEL = 'a';
+
+/** What `structureOf` puts where a hole was, so the two renders can differ there and nowhere else.
+ *  A RAW SPACE, which a parsed pathname can never contain (the parser encodes one as `%20`), so it
+ *  cannot collide with a real segment. Named rather than inlined: the first version used a literal
+ *  NUL, which works and makes the file BINARY to git and to every grep-based gate. */
+const MASKED_SEGMENT = ' ';
 
 export function inputHolesOf(template: string): string[] {
   return [...new Set([...template.matchAll(INPUT_HOLE_RE)].map((m) => m[1]!))];
@@ -435,40 +496,203 @@ interface FilledCall {
   body?: string;
 }
 
+/** A URL template taken apart into what an argument may and may not decide. */
+interface UrlTemplateParts {
+  /** Literal, always, and already normalised by the URL parser. The destination is the recipe's. */
+  origin: string;
+  /** The raw path, holes and all. Never `''` - a template with no path has the path `/`. */
+  path: string;
+  /** The raw query INCLUDING its `?`, holes and all, or `''`. */
+  search: string;
+}
+
 /**
  * Fill one call's holes, or throw.
  *
- * Two refusals live here and both are about what an ARGUMENT may decide. It may not leave a hole
- * empty (`assertHolesSupplied`), and it may not move the host: the template's literal origin is
- * read BEFORE substitution and the resolved URL must still be on it.
+ * ── WHAT AN ARGUMENT MAY DECIDE: A VALUE. NOTHING ELSE. ──────────────────────────────────────
+ *
+ * A replay runs inside the user's LIVE AUTHENTICATED PAGE. That is the whole point of the in-page
+ * rung and it is also exactly what makes an argument that can move the request dangerous: an
+ * argument choosing the endpoint is an SSRF with the user's session already attached. So the fill is
+ * STRUCTURAL rather than a string interpolation:
+ *
+ *   - the ORIGIN is taken from the template and never rendered. A template with a hole anywhere in
+ *     its origin is refused outright rather than filled;
+ *   - each PATH SEGMENT is rendered separately and its value percent-encoded, so a `/` in an
+ *     argument becomes `%2F` and cannot open a new segment;
+ *   - each QUERY PARAMETER NAME is literal and only its value is rendered, encoded, so an `&` or an
+ *     `=` in an argument cannot add or rename a parameter;
+ *   - and then the result is PROVEN against a CONTROL render of the same template with the
+ *     arguments taken out of it: same origin, same path-segment count, every hole-free segment
+ *     identical, same query parameter names in the same order. That proof catches what encoding
+ *     cannot - `..` needs no special character to walk up a path.
+ *
+ * The earlier version rendered the whole template with `interpolate` and then compared origins.
+ * `…/cases/{{input.id}}` with `id=../../admin/secrets` passed that check and resolved to
+ * `…/admin/secrets`: same origin, different endpoint, live session attached.
+ *
+ * The other refusal here is about an argument that is not there at all - see `assertHolesSupplied`.
  */
 export function fillCall(call: Pick<InjectedCall, 'urlTemplate' | 'bodyTemplate'>, args: Record<string, unknown>): FilledCall {
   assertHolesSupplied(call, args);
+  const template = parseUrlTemplate(call.urlTemplate);
+  const url = renderUrlTemplate(template, args);
+  const body = call.bodyTemplate === undefined ? undefined : renderBodyTemplate(call.bodyTemplate, args);
+  return { url: url.toString(), origin: url.origin, ...(body !== undefined ? { body } : {}) };
+}
 
-  let templateOrigin: string;
-  try {
-    templateOrigin = new URL(call.urlTemplate).origin;
-  } catch {
-    throw new RecipeShapeError('a compiled call did not resolve to an absolute URL');
+/** Take a stored template apart, refusing every shape whose fill could not be proven afterwards. */
+function parseUrlTemplate(urlTemplate: string): UrlTemplateParts {
+  const match = URL_TEMPLATE_RE.exec(urlTemplate);
+  if (!match) throw new RecipeShapeError('a compiled call did not resolve to an absolute URL');
+  const scheme = match[1]!.toLowerCase();
+  if (scheme !== 'http' && scheme !== 'https') {
+    throw new RecipeShapeError('a compiled call names a scheme this build will not replay');
   }
-
-  let absolute: string;
+  const authority = match[2] ?? '';
+  if (authority.includes('@')) {
+    throw new RecipeShapeError('a compiled call carries userinfo in its URL - refusing to replay it');
+  }
+  // A hole in the ORIGIN means the recipe let an argument choose the host. The compile can no longer
+  // produce one; a recipe written by an older build still can, and it is refused rather than filled.
+  if (authority.includes('{{')) {
+    throw new RecipeShapeError('a compiled call puts an argument in its ORIGIN - refusing to replay it');
+  }
   let origin: string;
   try {
-    const parsed = new URL(interpolate(call.urlTemplate, args));
-    absolute = parsed.toString();
-    origin = parsed.origin;
+    origin = new URL(`${scheme}://${authority}/`).origin;
   } catch {
     throw new RecipeShapeError('a compiled call did not resolve to an absolute URL');
   }
-  if (origin !== templateOrigin) {
-    // An argument moved the HOST. The recipe decides where a replay goes; a caller-supplied value
-    // that changes it would point the authenticated page's own fetch at somebody else's server.
-    throw new RecipeShapeError('a replayed call\'s arguments changed its origin - refusing to send it');
+  if (origin === 'null' || origin === '') {
+    throw new RecipeShapeError('a compiled call did not resolve to an absolute URL');
   }
+  // A template with no path has the path `/` - so the segment count the proof below compares is the
+  // one the parser will produce, rather than `[''].length`.
+  const path = match[3] === undefined || match[3] === '' ? '/' : match[3];
+  const search = match[4] ?? '';
 
-  const body = call.bodyTemplate === undefined ? undefined : interpolate(call.bodyTemplate, args);
-  return { url: absolute, origin, ...(body !== undefined ? { body } : {}) };
+  // Only the `{{input.*}}` family is fillable. Anything else would be rendered as a literal and go
+  // out on the wire looking like a placeholder nobody filled.
+  for (const hole of `${path}${search}`.matchAll(ANY_HOLE_RE)) {
+    if (!INPUT_HOLE_EXACT.test(hole[0])) {
+      throw new RecipeShapeError('a compiled call names a placeholder this build cannot fill');
+    }
+  }
+  // A hole in a parameter NAME lets a caller choose WHICH parameter it is filling. A bare flag
+  // (`?archived`, no `=`) is all name, so a hole anywhere in it is a hole in a name.
+  for (const pair of queryPairs(search)) {
+    if (nameOfPair(pair).includes('{{')) {
+      throw new RecipeShapeError('a compiled call puts an argument in a query parameter NAME - refusing to replay it');
+    }
+  }
+  return { origin, path, search };
+}
+
+/**
+ * Render the fillable parts, then PROVE what the arguments were allowed to do - against a CONTROL.
+ *
+ * The control is the same template rendered with every hole replaced by one inert character, so it
+ * is this template's structure with the arguments taken out of it. Both go through the same parser,
+ * so the comparison is between two normalised URLs rather than between a URL and a hand-rolled
+ * expectation of what the parser would have done.
+ *
+ * TWO PROPERTIES, AND THEY ARE GENUINELY DIFFERENT QUESTIONS - which is why they are two checks and
+ * not five overlapping ones:
+ *
+ *   1. THE STRUCTURE IS THE TEMPLATE'S (`structureOf`). Origin, path-segment count, every hole-free
+ *      segment, and the query parameter names in order. Stated once, compared once: an earlier cut
+ *      spread this over three separate `if`s, each of which happened to catch every case the others
+ *      did, so no one of them could be shown to matter.
+ *   2. WHAT LANDED IN A HOLE IS STILL A SEGMENT. A different question - it is about the VALUE at a
+ *      position the template chose, not about the shape. `.` and `..` are ordinary characters no
+ *      encoding escapes, and an empty one turns `…/cases/{id}` into the collection endpoint.
+ */
+function renderUrlTemplate(template: UrlTemplateParts, args: Record<string, unknown>): URL {
+  const actual = buildUrl(template, (name) => encodeURIComponent(String(args[name])));
+  const control = buildUrl(template, () => HOLE_SENTINEL);
+
+  const holeAt = template.path.split('/').map((segment) => segment.includes('{{'));
+  if (structureOf(actual, holeAt) !== structureOf(control, holeAt)) {
+    throw new RecipeShapeError('a replayed call\'s arguments changed its shape, not just its values - refusing to send it');
+  }
+  actual.pathname.split('/').forEach((filled, i) => {
+    if (!holeAt[i]) return;
+    if (filled === '' || filled === '.' || filled === '..') {
+      throw new RecipeShapeError('a replayed call\'s arguments emptied or walked a path segment - refusing to send it');
+    }
+  });
+  return actual;
+}
+
+/**
+ * Everything about a URL that a filled VALUE must not have changed, as one comparable string.
+ *
+ * Hole positions are blanked, because that is exactly where a value is allowed to differ. Everything
+ * else - the origin, how many segments there are, what the hole-free ones say, which parameters
+ * exist and in what order - is the template's decision and has to survive the fill unchanged.
+ */
+function structureOf(url: URL, holeAt: readonly boolean[]): string {
+  const segments = url.pathname.split('/').map((segment, i) => (holeAt[i] ? MASKED_SEGMENT : segment));
+  const names = queryPairs(url.search).map(nameOfPair);
+  return JSON.stringify([url.origin, segments, names]);
+}
+
+/** One render of the template. `fill` decides what a hole becomes; everything else is copied. */
+function buildUrl(template: UrlTemplateParts, fill: (name: string) => string): URL {
+  const path = template.path.replace(INPUT_HOLE_RE, (_match, name: string) => fill(name));
+  const search = template.search === ''
+    ? ''
+    : `?${queryPairs(template.search).map((pair) => {
+      const eq = pair.indexOf('=');
+      if (eq < 0) return pair;
+      return `${pair.slice(0, eq)}=${pair.slice(eq + 1).replace(INPUT_HOLE_RE, (_m, name: string) => fill(name))}`;
+    }).join('&')}`;
+  try {
+    return new URL(`${template.origin}${path}${search}`);
+  } catch {
+    throw new RecipeShapeError('a compiled call did not resolve to an absolute URL');
+  }
+}
+
+/** `?a=1&b` -> `['a=1', 'b']`, and `''` -> `[]`. */
+function queryPairs(search: string): string[] {
+  return search === '' ? [] : search.slice(1).split('&');
+}
+
+function nameOfPair(pair: string): string {
+  const eq = pair.indexOf('=');
+  return eq < 0 ? pair : pair.slice(0, eq);
+}
+
+/**
+ * The body, filled in its own escaping context.
+ *
+ * A JSON template gets JSON-STRING escaping, so a `"` in an argument cannot close the string it sits
+ * in and open a sibling field; and the filled body must still parse, which is the proof that it did
+ * not. Anything else (a form post, a site's own invention) is percent-encoded, which is the escaping
+ * that shape uses. `interpolate` did neither, and a JSON body is where an injected field would land.
+ */
+function renderBodyTemplate(bodyTemplate: string, args: Record<string, unknown>): string {
+  let templateIsJson = false;
+  try {
+    JSON.parse(bodyTemplate);
+    templateIsJson = true;
+  } catch {
+    templateIsJson = false;
+  }
+  const escape = templateIsJson
+    ? (value: string): string => JSON.stringify(value).slice(1, -1)
+    : encodeURIComponent;
+  const filled = bodyTemplate.replace(INPUT_HOLE_RE, (_match, name: string) => escape(String(args[name])));
+  if (templateIsJson) {
+    try {
+      JSON.parse(filled);
+    } catch {
+      throw new RecipeShapeError('a replayed call\'s arguments broke its JSON body - refusing to send it');
+    }
+  }
+  return filled;
 }
 
 /**

@@ -68,9 +68,20 @@ describe('internalApiCalls - what a recipe may be built from', () => {
   });
 });
 
+/** The compiled calls, when the compile was expected to succeed. Fails loudly on a refusal rather
+ *  than letting an empty list read as "nothing matched". */
+function compiled(
+  exchanges: ReturnType<typeof redactCaptures>,
+  opts: Parameters<typeof compileInjectedCalls>[1] = {},
+): ReturnType<typeof compileInjectedCalls>['calls'] {
+  const out = compileInjectedCalls(exchanges, opts);
+  expect(out.refusedBecause).toBeUndefined();
+  return out.calls;
+}
+
 describe('compileInjectedCalls - the distillation', () => {
   it('replaces an input value with a hole, in raw and percent-encoded form', () => {
-    const calls = compileInjectedCalls(
+    const calls = compiled(
       redactCaptures([capture({ url: 'https://portal.example/api/cases?ref=2024%2F1&name=Maria' })]),
       { inputs: { ref: '2024/1', name: 'Maria' } },
     );
@@ -80,17 +91,17 @@ describe('compileInjectedCalls - the distillation', () => {
   it('deduplicates on the TEMPLATE, so a paginated list is ONE call and not ten', () => {
     const pages = [1, 2, 3, 4].map((page) =>
       capture({ url: `https://portal.example/api/cases?ref=2024-1&page=${page}` }));
-    const calls = compileInjectedCalls(redactCaptures(pages), { inputs: { ref: '2024-1' } });
+    const calls = compiled(redactCaptures(pages), { inputs: { ref: '2024-1' } });
     // The page numbers are not inputs, so they stay literal and the four URLs stay distinct - the
     // dedupe fires on the ref hole. Four distinct pages remain four calls.
     expect(calls).toHaveLength(4);
 
     const repeats = [capture(), capture(), capture()];
-    expect(compileInjectedCalls(redactCaptures(repeats), {})).toHaveLength(1);
+    expect(compiled(redactCaptures(repeats), {})).toHaveLength(1);
   });
 
   it('marks GET idempotent and POST not - the write gate reads this and never re-derives it', () => {
-    const calls = compileInjectedCalls(
+    const calls = compiled(
       redactCaptures([
         capture(),
         capture({ method: 'POST', url: 'https://portal.example/api/cases', requestBody: '{"title":"new"}' }),
@@ -101,13 +112,13 @@ describe('compileInjectedCalls - the distillation', () => {
   });
 
   it('carries header NAMES onto the compiled call and no values (the branded constructor)', () => {
-    const [call] = compileInjectedCalls(redactCaptures([capture()]), {});
+    const [call] = compiled(redactCaptures([capture()]), {});
     expect(call!.headerNames).toEqual(['accept', 'x-csrf-token']);
     expect(JSON.stringify(call)).not.toContain('"headers"');
   });
 
   it('records a value-free expectShape from the response, and no data with it', () => {
-    const [call] = compileInjectedCalls(redactCaptures([capture()]), {});
+    const [call] = compiled(redactCaptures([capture()]), {});
     expect(call!.expectShape).toEqual({
       kind: 'object',
       keys: {
@@ -119,7 +130,7 @@ describe('compileInjectedCalls - the distillation', () => {
   });
 
   it('DROPS a login-shaped call rather than storing it with a blanked body (trap T8)', () => {
-    const calls = compileInjectedCalls(
+    const calls = compiled(
       redactCaptures([
         capture({ method: 'POST', url: 'https://portal.example/api/login', requestBody: '{"user":"maria","password":"hunter2"}' }),
         capture({ method: 'POST', url: 'https://portal.example/api/search', requestBody: 'q=cases&password=hunter2' }),
@@ -131,11 +142,110 @@ describe('compileInjectedCalls - the distillation', () => {
   });
 
   it('refuses to hole a secret-shaped INPUT name - a recipe must not say "put the password here"', () => {
-    const calls = compileInjectedCalls(
-      redactCaptures([capture({ url: 'https://portal.example/api/cases?t=abcdefgh' })]),
-      { inputs: { sessionToken: 'abcdefgh' } },
+    // …and it is not required to be FOUND either: a credential legitimately appears in no URL, so
+    // making it a located-argument would refuse every compile on an authenticated action.
+    const calls = compiled(
+      redactCaptures([capture({ url: 'https://portal.example/api/cases?ref=2024-1&t=abcdefgh' })]),
+      { inputs: { ref: '2024-1', sessionToken: 'abcdefgh' } },
     );
     expect(calls[0]!.urlTemplate).not.toContain('{{input.sessionToken}}');
+  });
+});
+
+// =============================================================================================
+// WHERE A HOLE MAY GO. The compile decides the DESTINATION of a call that will later run inside a
+// live authenticated page; an argument may fill a value in it and may not choose it. These pin the
+// component-wise templating that makes that true structurally rather than by inspection.
+// =============================================================================================
+describe('compileInjectedCalls - a hole is a value slot, never a destination', () => {
+  it('never templates the ORIGIN, even when an argument is literally the subdomain', () => {
+    const calls = compiled(
+      redactCaptures([capture({ url: 'https://acme.portal.example/api/cases/acme?ref=2024-1' })]),
+      { inputs: { tenant: 'acme', ref: '2024-1' } },
+    );
+    // The host is copied verbatim; the same value inside the PATH is holed, which is what proves
+    // the origin was skipped deliberately rather than the value simply not being found.
+    expect(calls[0]!.urlTemplate).toBe('https://acme.portal.example/api/cases/{{input.tenant}}?ref={{input.ref}}');
+  });
+
+  it('never templates a query parameter NAME - an argument does not choose which parameter it fills', () => {
+    const calls = compiled(
+      redactCaptures([capture({ url: 'https://portal.example/api/cases?ref=ref' })]),
+      { inputs: { ref: 'ref' } },
+    );
+    expect(calls[0]!.urlTemplate).toBe('https://portal.example/api/cases?ref={{input.ref}}');
+  });
+
+  it('holes a whole PATH SEGMENT by exact match, at any length', () => {
+    const calls = compiled(
+      redactCaptures([capture({ url: 'https://portal.example/api/cases/7' })]),
+      { inputs: { id: 7 } },
+    );
+    expect(calls[0]!.urlTemplate).toBe('https://portal.example/api/cases/{{input.id}}');
+  });
+
+  it('drops a captured URL carrying USERINFO rather than templating a credential into a recipe', () => {
+    const out = compileInjectedCalls(
+      redactCaptures([capture({ url: 'https://maria:hunter2@portal.example/api/cases?ref=2024-1' })]),
+      { inputs: { ref: '2024-1' } },
+    );
+    expect(out.calls).toEqual([]);
+    // Not a refusal-with-a-reason: there was simply no compilable call, and `ref` was never looked
+    // for in one. The distinction matters because a refusal is logged and this is not a defect.
+    expect(out.refusedBecause).toBeUndefined();
+  });
+});
+
+// =============================================================================================
+// AN ARGUMENT THE PASS COULD NOT FIND. A compiled call that ignores its input is a CONSTANT: every
+// later run replays the first run's request and hands back the first run's data. Refusing to learn
+// is the correct answer; learning something that answers the wrong question is not.
+// =============================================================================================
+describe('compileInjectedCalls - an unlocatable argument refuses the whole compile', () => {
+  it('REFUSES when an argument appears nowhere in what the pass captured', () => {
+    const out = compileInjectedCalls(redactCaptures([capture()]), { inputs: { ref: 'NOT-IN-THE-URL' } });
+    expect(out.calls).toEqual([]);
+    expect(out.refusedBecause).toContain('ref');
+    expect(out.refusedBecause).toContain('constant');
+  });
+
+  it('accepts an argument found in the BODY rather than the URL', () => {
+    const calls = compiled(
+      redactCaptures([capture({
+        method: 'POST',
+        url: 'https://portal.example/api/search',
+        requestBody: '{"q":"processos de 2024"}',
+      })]),
+      { inputs: { q: 'processos de 2024' } },
+    );
+    // The redaction pass re-serialises a JSON body, so the assertion is on the CONTENT: the value
+    // is gone and the hole stands where it was.
+    expect(calls[0]!.bodyTemplate).toContain('{{input.q}}');
+    expect(calls[0]!.bodyTemplate).not.toContain('processos de 2024');
+  });
+
+  it('REFUSES a non-scalar argument - there is no verbatim form of it to have found', () => {
+    const out = compileInjectedCalls(redactCaptures([capture()]), { inputs: { filter: { ref: '2024-1' } } });
+    expect(out.calls).toEqual([]);
+    expect(out.refusedBecause).toContain('filter');
+    expect(out.refusedBecause).toContain('scalar');
+  });
+
+  it('an argument found in ONE of several calls is enough - the recipe honours it somewhere', () => {
+    const calls = compiled(
+      redactCaptures([
+        capture({ url: 'https://portal.example/api/me' }),
+        capture({ url: 'https://portal.example/api/cases?ref=2024-1' }),
+      ]),
+      { inputs: { ref: '2024-1' } },
+    );
+    expect(calls).toHaveLength(2);
+  });
+
+  it('does not refuse when there was nothing to compile at all - that is not a constant recipe', () => {
+    const out = compileInjectedCalls(redactCaptures([capture({ resourceType: 'document' })]), { inputs: { ref: 'x' } });
+    expect(out.calls).toEqual([]);
+    expect(out.refusedBecause).toBeUndefined();
   });
 });
 

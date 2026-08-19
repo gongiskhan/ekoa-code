@@ -1240,6 +1240,17 @@ export interface ActionRunInput {
    * is not a gate: it is a permanent refusal that a reviewer reads as protection.
    */
   writeAssent?: boolean;
+  /**
+   * THE ACTION'S DECLARED EFFECT (`IntegrationAction.mutates`).
+   *
+   * It answers a question `writeAssent` cannot: does this action write at all. A discovery pass over
+   * a WRITE action routinely compiles only the reads it happened to watch underneath it - the write
+   * itself may be a form post, a non-JSON response, or a login-shaped body the compile drops. Storing
+   * that read-only recipe would make every later run replay the reads, answer `ok` and report SUCCESS
+   * while the write never happened. So `learnFromRun` refuses to compile one, and the replay refuses
+   * to run one (`does-not-cover`), and the action goes on writing by its authored steps.
+   */
+  mutates?: boolean;
 }
 
 export interface ActionRunResult {
@@ -1277,6 +1288,7 @@ export interface AutomationBackedCall {
   integrationKey?: string;
   actionName?: string;
   writeAssent?: boolean;
+  mutates?: boolean;
 }
 
 /**
@@ -1315,6 +1327,10 @@ export function automationBackedActionHandler(deps: ActionRunDeps = {}) {
       // The owner's answer to this action's write approval, decided once by the executor's own
       // gate. Absent from a caller that predates the field, which is the closed direction.
       ...(b.writeAssent !== undefined ? { writeAssent: b.writeAssent } : {}),
+      // What the action DECLARES it does. A caller that predates the field leaves it absent, which
+      // reads as "not known to write" - the pre-P2 behaviour, and the only honest default: a caller
+      // that cannot say is not a caller that said no.
+      ...(b.mutates !== undefined ? { mutates: b.mutates } : {}),
     }, deps);
     return {
       success: out.success,
@@ -1401,6 +1417,7 @@ export async function runAutomationForAction(
       args: input.args,
       secrets,
       ...(input.writeAssent !== undefined ? { writeAssent: input.writeAssent } : {}),
+      ...(input.mutates !== undefined ? { mutates: input.mutates } : {}),
     }).catch((err: unknown) => {
       // A replay that THREW is a fall-through like any other. It is an optimisation on the hot
       // path of every automation-backed action; a defect in it must not be able to break actions
@@ -1417,6 +1434,15 @@ export async function runAutomationForAction(
       // every single run - and `learnFromRun` below now declines to store its replacement, so this
       // settles rather than thrashing the store.
       await clearRefusedRecipe(input, result.blocked, deps);
+    }
+    if (result.outcome === 'does-not-cover') {
+      // THE READ-LEARNS-A-WRITE SHAPE, CAUGHT AT REPLAY. Falling through is not a fallback here, it
+      // is the fix: the automation below runs the action's authored steps, which is the path that
+      // actually performs the write. The recipe is CLEARED for the same reason a write-gated one is
+      // (it can never run, so leaving it costs a doomed attempt every run) - and `learnFromRun`
+      // declines to compile its replacement for a mutating action, so this settles rather than
+      // thrashing. LOUD, because a capability the product advertises is off for this action.
+      await clearRefusedRecipe(input, 'a call set that does not perform this action\'s declared write', deps);
     }
     // DRIFT ROUTES TO A HEAL. `classifyReplayDrift` is what separates "the site changed" (re-learn
     // it) from "the route is missing" (re-learning would fail the same way) and from a refusal a
@@ -1511,8 +1537,11 @@ export async function runAutomationForAction(
  *  - A DRIFT SUPERSEDES; everything else PUTS. `putRecipe` refuses to overwrite by design, so that
  *    every replacement carries the `supersedes` lineage - which means the only legitimate way to
  *    replace a recipe is through the heal, and the only thing that justifies a heal is drift.
- *  - THE EVIDENCE IS WRITTEN FIRST. The recipe carries `capturedCallsRef` pointing INTO the
- *    evidence, so writing the recipe first would publish a pointer to evidence that may not land.
+ *  - THE EVIDENCE IS WRITTEN FIRST AND IS DURABLE ONLY IF THE RECIPE IS. The recipe carries
+ *    `capturedCallsRef` pointing INTO the evidence, so writing the recipe first would publish a
+ *    pointer to evidence that may not land. The order therefore stays evidence-then-recipe, and the
+ *    orphan that order creates is COLLECTED: a write that did not land drops the evidence it just
+ *    wrote, so nothing durable outlives the thing it is evidence for.
  */
 async function learnFromRun(args: {
   input: ActionRunInput;
@@ -1527,7 +1556,16 @@ async function learnFromRun(args: {
   if (captured.length === 0) return;
 
   const exchanges = redactCaptures(captured, secrets);
-  const injectedCalls = compileInjectedCalls(exchanges, { inputs: input.args });
+  const compiled = compileInjectedCalls(exchanges, { inputs: input.args });
+  if (compiled.refusedBecause !== undefined) {
+    // NEVER SILENT. A refusal here means this action will keep paying for a full vision run forever,
+    // which is a real (and correct) cost the operator should be able to see a reason for.
+    console.warn(
+      `[automation] not compiling a recipe for ${integrationKey}/${actionName}: ${compiled.refusedBecause}`,
+    );
+    return;
+  }
+  const injectedCalls = compiled.calls;
   if (injectedCalls.length === 0) return;
 
   const captureId = (deps.captureId ?? randomUUID)();
@@ -1563,6 +1601,28 @@ async function learnFromRun(args: {
       `[automation] not storing a recipe for ${integrationKey}/${actionName}: it contains ` +
         `${writes.length} call(s)/step(s) that write (${writes.slice(0, 3).join(', ')}), and no human has ` +
         'been shown that call set. The action keeps running its authored steps.',
+    );
+    return;
+  }
+
+  // ── …AND NEITHER IS ONE THAT DOES NOT COVER THE ACTION'S DECLARED WRITE ──────────────────
+  //
+  // THE WORST FAILURE THIS SPINE CAN HAVE, and the two refusals are one rule read from both sides.
+  // A `mutates` action whose compile CONTAINS a write is refused above (nobody approved that call
+  // set). A `mutates` action whose compile contains NO write is refused here - because replaying it
+  // would issue the reads, answer `ok`, and report SUCCESS while the write never happened. Nobody
+  // finds out until somebody checks the far system.
+  //
+  // A recipe is not allowed to be a SUBSET of its action. Together the two refusals mean a mutating
+  // action stores no recipe at all in this slice, and that is stated rather than engineered around:
+  // there is no surface here that shows a human a compiled call set and takes an answer about it, so
+  // there is nothing that could make one safe. The action keeps writing by its authored steps, at
+  // full cost, correctly.
+  if (input.mutates === true) {
+    console.warn(
+      `[automation] not storing a recipe for ${integrationKey}/${actionName}: the action is declared as ` +
+        'writing and the compiled call set performs no write, so replaying it would report success ' +
+        'without performing the action. The action keeps running its authored steps.',
     );
     return;
   }
@@ -1631,10 +1691,27 @@ async function learnFromRun(args: {
   // fatal: a leaked capture is untidy, losing the evidence for a recipe that failed to store would
   // be destroying the only record of the pass.
   if (stored && supersededCaptureRef && supersededCaptureRef !== captureId) {
-    await discardSupersededCapture(
+    await discardEvidence(
       { orgId: input.orgId, integrationKey, actionName, captureId: supersededCaptureRef },
       deps,
     );
+  }
+
+  // ── AND THE ORPHAN THE OTHER WAY: EVIDENCE FOR A RECIPE THAT NEVER LANDED ────────────
+  //
+  // The evidence has to be written FIRST - the recipe carries `capturedCallsRef` INTO it, so writing
+  // the recipe first would publish a pointer to documents that may never arrive. The consequence is
+  // that a write which does not land (`exists`, because `putRecipe` refuses to overwrite; `notfound`,
+  // because the org runs a published definition and has no row of its own) leaves a full pass's
+  // request and response bodies - the most sensitive thing this pipeline touches - with nothing
+  // pointing at them and nothing that would ever collect them. An action in that state runs weekly
+  // and orphans a fresh pile every week, forever.
+  //
+  // So evidence becomes DURABLE only once the thing it is evidence for is: the write is attempted,
+  // and if it did not land the evidence this pass just wrote is dropped again. Best effort and loud,
+  // exactly like the supersede discard above - and, unlike it, on the common path.
+  if (!stored) {
+    await discardEvidence({ orgId: input.orgId, integrationKey, actionName, captureId }, deps);
   }
 }
 
@@ -1645,15 +1722,21 @@ async function priorCaptureRef(input: ActionRunInput, deps: ActionRunDeps): Prom
   return current?.capturedCallsRef;
 }
 
-/** Drop one superseded capture. Best effort and loud on failure - see the caller. */
-async function discardSupersededCapture(key: CaptureKey, deps: ActionRunDeps): Promise<void> {
+/**
+ * Drop one capture's evidence. Best effort and loud on failure - see the two callers.
+ *
+ * ONE FUNCTION FOR BOTH ENDS OF THE LIFECYCLE: the evidence behind a recipe that has been REPLACED,
+ * and the evidence behind a recipe that never LANDED. They are the same operation on the same
+ * collection with the same failure posture, and a second copy would be a second thing to forget.
+ */
+async function discardEvidence(key: CaptureKey, deps: ActionRunDeps): Promise<void> {
   const captures = deps.captures ?? capturedCallsStore;
   if (typeof captures.discardCapture !== 'function') return;
   try {
     await captures.discardCapture(key);
   } catch (err) {
     console.warn(
-      `[automation] the superseded evidence ${key.captureId} of ${key.integrationKey}/${key.actionName} ` +
+      `[automation] the evidence ${key.captureId} of ${key.integrationKey}/${key.actionName} ` +
         `was not discarded: ${err instanceof Error ? err.message : String(err)}`,
     );
   }

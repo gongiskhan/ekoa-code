@@ -136,13 +136,48 @@ export function internalApiCalls(exchanges: readonly CapturedExchange[]): Captur
   });
 }
 
+/** What one compile decided. A refusal is an ANSWER, not an exception: "this pass learned nothing
+ *  storable" is an ordinary outcome of discovery, and the caller logs `refusedBecause` and moves on. */
+export interface CompiledCalls {
+  calls: InjectedCall[];
+  /** Present ⇔ `calls` is empty BY REFUSAL rather than for want of material. */
+  refusedBecause?: string;
+}
+
 /**
  * DISTIL the site's own calls into replayable ones.
  *
- * `inputs` is what the run was given. Every string input value found in a URL is replaced by a
+ * `inputs` is what the run was given. Every input value found in the URL is replaced by a
  * `{{input.<name>}}` hole, which is what turns "the call discovery happened to make" into "the call
  * this action makes for any argument". Longest values first, so a short input that is a substring
  * of a longer one cannot punch a hole through the middle of it.
+ *
+ * ── A HOLE IS A VALUE SLOT, AND ONLY EVER A VALUE SLOT ───────────────────────────────────────
+ *
+ * The URL is templated COMPONENT-WISE (`templateUrl`), not by search-and-replace over the whole
+ * string, and that is a security property rather than tidiness. A replay runs inside the user's
+ * live authenticated page, so WHICH endpoint it calls must be decided here, at compile time, and
+ * never by an argument at run time. So:
+ *
+ *   - the ORIGIN is copied literally and is never offered a hole. The previous whole-string pass
+ *     would happily template `https://{{input.tenant}}.portal.example/...` out of a URL whose host
+ *     contained an argument, which is a recipe whose destination is caller data;
+ *   - a QUERY PARAMETER NAME is copied literally; only its value is holed. A hole in a name lets a
+ *     caller decide which parameter it is filling;
+ *   - a PATH SEGMENT is holed as a whole segment (or within one), and `fillCall` re-proves at replay
+ *     that the filled URL still has the same segment count and the same parameter names.
+ *
+ * ── AN ARGUMENT THIS PASS COULD NOT FIND REFUSES THE WHOLE COMPILE ───────────────────────────
+ *
+ * If an input value appears nowhere in what the site fetched, no hole is placed for it - and the
+ * compiled call is then a CONSTANT. Every later run would replay the first run's exact request and
+ * hand back the first run's data whatever the caller asked for: a silent wrong answer, which is
+ * strictly worse than no recipe at all. So the compile refuses. Refusing to learn is a cost;
+ * learning something that ignores its input is a defect that never surfaces.
+ *
+ * A non-scalar argument (an object, an array) refuses for the same reason and one more: there is no
+ * verbatim form of it to look for, so "it was honoured" is not a claim this compile can make.
+ * Secret-shaped names are neither holed nor required to be found - see `inputHoles`.
  *
  * WHAT IS REFUSED RATHER THAN TEMPLATED (trap T8): a body whose field NAME is secret-shaped
  * (`SECRET_SHAPED_INPUT_NAME` - the same vocabulary the verifier may not extract into) never
@@ -154,28 +189,49 @@ export function internalApiCalls(exchanges: readonly CapturedExchange[]): Captur
 export function compileInjectedCalls(
   exchanges: readonly CapturedExchange[],
   opts: { inputs?: Record<string, unknown>; max?: number } = {},
-): InjectedCall[] {
-  const holes = inputHoles(opts.inputs ?? {});
+): CompiledCalls {
+  const { holes, unlocatable } = inputHoles(opts.inputs ?? {});
+  if (unlocatable.length > 0) {
+    return {
+      calls: [],
+      refusedBecause:
+        `argument(s) ${unlocatable.sort().join(', ')} are not scalar values, so a compiled call cannot be ` +
+        'proven to honour them - refusing to learn a recipe that would ignore them',
+    };
+  }
   const seen = new Set<string>();
   const out: InjectedCall[] = [];
+  const placed = new Set<string>();
   const max = opts.max ?? MAX_COMPILED_CALLS;
 
   for (const exchange of internalApiCalls(exchanges)) {
     if (out.length >= max) break;
     if (exchange.requestBody !== undefined && bodyIsSecretShaped(exchange.requestBody)) continue;
-    const urlTemplate = applyHoles(exchange.url, holes);
-    const bodyTemplate = exchange.requestBody === undefined ? undefined : applyHoles(exchange.requestBody, holes);
+    // A URL this module cannot take apart is not one it may template: the whole safety argument
+    // below rests on origin/path/query being separable.
+    const templated = templateUrl(exchange.url, holes);
+    if (!templated) continue;
+    // Both halves record what they placed into a LOCAL set, merged only if the call is kept: an
+    // argument located solely in a call this compile then drops is not an argument the recipe
+    // honours, and counting it would let the located-argument check below pass on a call that is
+    // not in the recipe.
+    const bodyPlaced = new Set<string>();
+    const bodyTemplate = exchange.requestBody === undefined
+      ? undefined
+      : templateBody(exchange.requestBody, holes, bodyPlaced);
     // Deduplicate on the TEMPLATE, not the URL: a paginated list issues the same call ten times
     // with a different page, and once holed those are one call. Deduplicating on the raw URL would
     // put all ten in the recipe.
-    const key = `${exchange.method} ${urlTemplate}`;
+    const key = `${exchange.method} ${templated.template}`;
     if (seen.has(key)) continue;
     seen.add(key);
+    for (const name of templated.placed) placed.add(name);
+    for (const name of bodyPlaced) placed.add(name);
     const expectShape = expectShapeOf(exchange);
     out.push(
       injectedCallFromExchange({
         method: exchange.method as ApiCallMethod,
-        urlTemplate,
+        urlTemplate: templated.template,
         // THE ONE PLACE A HEADER MAP WOULD BE, AND THERE IS NONE. What arrives from the machine is
         // already names; they are re-offered as a map with empty values purely because
         // `injectedCallFromExchange` is the single constructor of a `HeaderName`, and it reads keys.
@@ -185,7 +241,18 @@ export function compileInjectedCalls(
       }),
     );
   }
-  return out;
+
+  if (out.length === 0) return { calls: [] };
+  const missed = holes.filter((h) => !placed.has(h.name)).map((h) => h.name);
+  if (missed.length > 0) {
+    return {
+      calls: [],
+      refusedBecause:
+        `argument(s) ${[...new Set(missed)].sort().join(', ')} appear nowhere in what this pass captured, so the ` +
+        'compiled call would be a constant that returns this run\'s data for every later caller - refusing to learn it',
+    };
+  }
+  return { calls: out };
 }
 
 /**
@@ -257,25 +324,135 @@ function expectShapeOf(exchange: CapturedExchange): unknown {
   }
 }
 
-/** Every string input value, longest first, paired with the hole that replaces it. */
-function inputHoles(inputs: Record<string, unknown>): Array<{ value: string; hole: string }> {
-  return Object.entries(inputs)
-    .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && entry[1].length >= 2)
-    // A secret-shaped input NAME never becomes a hole, because a hole is a reference the replay
-    // resolves - and a recipe that says "put the password here" is a recipe that needs a password.
-    .filter(([name]) => !SECRET_SHAPED_INPUT_NAME.test(name))
-    .map(([name, value]) => ({ value, hole: `{{input.${name}}}` }))
-    .sort((a, b) => b.value.length - a.value.length);
+/** One argument, and the hole that stands in for it. */
+interface InputHole {
+  name: string;
+  value: string;
+  hole: string;
 }
 
-function applyHoles(text: string, holes: ReadonlyArray<{ value: string; hole: string }>): string {
+/**
+ * The shortest value this compile will look for INSIDE a longer string.
+ *
+ * A whole path segment or a whole query value is matched exactly at any length - `?page=1` is an
+ * unambiguous placement. An EMBEDDED match is a guess ("2024-1" inside the slug "case-2024-1"), and
+ * below three characters it is a guess that fires everywhere.
+ */
+const MIN_EMBEDDED_HOLE_CHARS = 3;
+
+/**
+ * Every argument that can become a hole, longest first, plus the ones that cannot be looked for.
+ *
+ * `unlocatable` is the refusal list: a non-scalar argument has no verbatim form in a URL, so no
+ * compile can show it was honoured. A `null`/`undefined` argument carries nothing to find and is
+ * simply not an argument this pass saw - it is neither holed nor refused.
+ *
+ * A secret-shaped input NAME is excluded from BOTH lists. It never becomes a hole, because a hole is
+ * a reference the replay resolves and a recipe that says "put the password here" is a recipe that
+ * needs a password; and it is never required to be found, because a credential legitimately appears
+ * nowhere in a URL.
+ */
+function inputHoles(inputs: Record<string, unknown>): { holes: InputHole[]; unlocatable: string[] } {
+  const holes: InputHole[] = [];
+  const unlocatable: string[] = [];
+  for (const [name, value] of Object.entries(inputs)) {
+    if (SECRET_SHAPED_INPUT_NAME.test(name)) continue;
+    if (value === null || value === undefined) continue;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      holes.push({ name, value: String(value), hole: `{{input.${name}}}` });
+      continue;
+    }
+    unlocatable.push(name);
+  }
+  return { holes: holes.sort((a, b) => b.value.length - a.value.length), unlocatable };
+}
+
+/** A URL taken apart, templated component by component, and put back together. `null` for anything
+ *  this module cannot separate into origin/path/query - which is the only shape it may template. */
+function templateUrl(raw: string, holes: readonly InputHole[]): { template: string; placed: string[] } | null {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  // USERINFO IS A CREDENTIAL IN A URL. Never templated and never stored - the call is dropped.
+  if (url.username !== '' || url.password !== '') return null;
+
+  const placed = new Set<string>();
+  // THE ORIGIN IS COPIED, NEVER OFFERED A HOLE. See the header of `compileInjectedCalls`.
+  const path = url.pathname.split('/').map((segment) => holeInValue(segment, holes, placed)).join('/');
+  const query = url.search === ''
+    ? ''
+    : `?${url.search.slice(1).split('&').map((pair) => holeInPair(pair, holes, placed)).join('&')}`;
+  // The FRAGMENT is dropped: it never reaches the server, so templating it would be a hole whose
+  // filling changes nothing and whose presence would make `fillCall` demand an argument for it.
+  return { template: `${url.origin}${path}${query}`, placed: [...placed] };
+}
+
+/** One `name=value` pair. The NAME is copied literally - an argument may not choose which parameter
+ *  it is filling - and a bare flag (`?archived`) has no value slot at all. */
+function holeInPair(pair: string, holes: readonly InputHole[], placed: Set<string>): string {
+  const eq = pair.indexOf('=');
+  if (eq < 0) return pair;
+  return `${pair.slice(0, eq)}=${holeInValue(pair.slice(eq + 1), holes, placed)}`;
+}
+
+/** One value slot - a path segment or a query value. Exact match first (at any length), then an
+ *  embedded match for values long enough to be more than a coincidence. */
+function holeInValue(text: string, holes: readonly InputHole[], placed: Set<string>): string {
+  if (text === '') return text;
+  const decoded = safeDecode(text);
+  for (const h of holes) {
+    if (text === h.value || decoded === h.value) {
+      placed.add(h.name);
+      return h.hole;
+    }
+  }
   let out = text;
-  for (const { value, hole } of holes) {
-    out = out.split(value).join(hole);
-    // The URL-encoded form too: an input reaches a query string percent-encoded, and a recipe that
-    // only holed the raw form would carry one tenant's argument as a literal.
-    const encoded = encodeURIComponent(value);
-    if (encoded !== value) out = out.split(encoded).join(hole);
+  for (const h of holes) {
+    if (h.value.length < MIN_EMBEDDED_HOLE_CHARS) continue;
+    const encoded = encodeURIComponent(h.value);
+    if (out.includes(h.value)) {
+      out = out.split(h.value).join(h.hole);
+      placed.add(h.name);
+    } else if (encoded !== h.value && out.includes(encoded)) {
+      out = out.split(encoded).join(h.hole);
+      placed.add(h.name);
+    }
+  }
+  return out;
+}
+
+function safeDecode(text: string): string {
+  try {
+    return decodeURIComponent(text);
+  } catch {
+    return text;
+  }
+}
+
+/**
+ * The request body, templated by substring.
+ *
+ * Unlike the URL there is no structure to lean on - a body is JSON, or a form, or something a site
+ * invented - so this stays a search-and-replace, and `fillCall` re-proves at replay that a filled
+ * JSON body is still the same JSON document rather than a new one an argument wrote.
+ */
+function templateBody(raw: string, holes: readonly InputHole[], placed: Set<string>): string {
+  let out = raw;
+  for (const h of holes) {
+    if (h.value.length < 2) continue;
+    if (out.includes(h.value)) {
+      out = out.split(h.value).join(h.hole);
+      placed.add(h.name);
+    }
+    const encoded = encodeURIComponent(h.value);
+    if (encoded !== h.value && out.includes(encoded)) {
+      out = out.split(encoded).join(h.hole);
+      placed.add(h.name);
+    }
   }
   return out;
 }

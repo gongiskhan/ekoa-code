@@ -185,6 +185,16 @@ export type AutomationBackedHandler = (input: {
    * permanent refusal that reads, to a reviewer, as protection.
    */
   writeAssent?: boolean;
+  /**
+   * THE ACTION'S DECLARED EFFECT (`IntegrationAction.mutates`), which is a different fact from the
+   * assent above and is carried for a different reason.
+   *
+   * `writeAssent` answers "did a human approve this action's writes". This answers "does this action
+   * write AT ALL" - and a learned recipe containing no write cannot be the whole of an action that
+   * does. Without it the seam cannot tell a read whose recipe legitimately only reads from a WRITE
+   * whose recipe silently dropped the write and now reports success for having done nothing.
+   */
+  mutates?: boolean;
 }) => Promise<ExecuteIntegrationActionResult>;
 
 export interface ExecutorDeps {
@@ -440,6 +450,11 @@ export async function executeUserIntegrationAction(
       // purpose - a read that was never gated is not an approval of anything.
       // (`consent.allowed` is already narrowed to `true` here - the refusal returned above.)
       writeAssent: consent.reason !== 'not_mutating',
+      // WHAT THE ACTION IS, as its author declared it - read straight off the resolved action rather
+      // than inferred from the consent verdict beside it. The two are equal today and are not the
+      // same statement: an approval is a fact about a human, `mutates` is a fact about the action,
+      // and the recipe-coverage refusal downstream is judged against the action.
+      mutates: action.mutates === true,
     });
   }
 

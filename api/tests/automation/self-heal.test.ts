@@ -65,6 +65,10 @@ describe('classifyReplayDrift', () => {
     expect(classifyReplayDrift({ outcome: 'unavailable' })).toBe('needs_human');
     // A refusal must never be routed around by a heal.
     expect(classifyReplayDrift({ outcome: 'write-gate' })).toBe('refused');
+    // Nor may a heal answer "the recipe does not cover its action's declared write" - re-driving the
+    // same authored steps re-captures the same read-only traffic and compiles the same recipe. It is
+    // a refusal, not a site that changed, and it is named as one rather than left to the default.
+    expect(classifyReplayDrift({ outcome: 'does-not-cover' })).toBe('refused');
     expect(classifyReplayDrift({ outcome: 'no-recipe' })).toBe('transport');
     expect(classifyReplayDrift({ outcome: 'ok' })).toBe('transport');
   });

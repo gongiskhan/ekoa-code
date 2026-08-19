@@ -2261,3 +2261,65 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   DIAGRAM CHECK (FIXED-12): `02-module-map` carries an appended as-built annotation (`(c)`) amending
   the re-cut's, naming the two execution fixes, the two gate decisions, the discard and the split
   proof. Appended textually so no existing element was rewritten.
+
+## 2026-08-19 - P2 round four: what discovery is ALLOWED to write down
+
+  THE SUBJECT IS RECIPE COMPILATION, not execution. Round three got the replay running inside the
+  real authenticated session and the header names forwarded. What it did not settle is which recipes
+  a discovery pass may commit to at all - and every defect below is a way of learning something that
+  is confidently wrong rather than a way of failing.
+
+  A RECIPE MAY NOT BE A SUBSET OF ITS ACTION. A `mutates` action's discovery pass routinely captures
+  only the READS the page made underneath it: the write itself is a form post, or answers HTML, or
+  carries a login-shaped body the compile drops. The compile kept the reads, `writesIn` found no
+  write, and the recipe was stored - so every later run replayed a read, answered `ok`, and reported
+  SUCCESS while the action's whole purpose went unperformed. Nobody finds out until somebody checks
+  the far system, which is the worst failure shape this spine can have. DECISION: a recipe that does
+  not cover the action's DECLARED effect refuses to compile, and one already stored refuses to run
+  (`does-not-cover`) and falls back, loudly, to the path that does perform the write. The declared
+  effect (`IntegrationAction.mutates`) is now carried across the automation seam beside the write
+  assent, because the two are different facts: an assent is a statement about a human, `mutates` is a
+  statement about the action. Combined with the existing refusal of a recipe that DOES write, a
+  mutating action stores no recipe at all in this slice. That is stated rather than engineered
+  around: nothing here shows a human a compiled call set, so nothing here can make one safe. REVIEW
+  DATE: the same date as the assent decision above - when such a surface exists (Rule 10).
+
+  AN ARGUMENT FILLS A VALUE. IT DOES NOT CHOOSE AN ENDPOINT. `fillCall` interpolated the whole URL
+  template and then compared origins, so `…/cases/{{input.id}}` with `id=../../admin/secrets`
+  resolved to `…/admin/secrets`: same origin, different endpoint, and the call runs inside the user's
+  live authenticated page. That is an SSRF with the session already attached, and the query form
+  (`ref=x&scope=all`) was the same defect one component over. DECISION: the URL is templated and
+  filled COMPONENT-WISE. The compile never offers a hole in the origin or in a parameter name; the
+  fill percent-encodes every hole value and then proves the filled URL against a CONTROL render of
+  the same template with the arguments taken out of it. The proof is one statement (`structureOf`),
+  not three overlapping ones - an earlier cut had three, each of which happened to catch every case
+  the others did, so none of them could be shown to matter.
+
+  A URL TEMPLATE IS NOT A URL. `{` and `}` are in the WHATWG path percent-encode set, so
+  `new URL(t).pathname` turns every PATH hole into `%7B%7B…%7D%7D` while query holes survive intact.
+  The compile's commonest output is a query hole, which is why this was invisible. The template is
+  therefore split by grammar and only its real-URL pieces are handed to the parser.
+
+  AN ARGUMENT THE PASS COULD NOT FIND REFUSES THE COMPILE. An input that appears nowhere in what the
+  site fetched got no hole, so the compiled call was a CONSTANT: every later run replayed the first
+  run's request and handed back the first run's data whatever the caller asked. Another silent wrong
+  answer. DECISION: refuse. Refusing to learn is a cost; learning something that ignores its input is
+  a defect that never surfaces. A non-scalar argument refuses for the same reason and one more -
+  there is no verbatim form of it to have looked for, so "it was honoured" is not a claim this
+  compile can make.
+
+  EVIDENCE IS DURABLE ONLY IF THE RECIPE IS. The evidence has to be written first (the recipe carries
+  `capturedCallsRef` INTO it), and a write that did not land - `exists`, which is what `putRecipe`
+  answers for most learns, or `notfound` for an org on a published definition - left a full pass's
+  request and response bodies with nothing pointing at them. DECISION: keep the order and COLLECT the
+  orphan. `discardCapture` now has two production callers, and the common one is this.
+
+  A SAFETY CHECK WIRED ONLY IN TESTS IS WORSE THAN NONE. Three separate hops handing the run's
+  `SecretRegistry` to the thing that needs it could each be deleted with every suite staying green,
+  because the suites asserted that the registry was HANDED OVER rather than that a value was REFUSED
+  because of it. All three now have tests that assert the consequence against real stores and a real
+  mount - and each was verified by deleting the line and watching a test go red.
+
+  DIAGRAM CHECK (FIXED-12): `02-module-map` carries an appended as-built annotation (`(d)`) naming
+  the coverage refusal, the component-wise fill and the evidence lifecycle. Appended textually so no
+  existing element was rewritten.

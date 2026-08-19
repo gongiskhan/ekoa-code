@@ -480,6 +480,34 @@ refuses such a draft and the self-heal receives no assent at all. This slice has
 shows a human a compiled call set; that is stated rather than papered over with a gate whose key
 nothing sets.
 
+AND NEITHER IS A RECIPE THAT DOES NOT COVER ITS ACTION'S DECLARED WRITE. The two refusals are one
+rule read from both sides, and the second is the more dangerous omission: a `mutates` action's
+discovery pass routinely captures only the READS its page made underneath it (the write is a form
+post, or answers HTML, or carries a login-shaped body the compile drops), so the compiled set
+contains no write, `writesIn` finds nothing to refuse, and every later run replays the reads, answers
+`ok` and reports SUCCESS while the action's whole purpose goes unperformed. `IntegrationAction.mutates`
+is therefore carried across the automation seam beside the write assent - a different fact, read off
+the resolved action rather than inferred from the consent verdict next to it - and `learnFromRun`
+refuses a read-only compile for a mutating action while `replayCompiledAction` answers
+`does-not-cover` for one already stored, which the mount clears before falling through, loudly, to
+the path that does write. Between them a mutating action stores no recipe at all in this slice.
+
+WHAT AN ARGUMENT MAY DECIDE IS A VALUE. The replay runs inside the user's live authenticated page, so
+an argument that can change WHICH endpoint is called is an SSRF with the session already attached.
+The URL is therefore templated and filled COMPONENT-WISE rather than by string interpolation:
+`network-capture.templateUrl` copies the origin literally and never offers it a hole, keeps query
+parameter NAMES literal, and holes only path segments and query values; `injected-call.fillCall`
+splits the stored template by grammar (NOT with `new URL` - `{` and `}` are in the WHATWG path
+percent-encode set, which silently turned every path hole into `%7B%7B…%7D%7D`), percent-encodes
+every hole value, and then proves the filled URL against a CONTROL render of the same template with
+the arguments taken out of it. A body template is escaped in its own context - JSON-escaped into a
+JSON body, which is then re-parsed - so an argument cannot open a sibling field.
+
+AN ARGUMENT THE PASS COULD NOT LOCATE REFUSES THE COMPILE. `compileInjectedCalls` answers
+`{ calls, refusedBecause? }`: an input that appears in no compiled URL or body would make the call a
+CONSTANT, so every later run would return the first run's data whatever the caller asked. Refusing to
+learn is a cost; learning something that ignores its input is a defect that never surfaces.
+
 `automation/self-heal.ts` classifies drift (an `expectShape` mismatch, a non-2xx, a call that cannot
 be made) as `recipe_drift`. The next instrumented run re-learns the flow, and the new recipe is
 superseded through `recipe-store.supersedeRecipe` - tenant-scoped, version bumped, lineage stamped -
@@ -487,10 +515,14 @@ and never through `publishSnapshot`, whose gate is super-admin and whose effect 
 visibility. A read-only heal lands silently; one that re-authors a recipe containing a write is held
 and never goes live, because re-authoring is exactly when an old approval must not be inherited.
 
-The raw captures a recipe was distilled from END: `learnFromRun` discards the evidence behind the
-recipe a write replaces, once the new one is live. The current recipe's own evidence stays - that is
-what `capturedCallsRef` points at - so a human can still see what the live recipe came from without
-the collection growing without bound.
+The raw captures a recipe was distilled from END, at BOTH ends of the lifecycle. `learnFromRun`
+discards the evidence behind the recipe a write replaces, once the new one is live; the current
+recipe's own evidence stays - that is what `capturedCallsRef` points at - so a human can still see
+what the live recipe came from. And because the evidence must be written BEFORE the recipe that
+points into it, a write that did not land would otherwise leave a whole pass's request and response
+bodies with nothing referring to them: that is the COMMON case, since `putRecipe` refuses to
+overwrite by design, so the same `discardEvidence` helper collects the orphan. Evidence is durable
+only once the thing it is evidence for is.
 
 ## Integrations
 

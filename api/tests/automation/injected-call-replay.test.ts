@@ -213,6 +213,54 @@ describe('replayCompiledAction - posture is resolved PER CALL', () => {
   });
 });
 
+describe('replayCompiledAction - the server-side rung goes through the SSRF guard', () => {
+  /**
+   * EVERY OTHER CASE ON THIS RUNG INJECTS `fetchImpl`, so `guardedFetch` - the transport the module
+   * actually names - was never once executed by this suite. Swapping it for a bare `fetch` left
+   * every test green, which is the shape of a defence that reads as covered and is not.
+   *
+   * So this one supplies NO transport. A recipe's URL is authored from a captured URL and a captured
+   * URL is data: "the recipe said so" is not a reason to dial an address. The cloud metadata service
+   * is the canonical target, and it is reachable from a datacenter - which is exactly where this
+   * rung runs from.
+   */
+  it('REFUSES a link-local address the recipe names, with the REAL transport', async () => {
+    const result = await replayCompiledAction(
+      {
+        ...base,
+        classify: always(PERMISSIVE),
+        args: { ref: '2024-1' },
+      },
+      {
+        // No `fetchImpl`: `guardedFetch` runs, and it is what has to refuse.
+        loadRecipe: async () => recipe({
+          injectedCalls: [{ method: 'GET', urlTemplate: 'http://169.254.169.254/latest/meta-data/?ref={{input.ref}}', headerNames: [], idempotent: true }],
+        }),
+      },
+    );
+    // A call that could not be MADE is drift, not a run failure - and the reason names the refusal.
+    expect(result.outcome).toBe('drift');
+    expect((result as { reason: string }).reason).toMatch(/blocked|private|ssrf|not allowed/i);
+  });
+
+  it('…and reaches an ORDINARY address through the same transport', async () => {
+    // THE CONTROL, and it is what makes the refusal above about the ADDRESS rather than about a
+    // rung that cannot send anything at all. `example.invalid` never resolves, so the guard lets it
+    // through (it is not a blocked address) and the failure is DNS - a different failure, arriving
+    // from a different place, which is the whole point.
+    const result = await replayCompiledAction(
+      { ...base, classify: always(PERMISSIVE), args: { ref: '2024-1' } },
+      {
+        loadRecipe: async () => recipe({
+          injectedCalls: [{ method: 'GET', urlTemplate: 'http://portal.example.invalid/api/cases?ref={{input.ref}}', headerNames: [], idempotent: true }],
+        }),
+      },
+    );
+    expect(result.outcome).toBe('drift');
+    expect((result as { reason: string }).reason).not.toMatch(/blocked|ssrf/i);
+  }, 20_000);
+});
+
 describe('replayCompiledAction - the server-side rung is posture-gated', () => {
   it('falls to node-http with NO session when the origin is permissive', async () => {
     const fetchImpl = vi.fn(async () => ({ status: 200, text: async () => '{"items":[{"id":1}]}' }));
@@ -454,8 +502,140 @@ describe('replayCompiledAction - what an ARGUMENT may not decide', () => {
       { loadRecipe: async () => recipe({ injectedCalls: [{ method: 'GET', urlTemplate: 'https://{{input.host}}/api/cases', headerNames: [], idempotent: true }] }) },
     );
     expect(result.outcome).toBe('no-recipe');
-    expect((result as { reason: string }).reason).toContain('origin');
+    expect((result as { reason: string }).reason).toMatch(/origin/i);
     expect(browser.calls).toHaveLength(0);
+  });
+
+  // ===========================================================================================
+  // THE ESCAPE ATTEMPTS. A replay runs inside the user's LIVE AUTHENTICATED PAGE, so an argument
+  // that can change WHICH endpoint is called is an SSRF with the session already attached. Each
+  // case below is one way out of a value slot; each must be neutralised into a value or refused,
+  // never reach the page as a different request.
+  // ===========================================================================================
+  describe('an argument fills a value slot and cannot choose the endpoint', () => {
+    const pathRecipe = recipe({
+      injectedCalls: [{
+        method: 'GET',
+        urlTemplate: 'https://portal.example/api/cases/{{input.id}}',
+        headerNames: [],
+        idempotent: true,
+      }],
+    });
+
+    async function replayWith(args: Record<string, unknown>, stored: unknown = pathRecipe) {
+      // A body that satisfies the default recipe's `expectShape`, so a case that reaches the page
+      // reports `ok` rather than drifting on the answer - what is under test here is the REQUEST.
+      const browser = session({ status: 200, bodyText: '{"items":[{"id":1}]}' });
+      const result = await replayCompiledAction(
+        { ...base, args, browser, classify: always(ADVERSARIAL) },
+        { loadRecipe: async () => stored },
+      );
+      return { result, calls: browser.calls as Array<{ url: string }> };
+    }
+
+    it('does not resolve a traversal to another endpoint - the first cut reached /admin/secrets', async () => {
+      const { result, calls } = await replayWith({ id: '../../admin/secrets' });
+      expect(calls.map((c) => c.url)).not.toContain('https://portal.example/admin/secrets');
+      if (result.outcome === 'ok') {
+        // If it went out at all it went out as a VALUE - one segment, still under /api/cases/.
+        expect(new URL(calls[0]!.url).pathname.split('/')).toHaveLength(4);
+        expect(calls[0]!.url.startsWith('https://portal.example/api/cases/')).toBe(true);
+      } else {
+        expect(calls).toHaveLength(0);
+      }
+    });
+
+    it('REFUSES a segment that walks up - `..` needs no character an encoder would escape', async () => {
+      const { result, calls } = await replayWith({ id: '..' });
+      expect(result.outcome).toBe('no-recipe');
+      expect((result as { reason: string }).reason).toMatch(/emptied or walked|shape/i);
+      expect(calls).toHaveLength(0);
+    });
+
+    it('REFUSES a walk-up even when NO literal segment follows it to notice', async () => {
+      // The case the segment COUNT exists for. Every segment after `/api/cases/` is a hole here, so
+      // comparing the hole-free segments finds nothing wrong: `''`, `api` and `cases` all still
+      // match. Only "the path has as many segments as the template said" sees that one was eaten.
+      const { result, calls } = await replayWith(
+        { a: 'x', b: '..' },
+        recipe({ injectedCalls: [{ method: 'GET', urlTemplate: 'https://portal.example/api/cases/{{input.a}}/{{input.b}}', headerNames: [], idempotent: true }] }),
+      );
+      expect(result.outcome).toBe('no-recipe');
+      expect((result as { reason: string }).reason).toMatch(/shape/i);
+      expect(calls).toHaveLength(0);
+    });
+
+    it('REFUSES a segment that empties, which turns an item endpoint into its collection', async () => {
+      const { result, calls } = await replayWith({ id: '' });
+      expect(result.outcome).toBe('no-recipe');
+      expect(calls).toHaveLength(0);
+    });
+
+    it('cannot ADD a query parameter - `&` in an argument is a value, not a separator', async () => {
+      const { result, calls } = await replayWith({ ref: 'x&scope=all&admin=1' }, recipe());
+      expect(result.outcome).toBe('ok');
+      const sent = new URL(calls[0]!.url);
+      expect([...sent.searchParams.keys()]).toEqual(['ref']);
+      expect(sent.searchParams.get('ref')).toBe('x&scope=all&admin=1');
+    });
+
+    it('cannot open a new PATH SEGMENT - `/` in an argument is a value, not a separator', async () => {
+      const { result, calls } = await replayWith({ id: 'a/b/c' });
+      expect(result.outcome).toBe('ok');
+      expect(new URL(calls[0]!.url).pathname.split('/')).toHaveLength(4);
+    });
+
+    it('cannot append a query string through a PATH hole', async () => {
+      const { result, calls } = await replayWith({ id: '7?scope=all' });
+      expect(result.outcome).toBe('ok');
+      expect([...new URL(calls[0]!.url).searchParams.keys()]).toEqual([]);
+    });
+
+    it('REFUSES a template whose query parameter NAME is a hole', async () => {
+      const { result, calls } = await replayWith(
+        { field: 'admin' },
+        recipe({ injectedCalls: [{ method: 'GET', urlTemplate: 'https://portal.example/api/cases?{{input.field}}=1', headerNames: [], idempotent: true }] }),
+      );
+      expect(result.outcome).toBe('no-recipe');
+      expect(calls).toHaveLength(0);
+    });
+
+    it('REFUSES a placeholder family the compile never emits, rather than sending it as a literal', async () => {
+      const { result, calls } = await replayWith(
+        { ref: '2024-1' },
+        recipe({ injectedCalls: [{ method: 'GET', urlTemplate: 'https://portal.example/api/cases?ref={{integration.portal.token}}', headerNames: [], idempotent: true }] }),
+      );
+      expect(result.outcome).toBe('no-recipe');
+      expect(calls).toHaveLength(0);
+    });
+
+    it('cannot inject a sibling FIELD into a JSON body - the escaping is the body\'s own', async () => {
+      const browser = session({ status: 200, bodyText: '{}' });
+      const result = await replayCompiledAction(
+        {
+          ...base,
+          args: { q: 'x", "isAdmin": true, "z": "' },
+          browser,
+          classify: always(ADVERSARIAL),
+          writeAssent: true,
+        },
+        {
+          loadRecipe: async () => recipe({
+            injectedCalls: [{
+              method: 'POST',
+              urlTemplate: 'https://portal.example/api/search',
+              bodyTemplate: '{"q":"{{input.q}}"}',
+              headerNames: [],
+              idempotent: false,
+            }],
+          }),
+        },
+      );
+      expect(result.outcome).toBe('ok');
+      const sent = JSON.parse((browser.calls[0] as { body: string }).body) as Record<string, unknown>;
+      expect(Object.keys(sent)).toEqual(['q']);
+      expect(sent.q).toBe('x", "isAdmin": true, "z": "');
+    });
   });
 
   it('refuses to send a resolved URL that contains a live credential value', async () => {

@@ -55,6 +55,8 @@ export interface ReplayActionInput {
   secrets?: SecretRegistry;
   /** The owner's answer to this action's write approval, carried down from the executor's gate. */
   writeAssent?: boolean;
+  /** The action's DECLARED effect (`IntegrationAction.mutates`). Not the assent - see `ReplayInput`. */
+  mutates?: boolean;
 }
 
 export interface ReplayActionDeps {
@@ -111,8 +113,13 @@ export async function replayIntegrationAction(
         args: input.args,
         classify,
         ...(session ? { browser: session.browser } : {}),
+        // THE RUN'S LIVE VALUES, ALL THE WAY DOWN. `assertNoCredentialRodeIn` is inert without
+        // them, so this hop is the difference between a proof and a comment. It is pinned by
+        // `replay-mount.test.ts` ("a credential that rode in on an ARGUMENT never reaches the
+        // page"), which asserts the CONSEQUENCE - the machine was never asked to make the call.
         ...(input.secrets !== undefined ? { secrets: input.secrets } : {}),
         ...(input.writeAssent !== undefined ? { writeAssent: input.writeAssent } : {}),
+        ...(input.mutates !== undefined ? { mutates: input.mutates } : {}),
       },
       { loadRecipe: async () => stored },
     );

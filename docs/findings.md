@@ -5055,3 +5055,90 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   inject suite's header now states plainly that it is evidence about the composed script and the
   parsed envelope and about NOTHING else - no fetch ever happens on that page - and points at the
   real-browser suite for anything concerning what the replay carries.
+
+- **`p2-r4-mutating-action-learns-a-read-only-recipe-and-reports-success`** (CLOSED 2026-08-19,
+  BLOCKER, silent non-performance). A `mutates` action's discovery pass captures the READS its page
+  made; the write itself is typically a form post, a non-JSON response, or a login-shaped body the
+  compile drops. `writesIn` found no write in the compiled set, so the recipe was stored - and every
+  later run replayed the reads, answered `ok`, and reported SUCCESS while the action's whole purpose
+  went unperformed. Nobody discovers it until somebody checks the far system. Closed on both sides:
+  `learnFromRun` refuses to store a recipe that does not cover the action's declared effect, and
+  `replayCompiledAction` answers `does-not-cover` for one it finds, which the mount clears and falls
+  through on - loudly - to the authored steps that DO write. `IntegrationAction.mutates` is carried
+  across the automation seam for this; it is a different fact from `writeAssent` and is read off the
+  resolved action rather than inferred from the consent verdict beside it. Proved at
+  `executeUserIntegrationAction` (`discovery-replay-acceptance.test.ts`) against two actions on the
+  SAME automation and the SAME captured traffic that differ in exactly one declared fact.
+
+- **`p2-r4-replayed-path-and-query-were-caller-controlled`** (CLOSED 2026-08-19, MAJOR, SSRF-class
+  with the user's live session attached). `fillCall` rendered the whole URL template with
+  `interpolate` and then compared origins, so an argument could change the endpoint while keeping the
+  host: `…/cases/{{input.id}}` with `id=../../admin/secrets` resolved to `…/admin/secrets`, and
+  `?ref={{input.ref}}` with `ref=x&scope=all` added a parameter. The in-page rung means these run
+  inside the authenticated page. Closed by templating and filling COMPONENT-WISE: the compile never
+  puts a hole in an origin or a parameter name, the fill percent-encodes every value, and the result
+  is proved against a control render (`structureOf`). Eight escape attempts are pinned in
+  `injected-call-replay.test.ts`.
+
+- **`p2-r4-url-template-path-holes-were-silently-percent-encoded`** (CLOSED 2026-08-19, MAJOR, found
+  while fixing the above). `{` and `}` are in the WHATWG path percent-encode set, so parsing a
+  template with `new URL` turned every PATH hole into `%7B%7B…%7D%7D` - unfillable, and sent to the
+  site as a literal. Query holes survive, and the compile's commonest output is a query hole, which
+  is why no suite saw it. Closed by splitting the template by grammar and handing only real-URL
+  pieces to the parser.
+
+- **`p2-r4-an-unlocatable-argument-compiled-to-a-constant-recipe`** (CLOSED 2026-08-19, MAJOR, silent
+  wrong answer). An input that appeared nowhere in the captured URL or body got no hole, so the
+  compiled call was a constant and every later run returned the first run's data regardless of what
+  the caller asked. Closed by refusing the compile, with the reason logged. A non-scalar argument
+  refuses too: there is no verbatim form of it to have located, so the compile cannot claim it was
+  honoured.
+
+- **`p2-r4-capture-evidence-orphaned-when-the-recipe-write-did-not-land`** (CLOSED 2026-08-19,
+  MAJOR, unbounded growth of the most sensitive data in the pipeline). Evidence must be written
+  before the recipe (the recipe points INTO it), and nothing collected it when the write did not
+  land - which is the COMMON case, since `putRecipe` refuses to overwrite by design. Closed by
+  discarding the just-written evidence when the write did not land, sharing one `discardEvidence`
+  helper with the supersede path. NOTE where this ledger and the code disagreed and the CODE WON: the
+  round-two claim that `discardCapture` "still has no production caller" was already stale -
+  `learnFromRun`'s supersede discard is a production caller and is reachable through the heal path.
+  What was true is that the orphan on the failed-write side had none, and that is what is closed.
+
+- **`p2-r4-three-secret-registry-hops-were-surviving-mutants`** (CLOSED 2026-08-19, MAJOR, a check
+  that reads as covered). Deleting the registry from any of three hops - `replayIntegrationAction` ->
+  `replayCompiledAction`, `learnFromRun` -> `persistEvidence`, `learnFromRun` -> `putRecipe` - left
+  every suite green, because the suites asserted the registry was HANDED OVER and never that a value
+  was REFUSED because of it. Closed with consequence assertions against real stores and the real
+  mount (`replay-mount.test.ts`, "the run's live credential values reach every check that takes
+  them"), each verified by deleting the line and watching a test go red. The evidence/recipe case
+  uses a live value wearing a header NAME: names are never redacted and a low-entropy credential is a
+  valid RFC 7230 token, so both shape rules pass it and only the registry can refuse - which is
+  precisely the case both stores' registry legs are documented to exist for.
+
+- **`p2-r4-four-unfailable-tests`** (CLOSED 2026-08-19, MINOR, test quality). Re-derived by mutating
+  each safety-critical assertion. (1) `replay-mount.test.ts` "hands the replay a registry built from
+  THIS run's credential values" asserted a function was CALLED with something - the next hop could be
+  deleted freely; replaced by the consequence (the machine was never asked to make the call), with a
+  control proving the same harness does send one for an ordinary argument. (2)
+  `discovery-replay-acceptance.test.ts` "keeps no value in it either" was a same-file fixture
+  tautology: the integration is `authType: 'none'`, so the run holds no credential and the fixture
+  emits header names by contract - nothing could ever have appeared. Reframed to state what it pins
+  (the wire contract) and to point at where redaction is actually proved. (3)
+  `integration-write-gate.test.ts` "an approved write does NOT authorise a learned call set - the
+  recipe is refused" only called `writesIn` on a literal built in the same file; removing the learn's
+  refusal left it green. It now drives the real learn through a real approval and asserts nothing was
+  stored. (4) `injected-call-replay.test.ts` reached the node-http rung only with an injected
+  `fetchImpl`, so `guardedFetch` - the SSRF guard the module names - was never executed; swapping it
+  for a bare `fetch` left every suite green. A case with NO injected transport now proves a
+  link-local address is refused, with a control proving an ordinary address goes through the same
+  transport.
+
+- **`p2-r4-query-name-clause-of-the-structural-proof-has-no-failing-case`** (DISMISSED 2026-08-19,
+  MINOR, written dismissal per the QA process). `structureOf` compares the filled URL's query
+  parameter NAMES against the control's. That clause cannot currently be made to fire: a hole in a
+  parameter name is refused at parse time, and every filled value is percent-encoded, so neither `&`
+  nor `=` can reach the query as a separator. Mutating it away therefore leaves the suites green.
+  KEPT DELIBERATELY, and recorded here rather than left to read as covered: it states the whole of
+  what a filled value must not change, and it is the clause that would catch a future weakening of
+  the encoding - which is the only thing standing in front of it. The path clauses of the same proof
+  ARE independently falsifiable (`..` needs no character an encoder escapes) and are pinned.

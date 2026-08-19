@@ -431,24 +431,84 @@ describe('the write assent crosses the automation seam, and only when a human ga
   // actually lives.
   // ===========================================================================================
 
-  it('an approved write does NOT authorise a learned call set - the recipe is refused, not the action', async () => {
-    const { writesIn } = await import('../../src/automation/self-heal.js');
-    // The compiled recipe a discovery pass would produce for an approved write action. Nothing has
-    // ever shown a human THESE calls; the human approved the action.
-    const draft = {
-      goal: 'replay of autokey/send_via_auto',
-      injectedCalls: [{
-        method: 'POST',
-        urlTemplate: 'https://portal.example/api/messages',
-        headerNames: ['x-csrf-token'],
-        idempotent: false,
-      }],
-      scriptedSteps: [],
-      lessons: [],
-    };
-    // The predicate the learn refuses on, and the same one the replay's gate uses - one definition,
-    // so a recipe that would be stored could never be one the gate then blocks.
-    expect(writesIn(draft as never)).toEqual(['POST https://portal.example/api/messages']);
+  /**
+   * WHAT AN APPROVAL DOES NOT BUY, PROVED BY REFUSAL RATHER THAN BY A PREDICATE.
+   *
+   * This case used to build a recipe literal in this file and assert that `writesIn` classified it.
+   * That is a statement about a pure function over a hand-written object: removing the learn's
+   * refusal outright left it green, so a test named "the recipe is refused" could not see the
+   * refusal going away. It now drives the REAL learn, through the REAL approval granted above, and
+   * asserts that nothing was written down.
+   *
+   * BOTH SHAPES ARE REFUSED, and they are the same rule read from opposite sides: a compiled call
+   * set that WRITES was never shown to the human who approved the action, and a compiled call set
+   * that does NOT write cannot be the whole of an action that does - replaying it would report
+   * success for having done nothing. Between them a mutating action stores no recipe at all in this
+   * slice, which is the stated outcome rather than an accident.
+   *
+   * WHAT THIS SUITE CANNOT SEPARATE, said plainly: an APPROVED write is by definition `mutates:
+   * true`, so both refusals apply to every case here and either one alone would keep these green.
+   * The write refusal's own isolated proof needs a `mutates: false` action whose compile contains a
+   * POST - the ordinary "this portal serves its search over POST" case - and lives in
+   * `automation/replay-mount.test.ts` ("a FIRST compile that writes is not stored either").
+   */
+  async function learnedRecipeFor(exchange: Record<string, unknown>): Promise<{ stored: boolean; success: boolean }> {
+    const { automationBackedActionHandler } = await import('../../src/automation/service.js');
+    const { automations } = await import('../../src/data/stores.js');
+    await automations.deleteMany({});
+    await automations.insert({
+      _id: 'auto-x', id: 'auto-x', name: 'enviar', description: 'envia', steps: [],
+      ownerUserId: OWNER, orgId: ORG, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    } as never);
+
+    let stored = false;
+    const action = boundAutomationAction(true, 'send_via_auto');
+    await seed('autokey', [action], { userId: OWNER, orgId: ORG }, 'none');
+    // A REAL approval, through the real gate - so the assent that reaches the seam is one a human
+    // actually gave, not a boolean this test set.
+    await approveAction({ orgId: ORG, userId: OWNER }, describeAction('autokey', action), 'always');
+
+    const out = await executeUserIntegrationAction(
+      { orgId: ORG, ownerUserId: OWNER, integrationKey: 'autokey', actionName: 'send_via_auto', args: { ref: '2024-1' } },
+      {
+        runAutomationBackedAction: automationBackedActionHandler({
+          replay: async () => ({ outcome: 'no-recipe', reason: 'never discovered' }),
+          run: (async (_id: unknown, _ctx: unknown, options: { observeNetwork?: (b: unknown[]) => void }) => {
+            options?.observeNetwork?.([exchange]);
+            return { runId: 'run-1', status: 'completed', durationMs: 1, summary: 'ok', lastStepIndex: 0 };
+          }) as never,
+          putRecipe: (async () => { stored = true; return { verdict: 'ok' as const, recipe: { version: 1 } }; }) as never,
+          captures: { appendCapturedCall: async () => ({ verdict: 'ok' as const }), discardCapture: async () => 0 } as never,
+          captureId: () => 'cap-1',
+        }) as never,
+      },
+    );
+    return { stored, success: out.success };
+  }
+
+  /** The site's own private API, as a discovery pass captures it. */
+  const CAPTURED_READ = {
+    method: 'GET',
+    url: 'https://portal.example/api/messages?ref=2024-1',
+    requestHeaderNames: ['accept', 'x-csrf-token'],
+    responseHeaderNames: ['content-type'],
+    status: 200,
+    contentType: 'application/json',
+    resourceType: 'xhr',
+    responseBody: '{"items":[]}',
+  };
+
+  it('an approved write does NOT authorise a learned call set that WRITES', async () => {
+    const { stored, success } = await learnedRecipeFor({ ...CAPTURED_READ, method: 'POST', requestBody: '{"ref":"2024-1"}' });
+    expect(stored).toBe(false);
+    // The ACTION is not refused - only the recipe. Refusing to optimise is not refusing to work.
+    expect(success).toBe(true);
+  });
+
+  it('…nor one that does NOT write, which would report success for doing nothing', async () => {
+    const { stored, success } = await learnedRecipeFor(CAPTURED_READ);
+    expect(stored).toBe(false);
+    expect(success).toBe(true);
   });
 
   it('the replay\'s gate is keyed on the RECIPE\'s writes, not on the action\'s declaration', async () => {

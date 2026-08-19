@@ -77,7 +77,7 @@ import type { AddressInfo } from 'node:net';
 import type { Actor } from '@ekoa/shared';
 import { bootAgentTestDb, shutdownAgentTestDb, resetAgentState, restoreTransport } from '../agents/_setup.js';
 import type { FakeTransport } from '../agents/_fake-transport.js';
-import { automations, automationRuns, integrationDefinitions, integrationCapturedCalls } from '../../src/data/stores.js';
+import { automations, automationRuns, integrationDefinitions, integrationCapturedCalls, approvedIntegrationActions } from '../../src/data/stores.js';
 import {
   IntegrationDefinitionStore,
   type IntegrationDefinitionCreate,
@@ -85,6 +85,7 @@ import {
 import { IntegrationRecipeStore } from '../../src/integrations/recipe-store.js';
 import { CapturedCallsStore } from '../../src/integrations/captured-calls-store.js';
 import { executeUserIntegrationAction } from '../../src/integrations/action-executor.js';
+import { approveAction, describeAction } from '../../src/integrations/action-consent.js';
 import { automationBackedActionHandler } from '../../src/automation/service.js';
 import {
   setDaemonConnectionResolver,
@@ -275,6 +276,9 @@ let transport: FakeTransport;
 const actor: Actor = { userId: 'u1', orgId: 'org-a', role: 'user' };
 const KEY = 'portal';
 const ACTION = 'list_cases';
+/** The same integration's WRITE action, bound to the same automation. See the mutating-action
+ *  acceptance below: the pass it makes captures the very same read the action above learns from. */
+const WRITE_ACTION = 'submit_case';
 const AUTOMATION_ID = 'auto-portal';
 
 const definitions = new IntegrationDefinitionStore(integrationDefinitions, () => new Date(1_700_000_000_000 + clock++));
@@ -306,15 +310,23 @@ function definitionRow(): IntegrationDefinitionCreate {
       // which is exactly right and is asserted in its own case below.
       mutates: false,
       automationBinding: { automationId: AUTOMATION_ID },
+    }, {
+      actionName: WRITE_ACTION,
+      description: 'submete o processo',
+      // A WRITE, on the SAME automation and therefore the same captured traffic. That identity is
+      // the whole point of the acceptance below: the two actions differ in exactly one declared
+      // fact, and the spine must treat them completely differently because of it.
+      mutates: true,
+      automationBinding: { automationId: AUTOMATION_ID },
     }],
     skillMd: `# ${KEY}\n`,
   };
 }
 
 /** THE PRODUCTION ENTRY POINT, with the production seam mapping. */
-async function runTheAction(args: Record<string, unknown> = { ref: '2024-1' }) {
+async function runTheAction(args: Record<string, unknown> = { ref: '2024-1' }, actionName: string = ACTION) {
   return executeUserIntegrationAction(
-    { orgId: actor.orgId, ownerUserId: actor.userId, integrationKey: KEY, actionName: ACTION, args },
+    { orgId: actor.orgId, ownerUserId: actor.userId, integrationKey: KEY, actionName, args },
     {
       runAutomationBackedAction: automationBackedActionHandler({
         putRecipe: (orgId, key, actionName, draft, opts) => recipes.putRecipe(orgId, key, actionName, draft, opts),
@@ -354,6 +366,7 @@ beforeEach(async () => {
   setScopedMemoryResolver(async () => []);
   await integrationDefinitions.deleteMany({});
   await integrationCapturedCalls.deleteMany({});
+  await approvedIntegrationActions.deleteMany({});
   await automations.deleteMany({});
   await automationRuns.deleteMany({});
   await definitions.create(definitionRow(), { actor });
@@ -402,8 +415,15 @@ describe('ACCEPTANCE: learned on the run that was going to happen, replayed dete
     expect(recipe!.injectedCalls[0]!.headerNames).toContain('x-csrf-token');
     expect(recipe!.injectedCalls[0]!.idempotent).toBe(true);
     expect(recipe!.lessons.some((l) => l.includes('x-csrf-token'))).toBe(true);
-    // NO VALUE ANYWHERE IN IT - the property the whole spine rests on, asserted over the entire
-    // stored document rather than the fields we happened to think of.
+    // NO VALUE IN IT. Read this for what it is: the machine here never PUT a value on the wire (the
+    // fixture buffers `requestHeaderNames`, by contract), and this integration is `authType: 'none'`
+    // so the run holds no credential and its registry is empty. So this assertion pins the WIRE
+    // CONTRACT - a value cannot arrive from the machine in the first place - and NOT the redaction
+    // legs, which have nothing to redact here and cannot fail in this suite.
+    // The three redaction legs are proved where a live value actually exists, against the real
+    // stores: `automation/replay-mount.test.ts`, "the run's live credential values reach every check
+    // that takes them". Saying which is which matters: a green assertion that could not have gone
+    // red is exactly the shape that made three separate wirings look covered when they were not.
     expect(JSON.stringify(recipe)).not.toContain('csrf-live-value');
 
     // ── RUN 2. Same action, same arguments, entered the same way, and no model. ───────────────
@@ -433,7 +453,9 @@ describe('ACCEPTANCE: learned on the run that was going to happen, replayed dete
       url: `${origin}/api/cases?ref=2024-1`,
     });
     expect(replayDaemon.injectFrames[0]!.headerNames).toContain('x-csrf-token');
-    // …and no VALUE rode out with them: the frame carries names, the machine holds values.
+    // …and no VALUE rode out with them: the frame carries names, the machine holds values. This one
+    // is about the HOSTED side and can fail - Cortex builds these frames, and a build that resolved
+    // a header value would put one here. (What it does NOT prove is redaction; see above.)
     expect(JSON.stringify(replayDaemon.injectFrames)).not.toContain('csrf-live-value');
 
     // The replay got the REAL answer from the REAL server - the fixture checks the CSRF header, so
@@ -457,7 +479,7 @@ describe('ACCEPTANCE: learned on the run that was going to happen, replayed dete
     expect(modelCalls()).toBe(0);
   }, 60_000);
 
-  it('stores the raw evidence in its own collection and keeps no value in it either', async () => {
+  it('stores the raw evidence in its own collection, under the ref the recipe points at', async () => {
     setDaemonConnectionResolver(() => daemonForFixture());
     await runTheAction();
 
@@ -465,8 +487,13 @@ describe('ACCEPTANCE: learned on the run that was going to happen, replayed dete
     const evidence = await captures.listCapture({
       orgId: actor.orgId, integrationKey: KEY, actionName: ACTION, captureId: recipe!.capturedCallsRef!,
     });
+    // THE POINTER RESOLVES. That is what this case can prove and it is worth proving: the recipe
+    // carries `capturedCallsRef` into a separate collection, written before it, under the same id.
     expect(evidence.length).toBeGreaterThan(0);
     expect(evidence[0]!.call.requestHeaderNames).toContain('x-csrf-token');
+    // NOT a redaction proof - see the note in the case above. This run holds no credential, so the
+    // evidence store's registry leg has nothing to catch and cannot fail here. It is proved against
+    // a live value in `automation/replay-mount.test.ts`.
     expect(JSON.stringify(evidence)).not.toContain('csrf-live-value');
   }, 60_000);
 
@@ -527,5 +554,83 @@ describe('ACCEPTANCE: a site that changes drifts, re-learns on the next run, and
     const afterHeal = await runTheAction();
     expect((afterHeal.data as { replayed?: boolean; recipeVersion?: number })).toMatchObject({ replayed: true, recipeVersion: 2 });
     expect(modelCalls()).toBe(0);
+  }, 60_000);
+});
+
+// =============================================================================================
+// ACCEPTANCE: A MUTATING ACTION NEVER LEARNS A RECIPE THAT DOES NOT DO ITS JOB.
+//
+// This is the worst failure this spine can have and it is not exotic - it is what discovery does
+// by default. The write action below is bound to the SAME automation as the read above and makes
+// the SAME pass, so what the recorder sees underneath it is a JSON GET and nothing else: the write
+// itself is a form post, or answers HTML, or carries a login-shaped body the compile drops. The
+// read action learns that GET and is right to. The write action learning it would mean every later
+// run replays a read, answers `ok`, and reports SUCCESS while nothing is submitted - and nobody
+// finds out until somebody looks at the far system.
+//
+// ENTERED AT `executeUserIntegrationAction`, because the fact that decides it (`mutates`) is read
+// off the resolved action there and has to cross the automation seam to matter. Every hop of that
+// is production code here; a suite entering lower could not tell a carried field from a dropped one.
+// =============================================================================================
+describe('ACCEPTANCE: a recipe may not be a SUBSET of the action it belongs to', () => {
+  /** The owner has approved this action's writes. So the ONLY thing standing between the pass and a
+   *  stored read-only recipe is the coverage refusal - the approval does not open it, and must not:
+   *  a human approved an ACTION, never a call set compiled afterwards from traffic nobody saw. */
+  async function approveTheWrite(): Promise<void> {
+    const row = await definitions.getForActor(actor, KEY);
+    const action = row!.actions.find((a) => a.actionName === WRITE_ACTION)!;
+    await approveAction({ orgId: actor.orgId, userId: actor.userId }, describeAction(KEY, action), 'always');
+  }
+
+  it('the WRITE action learns nothing from the pass the READ action learns everything from', async () => {
+    await approveTheWrite();
+
+    // ── THE READ. Same automation, same traffic: it learns, which is the control. ─────────────
+    setDaemonConnectionResolver(() => daemonForFixture());
+    expect((await runTheAction()).success).toBe(true);
+    expect(await recipes.getRecipe(actor.orgId, KEY, ACTION)).not.toBeNull();
+
+    // ── THE WRITE. Identical pass, one declared fact different, and nothing is written down. ──
+    transport = resetAgentState({ oneShotText: RESOLVER_JSON });
+    setDaemonConnectionResolver(() => daemonForFixture());
+    const wrote = await runTheAction({ ref: '2024-1' }, WRITE_ACTION);
+    expect(wrote.success).toBe(true);
+    expect(await recipes.getRecipe(actor.orgId, KEY, WRITE_ACTION)).toBeNull();
+  }, 60_000);
+
+  it('a read-only recipe already on a writing action is REFUSED, cleared, and the action runs', async () => {
+    await approveTheWrite();
+    // An older build's recipe, or one written before the action was re-declared as writing. It is
+    // planted through the real store, so what the replay reads is a real stored recipe.
+    await recipes.putRecipe(actor.orgId, KEY, WRITE_ACTION, {
+      goal: `replay of ${KEY}/${WRITE_ACTION}`,
+      injectedCalls: [{
+        method: 'GET',
+        urlTemplate: `${origin}/api/cases?ref={{input.ref}}`,
+        headerNames: ['x-csrf-token'],
+        idempotent: true,
+      }],
+      scriptedSteps: [],
+      lessons: [],
+    }, {});
+    expect(await recipes.getRecipe(actor.orgId, KEY, WRITE_ACTION)).not.toBeNull();
+
+    transport = resetAgentState({ oneShotText: RESOLVER_JSON });
+    const machine = daemonForFixture();
+    setDaemonConnectionResolver(() => machine);
+    const runsBefore = (await automationRuns.find({})).length;
+
+    const result = await runTheAction({ ref: '2024-1' }, WRITE_ACTION);
+
+    // NOT REPLAYED. The recipe was readable, its route was available, its write gate would have
+    // opened (the owner assented) - and it still did not run, because it does not write.
+    expect(result.success).toBe(true);
+    expect((result.data as { replayed?: boolean }).replayed).toBeUndefined();
+    expect(machine.injectFrames).toEqual([]);
+    // THE ACTION RAN INSTEAD - which is the path that actually performs the write.
+    expect((await automationRuns.find({})).length).toBe(runsBefore + 1);
+    // …and the recipe that can never run is gone, so it costs no doomed attempt on the next run,
+    // and the learn declines to write a replacement, so this settles.
+    expect(await recipes.getRecipe(actor.orgId, KEY, WRITE_ACTION)).toBeNull();
   }, 60_000);
 });

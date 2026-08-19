@@ -28,9 +28,12 @@ import { runAutomationForAction, automationBackedActionHandler, type ActionRunDe
 import type { replayIntegrationAction } from '../../src/automation/replay-action.js';
 import type { runAutomation } from '../../src/automation/engine.js';
 import type { RecipeDraft } from '../../src/integrations/recipe-store.js';
-import { automations } from '../../src/data/stores.js';
+import { automations, integrationDefinitions, integrationCapturedCalls } from '../../src/data/stores.js';
+import { IntegrationRecipeStore } from '../../src/integrations/recipe-store.js';
+import { CapturedCallsStore } from '../../src/integrations/captured-calls-store.js';
+import { IntegrationDefinitionStore } from '../../src/integrations/definition-store.js';
 import { bootAgentTestDb, shutdownAgentTestDb, resetAgentState } from '../agents/_setup.js';
-import { __resetAutomationSeamsForTests } from '../../src/automation/seams.js';
+import { __resetAutomationSeamsForTests, setDaemonConnectionResolver } from '../../src/automation/seams.js';
 
 type Replay = typeof replayIntegrationAction;
 type Run = typeof runAutomation;
@@ -351,9 +354,15 @@ describe('runAutomationForAction - drift routes the compile through the SUPERSED
   });
 
   /**
-   * capture -> learn -> compile -> DISCARD. `discardCapture` had no production caller at all, so
-   * every learn wrote a new captureId and none was ever removed: a recurring action accumulated
-   * full request/response bodies - the most sensitive data this pipeline touches - forever.
+   * capture -> learn -> compile -> DISCARD, at BOTH ends of the lifecycle.
+   *
+   * Every learn writes a new captureId, so evidence that is never removed is evidence that grows
+   * without bound - full request and response bodies, the most sensitive data this pipeline touches,
+   * once per run of a recurring action, forever. Two things had to be collected, not one:
+   *
+   *   - the evidence behind the recipe a successful write REPLACED (below), and
+   *   - the evidence a write that DID NOT LAND left with nothing pointing at it. That is not the
+   *     rare case: `putRecipe` refuses to overwrite by design, so it is what most learns answer.
    */
   it('discards the evidence behind the recipe it REPLACED, and keeps the new one\'s', async () => {
     const { deps, supersede, discardCapture } = storeSpies();
@@ -372,7 +381,7 @@ describe('runAutomationForAction - drift routes the compile through the SUPERSED
     });
   });
 
-  it('does NOT discard when the new recipe did not go live - that would destroy the only record', async () => {
+  it('keeps the LIVE recipe\'s evidence when the new one did not go live, and collects the orphan it just wrote', async () => {
     const { deps, discardCapture } = storeSpies();
     await runAutomationForAction(base, {
       ...deps,
@@ -383,7 +392,28 @@ describe('runAutomationForAction - drift routes the compile through the SUPERSED
       // still the evidence for what is running.
       supersedeRecipe: (async () => ({ verdict: 'notfound' as const })) as never,
     });
-    expect(discardCapture).not.toHaveBeenCalled();
+    const discarded = discardCapture.mock.calls.map((c) => c[0].captureId);
+    // THE LIVE RECIPE'S EVIDENCE SURVIVES - dropping it would destroy the only record of what is
+    // actually running.
+    expect(discarded).not.toContain('cap-previous');
+    // …AND THE ORPHAN DOES NOT. The evidence has to be written before the recipe (the recipe points
+    // INTO it), so a write that does not land otherwise leaves a whole pass's request and response
+    // bodies with nothing referring to them and nothing that would ever collect them.
+    expect(discarded).toEqual(['cap-1']);
+  });
+
+  it('collects the orphan on the FIRST-COMPILE route too, where a refused overwrite is the common case', async () => {
+    const { deps, discardCapture } = storeSpies();
+    await runAutomationForAction(base, {
+      ...deps,
+      replay: async () => ({ outcome: 'no-recipe', reason: 'never discovered' }),
+      run: runObserving([EXCHANGE]),
+      // `putRecipe` refuses to overwrite BY DESIGN, so `exists` is what every learn on an action
+      // that already has a recipe and has not drifted answers - i.e. most learns this system does.
+      putRecipe: (async () => ({ verdict: 'exists' as const, recipe: { version: 1 } })) as never,
+      getRecipe: async () => ({}),
+    });
+    expect(discardCapture.mock.calls.map((c) => c[0].captureId)).toEqual(['cap-1']);
   });
 
   it('does NOT discard the evidence this very pass just wrote', async () => {
@@ -412,6 +442,284 @@ describe('runAutomationForAction - drift routes the compile through the SUPERSED
     expect(supersede).not.toHaveBeenCalled();
     // The RUN itself still succeeded - refusing to learn is not refusing to work.
     expect(result.success).toBe(true);
+  });
+});
+
+// =============================================================================================
+// THE READ-LEARNS-A-WRITE SHAPE. The worst failure this spine can have: an action that exists to
+// write learns the READS the discovery pass happened to watch underneath it, and every later run
+// replays those reads, answers `ok`, and reports SUCCESS while the write never happens. Nobody
+// finds out until somebody looks at the far system.
+//
+// Both refusals are here, because either one alone is a half-measure: the LEARN must not write such
+// a recipe down, and the REPLAY must not run one it finds (an older build's, or an action
+// re-declared `mutates` after it was learned).
+// =============================================================================================
+describe('runAutomationForAction - a recipe may not be a SUBSET of its action', () => {
+  beforeAll(() => bootAgentTestDb('ekoa_automation_replay_coverage'));
+  afterAll(shutdownAgentTestDb);
+  beforeEach(async () => {
+    resetAgentState({});
+    __resetAutomationSeamsForTests();
+    await automations.deleteMany({});
+    await automations.insert({
+      _id: AUTOMATION_ID, id: AUTOMATION_ID, name: 'submeter', description: 'submete', steps: [],
+      ownerUserId: OWNER, orgId: 'o1', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    } as never);
+  });
+
+  /** The realistic capture of a WRITE action's pass: the site's own JSON reads, and no sign of the
+   *  write itself - it was a form post, or answered HTML, or carried a login-shaped body the compile
+   *  drops. This is the ordinary case, not a contrived one. */
+  const READS_ONLY = [EXCHANGE];
+
+  it('does NOT store a read-only recipe for an action declared as writing', async () => {
+    const { deps, put, supersede } = storeSpies();
+    const result = await runAutomationForAction(
+      { ...base, mutates: true, writeAssent: true },
+      { ...deps, replay: async () => ({ outcome: 'no-recipe', reason: 'never discovered' }), run: runObserving(READS_ONLY) },
+    );
+    expect(put).not.toHaveBeenCalled();
+    expect(supersede).not.toHaveBeenCalled();
+    expect(result.success).toBe(true);
+  });
+
+  it('…and DOES store the same recipe for the same pass when the action is a READ', async () => {
+    // THE CONTROL. Without it "nothing was stored" would also hold for a harness in which nothing
+    // is ever stored, and the refusal above would be indistinguishable from a broken fixture.
+    const { deps, put } = storeSpies();
+    await runAutomationForAction(
+      { ...base, mutates: false },
+      { ...deps, replay: async () => ({ outcome: 'no-recipe', reason: 'never discovered' }), run: runObserving(READS_ONLY) },
+    );
+    expect(put).toHaveBeenCalledOnce();
+  });
+
+  it('CLEARS a read-only recipe it finds on a writing action and runs the action instead', async () => {
+    const { deps } = storeSpies();
+    const clearRecipe = vi.fn(async () => true);
+    const run = runObserving([]);
+    const result = await runAutomationForAction(
+      { ...base, mutates: true, writeAssent: true },
+      {
+        ...deps,
+        clearRecipe,
+        run,
+        replay: async () => ({ outcome: 'does-not-cover', reason: 'no write in it', recipeVersion: 4 }),
+      },
+    );
+    // THE POINT: the automation - the path that actually performs the write - ran.
+    expect(run).toHaveBeenCalledOnce();
+    expect((result.data as { replayed?: boolean }).replayed).toBeUndefined();
+    expect(result.success).toBe(true);
+    // …and the recipe that can never run is gone, so it costs no doomed attempt on the next run.
+    expect(clearRecipe).toHaveBeenCalledOnce();
+  });
+
+  it('does not re-learn the recipe it just cleared - the refusal settles instead of thrashing', async () => {
+    const { deps, put, supersede } = storeSpies();
+    await runAutomationForAction(
+      { ...base, mutates: true, writeAssent: true },
+      {
+        ...deps,
+        clearRecipe: async () => true,
+        run: runObserving(READS_ONLY),
+        replay: async () => ({ outcome: 'does-not-cover', reason: 'no write in it', recipeVersion: 4 }),
+      },
+    );
+    expect(put).not.toHaveBeenCalled();
+    expect(supersede).not.toHaveBeenCalled();
+  });
+
+  it('does NOT route `does-not-cover` through the heal - re-learning would produce the same recipe', async () => {
+    const { deps, supersede } = storeSpies();
+    await runAutomationForAction(
+      { ...base, mutates: false },
+      {
+        ...deps,
+        clearRecipe: async () => true,
+        run: runObserving(READS_ONLY),
+        replay: async () => ({ outcome: 'does-not-cover', reason: 'no write in it', recipeVersion: 4 }),
+      },
+    );
+    expect(supersede).not.toHaveBeenCalled();
+  });
+});
+
+// =============================================================================================
+// THE THREE PLACES THIS SPINE PROVES A CREDENTIAL DID NOT SURVIVE, EACH REACHED THROUGH THE REAL
+// THING IT PROTECTS.
+//
+// Every one of them takes the run's `SecretRegistry` as a parameter, and every one of them was
+// wired by a single line that no test could kill: the suites asserted that the registry was HANDED
+// OVER (a statement about a function call) and never that a value was REFUSED because of it. Delete
+// the parameter at any of the three hops and every suite stayed green, which is the worst shape a
+// safety check can have - it reads as covered.
+//
+// So the three below assert CONSEQUENCES, against real stores and a real mount:
+//
+//   1. the resolved URL check (`assertNoCredentialRodeIn`), two hops down from the run;
+//   2. the evidence store's last gate (`assertNoLiveSecret`);
+//   3. the recipe store's persistence-boundary proof (`assertCarriesNoValues`).
+//
+// Each has a CONTROL beside it, because "nothing was stored" is also what a broken harness says.
+// =============================================================================================
+describe('the run\'s live credential values reach every check that takes them', () => {
+  /** Composed at run time - no credential-shaped literal exists in this file. Deliberately LOW
+   *  ENTROPY: the shape rules (`looksLikeLiteralSecret`, the header-name grammar) cannot see it, so
+   *  the only thing that can is the registry. That is exactly the case those legs document. */
+  const LIVE = ['sessao', 'do', 'portal', String(2024)].join('-');
+
+  let recipes: IntegrationRecipeStore;
+  let captures: CapturedCallsStore;
+  let definitions: IntegrationDefinitionStore;
+  let clock = 0;
+
+  beforeAll(() => bootAgentTestDb('ekoa_automation_replay_secrets'));
+  afterAll(shutdownAgentTestDb);
+  beforeEach(async () => {
+    resetAgentState({});
+    __resetAutomationSeamsForTests();
+    clock = 0;
+    const now = () => new Date(1_700_000_000_000 + clock++);
+    recipes = new IntegrationRecipeStore(integrationDefinitions, now);
+    captures = new CapturedCallsStore(integrationCapturedCalls, now);
+    definitions = new IntegrationDefinitionStore(integrationDefinitions, now);
+    await integrationDefinitions.deleteMany({});
+    await integrationCapturedCalls.deleteMany({});
+    await automations.deleteMany({});
+    await automations.insert({
+      _id: AUTOMATION_ID, id: AUTOMATION_ID, name: 'listar', description: 'lista', steps: [],
+      ownerUserId: OWNER, orgId: 'o1', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    } as never);
+    await definitions.create({
+      orgId: 'o1',
+      userId: OWNER,
+      key: 'portal',
+      visibility: 'org',
+      authType: 'none',
+      configSchema: [],
+      actions: [{
+        actionName: 'list_cases',
+        description: 'lista os processos',
+        mutates: false,
+        automationBinding: { automationId: AUTOMATION_ID },
+      }],
+      skillMd: '# portal\n',
+    }, { actor: { userId: OWNER, orgId: 'o1', role: 'user' } });
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // 1. THE RESOLVED URL. Two hops from `runAutomationForAction`: it builds the registry, the mount
+  //    forwards it, the executor proves with it. The middle hop had no test at all.
+  // -------------------------------------------------------------------------------------------
+  describe('a credential that rode in on an ARGUMENT never reaches the page', () => {
+    function daemon(): { frames: Array<{ url: string }>; conn: unknown } {
+      const frames: Array<{ url: string }> = [];
+      return {
+        frames,
+        conn: {
+          runStep: async (frame: { input?: unknown }) => {
+            const input = (frame.input ?? {}) as Record<string, unknown>;
+            if (input.leaseOp === 'release') return { ok: true as const };
+            const call = input.injectedCall as { url: string } | undefined;
+            if (!call) return { ok: true as const, observation: { data: {} } };
+            frames.push({ url: call.url });
+            return {
+              ok: true as const,
+              observation: {
+                data: {
+                  url: 'https://portal.example/cases',
+                  injectedCall: { status: 200, ok: true, bodyText: '{"items":[{"id":1}]}', contentType: 'application/json', responseHeaderNames: ['content-type'] },
+                },
+              },
+            };
+          },
+        },
+      };
+    }
+
+    async function replayThroughTheRealMount(args: Record<string, unknown>, credentialFields: Record<string, unknown>) {
+      await recipes.putRecipe('o1', 'portal', 'list_cases', {
+        goal: 'replay of portal/list_cases',
+        injectedCalls: [{
+          method: 'GET',
+          urlTemplate: 'https://portal.example/api/cases?ref={{input.ref}}',
+          headerNames: ['x-csrf-token'],
+          idempotent: true,
+        }],
+        scriptedSteps: [],
+        lessons: [],
+      }, {});
+      const machine = daemon();
+      setDaemonConnectionResolver(() => machine.conn as never);
+      // NO `deps.replay`: the REAL `replayIntegrationAction` runs, so the forward from the mount
+      // into the executor is on the path under test rather than stubbed past.
+      const result = await runAutomationForAction(
+        { ...base, args, credentialFields },
+        { run: runObserving([]), putRecipe: (async () => ({ verdict: 'exists' as const, recipe: { version: 1 } })) as never, captures: { appendCapturedCall: async () => ({ verdict: 'ok' as const }), discardCapture: async () => 0 } as never },
+      );
+      return { result, frames: machine.frames };
+    }
+
+    it('REFUSES the call and falls through to the automation', async () => {
+      const { result, frames } = await replayThroughTheRealMount({ ref: LIVE }, { token: LIVE });
+      // THE CONSEQUENCE: the machine was never asked to make the call, so the credential never
+      // reached the site's query string (and its logs).
+      expect(frames).toEqual([]);
+      // …and the action still worked, by the path it worked by before it ever learned anything.
+      expect(result.success).toBe(true);
+      expect((result.data as { replayed?: boolean }).replayed).toBeUndefined();
+      expect((result.data as { runId?: string }).runId).toBeTruthy();
+    });
+
+    it('…and sends the very same call when the argument is NOT a live credential', async () => {
+      // THE CONTROL. It proves the refusal above is about the value and not about a harness that
+      // cannot send a frame at all.
+      const { result, frames } = await replayThroughTheRealMount({ ref: '2024-1' }, { token: LIVE });
+      expect(frames.map((f) => f.url)).toEqual(['https://portal.example/api/cases?ref=2024-1']);
+      expect((result.data as { replayed?: boolean }).replayed).toBe(true);
+    });
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // 2 + 3. THE TWO STORES. A live credential can reach a compiled recipe through a field the
+  //        redaction pass does not scan: header NAMES are never redacted (they are names), and a
+  //        low-entropy credential is a valid RFC 7230 token, so both shape rules pass it. That is
+  //        precisely the case both stores' registry legs are documented to exist for.
+  // -------------------------------------------------------------------------------------------
+  describe('a live value wearing a header NAME is refused by both stores', () => {
+    const poisoned = { ...EXCHANGE, requestHeaderNames: ['accept', LIVE] };
+
+    async function learnFrom(exchange: unknown) {
+      return runAutomationForAction(
+        { ...base, credentialFields: { token: LIVE } },
+        {
+          replay: async () => ({ outcome: 'no-recipe', reason: 'never discovered' }),
+          run: runObserving([exchange]),
+          putRecipe: (o, k, a, draft, opts) => recipes.putRecipe(o, k, a, draft, opts),
+          captures,
+          captureId: () => 'cap-1',
+        },
+      );
+    }
+
+    it('stores NEITHER the recipe nor the evidence, and the run still succeeds', async () => {
+      const result = await learnFrom(poisoned);
+      expect(result.success).toBe(true);
+      expect(await recipes.getRecipe('o1', 'portal', 'list_cases')).toBeNull();
+      expect(await captures.listCapture({ orgId: 'o1', integrationKey: 'portal', actionName: 'list_cases', captureId: 'cap-1' })).toEqual([]);
+    });
+
+    it('…and stores BOTH for the identical pass with an ordinary header name', async () => {
+      // THE CONTROL, and it is what makes the two assertions above mean anything: the same pipeline,
+      // the same registry, one character of difference in what the machine reported.
+      const result = await learnFrom({ ...EXCHANGE, requestHeaderNames: ['accept', 'x-csrf-token'] });
+      expect(result.success).toBe(true);
+      const recipe = await recipes.getRecipe('o1', 'portal', 'list_cases');
+      expect(recipe!.injectedCalls[0]!.headerNames).toContain('x-csrf-token');
+      expect(await captures.listCapture({ orgId: 'o1', integrationKey: 'portal', actionName: 'list_cases', captureId: 'cap-1' })).toHaveLength(1);
+    });
   });
 });
 
