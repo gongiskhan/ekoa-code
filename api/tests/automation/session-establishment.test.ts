@@ -1026,3 +1026,100 @@ describe('the establishment round-trip, end to end', () => {
     expect(await listCofreItems(mallory)).toHaveLength(2);
   });
 });
+
+/**
+ * P4.2 — WHERE THE SESSION WAS MADE IS REPORTED, NOT DECIDED.
+ *
+ * `sessionMetadata.establishedBy.pairingId` has been stamped on machine-established sessions since
+ * the attended ceremony landed, and nothing ever read it. It is the only fact this module owes the
+ * router: whether it becomes a routing PREFERENCE is a posture question, answered one layer up
+ * (`credential-gate.ts`), because a permissive origin's credential is portable and pinning it to a
+ * laptop would cost availability for nothing.
+ */
+describe('the establishing machine travels back with a reused session', () => {
+  it('a machine-established session reports its pairing', async () => {
+    const h = harness({
+      items: [sessionItem({
+        metadata: {
+          establishedBy: { kind: 'machine', pairingId: 'pair_home' },
+          boundEgress: { kind: 'datacenter' },
+          establishedAt: new Date(NOW - 60_000).toISOString(),
+          healthy: true,
+        },
+      })],
+    });
+    const result = await ensureSession(runInput(), h.deps);
+    expect(result).toMatchObject({ status: 'reused', establishedByPairingId: 'pair_home' });
+  });
+
+  it('a cloud-established session reports none — there is no machine to prefer', async () => {
+    const h = harness({ items: [sessionItem()] });
+    const result = await ensureSession(runInput(), h.deps);
+    expect(result.status).toBe('reused');
+    expect(result).not.toHaveProperty('establishedByPairingId');
+  });
+
+  it('a row written before session metadata existed reports none rather than throwing', async () => {
+    // The same shape `reestablishRouteFor` already guards: `markSessionUnhealthy` can stamp
+    // `healthy` onto a row with no `establishedBy` at all.
+    const h = harness({ items: [sessionItem({ metadata: undefined })] });
+    const result = await ensureSession(runInput(), h.deps);
+    expect(result.status).toBe('reused');
+    expect(result).not.toHaveProperty('establishedByPairingId');
+  });
+
+  it('a fresh capture reports the vantage it was established FROM', async () => {
+    const h = harness({ items: [sessionItem({ expiresAt: new Date(NOW - 1_000).toISOString() })] });
+    const result = await ensureSession(
+      runInput({
+        vantage: {
+          establishedBy: { kind: 'machine', pairingId: 'pair_office' },
+          boundEgress: { kind: 'residential', pairingId: 'pair_office' },
+        },
+      }),
+      h.deps,
+    );
+    expect(result).toMatchObject({ status: 'reestablished', establishedByPairingId: 'pair_office' });
+  });
+});
+
+/**
+ * The field this reads is `establishedBy`, and it matters which one.
+ *
+ * `sessionMetadata` is persisted as an opaque record (`cofre/types.ts`) and nothing re-validates it
+ * on the way back, so the read is defensive on purpose: a discriminant that does not say `machine`
+ * names no machine, whatever else the row happens to carry next to it.
+ */
+describe('the establishing machine is read off establishedBy and nothing else', () => {
+  it('a cloud establishment bound to a machine\'s residential line still reports NO machine', async () => {
+    const h = harness({
+      items: [sessionItem({
+        metadata: {
+          establishedBy: { kind: 'cloud' },
+          boundEgress: { kind: 'residential', pairingId: 'pair_home' },
+          establishedAt: new Date(NOW - 60_000).toISOString(),
+          healthy: true,
+        },
+      })],
+    });
+    const result = await ensureSession(runInput({ residentialAvailable: ['pair_home'] }), h.deps);
+    expect(result.status).toBe('reused');
+    // `boundEgress` answers "where may it leave from"; `establishedBy` answers "where was it made".
+    // Only the second is a statement about which machine can reproduce this identity.
+    expect(result).not.toHaveProperty('establishedByPairingId');
+  });
+
+  it('a stored discriminant that is not "machine" is ignored even when a pairingId sits beside it', async () => {
+    const item = sessionItem();
+    (item as unknown as { sessionMetadata: Record<string, unknown> }).sessionMetadata = {
+      establishedBy: { kind: 'cloud', pairingId: 'pair_smuggled' },
+      boundEgress: { kind: 'datacenter' },
+      establishedAt: new Date(NOW - 60_000).toISOString(),
+      healthy: true,
+    };
+    const h = harness({ items: [item] });
+    const result = await ensureSession(runInput(), h.deps);
+    expect(result.status).toBe('reused');
+    expect(result).not.toHaveProperty('establishedByPairingId');
+  });
+});

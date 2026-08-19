@@ -48,15 +48,21 @@ const T0 = new Date('2026-08-17T09:00:00.000Z');
 let clock = T0.getTime();
 let seq = 0;
 
+interface BlockedNotice { ownerUserId: string; scheduleId: string; runId: string; code?: string }
+
 function makeDeps(over: Partial<ScheduleSupervisorDeps> = {}): ScheduleSupervisorDeps & {
   automationCalls: unknown[];
   integrationCalls: unknown[];
+  blockedNotices: BlockedNotice[];
 } {
   const automationCalls: unknown[] = [];
   const integrationCalls: unknown[] = [];
+  const blockedNotices: BlockedNotice[] = [];
   return {
     automationCalls,
     integrationCalls,
+    blockedNotices,
+    notifyBlocked: (n) => { blockedNotices.push(n); },
     runAutomation: async (s, t) => {
       automationCalls.push({ scheduleId: s._id, target: t });
       return { status: 'ok', automationRunId: 'arun_1' };
@@ -184,7 +190,99 @@ describe('ScheduleSupervisor', () => {
     expect(runs[0]!.detail?.code).toBe('awaiting_consent');
     const after = (await schedules.get(s._id)) as unknown as ScheduleDoc;
     expect(after.lastRun?.status).toBe('blocked');
-    expect(after.consecutiveFailures).toBe(1); // blocked counts toward the ceiling
+    // P4.1 FLIPS THIS PIN. It used to assert `1` — blocked counted toward the ceiling. It is now
+    // NEUTRAL: a fire that is waiting on its owner says nothing about whether the schedule works,
+    // and counting it meant twenty nights with the laptop shut auto-paused a working schedule.
+    expect(after.consecutiveFailures).toBe(0);
+    // ...and the owner is told, because nothing else will: neutral outcomes are silent by design.
+    expect(deps.blockedNotices).toEqual([
+      { ownerUserId: 'usr1', scheduleId: s._id, runId: runs[0]!._id, code: 'awaiting_consent' },
+    ]);
+  });
+
+  it('a blocked fire does not RESET the failure counter either — it is neutral in both directions', async () => {
+    const deps = makeDeps({
+      runIntegrationAction: async () => mapIntegrationOutcome({ success: false, code: 'awaiting_consent' }),
+    });
+    const sup = new ScheduleSupervisor(deps);
+    // Resetting would be the opposite error to counting: a genuinely broken schedule could hide
+    // behind an occasional blocked fire and never reach the ceiling at all.
+    const s = await seedSchedule({
+      consecutiveFailures: 7,
+      target: { kind: 'integration_action', integrationKey: 'ntfy', actionName: 'publish', args: {} },
+    });
+    await sup.tick();
+    await sup.stop();
+    expect(((await schedules.get(s._id)) as unknown as ScheduleDoc).consecutiveFailures).toBe(7);
+  });
+
+  it('N CONSECUTIVE BLOCKED FIRES NEVER AUTO-PAUSE, however many (the laptop-shut case)', async () => {
+    const deps = makeDeps({
+      runAutomation: async () => mapAutomationOutcome({ outcome: 'blocked', permanent: false, runId: 'arun_b' }),
+    });
+    const sup = new ScheduleSupervisor(deps);
+    // Start one strike below the ceiling: if blocked counted at all, the FIRST fire would pause it.
+    const s = await seedSchedule({ consecutiveFailures: FAILURE_CEILING - 1 });
+    const fires = FAILURE_CEILING + 5;
+    for (let i = 0; i < fires; i++) {
+      // Each iteration is a DISTINCT occurrence: the run id is deterministic over
+      // (scheduleId, plannedFor), so reusing one instant would claim nothing after the first.
+      clock += 3_600_000;
+      await schedules.update(s._id, (cur) => ({ ...(cur as object), nextRunAt: new Date(clock).toISOString() }) as never);
+      await sup.tick();
+      await sup.stop();
+    }
+    const after = (await schedules.get(s._id)) as unknown as ScheduleDoc;
+    expect(after.enabled).toBe(true);
+    expect(after.autoPausedAt).toBeUndefined();
+    expect(after.consecutiveFailures).toBe(FAILURE_CEILING - 1);
+    expect(after.lastRun?.status).toBe('blocked');
+    // Every one of them told the owner. Silence is the failure mode this replaces.
+    expect(deps.blockedNotices.length).toBe(fires);
+    expect(deps.blockedNotices.every((n) => n.code === 'automation_blocked')).toBe(true);
+  });
+
+  it('an ok or failed fire notifies nobody — only blocked does', async () => {
+    for (const runAutomation of [
+      async () => mapAutomationOutcome({ outcome: 'completed', permanent: false }),
+      async () => mapAutomationOutcome({ outcome: 'failed', permanent: false }),
+    ]) {
+      const deps = makeDeps({ runAutomation });
+      const sup = new ScheduleSupervisor(deps);
+      await seedSchedule();
+      await sup.tick();
+      await sup.stop();
+      expect(deps.blockedNotices).toEqual([]);
+    }
+  });
+
+  it('a notifier that throws never fails the fire (the run row is the durable record)', async () => {
+    const deps = makeDeps({
+      runAutomation: async () => mapAutomationOutcome({ outcome: 'blocked', permanent: false }),
+      notifyBlocked: () => { throw new Error('push rail down'); },
+    });
+    const sup = new ScheduleSupervisor(deps);
+    const s = await seedSchedule();
+    await sup.tick();
+    await sup.stop();
+    const runs = (await scheduleRuns.find({ scheduleId: s._id })) as unknown as ScheduleRunDoc[];
+    expect(runs[0]!.status).toBe('blocked');
+    expect(((await schedules.get(s._id)) as unknown as ScheduleDoc).lastRun?.status).toBe('blocked');
+  });
+
+  it('mapAutomationOutcome opens a blocked channel out of the automation path', () => {
+    // The collapse this replaces: every non-`completed` status became `failed`, so a run halted in
+    // `awaiting_daemon` was indistinguishable from one that threw.
+    expect(mapAutomationOutcome({ outcome: 'blocked', permanent: false, runId: 'r1' })).toEqual({
+      status: 'blocked',
+      code: 'automation_blocked',
+      automationRunId: 'r1',
+    });
+    expect(mapAutomationOutcome({ outcome: 'completed', permanent: false }).status).toBe('ok');
+    expect(mapAutomationOutcome({ outcome: 'failed', permanent: true })).toEqual({
+      status: 'failed',
+      code: 'automation_gone',
+    });
   });
 
   it('a stale occurrence advances WITHOUT firing (no backfill beyond the grace)', async () => {

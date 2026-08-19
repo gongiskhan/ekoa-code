@@ -59,6 +59,65 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   suite an `afterEach` that does `await cancelCrawlAndWait('s1')` before the runner reset, so no
   background run can write after the clear; and make spec 1's precondition real - hold run #1 open
   with a lookup seam that does not resolve until the spec releases it - instead of racing it.
+- **`undeclared-origins-are-bridge-only-so-a-daemonless-dev-halts-browser-steps`** (OPEN 2026-08-19,
+  MEDIUM, developer ergonomics - the deliberate cost of P4.1, recorded rather than hidden). Execution
+  locality is now gated by the ORIGIN POSTURE in every environment, and posture defaults
+  ADVERSARIAL. A `navigate` step states its own URL and carries no action, so `resolveStepOrigin`
+  answers `action: null` for it and `classifyOrigin` returns the closed classification - which means
+  a plain planner-authored `navigate`/`browser` automation is BRIDGE-ONLY. On a developer machine
+  with no paired daemon those steps now halt in `awaiting_daemon` where they previously ran in the
+  hosted Chromium, because `config.localBrowserEnabled` defaulted to `!isProd`.
+
+  **This is the intended behaviour, not a regression to fix by loosening it.** The two escape routes
+  are the two the design intends: pair a daemon (`clients/bridge`), or declare the action's posture
+  (`IntegrationAction.posture: 'permissive'` with an `httpConfig.baseUrl` covering the origin). An
+  env override that reopened the hosted browser for an adversarial origin was considered and
+  REFUSED in `docs/decisions.md` (2026-08-19): it is the same defect wearing a different variable
+  name, and it would give `adversarial + cloud egress` a representation that
+  `origin-posture.ts`'s frozen constructor exists to make impossible.
+
+  **What is genuinely open** is the ergonomics, not the policy: there is no way today to declare a
+  posture for a bare `navigate` step's origin, because posture lives on `IntegrationAction` and a
+  navigate step has no action. Adding one to `StepDeclaration` would be wrong - the step is
+  MODEL-AUTHORED, so the authorised artefact and the authorising artefact would be the same file,
+  which is exactly the hole the deletion of `declaredOrigins` closed. The likely right answer is a
+  tenant-scoped, human-authored origin posture list resolved through the same seam, and it is not
+  built. Until it is, dev drives browser automations through a paired daemon.
+
+- **`daemon-seam-cannot-ask-for-a-specific-machine-so-the-ceremony-preference-can-refuse-spuriously`**
+  (OPEN 2026-08-19, MEDIUM, availability - a named limitation of P4.2, not a silent one).
+  `automation/seams.ts` `getDaemonConnection(ownerUserId)` is bound to `bridge/registry.ts`
+  `getConnectionByOwner`, which answers "the NEWEST live socket for this owner" and cannot be asked
+  for a particular one. P4.2 gives an adversarial session a preference for the pairing its ceremony
+  happened on, and `locality.ts` honours it by REFUSING a connected machine that is not it. For a
+  user with one machine that is exactly right. For a user with two, the run halts whenever the
+  arbitrary pick is the other one - even though the preferred machine is online and dialled in.
+
+  **The primitive that fixes it already exists and is INERT**, which is how this slice found it:
+  `bridge/registry.ts` `selectConnectionForStep` implements `pinned | any:<capability> | cloud`
+  selection with the org and owner checks, is fully covered by
+  `api/tests/security/step-declaration-routing.test.ts`, and has NO production caller - the same
+  shape `egress-policy.ts` was in before P4.1. Closing this means widening the daemon seam to
+  `(ownerUserId, preferred?: { pairingId, orgId })` and binding it to `selectConnectionForStep`
+  with `target: { kind: 'pinned' }`, plus deciding whether the run's connection may be re-resolved
+  mid-run (it is captured once today, and a `DaemonBrowserSession` binds it at construction).
+
+  **Deliberately not done here.** It changes which machine executes a step, which is a
+  security-relevant routing surface that deserves its own slice and its own suite rather than a
+  tail-end addition to one already touching the engine, the schedules rail and `shared/`. The
+  failure direction is the safe one meanwhile: the run HALTS naming the machine it wants, rather
+  than silently executing on a different one.
+
+- **`schedule-blocked-notification-has-no-client-consumer`** (OPEN 2026-08-19, LOW, half-wired
+  surface). P4.1 emits an additive `schedule_blocked` NotificationEvent on the per-user
+  notifications channel when a scheduled fire halts waiting for its owner, and
+  `ScheduleSupervisorDeps.notifyBlocked` is required so the rail cannot boot half-wired. NOTHING IN
+  `web/` LISTENS FOR IT YET: `header.tsx` subscribes to `usage_updated` only, so today the event
+  lands in the stream and is dropped. The durable record (the `blocked` schedule run row, already
+  rendered by the schedules surface) is unaffected, so nothing is lost - but the notification is not
+  yet a user-visible improvement, and claiming the owner "is told" is true only of the wire. Closing
+  it means a client subscription plus the pt/en strings derived from the CODE (never server prose).
+  Scoped out of P4 deliberately: it is a web slice, and this one is api-side.
 
 - **`workspace-scoped-verification-misses-two-workspaces`** (2026-08-18, OPEN as a PROCESS gap; the
   two red pins it hid are FIXED). Twice now a change has grown the public surface, left a pin red,

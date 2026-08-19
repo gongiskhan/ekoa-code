@@ -81,6 +81,18 @@ export interface ScheduleSupervisorDeps {
     schedule: ScheduleDoc,
     target: Extract<ScheduleTarget, { kind: 'integration_action' }>,
   ): Promise<ScheduleFireOutcome>;
+  /**
+   * Tell the schedule's owner that a fire ended BLOCKED — it is waiting on them (P4.1).
+   *
+   * REQUIRED, not optional, for the reason the two executor seams are: an optional notifier would
+   * let the process boot with the notification silently missing, and "the owner is never told"
+   * fails in exactly the direction this seam exists to prevent. The composition root binds it to
+   * the per-user notifications channel; a throw here is caught and logged, never propagated.
+   *
+   * NO MESSAGE FIELD — the client derives its text from `code`, the standing rule for user-facing
+   * run errors. Engine prose is not a user-facing vocabulary.
+   */
+  notifyBlocked(input: { ownerUserId: string; scheduleId: string; runId: string; code?: string }): void;
   /** Current ISO timestamp (injected so tests are deterministic). */
   now(): string;
   genId(): string;
@@ -335,6 +347,25 @@ export class ScheduleSupervisor {
       ...(outcome.automationRunId ? { automationRunId: outcome.automationRunId } : {}),
     });
     await this.recordOutcome(schedule._id, runId, outcome, false);
+    // P4.1 — A BLOCKED FIRE TELLS ITS OWNER. It is the one outcome nothing else will surface: `ok`
+    // needs no telling, `failed` drives the ceiling and eventually auto-pauses loudly, but blocked
+    // is neutral by design, so a schedule could sit waiting on a machine for weeks in silence. The
+    // alternative the rest of this slice exists to forbid is worse — running the work anyway from a
+    // datacenter IP against an origin that was declared bridge-only.
+    if (outcome.status === 'blocked') {
+      try {
+        this.deps.notifyBlocked({
+          ownerUserId: schedule.ownerUserId,
+          scheduleId: schedule._id,
+          runId,
+          ...(outcome.code ? { code: outcome.code } : {}),
+        });
+      } catch (err) {
+        // Best-effort by construction: the durable record is the `blocked` run row, which the
+        // schedules surface already reads. A push that failed must never fail the fire.
+        console.warn(`[schedule-supervisor] blocked notify ${runId} failed: ${msgOf(err)}`);
+      }
+    }
   }
 
   /** Advance `nextRunAt` past `firedPlannedFor` (CAS; anchored at creation). No-op when a
@@ -361,7 +392,19 @@ export class ScheduleSupervisor {
     });
   }
 
-  /** Denormalise the outcome onto the schedule + drive the failure ceiling. */
+  /**
+   * Denormalise the outcome onto the schedule + drive the failure ceiling.
+   *
+   * BLOCKED IS NEUTRAL (P4.1): it neither resets the counter nor increments it. A blocked fire is
+   * the schedule waiting for its owner — a machine of theirs that is not connected, a credential
+   * only they can establish — and it says NOTHING about whether the schedule works.
+   *
+   * Counting it (the previous behaviour, pinned by supervisor.test.ts) meant twenty nights with the
+   * laptop shut auto-paused a perfectly good schedule, and the owner would find it disabled rather
+   * than waiting. Resetting the counter would be the opposite error: a schedule that is genuinely
+   * broken could hide behind an occasional blocked fire and never reach the ceiling at all. Neither
+   * direction is a judgement this outcome is entitled to make, so it makes neither.
+   */
   private async recordOutcome(
     scheduleId: string,
     runId: string,
@@ -371,8 +414,9 @@ export class ScheduleSupervisor {
     const nowIso = this.deps.now();
     await updateScheduleSystem(scheduleId, (cur) => {
       const ok = outcome.status === 'ok';
-      const failures = ok ? 0 : cur.consecutiveFailures + 1;
-      const autoPause = !ok && failures >= FAILURE_CEILING && cur.enabled;
+      const blocked = outcome.status === 'blocked';
+      const failures = ok ? 0 : blocked ? cur.consecutiveFailures : cur.consecutiveFailures + 1;
+      const autoPause = !ok && !blocked && failures >= FAILURE_CEILING && cur.enabled;
       if (autoPause) {
         console.warn(
           `[schedule-supervisor] schedule ${scheduleId} disabled after ${failures} consecutive non-ok fires (last: ${outcome.code ?? outcome.status})`,
@@ -406,12 +450,25 @@ function msgOf(err: unknown): string {
 // automation/ (tier 5); the shapes are the seam's contract.
 // ---------------------------------------------------------------------------
 
-/** startRunForTrigger's outcome → a fire outcome. */
+/**
+ * startRunForTrigger's outcome → a fire outcome.
+ *
+ * P4.1: `blocked` is a THIRD outcome now, not a shade of `failed`. A run that halted waiting for
+ * its owner's machine or credential is not a failure of the schedule, and `recordOutcome` treats it
+ * as neutral — see the docblock there for why counting it was actively harmful.
+ */
 export function mapAutomationOutcome(o: {
-  outcome: 'completed' | 'failed';
+  outcome: 'completed' | 'failed' | 'blocked';
   permanent: boolean;
   runId?: string;
 }): ScheduleFireOutcome {
+  if (o.outcome === 'blocked') {
+    return {
+      status: 'blocked',
+      code: 'automation_blocked',
+      ...(o.runId ? { automationRunId: o.runId } : {}),
+    };
+  }
   return {
     status: o.outcome === 'completed' ? 'ok' : 'failed',
     ...(o.outcome === 'failed' ? { code: o.permanent ? 'automation_gone' : 'automation_failed' } : {}),

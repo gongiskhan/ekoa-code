@@ -13,8 +13,10 @@
  * fingerprint + a11y) exactly like the daemon's observation envelope — so cached
  * actions resolve identically whether they run here or on the daemon.
  *
- * Gated by config.automationLocalBrowser (default ON in dev / OFF in prod), so
- * production keeps the daemon model unchanged.
+ * Gated PER ORIGIN POSTURE, in every environment (P4.1, `locality.ts`): a permissive origin may be
+ * carried here, an adversarial one never is, and an origin nobody classified is adversarial. The
+ * old gate — `config.localBrowserEnabled`, defaulting to `!isProd` — is now only an operator kill
+ * switch; it is not what decides whether a given site may be automated from a datacenter IP.
  */
 
 import { maskedScreenshot } from './screenshot-masking.js';
@@ -24,6 +26,7 @@ import type { PlaywrightAction, PlaywrightAssertion, PageFingerprint } from './t
 import { executePlaywrightAction, executePlaywrightAssertion } from './executor.js';
 import { computePageFingerprint, fingerprintFromParts } from './fingerprint.js';
 import { getLocalBrowserContext as getAutomationBrowserContext } from './seams.js';
+import type { EgressResolution } from './egress-policy.js';
 
 /**
  * Minimal cookie shape accepted by `BrowserContext.addCookies`. We validate
@@ -85,6 +88,14 @@ export class LocalBrowserSession implements BrowserSession {
    * without a session credential.
    */
   private readonly sessionState: unknown;
+  /**
+   * The route out this session's context is launched for (P4.1). The proxy is a LAUNCH option, so
+   * it has to travel to `newContext` and cannot be applied to a context that already exists -
+   * which is also why the engine refuses to reuse this session for a later step that resolved to
+   * a different route (`locality.ts` `sameRoute`). Undefined means the composition root's default
+   * context, i.e. the datacenter.
+   */
+  private readonly egress: EgressResolution | undefined;
   private sessionInjectAttempted = false;
   private page: Page | null = null;
   /** The run's browser context, retained ONLY so dispose() can close it (Cofre G-3). */
@@ -97,9 +108,15 @@ export class LocalBrowserSession implements BrowserSession {
   private lastA11y: string | undefined;
   private observed = false;
 
-  constructor(opts: { runId: string; ownerUserId: string; sessionState?: unknown }) {
+  constructor(opts: {
+    runId: string;
+    ownerUserId: string;
+    sessionState?: unknown;
+    egress?: EgressResolution;
+  }) {
     this.ownerUserId = opts.ownerUserId;
     this.sessionState = opts.sessionState;
+    this.egress = opts.egress;
   }
 
   /**
@@ -120,7 +137,7 @@ export class LocalBrowserSession implements BrowserSession {
     if (this.page && !this.page.isClosed()) return this.page;
     if (!this.pagePromise) {
       this.pagePromise = (async () => {
-        const ctx = await getAutomationBrowserContext(this.ownerUserId);
+        const ctx = await getAutomationBrowserContext(this.ownerUserId, this.egress);
         this.context = ctx;
         // Cookies must land BEFORE the page opens / the first navigation, so
         // the very first request already carries the captured session.

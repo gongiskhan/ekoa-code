@@ -152,6 +152,25 @@ describe('shared contract', () => {
     ).toBe(false);
   });
 
+  it('NotificationEvent can represent a blocked scheduled fire (P4.1)', async () => {
+    const { NotificationEvent } = await import('./events.js');
+    expect(
+      NotificationEvent.safeParse({ type: 'schedule_blocked', scheduleId: 'sch_1', runId: 'run_1', code: 'automation_blocked' })
+        .success,
+    ).toBe(true);
+    // `code` is optional; the routing ids are not — a notice nobody can route to a schedule is not
+    // representable.
+    expect(NotificationEvent.safeParse({ type: 'schedule_blocked', scheduleId: 'sch_1', runId: 'run_1' }).success).toBe(true);
+    expect(NotificationEvent.safeParse({ type: 'schedule_blocked', scheduleId: 'sch_1' }).success).toBe(false);
+    // NO free-text message field: the client derives its text from the code, never from server
+    // prose. `discriminatedUnion` is not strict, so this asserts the SHAPE the server may build —
+    // the parsed value must not carry one.
+    const parsed = NotificationEvent.parse({
+      type: 'schedule_blocked', scheduleId: 'sch_1', runId: 'run_1', message: 'engine prose',
+    });
+    expect(parsed).not.toHaveProperty('message');
+  });
+
   it('ChatRunEvent and JobEvent can represent the B7 text_reset retraction (payload-free)', async () => {
     const { ChatRunEvent, JobEvent } = await import('./events.js');
     // The retraction is the ONLY authorized deletion signal for already-streamed answer text:

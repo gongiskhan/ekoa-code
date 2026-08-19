@@ -48,6 +48,10 @@ import { startDelivery, stopDelivery } from './events/delivery.js';
 import { attachCanvasServer } from './streaming/index.js';
 import { attachVoiceServer } from './voice/index.js';
 import { attachBridgeServer, bufferLedgerRow, delegateToLocal, rowsForSession, getConnectionByOwner, invokeTool, bridgeConnectionCount, createDaemonStepConnection, authoriseDelivery, deliverSecrets, newInvocationId, isCapabilityGranted } from './bridge/index.js';
+// Deep import, as `routes/integrations.ts` already does for the same registry: the fleet listing
+// selection is allowed to see is not on the bridge module's public face, and adding it there is a
+// change to a module this slice does not own.
+import { egressCandidatesForOrg } from './bridge/registry.js';
 import { maskedCountsForCorrelations } from './services/platform-crud.js';
 import { bridgeTokenRouter } from './routes/bridge.js';
 import { servedDataRouter } from './apps/served-data.js';
@@ -151,6 +155,8 @@ import {
   setArtifactResolver,
   setCatalogSources,
   setLocalBrowserContextProvider,
+  setEgressCandidateResolver,
+  proxyOptionFor,
   setDaemonConnectionResolver,
   setAutomationContentSections,
   startRunForTrigger,
@@ -665,10 +671,23 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     listEkoaActions: async () => [],
   });
   // 9. The in-process local browser for browser-step automations (services/ shared pool).
-  setLocalBrowserContextProvider(async () => {
+  //
+  // P4.1: the context is now launched WITH the run's resolved route out. The proxy is a
+  // `newContext` option and cannot be applied afterwards, which is why the resolution travels down
+  // from the run loop (`automation/locality.ts` decided it; this only renders it). `proxyOptionFor`
+  // answers undefined for every non-machine outcome, so the datacenter route builds exactly the
+  // context it always did — and the non-persistent `newContext()` invariant
+  // (tests/security/browser-context-lifecycle.test.ts) is untouched either way.
+  setLocalBrowserContextProvider(async (_ownerUserId, egress) => {
     const browser = await getSharedBrowser();
-    return browser.newContext();
+    const proxy = egress ? proxyOptionFor(egress) : undefined;
+    return browser.newContext(proxy ? { proxy } : {});
   });
+  // 9b. The org's machines, for egress selection (Cofre WS-I). `egressCandidatesForOrg` already
+  // returns the INTERSECTION of what each machine advertises and what the org granted (I-3), which
+  // is the only list selection may ever see — an advertisement is a self-assertion, not an
+  // authorisation. Org-scoped by construction: a foreign machine is not a candidate at all.
+  setEgressCandidateResolver((orgId) => egressCandidatesForOrg(orgId));
   // 10. THE DAEMON SEAM (Cofre J-1 wiring). This is a SECURITY EVENT, not plumbing: the moment it
   // is wired, `local_command` and daemon-driven browser steps become reachable end to end, and
   // every latent I5/I9 defect in that path goes live. The plan gates it explicitly — "J-1 must not
@@ -875,6 +894,18 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
         },
         { runAutomationBackedAction },
       ).then(mapIntegrationOutcome),
+    // P4.1: a blocked fire is waiting on its owner, and nothing else surfaces it — `blocked` is
+    // neutral against the failure ceiling by design, so without this a schedule could sit waiting
+    // on a machine for weeks in silence. The per-user notifications channel (ch03 §3.6.4), the same
+    // rail `usage_updated` rides. No message: the client derives its text from the code.
+    notifyBlocked: ({ ownerUserId, scheduleId, runId, code }) => {
+      sseManager.emit('notifications', ownerUserId, 'schedule_blocked', {
+        type: 'schedule_blocked',
+        scheduleId,
+        runId,
+        ...(code ? { code } : {}),
+      });
+    },
     now: () => new Date(deps.now()).toISOString(),
     genId: () => deps.genId(),
   });

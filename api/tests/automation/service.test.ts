@@ -584,4 +584,35 @@ describe('automation service surface (§3.8.18)', () => {
     expect(out.permanent).toBe(false);
     expect(out.runId).toBeTruthy();
   });
+
+  /**
+   * P4.1 — THE BLOCKED CHANNEL. Every non-`completed` terminal status used to collapse to `failed`
+   * here, which is what made a schedule fired against a shut laptop indistinguishable from one
+   * whose automation threw — and, twenty nights later, auto-paused.
+   */
+  it('startRunForTrigger reports a run waiting on the OWNER as BLOCKED, not failed', async () => {
+    // A browser step with no daemon and an undeclared (⇒ adversarial) origin: the locality halt.
+    await automations.insert({
+      _id: 'blocked_auto', id: 'blocked_auto', name: 'Blocked', description: '', ownerUserId: 'u1', orgId: 'o1',
+      steps: [{ id: 'w1', description: 'settle', type: 'wait', durationMs: 5 }],
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    } as never);
+    const out = await svc.startRunForTrigger({ automationId: 'blocked_auto', ownerUserId: 'u1', orgId: 'o1', triggeredBy: 'schedule' });
+
+    expect(out.outcome).toBe('blocked');
+    expect(out.permanent).toBe(false);
+    // The persisted run says the same thing in its own vocabulary — the two must not drift.
+    const run = await automationRuns.get(out.runId!);
+    expect((run as { status?: string }).status).toBe('awaiting_daemon');
+  });
+
+  it('an ordinary step failure is still FAILED — blocked did not swallow the failure channel', async () => {
+    await automations.insert({
+      _id: 'failing_auto', id: 'failing_auto', name: 'Failing', description: '', ownerUserId: 'u1', orgId: 'o1',
+      steps: [{ id: 'a1', description: 'call', type: 'api_call', apiRequest: { method: 'GET', url: 'not-a-url' } }],
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    } as never);
+    const out = await svc.startRunForTrigger({ automationId: 'failing_auto', ownerUserId: 'u1', orgId: 'o1', triggeredBy: 'schedule' });
+    expect(out.outcome).toBe('failed');
+  });
 });

@@ -236,6 +236,20 @@ export const NotificationEvent = z.discriminatedUnion('type', [
   // Org branding changed (brand research applied) - clients refetch the company/branding
   // config so the header logo + theme update live instead of waiting for a page reload.
   z.object({ type: z.literal('branding_updated') }),
+  // P4.1: a scheduled fire ended BLOCKED - it is waiting on the owner (a machine of theirs that is
+  // not connected, or a credential only they can establish), not failing. The schedule rail never
+  // substitutes a datacenter route for an adversarial origin, so the owner has to be told rather
+  // than the run quietly proceeding from somewhere the portal will notice.
+  //
+  // NO MESSAGE FIELD, deliberately: the UI derives its text from `code` (the standing rule since
+  // "derive user-facing run errors from a code, never server prose"). A blocked outcome's prose is
+  // an engine string, and engine strings are not a user-facing vocabulary.
+  z.object({
+    type: z.literal('schedule_blocked'),
+    scheduleId: z.string(),
+    runId: z.string(),
+    code: z.string().max(80).optional(),
+  }),
   // Part B decision B.E (run 20260717-190134): the post-run {title, summary} for the sheet a
   // completed chat turn produced. Rides THIS per-user channel (the chat_answer pattern), never
   // the chat-run stream - the client tears that stream down on `complete`, so a post-run event

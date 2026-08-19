@@ -194,6 +194,7 @@ import { runAutomation, rehearseAutomation, type RunContext } from '../../src/au
 import {
   setDaemonConnectionResolver,
   setIntegrationActionExecutor,
+  setIntegrationActionDeclarationResolver,
   setPlatformIntegrationCaller,
   setScopedMemoryResolver,
   __resetAutomationSeamsForTests,
@@ -529,14 +530,25 @@ describe('runAutomation', () => {
   });
 
   it('threads inputs.credentials.storageState into the LocalBrowserSession when no daemon is connected', async () => {
-    // Daemon-less path: no daemon connection resolves for this run, so the
-    // engine falls back to the in-process LocalBrowserSession (the
-    // automation config's local-browser fallback is ON in tests).
+    // Daemon-less path: no daemon connection resolves for this run, so the engine may fall back to
+    // the in-process LocalBrowserSession.
+    //
+    // P4.1 CHANGED THE PRECONDITION, and this test now states it rather than relying on it. The
+    // fallback is no longer opened by the config flag alone — the ORIGIN POSTURE decides, in every
+    // environment. So the run declares its origin PERMISSIVE through an integration action (the one
+    // place a posture may be declared), and the `wait` step that follows inherits that origin. An
+    // automation declaring nothing HALTS here instead, which `engine-locality.test.ts` asserts.
     setDaemonConnectionResolver(() => null);
+    setIntegrationActionExecutor(async () => ({ success: true, data: { ok: true } }));
+    setIntegrationActionDeclarationResolver(async () => ({
+      posture: 'permissive',
+      httpConfig: { baseUrl: 'https://portal.example.pt' },
+    }));
 
-    hoisted.automations.set('auto-1', automation([{
-      id: 's1', description: 'go to portal', type: 'navigate', url: 'https://portal.example.pt/',
-    }]));
+    hoisted.automations.set('auto-1', automation([
+      { id: 's0', description: 'open portal', type: 'integration', integrationKey: 'portal', integrationAction: 'fetch' },
+      { id: 's1', description: 'let the page settle', type: 'wait', durationMs: 5 },
+    ]));
 
     const storageState = { cookies: [{ name: 'sessao', value: 'tok-secreto', domain: '.example.pt', path: '/' }] };
     const result = await runAutomation('auto-1', ctx(), {

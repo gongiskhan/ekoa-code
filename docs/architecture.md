@@ -236,6 +236,30 @@ adversarial/closed, resolved at use from an optional per-action declaration on `
 (never stored resolved), with cloud egress structurally impossible on an adversarial origin and
 posture overriding `StepDeclaration`'s `cloud` default.
 
+`automation/locality.ts` is what consumes it: a PURE decision (no store, no seam, no env) answering
+`bridge | in-process | blocked` for the four step types that can reach a browser (`navigate`,
+`wait`, `browser`, `verify`), from the posture, the step's declaration, whether a daemon is
+connected, and the org's fleet. The bridge is the default - a browser step's home is the owner's
+machine - and the hosted Chromium is a fallback a PERMISSIVE origin may take, in every environment;
+`config.localBrowserEnabled` is now only an operator kill switch, able to close the fallback and
+never to open it for an adversarial origin. `blocked` is a HALT (`awaiting_daemon`), never a
+datacenter fallback and never a substitute machine. The route out comes from
+`automation/egress-policy.ts` (`resolveEgress` against org-scoped candidates; `proxyOptionFor`
+rendered at the single launch seam in `server.ts`, because a proxy is a `newContext` launch option
+and cannot be applied afterwards), with the fleet reaching `automation/` through
+`setEgressCandidateResolver` - bound to `bridge/registry.ts` `egressCandidatesForOrg`, default
+EMPTY, and empty refuses. An ADVERSARIAL session prefers the pairing its ceremony happened on
+(`sessionMetadata.establishedBy.pairingId`, reported by `ensureSession` and turned into a preference
+by `credential-gate.ts`): that machine or wait, never a colleague's. A portable credential resolves
+to `kind: 'any'` and prefers nothing.
+
+A scheduled run that ends in one of the two "waiting for the owner" statuses (`awaiting_daemon`,
+`needs_credentials`) reports `outcome: 'blocked'` from `startRunForTrigger`, which
+`schedules/supervisor.ts` maps to a `blocked` fire outcome that is NEUTRAL against the 20-strike
+`FAILURE_CEILING` - it neither increments nor resets - and which notifies the owner through the
+required `notifyBlocked` seam (`schedule_blocked` on the per-user notifications channel, carrying a
+code and no prose).
+
 A run that needs a credential the Cofre does not hold halts in `needs_credentials`, a first-class
 `RunStatus` modelled on `awaiting_daemon` (halt and re-dispatch) rather than on `paused_for_user` (an
 in-process poll): the human is expected to leave the page for `/cofre`, so the halt has to survive a

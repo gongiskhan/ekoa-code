@@ -18,6 +18,7 @@ import type { Actor } from '@ekoa/shared';
 // Type-only import (erased at compile) — the run event emitter's shape lives in engine.ts, which
 // imports this module at RUNTIME; a type-only import back here creates no runtime cycle.
 import type { RunEventEmitter } from './engine.js';
+import type { EgressCandidate, EgressResolution } from './egress-policy.js';
 
 // ============================================================================
 // Daemon bridge (ch02 `bridge/`, lands at G8A) — getDaemonConnection
@@ -410,7 +411,18 @@ export function getCatalogSources(): CatalogSources {
 // cookies would report itself as a successful re-establishment.
 // ============================================================================
 
-export type LocalBrowserContextProvider = (ownerUserId: string) => Promise<BrowserContext>;
+/**
+ * P4.1: the provider now also carries the run's EGRESS RESOLUTION, because the proxy is a LAUNCH
+ * option - `newContext({ proxy })` - and cannot be applied to a context that already exists. The
+ * resolution is computed at the run loop (`locality.ts`, which knows the origin's posture and the
+ * step's declaration) and handed down; the composition root's only job is to turn it into the
+ * launch option via `proxyOptionFor`. Optional so a caller with nothing to declare behaves exactly
+ * as it did before this parameter existed.
+ */
+export type LocalBrowserContextProvider = (
+  ownerUserId: string,
+  egress?: EgressResolution,
+) => Promise<BrowserContext>;
 
 const defaultLocalBrowserContextProvider: LocalBrowserContextProvider = async () => {
   throw new Error('in-process automation browser context is not wired');
@@ -419,8 +431,37 @@ let localBrowserContextProvider: LocalBrowserContextProvider = defaultLocalBrows
 export function setLocalBrowserContextProvider(fn: LocalBrowserContextProvider): void {
   localBrowserContextProvider = fn;
 }
-export function getLocalBrowserContext(ownerUserId: string): Promise<BrowserContext> {
-  return localBrowserContextProvider(ownerUserId);
+export function getLocalBrowserContext(
+  ownerUserId: string,
+  egress?: EgressResolution,
+): Promise<BrowserContext> {
+  return localBrowserContextProvider(ownerUserId, egress);
+}
+
+// ============================================================================
+// Egress candidates (Cofre WS-I / I-2) — the org's machines, as the bridge registry sees them.
+//
+// `resolveEgress` (egress-policy.ts) needs the fleet to choose a route out, and the fleet lives in
+// `bridge/` — a module `automation/` does not import (the same one-way tier rule that puts
+// `getDaemonConnection` here). So the direction is inverted: this declares the resolver, and the
+// composition root binds it to `bridge/registry.ts` `egressCandidatesForOrg`.
+//
+// DEFAULT IS EMPTY, and empty is the CLOSED answer: with no candidates a residential requirement
+// cannot be met, so `resolveEgress` refuses (or queues) rather than falling through to a
+// datacenter route. An unbound seam must never be able to widen where a run's traffic may leave
+// from — the same posture `defaultOriginResolver` takes above.
+// ============================================================================
+
+export type EgressCandidateResolver = (orgId: string) => Promise<EgressCandidate[]>;
+
+const defaultEgressCandidateResolver: EgressCandidateResolver = async () => [];
+let egressCandidateResolver: EgressCandidateResolver = defaultEgressCandidateResolver;
+export function setEgressCandidateResolver(fn: EgressCandidateResolver): void {
+  egressCandidateResolver = fn;
+}
+/** The machines this ORG may be routed through. Org-scoped by construction (Rule 5). */
+export function loadEgressCandidates(orgId: string): Promise<EgressCandidate[]> {
+  return egressCandidateResolver(orgId);
 }
 
 // ============================================================================
@@ -482,5 +523,6 @@ export function __resetAutomationSeamsForTests(): void {
   artifactResolver = defaultArtifactResolver;
   catalogSources = defaultCatalogSources;
   localBrowserContextProvider = defaultLocalBrowserContextProvider;
+  egressCandidateResolver = defaultEgressCandidateResolver;
   automationContentFn = defaultAutomationContent;
 }

@@ -1080,7 +1080,17 @@ export interface TriggerRunInput {
 }
 
 export interface TriggerRunOutcome {
-  outcome: 'completed' | 'failed';
+  /**
+   * THREE outcomes, because "not completed" was hiding two different things (P4.1).
+   *
+   * `blocked` is a run that stopped ON PURPOSE, waiting for its owner: a browser step whose origin
+   * is bridge-only with no machine connected (`awaiting_daemon`), or a credential only a person can
+   * establish (`needs_credentials`). Nothing about either is retryable by a machine, and calling
+   * them `failed` was actively harmful on the schedule rail - twenty nights with the laptop shut
+   * would auto-pause a perfectly good schedule (`FAILURE_CEILING`), and the owner would find it
+   * disabled rather than waiting.
+   */
+  outcome: 'completed' | 'failed' | 'blocked';
   /** A permanent failure (e.g. the automation no longer exists) must NOT be retried by the delivery
    *  pipeline; a transient one re-enters the retry schedule. */
   permanent: boolean;
@@ -1088,8 +1098,18 @@ export interface TriggerRunOutcome {
 }
 
 /**
+ * Run statuses that mean "waiting for the owner", not "failed".
+ *
+ * Both are halts the engine takes DELIBERATELY and persists, and both are resolved by a person
+ * doing something - starting their machine, establishing a credential - rather than by anything
+ * retrying. Every other non-`completed` status stays a failure.
+ */
+const BLOCKED_RUN_STATUSES: ReadonlySet<string> = new Set(['awaiting_daemon', 'needs_credentials']);
+
+/**
  * Run an automation under a trigger's server-trusted owner and AWAIT its terminal status. A
- * non-`completed` terminal state is reported as a delivery failure; a missing automation is a
+ * non-`completed` terminal state is reported as a delivery failure EXCEPT the two that mean "this
+ * is waiting for you" (`BLOCKED_RUN_STATUSES`), which report `blocked`; a missing automation is a
  * PERMANENT failure (never retried). The engine runs one attempt — retry lives in `events/`.
  */
 export async function startRunForTrigger(input: TriggerRunInput): Promise<TriggerRunOutcome> {
@@ -1123,7 +1143,12 @@ export async function startRunForTrigger(input: TriggerRunInput): Promise<Trigge
     const runId = randomUUID();
     const emit = runEventEmitterFactory(runId); // trigger runs stream too (§3.6.3)
     const result = await runAutomation(input.automationId, ctx, { runId, ...(emit ? { emit } : {}), ...(input.inputs ? { inputs: input.inputs } : {}) });
-    return { outcome: result.status === 'completed' ? 'completed' : 'failed', permanent: false, runId: result.runId };
+    const outcome: TriggerRunOutcome['outcome'] = result.status === 'completed'
+      ? 'completed'
+      : BLOCKED_RUN_STATUSES.has(result.status)
+        ? 'blocked'
+        : 'failed';
+    return { outcome, permanent: false, runId: result.runId };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // A missing automation is permanent (the delivery pipeline must not retry it).

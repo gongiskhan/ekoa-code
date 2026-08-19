@@ -84,7 +84,19 @@ export interface CredentialGateInput {
  */
 export type CredentialGateVerdict =
   | { kind: 'not-applicable' }
-  | { kind: 'ready'; itemId: string; storageState: unknown }
+  | {
+      kind: 'ready';
+      itemId: string;
+      storageState: unknown;
+      /**
+       * P4.2 - the pairing where this session's ceremony happened
+       * (`sessionMetadata.establishedBy.pairingId`, stamped by `bridge/attended.ts`). Carried
+       * through so the run loop can PREFER that machine for an adversarial origin. Absent for a
+       * cloud-established session, and ignored for a permissive one: a portable credential has no
+       * home, so it gets no preference.
+       */
+      preferredPairingId?: string;
+    }
   | { kind: 'needs-credentials'; request: RunCredentialRequest }
   | { kind: 'needs-machine'; reason: string };
 
@@ -163,7 +175,17 @@ export async function evaluateCredentialGate(
   }
 
   if (verdict.status === 'reused' || verdict.status === 'reestablished') {
-    return { kind: 'ready', itemId: verdict.itemId, storageState: verdict.storageState };
+    return {
+      kind: 'ready',
+      itemId: verdict.itemId,
+      storageState: verdict.storageState,
+      // ONLY for an adversarial origin. A permissive origin's credential is portable by
+      // definition, and attaching a machine preference to one would pin a run to a laptop for no
+      // reason - the P4.2 constraint, applied at the one place both facts are in hand.
+      ...(classification.posture === 'adversarial' && verdict.establishedByPairingId
+        ? { preferredPairingId: verdict.establishedByPairingId }
+        : {}),
+    };
   }
   if (verdict.status === 'needs-egress') {
     return {

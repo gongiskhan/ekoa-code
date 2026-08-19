@@ -298,7 +298,19 @@ export interface EnsureSessionInput {
  */
 export type EnsureSessionResult =
   /** A stored session checked out clean. No browser was opened and no password was touched. */
-  | { status: 'reused'; itemId: string; storageState: unknown }
+  | {
+      status: 'reused';
+      itemId: string;
+      storageState: unknown;
+      /**
+       * P4.2 — the machine this session was ESTABLISHED on
+       * (`sessionMetadata.establishedBy.pairingId`). Reported, not decided: whether it becomes a
+       * routing preference is the caller's judgement, and it is a preference only for an
+       * adversarial origin. Absent for a cloud-established session (there is no machine) and for
+       * a row written before session metadata existed.
+       */
+      establishedByPairingId?: string;
+    }
   /**
    * The typist logged in and the fresh session was captured back to the Cofre, with a grant.
    * `secrets` is the typist's registry: it HOLDS the value that was typed, so the caller can filter
@@ -306,7 +318,14 @@ export type EnsureSessionResult =
    * dropping it does not make the value stop existing — it only removes the caller's ability to
    * redact it. Nothing here serialises it; `JSON.stringify` of a registry is `{}`.
    */
-  | { status: 'reestablished'; itemId: string; storageState: unknown; secrets: SecretRegistry }
+  | {
+      status: 'reestablished';
+      itemId: string;
+      storageState: unknown;
+      secrets: SecretRegistry;
+      /** As above. The vantage this process established FROM, when it was a machine. */
+      establishedByPairingId?: string;
+    }
   /** Only a person can produce this session. `route` says which ceremony, `attempted` whether a
    *  credential was already submitted trying. */
   | {
@@ -384,6 +403,24 @@ export function decideReauthRoute(input: {
 }): ReauthRoute {
   if (input.requiresAttendedAuth) return 'ceremony';
   return input.grantAllowsUnattendedRelogin ? 'typist' : 'ceremony';
+}
+
+/**
+ * The machine a stored session was ESTABLISHED on, when it names one (P4.2).
+ *
+ * `sessionMetadata` is persisted as an opaque `Record<string, unknown>` on the Cofre item
+ * (`cofre/types.ts`), so this reads defensively rather than casting: a row written before session
+ * metadata existed, or one `markSessionUnhealthy` stamped onto nothing, has no `establishedBy` at
+ * all — the same shape `reestablishRouteFor` already guards against. Answering undefined is the
+ * closed direction here: no preference means the ordinary bridge selection, not a wrong one.
+ */
+function establishedByPairingIdOf(item: CofreItemDoc): string | undefined {
+  const meta = (item as unknown as { sessionMetadata?: Record<string, unknown> }).sessionMetadata;
+  const by = meta?.['establishedBy'];
+  if (!by || typeof by !== 'object') return undefined;
+  const rec = by as Record<string, unknown>;
+  if (rec['kind'] !== 'machine') return undefined;
+  return typeof rec['pairingId'] === 'string' && rec['pairingId'] ? rec['pairingId'] : undefined;
 }
 
 /** The `cofre:<itemId>` reference's item id, or null when the string is not a reference. */
@@ -506,7 +543,13 @@ export async function ensureSession(
     // automated re-login would mean the kill switch does not exist.
     const { item } = evaluated;
     const stored = await d.unwrap(item._id, actor, { kind: 'browser', origin: host }, { runId });
-    return { status: 'reused', itemId: item._id, storageState: parseStorageState(stored.value, item._id) };
+    const establishedOn = establishedByPairingIdOf(item);
+    return {
+      status: 'reused',
+      itemId: item._id,
+      storageState: parseStorageState(stored.value, item._id),
+      ...(establishedOn ? { establishedByPairingId: establishedOn } : {}),
+    };
   } else if (evaluated.verdict.reason === 'egress-unavailable') {
     // Healthy but unreachable: the caller's offline policy decides, not this module.
     return { status: 'needs-egress', itemId: evaluated.item._id, required: evaluated.verdict.required };
@@ -749,7 +792,17 @@ async function establishWithTypist(
 
     // Deliberately NOT re-running checkout on the item we just made. A second verdict here would be
     // an invitation to a second login, and one automated attempt per call is the rule.
-    return { status: 'reestablished', itemId: item._id, storageState, secrets: login.secrets };
+    return {
+      status: 'reestablished',
+      itemId: item._id,
+      storageState,
+      secrets: login.secrets,
+      // The vantage this process established FROM, which is what the item now records. A cloud
+      // establishment names no machine and therefore reports none.
+      ...(vantage.establishedBy.kind === 'machine'
+        ? { establishedByPairingId: vantage.establishedBy.pairingId }
+        : {}),
+    };
   } finally {
     await browser.close().catch(() => {});
   }

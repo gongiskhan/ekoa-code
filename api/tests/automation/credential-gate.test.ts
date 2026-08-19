@@ -233,3 +233,64 @@ describe('generality (Rule 3: no consumer special-casing)', () => {
     expect(verdict.kind === 'needs-credentials' && verdict.request.mode).toBe('ceremony');
   });
 });
+
+/**
+ * P4.2 — THE CEREMONY PAIRING TRAVELS, AND ONLY WHERE IT MEANS SOMETHING.
+ *
+ * A captured session was made at a particular vantage point, and the pairing where its ceremony
+ * happened is already on the item (`sessionMetadata.establishedBy.pairingId`). For an ADVERSARIAL
+ * origin that is a routing preference: run there or wait. For a PERMISSIVE one it is noise — the
+ * credential is portable, so pinning the run to a laptop would cost availability for nothing.
+ *
+ * The gate is where both facts are in hand (the posture it just classified, the pairing checkout
+ * reported), which is why the filter lives here rather than downstream.
+ */
+describe('the ceremony pairing is a preference for adversarial origins only', () => {
+  const ready = (pairingId?: string) => async () => ({
+    status: 'reused' as const,
+    itemId: 'itm_session_1',
+    storageState: { cookies: [] },
+    ...(pairingId ? { establishedByPairingId: pairingId } : {}),
+  });
+
+  it('an adversarial origin carries it', async () => {
+    const verdict = await gate(
+      [declared({ type: 'integration', integrationKey: 'portal', integrationAction: 'fetch' })],
+      0,
+      {
+        loadActionDeclaration: async () => ({ httpConfig: { baseUrl: 'https://portal.example/api' } }),
+        ensure: ready('pair_home'),
+      },
+    );
+    expect(verdict).toMatchObject({ kind: 'ready', preferredPairingId: 'pair_home' });
+  });
+
+  it('a permissive origin drops it — a portable credential has no home', async () => {
+    const verdict = await gate(
+      [declared({ type: 'integration', integrationKey: 'portal', integrationAction: 'fetch' })],
+      0,
+      {
+        loadActionDeclaration: async () => ({
+          posture: 'permissive',
+          httpConfig: { baseUrl: 'https://portal.example/api' },
+        }),
+        ensure: ready('pair_home'),
+      },
+    );
+    expect(verdict.kind).toBe('ready');
+    expect(verdict).not.toHaveProperty('preferredPairingId');
+  });
+
+  it('a cloud-established session names no machine, so there is nothing to prefer', async () => {
+    const verdict = await gate(
+      [declared({ type: 'integration', integrationKey: 'portal', integrationAction: 'fetch' })],
+      0,
+      {
+        loadActionDeclaration: async () => ({ httpConfig: { baseUrl: 'https://portal.example/api' } }),
+        ensure: ready(),
+      },
+    );
+    expect(verdict.kind).toBe('ready');
+    expect(verdict).not.toHaveProperty('preferredPairingId');
+  });
+});

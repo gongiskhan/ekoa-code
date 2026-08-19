@@ -1423,3 +1423,91 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   in `/proc/self/fdinfo` around arm / unregister / stop against real chokidar, so the descriptor
   claim above is a test rather than a comment. It skips (never reddens) on a host that cannot hand
   out watches at all, since degrading quietly is precisely the registry's contract there.
+- 2026-08-19 - P4: EXECUTION LOCALITY IS DECIDED BY THE ORIGIN'S POSTURE, IN EVERY ENVIRONMENT -
+  NOT BY `NODE_ENV`, AND NOT BY A GLOBAL FLAG.
+  WHAT WAS WRONG. Two halves of one decision existed and neither was connected.
+  `automation/egress-policy.ts` implemented the route-out choice exactly - requirement, offline
+  policy, org-scoped candidate selection, `proxyOptionFor` - and shipped with ZERO callers, so a
+  run's `StepTarget` and `offlinePolicy` were inert declarations nothing read. The browser-vs-bridge
+  choice, meanwhile, was made by `config.localBrowserEnabled`, defaulting to `!isProd`. The question
+  "may this site be automated from a datacenter IP" was therefore answered by the deployment
+  environment: outside production, silently yes, for every target. Production only conformed by
+  accident.
+  THE DECISION. New `automation/locality.ts` answers `bridge | in-process | blocked` from the
+  posture `origin-posture.ts` resolves at use, the step's declaration, whether a daemon is
+  connected, and the org's fleet. Permissive origins may be carried by the hosted browser;
+  adversarial origins never are, in any environment; and an origin nobody classified is adversarial,
+  so every automation authored before posture existed is bridge-only. `localBrowserEnabled` survives
+  as an operator KILL SWITCH - it can close the fallback, it can never open it for an adversarial
+  origin, which keeps the structural clamp in `origin-posture.ts` the only way that answer is
+  produced.
+  WHY NOT AN ENV ESCAPE HATCH FOR DEV. Because it would be the same defect wearing a different
+  variable name, and because the clamp's whole value is that `adversarial + cloud egress` is
+  UNREPRESENTABLE rather than merely discouraged. The cost is real and is named as a finding rather
+  than hidden: a dev with no paired daemon now sees browser steps HALT on undeclared origins instead
+  of quietly running hosted. The two honest ways forward are the two the design intends - pair a
+  daemon, or declare the action's posture.
+  LOCALITY IS PURE. It reads no store, no seam and no env: every input is an argument, so the whole
+  decision table - including the cross-tenant cases - is drivable from a test rather than argued
+  about. The impure edges live where they already lived: the fleet behind a seam
+  (`setEgressCandidateResolver`, bound to `bridge/registry.ts` `egressCandidatesForOrg`, default
+  EMPTY because empty refuses), and the launch behind the composition root.
+  WHICH STEPS IT GOVERNS. `navigate`, `wait`, `browser`, `verify` - the four that can reach a
+  browser. An `api_call`, `integration`, `local_command`, `sub_automation` or `ekoa_action` step is
+  never halted by a locality verdict: those leave from the server by design or are dispatched by
+  their own declaration, and halting an integration-only run because some origin in the step list is
+  adversarial would be a stop nobody can act on.
+  ONE SESSION, ONE ROUTE. The proxy is a `newContext` LAUNCH option, so a context cannot be
+  re-pointed after it exists. A run that opened a hosted context on one route and then resolves a
+  different one for a later step REFUSES rather than reusing it, and a bridge-only step never
+  inherits a hosted session an earlier permissive step opened. Reuse in either direction would send
+  a step's traffic out of somewhere it did not resolve to, which is the silent substitution this
+  slice exists to end.
+
+- 2026-08-19 - P4.2: AN ADVERSARIAL SESSION PREFERS THE MACHINE ITS CEREMONY HAPPENED ON; A
+  PORTABLE CREDENTIAL PREFERS NOTHING.
+  NO NEW IDENTITY PRIMITIVE, as the plan constrained. `sessionMetadata.establishedBy.pairingId` has
+  been stamped on machine-established sessions since the attended ceremony landed
+  (`bridge/attended.ts`) and nothing ever read it. `ensureSession` now REPORTS it - reports, not
+  decides - and `credential-gate.ts` turns it into an `EgressRequirement.residential.pairingId` for
+  ADVERSARIAL origins only, because that is the one place both facts (the posture just classified,
+  the pairing checkout returned) are in hand.
+  WHY ONLY ADVERSARIAL. A captured session for a site that fights back is bound to the vantage it
+  was made at; replaying it from a colleague's line is the same cookie from a different household on
+  a different ASN, which is as foreign to the portal as a datacenter and more confusing when it
+  fails. An API key, an OAuth token, a CLI login or a permissive origin's storageState is portable
+  by definition, so pinning it to one laptop would cost availability and buy nothing:
+  `egressRequirementFor` resolves those to `kind: 'any'`.
+  WHAT HAPPENS WHEN THE PREFERRED MACHINE IS NOT THERE. The run WAITS - a `blocked` halt naming that
+  machine. Never a substitute, and never the datacenter. An EXPLICITLY PINNED `StepTarget` outranks
+  the ceremony preference, because the author was specific and the preference is an inference. A
+  connected daemon whose `pairingId` is absent cannot PROVE it is the preferred machine, and
+  unprovable reads as no.
+
+- 2026-08-19 - P4.1: A SCHEDULED RUN WAITING ON ITS OWNER IS `blocked`, THE FAILURE CEILING IGNORES
+  IT, AND THE OWNER IS TOLD.
+  THE COLLAPSE. `startRunForTrigger` mapped every non-`completed` terminal status to `failed`, so a
+  run halted in `awaiting_daemon` (a machine of yours is needed) or `needs_credentials` (a password
+  only you can give) was indistinguishable from one whose automation threw. On the schedule rail
+  that was not cosmetic: twenty consecutive fires drive `FAILURE_CEILING` and auto-pause the
+  schedule, so twenty nights with the laptop shut disabled a perfectly good schedule and the owner
+  found it off rather than waiting.
+  THE CHANNEL. `TriggerRunOutcome.outcome` gains `blocked` for exactly those two statuses;
+  `mapAutomationOutcome` maps it onto the `blocked` status `ScheduleFireOutcome` already carried;
+  `recordOutcome` makes it NEUTRAL - it neither increments the counter nor resets it. Both
+  directions are wrong: counting auto-pauses a working schedule, and resetting lets a genuinely
+  broken one hide behind an occasional block. A blocked outcome is not entitled to either judgement,
+  so it makes neither. This FLIPS a pin (`supervisor.test.ts` asserted blocked counted); the flip is
+  the change, and a companion case asserts N consecutive blocked fires never auto-pause.
+  NOT A NEW RunStatus. `awaiting_daemon` already means "a machine of yours is needed", and is
+  already threaded through the SSE union, the reload-recovery set and the UI. `blocked` is the
+  SCHEDULE rail's word for the same state. A second run status meaning the same thing would have to
+  be kept in step with the first forever.
+  AND IT NOTIFIES. Neutral outcomes are silent by design - `ok` needs no telling and `failed`
+  eventually auto-pauses loudly - so without a notification a schedule could sit waiting on a
+  machine for weeks with nothing said. `ScheduleSupervisorDeps.notifyBlocked` is REQUIRED for the
+  reason the executor seams are (an optional one lets the process boot with the notice silently
+  missing), the composition root binds it to the per-user notifications channel as an additive
+  `schedule_blocked` event, and it carries a CODE and no message - the client derives its text from
+  the code, never from engine prose. A notifier that throws is caught and logged: the durable record
+  is the `blocked` run row, and a push failure must never fail a fire.

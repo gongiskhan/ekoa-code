@@ -35,8 +35,11 @@ where they touch the dashboard.
   gates), `llm/`, `agents/`, `automation/`, `apps/`, `knowledge/`, `memory/`, `billing/`, `auth/`,
   `integrations/`, `events/`, `data/`, `legal/`, `services/`, `streaming/`, `bridge/`, plus
   `security-headers.test.ts` and `health.test.ts`. Named security suites live here: `cross-org.test.ts`,
-  in-org sharing, rate/spend-cap, the anonymisation payload-capture harness, and the bridge S1-S6
-  scenarios (`fake-daemon/`). `migration/` holds the protocol-parity replay suites.
+  in-org sharing, rate/spend-cap, the anonymisation payload-capture harness,
+  `locality-isolation.test.ts` (Rule 5 for execution locality: an org's run is never routed out
+  through another org's machine, staged with real pairing + grant rows and asserted through both the
+  injected seam and selection itself), and the bridge S1-S6 scenarios (`fake-daemon/`). `migration/`
+  holds the protocol-parity replay suites.
 - **`api/tests/e2e/`** - node full-app e2e drivers (`*.e2e.mjs`): served-app plane, legal suite, and
   the deferred `erp-*` tenant-fork drivers (awaiting CUTOVER).
 - **`api/tests/journeys/`** - the zero-dependency HTTP journey probe kit (`_lib.mjs`, `j*.mjs`) plus

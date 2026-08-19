@@ -153,6 +153,7 @@ export {
   setArtifactResolver,
   setCatalogSources,
   setLocalBrowserContextProvider,
+  setEgressCandidateResolver,
   setRunEventEmitterFactory,
   __resetAutomationSeamsForTests,
   type RunEventEmitterFactory,
@@ -176,7 +177,28 @@ export {
   type SkillActionEntry,
   type ConnectedAccount,
   type LocalBrowserContextProvider,
+  type EgressCandidateResolver,
 } from './seams.js';
+
+// --- Egress / locality (Cofre WS-I, P4.1) ----------------------------------
+// `proxyOptionFor` is what the composition root turns a resolution into at the launch seam; the
+// decision itself is made in `locality.ts` inside the run loop and never here.
+export {
+  proxyOptionFor,
+  resolveEgress,
+  DEFAULT_EGRESS,
+  type EgressCandidate,
+  type EgressDeclaration,
+  type EgressRequirement,
+  type EgressResolution,
+} from './egress-policy.js';
+export {
+  resolveLocality,
+  egressRequirementFor,
+  sameRoute,
+  type LocalityInput,
+  type LocalityVerdict,
+} from './locality.js';
 
 export {
   screenshotPlaneRouter,
