@@ -4947,3 +4947,111 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   transport itself - `streamAgent` + `oneShot` + `messages`. The mutation that demonstrates the gap
   is a `completeFast` call inserted into the replay path: the new assertion catches it, the old one
   could not have.
+
+- **`p2-recut-in-page-replay-ran-from-a-blank-page`** (CLOSED 2026-08-19, CRITICAL, the central rung
+  did not do what the design says). The whole premise of CDP call-injection is that the call executes
+  INSIDE the authenticated page and inherits its cookie jar, TLS session and SameSite context. As
+  built, `runInjectedCall` evaluated its script on whatever page the lease held - and a lease taken
+  for a replay holds a fresh `about:blank`, in a profile whose jar `release()` wiped at the end of the
+  previous run. A fetch from `about:blank` is a CROSS-SITE request from an opaque origin: SameSite
+  Strict/Lax cookies are not attached, a credentialed cross-origin read needs an
+  `Access-Control-Allow-Origin` echo no private API sends to a null origin, and `Origin: null` is
+  itself the tell. The rung inherited nothing - a slower Node fetch wearing a browser costume, and
+  every unit test stayed green because the fake page returns a canned envelope whatever the page is.
+  Closed by `ensureOriginForCall` (`clients/bridge/src/browser/inject.ts`): the page is put on the
+  call's own origin (the origin ROOT, never the call URL - that would issue the call as a document
+  navigation) before anything is sent, and the call REFUSES if it could not get there or was
+  redirected off it. PROVED, not asserted: `clients/bridge/test/browser/inject-inheritance.test.ts`
+  drives the production function over a REAL Chromium against a REAL `node:http` server and asserts
+  on the headers the SERVER received - a `SameSite=Strict` session cookie arrives - against a control
+  issuing the identical credentialed fetch from `about:blank` on the same page, same jar, same
+  browser, which does not carry it.
+
+- **`p2-recut-learned-header-names-were-never-forwarded`** (CLOSED 2026-08-19, CRITICAL, the most
+  valuable thing capture produces was dropped). `recipe.headerNames` - "which header carries the
+  session" - was decorative on the production replay path. `runInjectedCallOp` resolved values from
+  `recorders.get(leaseId)` and forwarded `{}` when there was none, and on a replay lease there is
+  NEVER one: a replay run does not drive the automation, so nothing sends `captureOp:'start'`. Every
+  unit test passed because each one handed the resolver in itself. Closed by arming a recorder for
+  the replay lease BEFORE the navigation (`ensureRecorder(..., { buffer: false })`), so the site's
+  own boot traffic reveals the CURRENT value of each learned name: NAMES from the recipe, VALUES from
+  the live context, never values from the recipe. `buffer: false` is load-bearing - nothing drains a
+  replay's recorder, so buffering there would accumulate response bodies no code path can read.
+  Pinned in `clients/bridge/test/browser/replay-wiring.test.ts` (the real frame handler) and end to
+  end in the real-Chromium suite above.
+
+- **`p2-recut-acceptance-substituted-a-different-execution-model`** (CLOSED 2026-08-19, HIGH,
+  unfalsifiable headline claim). The acceptance fixture's stand-in daemon resolved header values from
+  a map it simply held, while the real daemon resolved them from a recorder a replay lease did not
+  have. Its headline assertion - "the replay reached the real API carrying the session header" - was
+  therefore true of the fixture and FALSE of production, and no mutation of the daemon could have
+  turned it red. `api/**` may not import `clients/**` (lint-enforced zone), so this suite
+  structurally CANNOT exercise the daemon; the previous cut did not say so. Closed by splitting the
+  claim and saying which half lives where, in the suite header: the hosted half is asserted here
+  (zero model calls at the chokepoint, no new run record, and the FRAMES Cortex emits carrying the
+  learned header names), the daemon half in the two real-browser bridge suites named above. The
+  stand-in was additionally rewritten to model the real contract - it starts holding NO header
+  values, learns them only from traffic it observes, and refuses a call for an origin it was never
+  navigated to - so it can no longer flatter the hosted side. Falsifiability re-derived by mutation:
+  dropping `headerNames` in `runInPage` turns three acceptance cases red.
+
+- **`p2-recut-mutates-false-action-bricked-by-a-learned-post`** (CLOSED 2026-08-19, HIGH, no recovery
+  path). A `mutates: false` action whose learned recipe contained a POST ended `awaiting_consent`
+  forever. At the automation seam `writeAssent` is `false` ONLY for an action declared
+  `mutates: false` (the executor refuses an unapproved write before the seam), and such an action is
+  never put to a human at all - `checkActionConsent` answers `not_mutating` and there is no approval
+  flow to enter. So the error named a consent nobody could give, and `putRecipe` refuses to overwrite
+  while `supersedeRecipe` only bumps: every later run failed on the same gate with no control its
+  owner could touch. A read-declared action learning a POST is ORDINARY - portals serve searches over
+  POST - so the RECIPE is what gives way, not the action. Closed by clearing the offending recipe
+  (`IntegrationRecipeStore.clearRecipe`, new) and falling through to the authored automation, which
+  is what the human approved in the first place. Pinned in `tests/automation/replay-mount.test.ts`,
+  including the case where the clear itself fails.
+
+- **`p2-recut-action-assent-authorised-an-unseen-call-set`** (CLOSED 2026-08-19, MAJOR, consent did
+  not cover what was shown). The write gate's key was the owner's approval of an ACTION, and it was
+  used to authorise an arbitrary per-CALL set compiled afterwards from traffic nobody looked at;
+  `healDriftedRecipe` additionally INHERITED that answer while re-authoring the call set. Approving
+  "send_message may write" is not approving "issue these four POSTs to these four URLs". Closed on
+  both sides: `learnFromRun` refuses to STORE any recipe containing a write by either route, and the
+  heal no longer receives `writeAssent` at all, so a re-authored write set is never live. This slice
+  has no surface that shows a human a compiled call set, and that is stated rather than papered over
+  with a field nobody sets.
+
+- **`p2-recut-raw-capture-evidence-accumulated-forever`** (CLOSED 2026-08-19, MAJOR, unbounded growth
+  of the most sensitive data in the pipeline). The design is capture -> learn -> compile -> DISCARD,
+  and `discardCapture` had no production caller: every learn wrote a new `captureId` and none was
+  ever removed, so a recurring action piled up full request/response bodies indefinitely. Closed by
+  discarding the evidence behind the recipe a write REPLACES, once the new recipe is live - the
+  current recipe's own evidence stays, which is what `capturedCallsRef` is for. Best effort and loud:
+  a leaked capture is untidy, losing the evidence for a recipe that failed to store is worse.
+
+- **`p2-recut-posture-never-consulted-with-a-browser-session`** (CLOSED 2026-08-19, MINOR).
+  `chooseRoute` returned `in-page` before asking `classify`, so a replay holding a browser session
+  resolved no posture at all and the run record could not say what the system believed about the
+  hosts it had spoken to. Closed by resolving posture for every call on every rung and recording it
+  on `InjectedCallResolved.posture`. NOTE what was deliberately NOT changed, because the code and the
+  finding disagree here and the code is right: the in-page rung stays non-refusable by posture. It is
+  the rung an adversarial origin REQUIRES, and gating it would disable the ladder exactly where it is
+  the only thing that works, and would break the multi-origin recipes the design explicitly supports.
+  What bounds that rung is provenance, not posture - every origin in a recipe was compiled from
+  traffic the site's own page generated, the store refuses a recipe carrying a value, and `fillCall`
+  refuses an argument that moves the host. That reasoning now sits at the decision point in code.
+
+- **`p2-recut-global-definition-org-can-never-learn-silently`** (CLOSED 2026-08-19, MINOR). A recipe
+  is written onto the org's OWN definition row, so an org running an action off a published/`global`
+  definition has no row to write to and `putRecipe` answered `notfound`, which nothing read. The
+  limitation is correct - one tenant's learning must not land on a row every org reads - but a learn
+  that vanishes without a word is indistinguishable from a broken one. Closed by naming it in the log
+  at the point the verdict comes back.
+
+- **`p2-recut-unfailable-assertions-re-derived-by-mutation`** (CLOSED 2026-08-19, MINOR, test
+  quality). Five assertions were re-derived by mutating what they claim to protect. Two isolation
+  positives used `expect(outcome).not.toBe('unavailable')`, which any unrelated outcome satisfies:
+  under a mutation making the stored recipe unreadable, the single-origin control stayed GREEN (3 red
+  with the old form vs 4 with the new). Both now assert the outcome and reason precisely, pinning
+  that the server-side rung was actually TAKEN. The write-assent cases asserted only what a function
+  was handed; they are joined by two that assert the CONSEQUENCE at the gate itself. The fake-page
+  inject suite's header now states plainly that it is evidence about the composed script and the
+  parsed envelope and about NOTHING else - no fetch ever happens on that page - and points at the
+  real-browser suite for anything concerning what the replay carries.

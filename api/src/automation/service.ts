@@ -40,7 +40,7 @@ import { approveCommandShape, revokeCommandShape, listApprovedShapes, listApprov
 import { runEventEmitterFactory } from './seams.js';
 import { clearCredentialWaiter } from './credential-waiters.js';
 import { replayIntegrationAction } from './replay-action.js';
-import { classifyReplayDrift, healDriftedRecipe, type HealDeps } from './self-heal.js';
+import { classifyReplayDrift, healDriftedRecipe, writesIn, type HealDeps } from './self-heal.js';
 import {
   compileInjectedCalls,
   deriveLessons,
@@ -1257,8 +1257,12 @@ export interface ActionRunDeps {
   /** The org-scoped recipe writes. Default: the real store. */
   putRecipe?: (orgId: string, key: string, actionName: string, draft: RecipeDraft, opts: { secrets?: SecretRegistry }) => Promise<RecipeWriteResult>;
   supersedeRecipe?: HealDeps['supersedeRecipe'];
-  /** Where the raw evidence lands. Default: the real captures collection. */
-  captures?: Pick<CapturedCallsStore, 'appendCapturedCall'>;
+  /** The recipe read, used only to find the evidence a new recipe supersedes. Default: the store. */
+  getRecipe?: (orgId: string, key: string, actionName: string) => Promise<{ capturedCallsRef?: string } | null>;
+  /** Drop an action's recipe. The escape hatch for a recipe the replay's write gate refuses. */
+  clearRecipe?: (orgId: string, key: string, actionName: string) => Promise<boolean>;
+  /** Where the raw evidence lands - and, on a supersede, where the old evidence is dropped from. */
+  captures?: Pick<CapturedCallsStore, 'appendCapturedCall'> & Partial<Pick<CapturedCallsStore, 'discardCapture'>>;
   captureId?: () => string;
 }
 
@@ -1363,12 +1367,29 @@ export async function runAutomationForAction(
   // ── 1. REPLAY FIRST (slice P2.3) ───────────────────────────────────────────────────────────
   //
   // If this action has learned a recipe, it replays the site's own API calls with no model in the
-  // loop - which is the entire point of the spine. Everything except `ok` and `write-gate` falls
-  // THROUGH to the automation below, so the worst case of a replay that cannot proceed is exactly
-  // the run this function performed before the recipe existed.
+  // loop - which is the entire point of the spine. EVERY outcome except `ok` falls THROUGH to the
+  // automation below, so the worst case of a replay that cannot proceed is exactly the run this
+  // function performed before the recipe existed.
   //
-  // `write-gate` does not fall through: it is a refusal (something non-idempotent cannot replay
-  // unattended, trap T4), and running the write by the other path would make the gate decorative.
+  // ── WHY `write-gate` FALLS THROUGH TOO, WHICH IT DID NOT ──────────────────────────────────
+  //
+  // It used to answer `awaiting_consent`, and that answer named a consent NOBODY COULD EVER GIVE.
+  // Look at what can actually arrive here: the executor refuses an unapproved write BEFORE this
+  // seam, so `writeAssent` is `true` for an approved write and `false` only when the action is
+  // declared `mutates: false`. A `mutates: false` action is never put to a human at all -
+  // `checkActionConsent` answers `not_mutating`, and there is no approval flow to enter. So the
+  // action was BRICKED: `putRecipe` refuses to overwrite and `supersedeRecipe` only bumps, so every
+  // later run replayed, hit the same gate, and failed, with no control its owner could touch.
+  //
+  // A read-declared action learning a POST is ORDINARY rather than anomalous - plenty of portals
+  // serve a search over POST - so the defect is in the RECIPE, not in the action. The recipe is
+  // therefore what gets refused: it is cleared, and the action runs the way it ran before it ever
+  // learned anything. Nothing that was working is lost.
+  //
+  // This does NOT make the gate decorative, which was the original argument for refusing outright.
+  // The gate stops the REPLAY from issuing a call set no human ever saw. The automation path runs
+  // the action's own authored steps - precisely what the owner approved when they approved the
+  // action. Declining to optimise a write is the conservative choice, not a bypass of one.
   let driftReason: string | undefined;
   if (learnable) {
     const replay = deps.replay ?? replayIntegrationAction;
@@ -1391,11 +1412,11 @@ export async function runAutomationForAction(
       return { success: true, data: { replayed: true, recipeVersion: result.recipeVersion, output: result.data } };
     }
     if (result.outcome === 'write-gate') {
-      return {
-        success: false,
-        code: 'awaiting_consent',
-        error: `"${input.actionName}" replays ${result.blocked}, which writes; a human has to approve this action before it runs unattended.`,
-      };
+      // REFUSE THE RECIPE, KEEP THE ACTION. Cleared rather than left in place, because a recipe the
+      // gate will not run is one this action would otherwise pay a doomed replay attempt for on
+      // every single run - and `learnFromRun` below now declines to store its replacement, so this
+      // settles rather than thrashing the store.
+      await clearRefusedRecipe(input, result.blocked, deps);
     }
     // DRIFT ROUTES TO A HEAL. `classifyReplayDrift` is what separates "the site changed" (re-learn
     // it) from "the route is missing" (re-learning would fail the same way) and from a refusal a
@@ -1524,9 +1545,36 @@ async function learnFromRun(args: {
     capturedCallsRef: captureId,
   };
 
+  // ── A RECIPE THAT WRITES IS NOT STORED, BY EITHER ROUTE ───────────────────────────────────
+  //
+  // An assent is a human answering a question about an ACTION. It is not, and cannot be, an
+  // approval of a per-CALL set that was compiled afterwards from traffic nobody looked at: the
+  // owner approved "send_message may write", never "issue these four POSTs to these four URLs".
+  // Storing a write recipe on the strength of the action's assent would silently widen one answer
+  // into authority over an arbitrary set - so the learn stops here, and the action keeps writing by
+  // its authored steps, which ARE what the human approved.
+  //
+  // This slice has no surface that shows a human a compiled call set and takes an answer about it,
+  // so there is deliberately no `writeAssent` that opens this. Saying that plainly beats shipping a
+  // gate whose key is a field nobody sets (see `docs/decisions.md`).
+  const writes = writesIn(draft);
+  if (writes.length > 0) {
+    console.warn(
+      `[automation] not storing a recipe for ${integrationKey}/${actionName}: it contains ` +
+        `${writes.length} call(s)/step(s) that write (${writes.slice(0, 3).join(', ')}), and no human has ` +
+        'been shown that call set. The action keeps running its authored steps.',
+    );
+    return;
+  }
+
   const captures = deps.captures ?? capturedCallsStore;
   await persistEvidence(captures, { orgId: input.orgId, integrationKey, actionName, captureId }, exchanges, secrets);
 
+  // What the recipe about to be replaced was distilled from - read BEFORE the write, because after
+  // it the pointer is the new one. This is the head of the discard below.
+  const supersededCaptureRef = await priorCaptureRef(input, deps);
+
+  let stored = false;
   if (driftReason !== undefined) {
     const supersedeRecipe = deps.supersedeRecipe
       ?? ((orgId, key, action, next, opts) => integrationRecipeStore.supersedeRecipe(orgId, key, action, next, opts ?? {}));
@@ -1537,9 +1585,12 @@ async function learnFromRun(args: {
         actionName,
         reason: driftReason,
         secrets,
-        // A heal that re-authors a WRITE needs the same human answer a replayed write needs. The
-        // owner's approval of this action IS that answer; absent it the draft is held, not applied.
-        ...(input.writeAssent !== undefined ? { writeAssent: input.writeAssent } : {}),
+        // NO ASSENT IS INHERITED HERE, and that is the point. A heal RE-AUTHORS the call set: the
+        // draft is compiled from a fresh pass and can name calls nothing has ever shown anybody.
+        // Carrying the action's old answer forward would let one approval, given once about an
+        // action, silently authorise every future set the system writes for itself. The heal is
+        // read-only by construction (a draft containing writes never reaches this line, refused
+        // above), so nothing legitimate is blocked by leaving this closed.
       },
       draft,
       { supersedeRecipe },
@@ -1547,12 +1598,89 @@ async function learnFromRun(args: {
     if (healed.outcome !== 'healed') {
       console.warn(`[automation] the re-learned recipe for ${integrationKey}/${actionName} did not go live: ${healed.outcome}`);
     }
-    return;
+    stored = healed.outcome === 'healed';
+  } else {
+    const putRecipe = deps.putRecipe
+      ?? ((orgId, key, action, d, opts) => integrationRecipeStore.putRecipe(orgId, key, action, d, opts));
+    const written = await putRecipe(input.orgId, integrationKey, actionName, draft, { secrets });
+    if (written.verdict === 'notfound') {
+      // NOT SILENT (the `global`-definition case). A recipe is tenant data and is written onto the
+      // org's OWN definition row, so an org running an action off somebody else's published/global
+      // definition has no row to write to and can never learn. That is a real and defensible
+      // limitation - one tenant's learning must not land on a row every org reads - but a learn
+      // that vanishes without a word is indistinguishable from a broken one.
+      console.warn(
+        `[automation] ${integrationKey}/${actionName} cannot store a recipe in org ${input.orgId}: ` +
+          'the org has no definition row of its own for this integration (it is running a published ' +
+          'or global definition). Learning is per-tenant; this action will keep using its automation.',
+      );
+    }
+    stored = written.verdict === 'ok';
   }
 
-  const putRecipe = deps.putRecipe
-    ?? ((orgId, key, action, d, opts) => integrationRecipeStore.putRecipe(orgId, key, action, d, opts));
-  await putRecipe(input.orgId, integrationKey, actionName, draft, { secrets });
+  // ── THE RAW EVIDENCE ENDS ITS LIFE HERE (capture -> learn -> compile -> DISCARD) ──────────
+  //
+  // The captures collection exists BECAUSE this data is unbounded and short-lived; the compiled
+  // recipe is the durable artefact. Every learn wrote a new captureId and nothing ever removed the
+  // old one, so a weekly action accumulated a fresh pile of full request/response bodies - the most
+  // sensitive thing this pipeline touches - every week, forever.
+  //
+  // The CURRENT recipe's evidence stays (it is what `capturedCallsRef` points at, and the reason a
+  // human can see what the live recipe was distilled from). What goes is the evidence behind the
+  // recipe this write just replaced. Discarded only once the new recipe is actually live, and never
+  // fatal: a leaked capture is untidy, losing the evidence for a recipe that failed to store would
+  // be destroying the only record of the pass.
+  if (stored && supersededCaptureRef && supersededCaptureRef !== captureId) {
+    await discardSupersededCapture(
+      { orgId: input.orgId, integrationKey, actionName, captureId: supersededCaptureRef },
+      deps,
+    );
+  }
+}
+
+/** The captureId the action's CURRENT recipe was distilled from, if it has one. */
+async function priorCaptureRef(input: ActionRunInput, deps: ActionRunDeps): Promise<string | undefined> {
+  const getRecipe = deps.getRecipe ?? ((o, k, a) => integrationRecipeStore.getRecipe(o, k, a));
+  const current = await getRecipe(input.orgId, input.integrationKey!, input.actionName!).catch(() => null);
+  return current?.capturedCallsRef;
+}
+
+/** Drop one superseded capture. Best effort and loud on failure - see the caller. */
+async function discardSupersededCapture(key: CaptureKey, deps: ActionRunDeps): Promise<void> {
+  const captures = deps.captures ?? capturedCallsStore;
+  if (typeof captures.discardCapture !== 'function') return;
+  try {
+    await captures.discardCapture(key);
+  } catch (err) {
+    console.warn(
+      `[automation] the superseded evidence ${key.captureId} of ${key.integrationKey}/${key.actionName} ` +
+        `was not discarded: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/**
+ * A recipe the write gate refused, removed so it cannot cost a doomed replay on every later run.
+ *
+ * Loud, because this is the system throwing away something it learned: the owner's action is fine
+ * and keeps working, but a capability the product advertises (this action replays deterministically)
+ * is not available for it, and the reason is worth a line in the log rather than a silent downgrade.
+ */
+async function clearRefusedRecipe(input: ActionRunInput, blocked: string, deps: ActionRunDeps): Promise<void> {
+  const clearRecipe = deps.clearRecipe ?? ((o, k, a) => integrationRecipeStore.clearRecipe(o, k, a));
+  try {
+    const dropped = await clearRecipe(input.orgId, input.integrationKey!, input.actionName!);
+    console.warn(
+      `[automation] the learned recipe for ${input.integrationKey}/${input.actionName} replays ${blocked}, ` +
+        `which writes, and no human has been shown that call set - ${dropped ? 'it has been discarded' : 'it was already gone'}. ` +
+        'The action runs its authored steps instead.',
+    );
+  } catch (err) {
+    console.warn(
+      `[automation] could not discard the refused recipe for ${input.integrationKey}/${input.actionName}: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 /**

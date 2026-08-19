@@ -64,9 +64,21 @@
  * this module replayed those with no gate at all. Both stop at the same gate, and it is checked
  * BEFORE any call runs so a partial replay cannot leave the site half-mutated.
  *
- * The gate has a KEY: `writeAssent`, which the mount fills from the answer the owner already gave
- * this action's write approval (`integrations/action-consent.ts`). A gate whose key nothing sets is
- * not a gate, it is a permanent refusal wearing one; a gate that defaults open is not a gate at all.
+ * ── WHAT THE GATE'S KEY IS, AND WHAT IT IS NOT ───────────────────────────────────────────────
+ *
+ * `writeAssent` is the answer the owner gave to this ACTION's write approval
+ * (`integrations/action-consent.ts`), carried across the automation seam. It is deliberately NOT
+ * treated as authority over an arbitrary compiled call set: approving "send_message may write" is
+ * not approving "issue these four POSTs to these four URLs", and nothing in this slice ever shows a
+ * human a compiled call set. So `learnFromRun` (`automation/service.ts`) refuses to STORE a recipe
+ * containing a write at all, and this gate is the second, independent line - for a recipe written
+ * by an older build, or one whose site turned a GET into a POST.
+ *
+ * WHAT HAPPENS AFTER THE REFUSAL IS THE CALLER'S DECISION, and it is the difference between a safe
+ * optimisation and a permanently broken action: `runAutomationForAction` CLEARS the offending
+ * recipe and runs the action's authored steps - which are what the human approved - rather than
+ * failing the action forever on a consent nobody could give. The long note there explains why the
+ * old `awaiting_consent` answer was unreachable-as-useful.
  */
 import { RecipeShapeError, parseCompiledRecipe, type CompiledRecipe, type InjectedCall } from '../recipe.js';
 import { parseResponseShape, shapeMismatch } from '../response-shape.js';
@@ -215,7 +227,8 @@ export async function replayCompiledAction(input: ReplayInput, deps: ReplayDeps)
       headerNames: [...call.headerNames],
       ...(filled.body !== undefined ? { body: filled.body } : {}),
       idempotent: call.idempotent,
-      route,
+      route: route.route,
+      posture: route.posture,
       recipeVersion: recipe.version,
     };
     assertNoCredentialRodeIn(resolved, input.secrets);
@@ -296,17 +309,37 @@ function firstWrite(recipe: CompiledRecipe): string | undefined {
 // ------------------------------------------------------------------------------------------
 
 /**
- * Which rung may carry THIS call.
+ * Which rung may carry THIS call, and what its origin was classified as.
  *
- * The in-page rung needs a session that can inject; the HTTP rung needs a PERMISSIVE origin, and
- * the origin asked about is the one this call targets. Note what is missing: there is no "no
- * session, adversarial origin, try HTTP anyway". That combination answers null and the caller falls
- * back to the ordinary path, which is where the daemon / credential rails get their chance to ask
- * for what is missing.
+ * POSTURE IS RESOLVED FOR EVERY CALL ON EVERY RUNG, which it was not: the first version returned
+ * `in-page` before asking, so a replay holding a browser session never classified anything at all
+ * and the run record could not say what the system believed about the hosts it spoke to.
+ *
+ * WHAT POSTURE DOES AND DOES NOT DECIDE HERE, stated at the decision point because a reviewer
+ * reading a posture-gated ladder will otherwise assume it gates both rungs:
+ *
+ *   - `node-http` IS gated by it. A server-side request inherits no session and arrives from a
+ *     datacenter, so against an adversarial origin it is not a fallback, it is a 401 and a
+ *     detection event. Closed by default.
+ *   - `in-page` IS NOT, deliberately. In-page is the rung an adversarial origin REQUIRES - it is
+ *     the site's own page making the call it already makes - so refusing it for adversarial would
+ *     disable the ladder precisely where it is the only thing that works, and a multi-origin
+ *     recipe (portal, then its document CDN) would stop at the second hop. What bounds this rung is
+ *     not posture but PROVENANCE: every origin in a recipe was compiled from traffic the site's own
+ *     page generated, `recipe-store` refuses a recipe carrying a value, and `fillCall` refuses an
+ *     argument that moves the host. Nobody outside the site chooses where this rung goes.
+ *
+ * There is no "no session, adversarial origin, try HTTP anyway": that combination answers null and
+ * the caller falls back to the ordinary path, which is where the daemon and credential rails get
+ * their chance to ask for what is missing.
  */
-function chooseRoute(input: ReplayInput, origin: string): 'in-page' | 'node-http' | null {
-  if (input.browser && typeof input.browser.injectCall === 'function') return 'in-page';
-  if (input.classify(origin).posture === 'permissive') return 'node-http';
+function chooseRoute(
+  input: ReplayInput,
+  origin: string,
+): { route: 'in-page' | 'node-http'; posture: 'permissive' | 'adversarial' } | null {
+  const posture = input.classify(origin).posture;
+  if (input.browser && typeof input.browser.injectCall === 'function') return { route: 'in-page', posture };
+  if (posture === 'permissive') return { route: 'node-http', posture };
   return null;
 }
 

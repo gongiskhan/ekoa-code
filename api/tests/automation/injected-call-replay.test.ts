@@ -155,6 +155,50 @@ describe('replayCompiledAction - posture is resolved PER CALL', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  /**
+   * POSTURE IS ASKED ON EVERY RUNG, INCLUDING THE ONE IT DOES NOT GATE.
+   *
+   * `chooseRoute` used to answer `in-page` BEFORE calling `classify`, so a replay holding a browser
+   * session resolved no posture at all and the run record could not say what the system believed
+   * about the hosts it had just spoken to. The in-page rung is deliberately still not REFUSABLE by
+   * the answer - it is the rung an adversarial origin requires, and gating it would disable the
+   * ladder exactly where it is the only thing that works - so what these two pin is that the
+   * verdict is resolved and recorded.
+   */
+  it('classifies every origin even WITH a session, though in-page is not refused by the answer', async () => {
+    const asked: string[] = [];
+    const result = await replayCompiledAction(
+      {
+        ...base,
+        browser: session({ status: 200, bodyText: '{"items":[{"id":1}]}' }),
+        classify: (origin) => { asked.push(origin); return ADVERSARIAL; },
+      },
+      { loadRecipe: async () => TWO_ORIGIN_RECIPE },
+    );
+    // Adversarial on BOTH hops and the replay still ran: in-page is exactly the rung for that.
+    expect(result.outcome).toBe('ok');
+    expect(asked).toEqual(['https://portal.example', 'https://cdn.other.example']);
+  });
+
+  it('records the verdict on each resolved call, so the run record says what was believed', async () => {
+    const result = await replayCompiledAction(
+      {
+        ...base,
+        browser: session({ status: 200, bodyText: '{"items":[{"id":1}]}' }),
+        classify: permissiveOnly('https://portal.example'),
+      },
+      { loadRecipe: async () => TWO_ORIGIN_RECIPE },
+    );
+    expect(result.outcome).toBe('ok');
+    const calls = (result as { calls: Array<{ resolved: { route: string; posture: string } }> }).calls;
+    // PER CALL, not one verdict for the list: the declared host is permissive, the third-party hop
+    // the author never classified is not, and both rode the same rung.
+    expect(calls.map((c) => [c.resolved.posture, c.resolved.route])).toEqual([
+      ['permissive', 'in-page'],
+      ['adversarial', 'in-page'],
+    ]);
+  });
+
   it('is asked about the origin the CALL targets, which is what a real declaration classifies', async () => {
     // Wired through the real `classifyOrigin` with a real action declaration, so this pins the
     // integration rather than a hand-written stand-in for it.

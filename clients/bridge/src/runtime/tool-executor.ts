@@ -363,6 +363,36 @@ function recorderFor(leaseId: string, _deps: ToolExecutorDeps): NetworkRecorder 
 }
 
 /**
+ * The lease's recorder, CREATED if it has none.
+ *
+ * Two callers with different reasons and one object: `captureOp:'start'` wants exchanges handed
+ * back (`buffer: true`), a REPLAY wants only the live header map (`buffer: false` - nothing drains
+ * a replay's recorder, so buffering there would pile up bodies no code can read). A lease that does
+ * both gets one recorder listening once, upgraded rather than duplicated.
+ *
+ * THE DISPOSAL IS REGISTERED HERE, in the same breath as the creation, because `releaseRun` is the
+ * single funnel every lease-ending route lands on - including the two that send no frame (the idle
+ * backstop and shutdown). This is the only place a recorder comes into existence, so it is the only
+ * place that has to remember.
+ */
+function ensureRecorder(leaseId: string, deps: ToolExecutorDeps, opts: { buffer: boolean }): NetworkRecorder {
+  const existing = recorders.get(leaseId);
+  if (existing) {
+    if (opts.buffer) existing.setBuffering(true);
+    return existing;
+  }
+  const recorder = new NetworkRecorder({
+    // The machine's own redaction leg: the outbound redactor already knows every credential this
+    // daemon was delivered, so a body carrying one is masked before it can ride a frame.
+    ...(deps.redactOutbound ? { redactBody: deps.redactOutbound } : {}),
+    buffer: opts.buffer,
+  });
+  recorders.set(leaseId, recorder);
+  deps.profiles.onLeaseEnd(leaseId, () => disposeNetworkRecorder(leaseId));
+  return recorder;
+}
+
+/**
  * Drop one lease's recorder and the live header values in it. Idempotent, and safe to call for a
  * lease that never armed one - which is the common case, since it is bound to EVERY lease's end.
  */
@@ -404,20 +434,9 @@ async function runCaptureOp(
   try {
     return await deps.profiles.withRunLease({ leaseId, profileId }, async (lease) => {
       const page = await lease.page();
-      let recorder = recorders.get(leaseId);
-      if (!recorder) {
-        recorder = new NetworkRecorder(
-          // The machine's own redaction leg: the outbound redactor already knows every credential
-          // this daemon was delivered, so a body carrying one is masked before it can ride a frame.
-          deps.redactOutbound ? { redactBody: deps.redactOutbound } : {},
-        );
-        recorders.set(leaseId, recorder);
-        // REGISTERED IN THE SAME BREATH AS THE CREATION. `releaseRun` fires this on all three
-        // lease-ending routes - the explicit frame, the idle backstop, and shutdown - so the live
-        // header values in this recorder cannot outlive the authenticated jar they were read from
-        // even when nobody sends a `stop`.
-        deps.profiles.onLeaseEnd(leaseId, () => disposeNetworkRecorder(leaseId));
-      }
+      // `buffer: true` - this caller is the one that wants the exchanges themselves. It also
+      // UPGRADES a values-only recorder a replay armed earlier on the same lease.
+      const recorder = ensureRecorder(leaseId, deps, { buffer: true });
       recorder.attach(page as unknown as CapturePage);
       ledgerAutomation(ctx, 'browser', 'capture:start', 'ran');
       return { ok: true, output: {} };
@@ -439,6 +458,19 @@ async function runCaptureOp(
  * NO PAGE OBSERVATION is taken here, and that is not an omission: an injected call does not touch
  * the DOM, so a screenshot and a fingerprint after it would be the same page as before it, taken at
  * the cost of a screenshot per call. A replay of twelve calls would pay twelve of them for nothing.
+ *
+ * ── A RECORDER IS ARMED EVEN THOUGH NOTHING WILL BE CAPTURED ─────────────────────────────────
+ *
+ * `runInjectedCall` navigates the page onto the call's origin (see `browser/inject.ts` for why that
+ * is the whole mechanism and not a detail), and loading the origin runs the site's own JavaScript,
+ * which authenticates and calls its own API. THAT traffic is where the current value of every
+ * header name the recipe learned comes from - so a recorder has to be listening before the
+ * navigation, or the names arrive with nothing to fill them and the replay sends an unauthenticated
+ * request. It is armed values-only: nothing drains a replay's recorder.
+ *
+ * The first cut read `recorders.get(leaseId)` and forwarded `{}` when it found nothing, which on a
+ * replay lease is always - so `headerNames`, the single most valuable thing a capture learns, was
+ * decorative on the one path that exists to use it.
  */
 async function runInjectedCallOp(
   call: LocalBrowserInjectedCall,
@@ -453,9 +485,12 @@ async function runInjectedCallOp(
       { leaseId, profileId, session: () => parseSessionState(deps.sessionStateFor?.(runId)) },
       async (lease) => {
         const page = await lease.page();
-        const recorder = recorders.get(leaseId);
+        // BEFORE the call, so the navigation `runInjectedCall` performs is observed and the live
+        // header values it provokes are in the map by the time the call asks for them.
+        const recorder = ensureRecorder(leaseId, deps, { buffer: false });
+        recorder.attach(page as unknown as CapturePage);
         const result = await runInjectedCall(page, call, (origin, names) =>
-          recorder ? recorder.headerValuesFor(origin, names) : {},
+          recorder.headerValuesFor(origin, names),
         );
         ledgerAutomation(ctx, 'browser', 'inject', result.ok ? 'ran' : 'error');
         const data: LocalBrowserObservation = { url: safeUrl(page.url.bind(page)), injectedCall: result };

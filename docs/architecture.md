@@ -445,28 +445,52 @@ the idle backstop, daemon shutdown), and the recorder registers its own disposal
 `automation/executors/injected-call.ts` replays, cheapest-reliable first: an in-page `fetch` (which
 inherits the origin, the cookie jar, SameSite and the TLS session), then a plain server-side request
 for PERMISSIVE origins only, then the recipe's scripted DOM steps. Vision is not a rung - it is the
-caller's fall-through. Posture is resolved PER CALL, against the origin that call targets, and the
-whole ladder is resolved before the first call is sent: a recipe spans hosts, so one verdict for the
-list would let a permissive first hop authorise egress to a third-party host nobody classified. Two
-things an ARGUMENT may not decide are refused there too - a hole the run did not supply (rendering it
-empty widens `?ref={{input.ref}}` into `?ref=`, which most APIs read as "everything") and a resolved
-URL whose origin differs from the template's literal one.
+caller's fall-through. Posture is resolved PER CALL on EVERY rung, against the origin that call
+targets, and recorded on the resolved call: a recipe spans hosts, so one verdict for the list would
+let a permissive first hop authorise egress to a third-party host nobody classified. The in-page rung
+is deliberately not refusable by posture - it is the rung an adversarial origin REQUIRES - and what
+bounds it is provenance: every origin in a recipe was compiled from traffic the site's own page
+generated. Two things an ARGUMENT may not decide are refused there too - a hole the run did not
+supply (rendering it empty widens `?ref={{input.ref}}` into `?ref=`, which most APIs read as
+"everything") and a resolved URL whose origin differs from the template's literal one.
+
+THE IN-PAGE RUNG ONLY INHERITS ANYTHING IF THE PAGE IS ON THE CALL'S ORIGIN, and that is the whole
+mechanism rather than a detail. A replay takes its own lease, so the page it gets is a fresh
+`about:blank` in a profile whose jar was wiped at the previous run's release; a credentialed fetch
+from an opaque origin is a CROSS-SITE request, which drops SameSite cookies and fails CORS.
+`clients/bridge/src/browser/inject.ts` therefore navigates to the call's origin ROOT first (never to
+the call URL - that would issue the call as a document navigation) and refuses if it could not get
+there. The same navigation is what makes the learned header NAMES usable: loading the origin runs the
+site's own JavaScript, which authenticates and calls its own API, and a recorder armed values-only
+before the navigation reads the CURRENT value of each learned name off that traffic. Names come from
+the recipe, values from the live session, never values from the recipe.
 
 `replay-action.ts` mounts the replay inside `runAutomationForAction`, reading the recipe through
 `recipe-store` (org-scoped; the definition projection strips recipes so they cannot reach the wire).
-Every outcome except `ok` and `write-gate` falls through to the run, so the worst case is the run as
-it was before; `write-gate` refuses, because anything non-idempotent - a POST, or a scripted DOM step
-that changes the page - needs a human, and routing around it would make the gate decorative. The
-gate's key is `writeAssent`, produced by `integrations/action-consent.ts` and carried across the
-automation seam by `automationBackedActionHandler`; it is true only when a human approved a MUTATING
-action, never merely because a read was not gated.
+EVERY outcome except `ok` falls through to the run, so the worst case is the run as it was before.
+That includes `write-gate`: it stops the REPLAY from issuing a call set no human ever saw, and then
+CLEARS the offending recipe and lets the action run its authored steps - which are what the owner
+approved. It used to answer `awaiting_consent`, which named a consent nobody could give (at this seam
+`writeAssent` is false only for an action declared `mutates: false`, and such an action is never put
+to a human) and left the action failing identically forever, since `putRecipe` will not overwrite.
+
+A RECIPE CONTAINING A WRITE IS NEVER STORED, by either route. An approval of an ACTION is not an
+approval of a per-CALL set compiled afterwards from traffic nobody looked at, so `learnFromRun`
+refuses such a draft and the self-heal receives no assent at all. This slice has no surface that
+shows a human a compiled call set; that is stated rather than papered over with a gate whose key
+nothing sets.
 
 `automation/self-heal.ts` classifies drift (an `expectShape` mismatch, a non-2xx, a call that cannot
 be made) as `recipe_drift`. The next instrumented run re-learns the flow, and the new recipe is
 superseded through `recipe-store.supersedeRecipe` - tenant-scoped, version bumped, lineage stamped -
 and never through `publishSnapshot`, whose gate is super-admin and whose effect is `global`
 visibility. A read-only heal lands silently; one that re-authors a recipe containing a write is held
-for the same human assent.
+and never goes live, because re-authoring is exactly when an old approval must not be inherited.
+
+The raw captures a recipe was distilled from END: `learnFromRun` discards the evidence behind the
+recipe a write replaces, once the new one is live. The current recipe's own evidence stays - that is
+what `capturedCallsRef` points at - so a human can still see what the live recipe came from without
+the collection growing without bound.
 
 ## Integrations
 

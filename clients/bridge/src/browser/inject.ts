@@ -21,14 +21,58 @@
  * which is where they came from in the first place. They exist in this process for the duration of
  * one call and in the recorder for the duration of one lease. Nothing about them is written down,
  * and the RESULT this function returns carries response header NAMES only, on the same terms.
+ *
+ * ── THE PAGE MUST BE ON THE CALL'S ORIGIN, AND THAT IS THE WHOLE MECHANISM ───────────────────
+ *
+ * Everything above is true only if the `fetch` is SAME-ORIGIN. The first cut of this module ran the
+ * script on whatever page the lease happened to hold, and a lease taken for a replay holds a fresh
+ * `about:blank`. A fetch from `about:blank` is not "the authenticated page calling its own API"; it
+ * is a CROSS-SITE request from an OPAQUE origin, and every property this path exists for is lost:
+ *
+ *   - SameSite=Strict and SameSite=Lax cookies are NOT attached to a cross-site request, so the
+ *     session cookie - the one thing the whole design is inheriting - is silently absent;
+ *   - `credentials:'include'` across origins triggers CORS, and a credentialed response needs an
+ *     explicit `Access-Control-Allow-Origin` echo (`*` is rejected), which a private API never sends
+ *     to a null origin - so the request either never leaves or its answer is unreadable;
+ *   - `Origin: null` and the absence of `Referer` are exactly the tells a site that fingerprints
+ *     its callers is looking for.
+ *
+ * The net effect was a slower Node fetch wearing a browser costume. So `ensureOriginForCall` puts
+ * the page ON the origin first, and the call refuses if it could not get there. Navigation goes to
+ * the origin ROOT and never to the call's own URL: navigating to the URL would ISSUE the call as a
+ * document navigation - an uncontrolled GET, wrong for a POST recipe, and a duplicate of the call
+ * that is about to be made properly.
+ *
+ * It is also what makes the header NAMES worth learning (see `capture.ts`): loading the origin runs
+ * the site's own JavaScript, which authenticates and calls its own API, and the recorder watching
+ * that traffic is where the CURRENT value of `x-csrf-token` comes from. A replay on a page that
+ * never loaded the site has no live values to forward and no jar to inherit.
  */
 import type { LocalBrowserInjectedCall, LocalBrowserInjectedCallResult } from '@ekoa/shared';
+// The recorder's own origin normaliser. Imported rather than restated: this module and `capture.ts`
+// must agree byte-for-byte on what "the same origin" means, because one keys the live header map by
+// it and the other decides whether the page is on it. Two copies would eventually disagree, and the
+// symptom would be a replay silently forwarding nothing.
+import { originOf } from './capture.js';
 import type { ProfilePage } from './types.js';
 
 /** Cap on the body handed back to Cortex. It becomes a step output and, on a drift, a model prompt. */
 export const MAX_INJECTED_BODY_CHARS = 256 * 1024;
 
 const DEFAULT_TIMEOUT_MS = 20_000;
+
+/** How long the page gets to load the origin before a replay gives up on it. */
+const NAVIGATE_TIMEOUT_MS = 20_000;
+
+/**
+ * How long the page's own boot traffic gets to settle after the origin loads.
+ *
+ * It is bounded and its expiry is NOT an error: `networkidle` never arrives on a site holding a
+ * long-poll or a websocket open, and those are ordinary. What this window buys is the site's own
+ * first API calls - which is where the live value of a learned header name comes from - so it is
+ * worth waiting for and never worth failing on.
+ */
+const SETTLE_TIMEOUT_MS = 5_000;
 
 /** Header names a replay may NEVER set from the machine's live map, because the browser owns them
  *  and a forged one either breaks the request or defeats the very inheritance this path exists for.
@@ -54,21 +98,70 @@ export function forwardableHeaderNames(names: readonly string[]): string[] {
 }
 
 /**
- * Run one injected call. `resolveHeaderValues` is the recorder's live map, injected rather than
- * imported so a lease with no capture armed simply forwards nothing (and the site's cookie-borne
- * session still carries the request).
+ * PUT THE PAGE ON THE CALL'S ORIGIN, or say why it could not be.
+ *
+ * Returns `true` when a navigation actually happened, so the caller knows whether new traffic was
+ * provoked (and therefore whether the live header map has just been refreshed). Already being on
+ * the origin is the no-op case: a replay that joins a lease its run is still driving must not
+ * navigate the page out from under it.
+ *
+ * A REDIRECT OFF THE ORIGIN IS A REFUSAL. A portal that bounces `/` to an identity provider leaves
+ * the page cross-site again, and sending from there is the exact failure this function exists to
+ * remove - so it is named rather than sent. Exported because "the page ended up somewhere else" is
+ * the one branch a fake page cannot make interesting.
+ */
+export async function ensureOriginForCall(page: ProfilePage, origin: string): Promise<boolean> {
+  if (originOf(page.url()) === origin) return false;
+  try {
+    await page.goto(origin, { timeout: NAVIGATE_TIMEOUT_MS, waitUntil: 'domcontentloaded' });
+  } catch (err) {
+    throw new InjectedCallError(
+      `the page could not open ${origin} to replay in its session: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  // The site's own boot traffic is what carries the CURRENT value of every header the recipe
+  // learned by name. Bounded, and its expiry is not a failure - see SETTLE_TIMEOUT_MS.
+  await settle(page);
+  const landed = originOf(page.url());
+  if (landed !== origin) {
+    throw new InjectedCallError(
+      `replaying in the page needs it on ${origin}, and loading it landed on ${landed ?? 'nowhere'} instead`,
+    );
+  }
+  return true;
+}
+
+async function settle(page: ProfilePage): Promise<void> {
+  await Promise.race([
+    page.waitForLoadState('networkidle').catch(() => undefined),
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, SETTLE_TIMEOUT_MS);
+      timer.unref?.();
+    }),
+  ]);
+}
+
+/**
+ * Run one injected call, IN the authenticated page, ON the call's own origin.
+ *
+ * `resolveHeaderValues` is the recorder's live map, injected rather than imported so a lease with no
+ * capture armed simply forwards nothing (and the site's cookie-borne session still carries the
+ * request). It is asked AFTER the navigation above, never before: the navigation is what refreshes
+ * the map, so asking first would forward whatever the previous page happened to leave behind.
  */
 export async function runInjectedCall(
   page: ProfilePage,
   call: LocalBrowserInjectedCall,
   resolveHeaderValues: (origin: string, names: readonly string[]) => Record<string, string>,
 ): Promise<LocalBrowserInjectedCallResult> {
-  let origin: string;
-  try {
-    origin = new URL(call.url).origin;
-  } catch {
+  const origin = originOf(call.url);
+  if (origin === null) {
     throw new InjectedCallError('injected call url is not absolute');
   }
+
+  // BEFORE ANYTHING IS SENT. Same-origin is not an optimisation here, it is the entire mechanism:
+  // see the module header for what a cross-site `credentials:'include'` actually inherits (nothing).
+  await ensureOriginForCall(page, origin);
 
   const names = forwardableHeaderNames(call.headerNames);
   const headers: Record<string, string> = { ...resolveHeaderValues(origin, names) };

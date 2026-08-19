@@ -77,13 +77,14 @@ function storeSpies() {
     recipe: { ...next, version: 2, compiledAt: 'now', supersedes: { version: 1, reason: next.reason } },
   }));
   const appendCapturedCall = vi.fn(async () => ({ verdict: 'ok' as const }));
+  const discardCapture = vi.fn(async (_key: { orgId: string; integrationKey: string; actionName: string; captureId: string }) => 1);
   const deps: ActionRunDeps = {
     putRecipe: put as never,
     supersedeRecipe: supersede as never,
-    captures: { appendCapturedCall } as never,
+    captures: { appendCapturedCall, discardCapture } as never,
     captureId: () => 'cap-1',
   };
-  return { put, supersede, appendCapturedCall, deps };
+  return { put, supersede, appendCapturedCall, discardCapture, deps };
 }
 
 describe('runAutomationForAction - the replay-first mount', () => {
@@ -128,17 +129,45 @@ describe('runAutomationForAction - the replay-first mount', () => {
     expect(replay.mock.calls[0]![0]).toMatchObject({ orgId: 'o1', integrationKey: 'portal', actionName: 'list_cases', args: { ref: '2024-1' } });
   });
 
-  it('REFUSES on write-gate rather than running the write by the other path (trap T4)', async () => {
+  /**
+   * WRITE-GATE: THE RECIPE IS REFUSED, THE ACTION IS NOT (trap T4).
+   *
+   * This used to answer `awaiting_consent`, and that answer named a consent NOBODY COULD EVER GIVE.
+   * At this seam `writeAssent` is `false` only for an action declared `mutates: false` - the
+   * executor refuses an unapproved write before it gets here - and a `mutates: false` action is
+   * never put to a human at all. So the action was permanently dead: `putRecipe` will not overwrite
+   * and `supersedeRecipe` only bumps, leaving every later run to fail on the same gate with nothing
+   * its owner could do about it. A read-declared action learning a POST is ordinary (portals serve
+   * searches over POST), so the RECIPE is what has to give way.
+   */
+  it('write-gate CLEARS the offending recipe and runs the action, instead of bricking it', async () => {
     const replay = vi.fn<Replay>(async () => ({ outcome: 'write-gate', blocked: 'POST https://portal.example/api/cases', recipeVersion: 2 }));
-    const run = vi.fn<Run>();
-    const result = await runAutomationForAction(base, { replay, run });
+    const run = vi.fn<Run>(async () => ({ runId: 'r-1', status: 'completed', summary: 'ok' }) as never);
+    const clearRecipe = vi.fn(async () => true);
+    const result = await runAutomationForAction(base, { replay, run, clearRecipe });
 
-    expect(result.success).toBe(false);
-    expect(result.code).toBe('awaiting_consent');
-    expect(result.error).toContain('POST');
-    // The refusal must NOT have been followed by the automation running anyway.
-    expect(run).not.toHaveBeenCalled();
-    expect(result.data).toBeUndefined();
+    // THE ACTION STILL WORKS - it runs its authored steps, which are what the owner approved,
+    // exactly as it did before it ever learned anything.
+    expect(result.success).toBe(true);
+    expect(result.code).toBeUndefined();
+    expect(run).toHaveBeenCalledOnce();
+    // …and it was NOT replayed, so the gate did stop the unreviewed call set.
+    expect((result.data as { replayed?: boolean }).replayed).toBeUndefined();
+    // THE ESCAPE HATCH FIRED, so no later run pays for the same doomed replay.
+    expect(clearRecipe).toHaveBeenCalledWith('o1', 'portal', 'list_cases');
+  });
+
+  it('write-gate does not brick the action even when the recipe cannot be cleared', async () => {
+    // A store that refuses the clear must not resurrect the permanent failure by another route.
+    const replay = vi.fn<Replay>(async () => ({ outcome: 'write-gate', blocked: 'POST /x', recipeVersion: 2 }));
+    const run = vi.fn<Run>(async () => ({ runId: 'r-2', status: 'completed', summary: 'ok' }) as never);
+    const result = await runAutomationForAction(base, {
+      replay,
+      run,
+      clearRecipe: async () => { throw new Error('store unavailable'); },
+    });
+    expect(result.success).toBe(true);
+    expect(run).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -294,17 +323,95 @@ describe('runAutomationForAction - drift routes the compile through the SUPERSED
     expect(put).toHaveBeenCalledOnce();
   });
 
-  it('HOLDS a re-learned recipe that writes, unless the owner assented to this action', async () => {
+  /**
+   * A RE-LEARNED WRITE NEVER GOES LIVE, AND THE ACTION'S ASSENT DOES NOT CHANGE THAT.
+   *
+   * The first cut passed the action-level `writeAssent` into the heal, so an owner's one answer
+   * about an ACTION ("send_message may write") silently authorised whatever per-CALL set a later
+   * pass happened to compile - a set no human has ever been shown. An assent has to cover what was
+   * actually shown, and nothing in this slice shows a compiled call set to anybody. So the write
+   * draft is refused on BOTH routes, and `writeAssent: true` is asserted here to make no difference
+   * whatsoever: if it ever starts to, this test is what says so.
+   */
+  it('a re-learned recipe that WRITES never supersedes - the action\'s own assent does not authorise it', async () => {
     const write = { ...EXCHANGE, method: 'POST', requestBody: '{"ref":"2024-1"}' };
-    const run = runObserving([write]);
     const { deps, supersede } = storeSpies();
-    await runAutomationForAction(base, { ...deps, replay: drifted, run });
+    await runAutomationForAction(base, { ...deps, replay: drifted, run: runObserving([write]) });
     expect(supersede).not.toHaveBeenCalled();
 
-    // …and with the assent the executor's own consent gate produced, it goes live.
+    // THE SAME, WITH THE ACTION APPROVED. An approval of the action is not an approval of this set.
     const { deps: deps2, supersede: supersede2 } = storeSpies();
     await runAutomationForAction({ ...base, writeAssent: true }, { ...deps2, replay: drifted, run: runObserving([write]) });
-    expect(supersede2).toHaveBeenCalledOnce();
+    expect(supersede2).not.toHaveBeenCalled();
+
+    // …and the read half still heals, so the refusal is about the WRITE and not a dead heal path.
+    const { deps: deps3, supersede: supersede3 } = storeSpies();
+    await runAutomationForAction(base, { ...deps3, replay: drifted, run: runObserving([EXCHANGE]) });
+    expect(supersede3).toHaveBeenCalledOnce();
+  });
+
+  /**
+   * capture -> learn -> compile -> DISCARD. `discardCapture` had no production caller at all, so
+   * every learn wrote a new captureId and none was ever removed: a recurring action accumulated
+   * full request/response bodies - the most sensitive data this pipeline touches - forever.
+   */
+  it('discards the evidence behind the recipe it REPLACED, and keeps the new one\'s', async () => {
+    const { deps, supersede, discardCapture } = storeSpies();
+    await runAutomationForAction(base, {
+      ...deps,
+      replay: drifted,
+      run: runObserving([EXCHANGE]),
+      // The action's CURRENT recipe points at the evidence of the pass that produced it.
+      getRecipe: async () => ({ capturedCallsRef: 'cap-previous' }),
+    });
+    expect(supersede).toHaveBeenCalledOnce();
+    // The OLD evidence goes…
+    expect(discardCapture).toHaveBeenCalledOnce();
+    expect(discardCapture.mock.calls[0]![0]).toEqual({
+      orgId: 'o1', integrationKey: 'portal', actionName: 'list_cases', captureId: 'cap-previous',
+    });
+  });
+
+  it('does NOT discard when the new recipe did not go live - that would destroy the only record', async () => {
+    const { deps, discardCapture } = storeSpies();
+    await runAutomationForAction(base, {
+      ...deps,
+      replay: drifted,
+      run: runObserving([EXCHANGE]),
+      getRecipe: async () => ({ capturedCallsRef: 'cap-previous' }),
+      // The store refuses the supersede: the old recipe is still the live one, so its evidence is
+      // still the evidence for what is running.
+      supersedeRecipe: (async () => ({ verdict: 'notfound' as const })) as never,
+    });
+    expect(discardCapture).not.toHaveBeenCalled();
+  });
+
+  it('does NOT discard the evidence this very pass just wrote', async () => {
+    const { deps, discardCapture } = storeSpies();
+    await runAutomationForAction(base, {
+      ...deps,
+      replay: drifted,
+      run: runObserving([EXCHANGE]),
+      // Same id as `captureId: () => 'cap-1'`: nothing to supersede, and dropping it would delete
+      // what the recipe that just went live points at.
+      getRecipe: async () => ({ capturedCallsRef: 'cap-1' }),
+    });
+    expect(discardCapture).not.toHaveBeenCalled();
+  });
+
+  it('a FIRST compile that writes is not stored either - neither route may author a write', async () => {
+    const write = { ...EXCHANGE, method: 'POST', requestBody: '{"ref":"2024-1"}' };
+    const { deps, put, supersede } = storeSpies();
+    // No drift: this is the ordinary `putRecipe` route.
+    const result = await runAutomationForAction(base, {
+      ...deps,
+      replay: async () => ({ outcome: 'no-recipe', reason: 'never discovered' }),
+      run: runObserving([write]),
+    });
+    expect(put).not.toHaveBeenCalled();
+    expect(supersede).not.toHaveBeenCalled();
+    // The RUN itself still succeeded - refusing to learn is not refusing to work.
+    expect(result.success).toBe(true);
   });
 });
 

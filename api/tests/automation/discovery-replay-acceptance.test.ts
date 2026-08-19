@@ -35,13 +35,41 @@
  * the shape comparison and the drift classification all run against bytes that actually crossed a
  * socket. Stubbing the transport would have made this suite a test of its own mocks.
  *
- * WHAT IS FAKED, AND HONESTLY: the machine. There is no Chromium here - `daemonForFixture` stands
- * in for the paired daemon at the WIRE, answering the same `browser` frames the real one answers
- * (`clients/bridge/src/runtime/tool-executor.ts`), so `DaemonBrowserSession` and the engine run for
- * real above it. The daemon's own half of those frames is exercised in
- * `clients/bridge/test/browser/{capture,inject}.test.ts` and the frame shapes are pinned by
- * `tests/contract/local-browser-capture.contract.test.ts`. A headed-Chromium pass is live
- * verification, not a CI lane.
+ * ══ WHAT THIS SUITE CANNOT PROVE, SAID PLAINLY ═══════════════════════════════════════════════
+ *
+ * IT DOES NOT EXERCISE THE DAEMON, AND IT STRUCTURALLY CANNOT. `api/**` may not import
+ * `clients/**` - a lint-enforced zone (`.eslintrc.cjs`, "api/ must not import from clients/ - the
+ * dependency runs one way"), and rightly so. So there is no arrangement of this file that runs
+ * `clients/bridge/src/runtime/tool-executor.ts` or `browser/inject.ts`. `daemonForFixture` below is
+ * a STAND-IN at the frame boundary, and a stand-in is not evidence about the thing it stands in for.
+ *
+ * The previous cut of this suite did not say that, and the omission mattered: its stand-in resolved
+ * header values from a map it simply held, while the real daemon resolved them from a recorder that
+ * a replay lease did not have. The suite's headline assertion - "the replay reached the real API
+ * with the session header" - was therefore true of the fixture and FALSE of production, and no
+ * mutation of the daemon could have turned it red.
+ *
+ * SO THE CLAIM IS SPLIT, and each half is proved where it can actually fail:
+ *
+ *   HERE (the hosted half, and it is the whole of what this file asserts): entered at
+ *   `executeUserIntegrationAction` through the production seam mapping, run 1 learns and run 2
+ *   replays with ZERO model calls at the chokepoint and no new run record. The frames Cortex emits
+ *   are asserted directly - including that the recipe's header NAMES are on them - because that is
+ *   the hosted side's actual contract with the machine.
+ *
+ *   `clients/bridge/test/browser/inject-inheritance.test.ts` (the daemon half): a REAL Chromium
+ *   over a REAL server proves the replay inherits the page's SameSite=Strict cookie jar and fills
+ *   the learned header NAME from the live session, each against its own control.
+ *   `clients/bridge/test/browser/replay-wiring.test.ts` proves the daemon's frame handler arms the
+ *   recorder and navigates for a lease that never captured - which is every replay lease.
+ *
+ *   `tests/contract/local-browser-capture.contract.test.ts` pins the frame shapes both sides read.
+ *
+ * TO KEEP THE STAND-IN FROM DRIFTING BACK INTO A LIE, it is written to model the real daemon's
+ * CONTRACT rather than a convenient one: it starts holding NO header values, it learns them only
+ * from traffic it actually observes, and it REFUSES an injected call for an origin it was never
+ * navigated to - exactly as `runInjectedCall` refuses a page it could not put on the origin. A
+ * regression that stops the hosted side sending what the daemon needs therefore fails HERE too.
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { createServer, type Server } from 'node:http';
@@ -106,22 +134,63 @@ function startFixture(): Promise<void> {
 // ---------------------------------------------------------------------------------------------
 
 /**
- * A paired daemon, standing in at the frame boundary.
+ * A paired daemon, standing in at the frame boundary. NOT the daemon - see the header for what this
+ * can and cannot be evidence of.
  *
- * It mirrors `clients/bridge/src/runtime/tool-executor.ts`: a `captureOp` arms or drops a recorder,
- * an `injectedCall` resolves the named headers FROM THE LIVE SESSION and makes the request, and a
- * page act does whatever the page does - here, the site's own UI issuing its private API call, the
- * way a click on "Pesquisar" does on a real portal.
+ * It is written to model the REAL contract (`clients/bridge/src/runtime/tool-executor.ts`), and the
+ * two properties below are the ones that stop it flattering the hosted side:
+ *
+ *  1. IT HOLDS NO HEADER VALUES TO BEGIN WITH. `live` starts EMPTY, exactly as a machine's recorder
+ *     does on a lease that has not watched any traffic. Values appear only in `observeTraffic`,
+ *     which is called when the page actually loads the site. A fixture that simply held the CSRF
+ *     value - which the previous cut did - answers every replay correctly no matter what the hosted
+ *     side sends, and the "the replay carried the session header" assertion proves nothing.
+ *  2. AN INJECTED CALL FOR AN ORIGIN THE PAGE HAS NEVER BEEN ON IS REFUSED, mirroring
+ *     `runInjectedCall`'s own refusal. The real daemon navigates first (that is what makes the
+ *     fetch same-origin and the jar inheritable); this models the navigation and its failure mode.
  *
  * CORTEX NEVER SENDS A HEADER VALUE TO IT AND IT NEVER SENDS ONE BACK. `live` is this machine's;
  * frames carry names.
  */
-function daemonForFixture(): DaemonConnection & { armed: boolean; leaseReleased: boolean } {
-  const live: Record<string, string> = { 'x-csrf-token': 'csrf-live-value' };
+function daemonForFixture(): DaemonConnection & {
+  armed: boolean;
+  leaseReleased: boolean;
+  injectFrames: Array<{ method: string; url: string; headerNames: string[] }>;
+} {
+  /** The machine's live map. EMPTY until this machine watches the site talk to itself. */
+  const live: Record<string, string> = {};
+  /** Origins this page has actually loaded. An injected call may only run on one of them. */
+  const visited = new Set<string>();
   let buffered: Array<Record<string, unknown>> = [];
+
+  /** The site's own boot/search traffic, as the machine's recorder sees it: the values land in
+   *  `live`, and only the NAMES are ever buffered for Cortex. */
+  async function observeTraffic(url: string): Promise<string> {
+    const sessionHeaders = { 'x-csrf-token': 'csrf-live-value' };
+    const res = await fetch(url, { headers: sessionHeaders });
+    const body = await res.text();
+    for (const [name, value] of Object.entries(sessionHeaders)) live[name] = value;
+    visited.add(new URL(url).origin);
+    if (state.armed) {
+      buffered.push({
+        method: 'GET',
+        url,
+        // NAMES. The recorder on the machine reads the map's keys and drops the values.
+        requestHeaderNames: ['accept', ...Object.keys(sessionHeaders)].sort(),
+        responseHeaderNames: ['content-type'],
+        status: res.status,
+        contentType: 'application/json',
+        resourceType: 'xhr',
+        responseBody: body,
+      });
+    }
+    return body;
+  }
+
   const state = {
     armed: false,
     leaseReleased: false,
+    injectFrames: [] as Array<{ method: string; url: string; headerNames: string[] }>,
     runStep: async (frame: { capability: string; input?: unknown }) => {
       const input = (frame.input ?? {}) as Record<string, unknown>;
 
@@ -129,6 +198,9 @@ function daemonForFixture(): DaemonConnection & { armed: boolean; leaseReleased:
         state.leaseReleased = true;
         state.armed = false;
         buffered = [];
+        // The lease's live values die with it, on this machine as on the real one.
+        for (const k of Object.keys(live)) delete live[k];
+        visited.clear();
         return { ok: true as const };
       }
       if (input.captureOp === 'start') { state.armed = true; return { ok: true as const, observation: { data: {} } }; }
@@ -136,6 +208,19 @@ function daemonForFixture(): DaemonConnection & { armed: boolean; leaseReleased:
 
       if (input.injectedCall) {
         const call = input.injectedCall as { method: string; url: string; headerNames: string[] };
+        state.injectFrames.push({ method: call.method, url: call.url, headerNames: [...call.headerNames] });
+        const callOrigin = new URL(call.url).origin;
+        // THE NAVIGATION. The real daemon puts the page on the call's origin before it injects -
+        // which is both what makes the fetch same-origin and what provokes the traffic the live
+        // header values are read from. Modelled here for the same reason: without it this machine
+        // has no values to forward, exactly as the real one would not.
+        if (!visited.has(callOrigin)) {
+          try {
+            await observeTraffic(`${callOrigin}${apiPath}?ref=probe`);
+          } catch {
+            return { ok: false as const, error: { message: `the page could not open ${callOrigin}` } };
+          }
+        }
         // THE MACHINE RESOLVES THE VALUES. Cortex sent names; the values come from the live session.
         const headers: Record<string, string> = {};
         for (const name of call.headerNames) if (live[name] !== undefined) headers[name] = live[name]!;
@@ -155,22 +240,7 @@ function daemonForFixture(): DaemonConnection & { armed: boolean; leaseReleased:
       // An ordinary page act. The only one the fixture models is the page fetching its own data.
       const action = input.action as { kind?: string } | undefined;
       if (action && action.kind !== 'screenshot' && action.kind !== 'noop') {
-        const url = `${origin}${apiPath}?ref=2024-1`;
-        const res = await fetch(url, { headers: live });
-        const body = await res.text();
-        if (state.armed) {
-          buffered.push({
-            method: 'GET',
-            url,
-            // NAMES. The recorder on the machine reads the map's keys and drops the values.
-            requestHeaderNames: ['accept', ...Object.keys(live)].sort(),
-            responseHeaderNames: ['content-type'],
-            status: res.status,
-            contentType: 'application/json',
-            resourceType: 'xhr',
-            responseBody: body,
-          });
-        }
+        await observeTraffic(`${origin}${apiPath}?ref=2024-1`);
       }
       const captures = buffered;
       buffered = [];
@@ -190,7 +260,11 @@ function daemonForFixture(): DaemonConnection & { armed: boolean; leaseReleased:
       };
     },
   };
-  return state as unknown as DaemonConnection & { armed: boolean; leaseReleased: boolean };
+  return state as unknown as DaemonConnection & {
+    armed: boolean;
+    leaseReleased: boolean;
+    injectFrames: Array<{ method: string; url: string; headerNames: string[] }>;
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -333,8 +407,11 @@ describe('ACCEPTANCE: learned on the run that was going to happen, replayed dete
     expect(JSON.stringify(recipe)).not.toContain('csrf-live-value');
 
     // ── RUN 2. Same action, same arguments, entered the same way, and no model. ───────────────
+    // A FRESH machine, held as ONE instance so what it was asked is observable. Fresh matters: it
+    // starts with an empty live map, which is the state a replay lease is really in.
     transport = resetAgentState({ oneShotText: RESOLVER_JSON });
-    setDaemonConnectionResolver(() => daemonForFixture());
+    const replayDaemon = daemonForFixture();
+    setDaemonConnectionResolver(() => replayDaemon);
     const runsBefore = (await automationRuns.find({})).length;
 
     const second = await runTheAction();
@@ -346,6 +423,18 @@ describe('ACCEPTANCE: learned on the run that was going to happen, replayed dete
     expect(modelCalls()).toBe(0);
     // …and the automation did not run at all: no new run record exists.
     expect((await automationRuns.find({})).length).toBe(runsBefore);
+
+    // THE HOSTED CONTRACT, which is the half this suite can actually falsify: what Cortex PUT ON
+    // THE WIRE. The learned header names must be on the frame - a machine cannot forward a name it
+    // was never told, so a hosted side that drops them makes the daemon's whole capture worthless.
+    expect(replayDaemon.injectFrames).toHaveLength(1);
+    expect(replayDaemon.injectFrames[0]).toMatchObject({
+      method: 'GET',
+      url: `${origin}/api/cases?ref=2024-1`,
+    });
+    expect(replayDaemon.injectFrames[0]!.headerNames).toContain('x-csrf-token');
+    // …and no VALUE rode out with them: the frame carries names, the machine holds values.
+    expect(JSON.stringify(replayDaemon.injectFrames)).not.toContain('csrf-live-value');
 
     // The replay got the REAL answer from the REAL server - the fixture checks the CSRF header, so
     // this is also proof the name-only recipe reconstituted a working authenticated call.

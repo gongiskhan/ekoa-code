@@ -210,6 +210,27 @@ export class IntegrationRecipeStore {
     });
   }
 
+  /**
+   * DROP an action's recipe, putting the action back to never-having-learned.
+   *
+   * This is the escape hatch that stops a bad recipe becoming a permanent property of an action.
+   * `putRecipe` refuses to overwrite and `supersedeRecipe` only bumps, so without a clear there is
+   * no way out of a recipe the replay will not run: the action pays for a doomed replay attempt on
+   * every single run, forever, and its owner has no control that changes it. That is the shape of
+   * the `mutates:false` action whose learned recipe turned out to contain a POST - a legitimate and
+   * expected outcome of discovery, since a site is free to serve a read over POST.
+   *
+   * IT IS NOT A DELETE OF ANYTHING ELSE. The action, its binding and the row are untouched; the
+   * action goes on working by the path it worked by before it ever learned. `false` means there was
+   * nothing to clear, which is the ordinary idempotent case and never an error.
+   */
+  async clearRecipe(orgId: string, key: string, actionName: string): Promise<boolean> {
+    const result = await this.writeRecipe(orgId, key, actionName, (current) =>
+      current ? { clear: true } : { refuse: { verdict: 'notfound' } },
+    );
+    return result.verdict === 'ok';
+  }
+
   // ------------------------------------------------------------------------------------------
   // Internals
   // ------------------------------------------------------------------------------------------
@@ -220,8 +241,9 @@ export class IntegrationRecipeStore {
     key: string,
     actionName: string,
     decide: (current: IntegrationActionRecipe | undefined) =>
-      | { recipe: IntegrationActionRecipe; refuse?: undefined }
-      | { refuse: RecipeWriteResult; recipe?: undefined },
+      | { recipe: IntegrationActionRecipe; refuse?: undefined; clear?: undefined }
+      | { clear: true; recipe?: undefined; refuse?: undefined }
+      | { refuse: RecipeWriteResult; recipe?: undefined; clear?: undefined },
   ): Promise<RecipeWriteResult> {
     // An org-less caller can never own a row (`isDefinitionVisibleTo` refuses an org-less document
     // for the same reason): refuse before deriving an id that would collide on the empty tenant.
@@ -232,11 +254,13 @@ export class IntegrationRecipeStore {
 
     let refused: RecipeWriteResult | null = null;
     let written: IntegrationActionRecipe | null = null;
+    let cleared: IntegrationActionRecipe | null = null;
     const updated = await this.store.update(id, (cur) => {
       // RESET on every attempt: `Store.update` re-runs the mutator after losing a CAS race, and a
       // verdict recorded on a losing attempt is not the one the winning attempt reached.
       refused = null;
       written = null;
+      cleared = null;
       const doc = cur as IntegrationDefinitionDoc;
       // THE TENANCY RE-ASSERT. The id already binds the row to `orgId`; this catches the case the id
       // cannot - a row whose `orgId` does not match the id it is stored under (a hand-written or
@@ -256,6 +280,19 @@ export class IntegrationRecipeStore {
         refused = decision.refuse;
         return cur;
       }
+      if (decision.clear) {
+        // `ok` carries WHAT WAS REMOVED, which keeps `writeRecipe`'s contract intact and is the
+        // more useful answer anyway: a caller clearing a recipe wants to log the version it dropped.
+        cleared = actions[index]?.recipe ?? null;
+        const nextActions = actions.map((action, i) => {
+          if (i !== index) return action;
+          // The FIELD goes, not an empty recipe in its place: `getRecipe` answers on presence, and
+          // a hollow `{}` would be a recipe this build cannot read rather than no recipe at all.
+          const { recipe: _dropped, ...withoutRecipe } = action;
+          return withoutRecipe;
+        });
+        return { ...cur, actions: nextActions, updatedAt: this.nextStamp(doc.updatedAt) };
+      }
       written = decision.recipe;
       const nextActions = actions.map((action, i) =>
         i === index ? { ...action, recipe: decision.recipe } : action,
@@ -266,7 +303,9 @@ export class IntegrationRecipeStore {
       return { ...cur, actions: nextActions, updatedAt: this.nextStamp(doc.updatedAt) };
     });
     if (refused) return refused;
-    if (!updated || !written) return { verdict: 'notfound' };
+    if (!updated) return { verdict: 'notfound' };
+    if (cleared) return { verdict: 'ok', recipe: cleared };
+    if (!written) return { verdict: 'notfound' };
     return { verdict: 'ok', recipe: written };
   }
 

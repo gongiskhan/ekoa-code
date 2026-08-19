@@ -85,6 +85,16 @@ export interface NetworkRecorderDeps {
   /** The machine's outbound redactor leg. Default: identity, for a daemon with nothing delivered. */
   redactBody?: (text: string) => string;
   now?: () => number;
+  /**
+   * Whether exchanges are BUFFERED for Cortex, or only watched for their live header values.
+   *
+   * Default `true` - a recorder armed by `captureOp:'start'` exists to hand exchanges back. A REPLAY
+   * arms one for the other half of this class's job: the live map that answers "what is
+   * `x-csrf-token` right now?". Nothing drains a replay's recorder, so buffering there would
+   * accumulate up to `MAX_BUFFERED_EXCHANGES` response bodies on the user's machine that no code
+   * path can ever read - a leak of exactly the data this module is most careful about.
+   */
+  buffer?: boolean;
 }
 
 /**
@@ -99,9 +109,21 @@ export class NetworkRecorder {
   private attachedTo: CapturePage | undefined;
   private handler: ((response: CaptureResponse) => void) | undefined;
   private readonly redactBody: (text: string) => string;
+  /** See `NetworkRecorderDeps.buffer`. Mutable because a lease that armed a values-only recorder for
+   *  a replay can later be asked to capture properly, and that must upgrade the SAME recorder rather
+   *  than leave a second one listening to the same page. */
+  private buffering: boolean;
 
   constructor(deps: NetworkRecorderDeps = {}) {
     this.redactBody = deps.redactBody ?? ((t) => t);
+    this.buffering = deps.buffer ?? true;
+  }
+
+  /** Start (or stop) handing exchanges back to Cortex. The live header map is kept either way -
+   *  it is what an injected replay forwards, and it is never emitted. */
+  setBuffering(on: boolean): void {
+    this.buffering = on;
+    if (!on) this.buffered.length = 0;
   }
 
   /** Start listening. Idempotent per page: re-arming an already-armed recorder on the SAME page is a
@@ -173,7 +195,10 @@ export class NetworkRecorder {
     const url = safe(() => request.url(), '');
     if (url === '') return;
     const requestHeaders = safe(() => request.headers(), {} as Record<string, string>);
+    // THE LIVE MAP IS UPDATED WHETHER OR NOT ANYTHING IS BUFFERED. It is the half of this class a
+    // replay needs, and the half that never leaves the machine.
     this.remember(url, requestHeaders);
+    if (!this.buffering) return;
 
     const responseHeaders = safe(() => response.headers(), {} as Record<string, string>);
     const body = await response.text().catch(() => '');

@@ -422,4 +422,68 @@ describe('the write assent crosses the automation seam, and only when a human ga
     // no run to carry it to.
     expect(await seamSaw('unapproved_via_auto', true, false)).toBeNull();
   });
+
+  // ===========================================================================================
+  // …AND WHAT THE ASSENT DOES NOT BUY. The three cases above assert only what the seam WAS HANDED,
+  // which is a statement about a function call and not about a refusal. On its own that is exactly
+  // the shape of test this repo has been burned by: it stays green for any downstream that ignores
+  // the field entirely. The two below assert the CONSEQUENCE, which is where the security property
+  // actually lives.
+  // ===========================================================================================
+
+  it('an approved write does NOT authorise a learned call set - the recipe is refused, not the action', async () => {
+    const { writesIn } = await import('../../src/automation/self-heal.js');
+    // The compiled recipe a discovery pass would produce for an approved write action. Nothing has
+    // ever shown a human THESE calls; the human approved the action.
+    const draft = {
+      goal: 'replay of autokey/send_via_auto',
+      injectedCalls: [{
+        method: 'POST',
+        urlTemplate: 'https://portal.example/api/messages',
+        headerNames: ['x-csrf-token'],
+        idempotent: false,
+      }],
+      scriptedSteps: [],
+      lessons: [],
+    };
+    // The predicate the learn refuses on, and the same one the replay's gate uses - one definition,
+    // so a recipe that would be stored could never be one the gate then blocks.
+    expect(writesIn(draft as never)).toEqual(['POST https://portal.example/api/messages']);
+  });
+
+  it('the replay\'s gate is keyed on the RECIPE\'s writes, not on the action\'s declaration', async () => {
+    const { replayCompiledAction } = await import('../../src/automation/executors/injected-call.js');
+    const stored = {
+      version: 1,
+      compiledAt: new Date().toISOString(),
+      goal: 'g',
+      injectedCalls: [{
+        method: 'POST',
+        urlTemplate: 'https://portal.example/api/messages',
+        headerNames: [],
+        idempotent: false,
+      }],
+      scriptedSteps: [],
+      lessons: [],
+    };
+    const input = {
+      orgId: ORG,
+      integrationKey: 'autokey',
+      actionName: 'send_via_auto',
+      args: {},
+      classify: () => ({ posture: 'permissive' as const, requiresAttendedAuth: false, cloudEgressAllowed: true }),
+    };
+    // NO ASSENT: refused, and it names the template rather than a resolved URL (which would carry
+    // the caller's arguments into an error message).
+    const blocked = await replayCompiledAction(input, { loadRecipe: async () => stored });
+    expect(blocked.outcome).toBe('write-gate');
+    expect((blocked as { blocked: string }).blocked).toBe('POST https://portal.example/api/messages');
+
+    // WITH the action's assent the gate opens - which is precisely why `learnFromRun` refuses to
+    // store a write recipe in the first place: this is the only thing standing between an
+    // action-level "yes" and an arbitrary compiled call set, and one line of defence is not enough
+    // for a write. Pinned so that a change to either half has to face the other.
+    const opened = await replayCompiledAction({ ...input, writeAssent: true }, { loadRecipe: async () => stored });
+    expect(opened.outcome).not.toBe('write-gate');
+  });
 });

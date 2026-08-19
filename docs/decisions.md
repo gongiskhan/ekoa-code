@@ -2201,3 +2201,63 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   call added to the replay path, which the old assertion would not have seen.
   DIAGRAM CHECK (FIXED-12): `02-module-map` carries an appended as-built annotation superseding the
   first cut's, naming the deletions and the three new seams.
+
+## 2026-08-19 - P2 re-cut, verification fixes: the replay executes where the design says it does
+
+  THE CENTRAL RUNG WAS NOT DOING ITS JOB. CDP call-injection is worth building for exactly one
+  reason: the call runs INSIDE the authenticated page, so it inherits the cookie jar (HttpOnly and
+  SameSite=Strict included), the origin, the TLS session and the IP. The first re-cut ran that call
+  on whatever page the lease held, and a lease taken for a replay holds a fresh `about:blank` in a
+  profile whose jar was wiped at the previous run's release. A credentialed fetch from an opaque
+  origin is a cross-site request: SameSite cookies are not attached and CORS refuses the read. The
+  rung inherited nothing. `ensureOriginForCall` now navigates to the call's origin ROOT first - never
+  to the call URL, which would issue the call as a document navigation - and refuses if the page
+  could not get there or was bounced off it by an identity provider.
+
+  THE NAVIGATION IS ALSO WHAT MAKES THE LEARNED HEADER NAMES USABLE, which is why the two fixes are
+  one change. Loading the origin runs the site's own JavaScript, which authenticates and calls its
+  own API; a recorder listening to that traffic is the only place the CURRENT value of
+  `x-csrf-token` exists. `runInjectedCallOp` therefore arms a recorder BEFORE the navigation. It is
+  armed values-only (`buffer: false`): nothing drains a replay's recorder, so buffering would
+  accumulate response bodies on the user's machine that no code path can ever read.
+
+  PROOF, NOT ASSERTION. `api/**` may not import `clients/**` (lint-enforced), so no api suite can
+  exercise the daemon - and the previous acceptance did not say so while presenting a stand-in as
+  the proof. The claim is now split: the hosted half is asserted in the acceptance (zero model calls
+  at the chokepoint, no new run record, and the frames Cortex emits carrying the learned header
+  names), and the daemon half in `clients/bridge/test/browser/inject-inheritance.test.ts`, which
+  drives the production function over a REAL Chromium against a REAL server and reads the headers
+  the SERVER received, each property against its own control on the same jar.
+
+  A GATE WHOSE ONLY REACHABLE OUTCOME IS A DEAD ACTION IS NOT A GATE. The replay's `write-gate`
+  answered `awaiting_consent`. At the automation seam `writeAssent` is `false` only when the action
+  is declared `mutates: false`, and such an action is never put to a human at all - so the message
+  named a consent nobody could give, and because `putRecipe` will not overwrite, the action failed
+  identically on every later run forever. A read-declared action learning a POST is an ORDINARY
+  outcome of discovery. DECISION: the RECIPE gives way, not the action. `write-gate` clears the
+  recipe (`clearRecipe`, new on the store) and falls through to the authored automation. This does
+  not make the gate decorative - it stops the REPLAY from issuing a call set no human saw, while the
+  authored steps are precisely what the owner approved.
+
+  AN ASSENT COVERS WHAT WAS SHOWN. An approval of an ACTION was being used to authorise an arbitrary
+  compiled call set, and the heal INHERITED that approval while re-authoring the set. DECISION:
+  `learnFromRun` refuses to store any recipe containing a write, by either route, and the heal
+  receives no assent at all. There is no surface in this slice that shows a human a compiled call
+  set, so there is deliberately no `writeAssent` that opens this - said plainly rather than shipped
+  as a gate whose key nothing sets. REVIEW DATE: when a surface exists that can show a call set and
+  take an answer about it, this is the decision to revisit (Rule 10 - no permanent parallel states).
+
+  THE RAW EVIDENCE ENDS. capture -> learn -> compile -> DISCARD was the design and `discardCapture`
+  had no production caller, so captures accumulated forever. A learn now discards the evidence behind
+  the recipe it replaced, once the new one is live; the current recipe's own evidence stays, which is
+  what `capturedCallsRef` is for.
+
+  POSTURE IS RESOLVED ON EVERY RUNG and recorded per call. The in-page rung stays deliberately NOT
+  refusable by posture - it is the rung an adversarial origin requires, and refusing it would disable
+  the ladder where it is the only thing that works and break the multi-origin recipes the design
+  supports. What bounds that rung is provenance rather than posture, and the reasoning now sits at
+  the decision point instead of being inferred from a missing call.
+
+  DIAGRAM CHECK (FIXED-12): `02-module-map` carries an appended as-built annotation (`(c)`) amending
+  the re-cut's, naming the two execution fixes, the two gate decisions, the discard and the split
+  proof. Appended textually so no existing element was rewritten.

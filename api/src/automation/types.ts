@@ -143,6 +143,15 @@ export interface InjectedCallResolved {
    *   - `node-http` a plain server-side request, permitted ONLY for a permissive origin.
    */
   route: 'in-page' | 'node-http';
+  /**
+   * What THIS call's own origin was classified as, recorded whichever rung carried it.
+   *
+   * Posture used to be consulted only on the way to `node-http`, so a replay holding a browser
+   * session resolved none at all: the run record could not say what the system believed about the
+   * host it had just spoken to, including the third-party hops a multi-origin recipe reaches.
+   * Recording it per call is what makes the ladder's reasoning legible afterwards.
+   */
+  posture: 'permissive' | 'adversarial';
   /** Which recipe version was replayed - the lineage a drift report is read against. */
   recipeVersion: number;
 }

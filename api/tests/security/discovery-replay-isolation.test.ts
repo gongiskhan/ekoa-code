@@ -166,7 +166,14 @@ describe('replay: one org\'s learning never runs for another', () => {
     );
     // Org B's own declaration lets it leave from the server (the call itself then fails on the
     // network in a unit environment; what matters is that posture did not refuse it).
-    expect(permissive.outcome).not.toBe('unavailable');
+    // ITS OWN DECLARATION LETS IT LEAVE FROM THE SERVER, and the assertion says exactly which rung
+    // ran rather than merely "not refused": the node-http rung was taken and the request was
+    // actually attempted (`portal.example` is a reserved TLD, so it fails at DNS - which is proof
+    // the call left the posture gate, not proof of anything about the network).
+    // A bare `not.toBe('unavailable')` here would also have been satisfied by `no-recipe` - i.e. by
+    // any mutation that broke the recipe read - which is no evidence about posture at all.
+    expect(permissive.outcome).toBe('drift');
+    expect((permissive as { reason: string }).reason).toContain('could not be made');
 
     const closed = await replayIntegrationAction(
       { orgId: 'orgA', ownerUserId: userA.userId, integrationKey: KEY, actionName: ACTION, args: {} },
@@ -203,7 +210,10 @@ describe('replay: posture does not travel from one origin to the next', () => {
       { orgId: 'orgA', ownerUserId: userA.userId, integrationKey: KEY, actionName: ACTION, args: {} },
       noSession,
     );
-    expect(result.outcome).not.toBe('unavailable');
+    // Same precision as above: the single-origin recipe in this tenant genuinely TOOK the
+    // server-side rung, so the refusal in the case above is about the HOST and not about the org.
+    expect(result.outcome).toBe('drift');
+    expect((result as { reason: string }).reason).toContain('could not be made');
   });
 });
 
