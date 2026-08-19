@@ -1357,3 +1357,69 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   ALSO CLOSED HERE: `register()` is serialised per appId. It guarded on `apps.has(appId)` and then
   AWAITED `readManifest`, so two concurrent registers for one id both passed the guard and the
   second overwrote the first's bookkeeping, leaving the first's paths watched forever.
+- 2026-08-19 - App registry: watch failures are handled, the registry keeps ONE WATCHER PER APP, and
+  register/unregister/stop stop racing each other. `api/src/apps/app-registry.ts`.
+  This entry REPLACES the version of it written in commit b0ec7cb on the same branch, which recorded
+  the opposite of decision 2 and an escalation that the code contradicts; both are named below and
+  the superseded text is in that commit. Rewritten rather than appended because it had not landed on
+  `main`: the journal is append-only for what is merged, and shipping two adjacent entries that
+  disagree about the same change would leave the ledger less true, not more.
+  DIAGRAM CHECK (FIXED-12): none needed, checked rather than assumed. No diagram under
+  `docs/diagrams/` depicts the app registry's filesystem watching (`04-agent-job`'s "esbuild watcher"
+  is the build pipeline, not this), and the change alters no module boundary, no flow across one, and
+  no data shape - it is internal to one file behind unchanged method signatures.
+  DECISION 1, the one that fixed the observable - every watcher carries an `error` listener, and the
+  capacity warning is deduplicated registry-wide. The file had no error listener at all. chokidar
+  reports an `fs.watch` failure as an `error` event; an EventEmitter 'error' with no listener throws,
+  here inside chokidar's own promise chain, so it lands as an unhandled rejection. **vitest fails a
+  RUN on an unhandled rejection even when every test passes** - that is the whole observable, and it
+  is what made the api contract lane exit 1 on a loaded box. Watching is a hot-reload convenience;
+  serving reads from disk and never consults a watcher, so EMFILE/ENOSPC now degrades to ONE warning
+  per registry lifetime (a registry-level flag, shared across every app's watcher) and the apps stay
+  registered and served.
+  NOT claimed, having been claimed once and withdrawn: that this condition could kill the API
+  server. `server.ts`'s `boot()` installs `uncaughtException` / `unhandledRejection` handlers that
+  log and continue as its first two statements, before anything reaches `appRegistry.start()`, and
+  an `unhandledRejection` listener switches Node's `--unhandled-rejections=throw` default off
+  outright. On a server host the condition logged. See findings
+  `artifact-family-test-leaks-watchers`, second correction.
+  DECISION 2 - the per-app `Map<appId, FSWatcher>` STAYS, and `unregister()` calls `close()`. The
+  first attempt at this change collapsed it into a single registry-wide watcher driven with
+  `add()`/`unwatch()`, on the premise that watcher count was a scarce resource. It is not: libuv
+  keeps one inotify instance per event loop and every `fs.watch` adds a watch DESCRIPTOR to it, so 1
+  watcher and 300 watchers both cost exactly one instance (measured, chokidar 5.0.0 / Node 20.19.4 /
+  Linux 6.17). The cap a many-app host can genuinely reach is `max_user_watches`, a function of the
+  PATHS watched, which no watcher-count change touches. Rejected on measurement, not taste:
+  `FSWatcher.unwatch(path)` closes only the closers registered under that exact path string
+  (chokidar 5.0.0 `_closePath`), so with 8 apps of `dist/` + 10 subdirectories, unregistering all 8
+  left 80 of 96 watch descriptors held (`close()` leaves 0); `unwatch()` also calls
+  `_addIgnoredPath(path, {recursive:true})`, which permanently blinds an enclosing app for an
+  unregistered nested app's subtree; and routing one shared watcher's event to a single winning app
+  quietly narrowed the listener contract, notifying only the first of two ids registered over the
+  same project dir. The single thing the collapse genuinely bought - one failure report instead of N
+  - is bought by decision 1's dedup flag instead, at none of that cost.
+  DECISION 3 - register/unregister are serialised per appId, and `stop()` drains before it tears
+  down. `register()` guarded on `apps.has(appId)` and then AWAITED `readManifest`, so two concurrent
+  registers for one id both passed the guard and the second overwrote the first's entry in the
+  watcher map, leaving that watcher open for the life of the process. `serialize()` closes that;
+  `stop()` awaiting the in-flight ops closes the same orphan from the other side (a register in
+  flight across a stop used to resume afterwards and arm a watcher nothing held).
+  TWO BEHAVIOUR CHANGES, named so review can weigh them, both removing a bare string-prefix match
+  from a file whose whole review was about bare string-prefix matches.
+  (a) The manifest/dist discrimination is by whole path. `filePath.endsWith('manifest.json')` also
+  claimed a build output named `app-manifest.json` and swallowed its dist notification, so a rebuild
+  that rewrote only that file busted no cache; it is now an exact compare against
+  `<projectDir>/manifest.json`, and the dist test matches a whole path SEGMENT, so a `distDir`
+  re-pointed by a manifest edit (which deliberately does not re-point the WATCH) cannot claim the
+  still-watched sibling that shares its prefix.
+  (b) Debounce timers are keyed appId -> file instead of a flat `${appId}:${filePath}` map swept on
+  unregister with `key.startsWith('${appId}:')`. A manifest's `id` is an arbitrary non-empty string
+  (`validateManifest`) and boot registers every user's apps into that one map, so an app called `a`
+  unregistering cancelled the pending reload of an unrelated app called `a:b`.
+  Everything else is preserved exactly: the 100 ms debounce per app and file, add/change through the
+  debounce and unlink immediately, `ignoreInitial`, the `ignored` pattern, and the dist-change
+  listener contract - including notifying every app registered over a shared or nested tree.
+  MEASURED, NOT ASSERTED: `api/tests/apps/app-registry-watch-live.test.ts` counts `inotify wd:` lines
+  in `/proc/self/fdinfo` around arm / unregister / stop against real chokidar, so the descriptor
+  claim above is a test rather than a comment. It skips (never reddens) on a host that cannot hand
+  out watches at all, since degrading quietly is precisely the registry's contract there.

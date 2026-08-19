@@ -6,6 +6,25 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`suite-ledger-unit-census-drifted-red-again`** (2026-08-19, OPEN, LOW, gate rot - found by
+  running `npm run gate:ledger` on this branch and checking whether the red was mine; it is not).
+  `npm run gate:ledger` **exits 1** on `[FAIL] unit census mismatch: disk 64 != ledger 59 (drift or
+  omission)`. Five `web/__tests__` files exist without a `frontend_unit.surviving` entry in
+  `api/tests/SUITE_LEDGER.json`: `automations-needs-credentials`, `components/schedule-detail-page`,
+  `components/schedule-form-error`, `components/schedules-page`, `lib/schedules-authority` - the
+  schedules and needs-credentials work. **Not caused by the branch that found it**
+  (`fix/app-registry-watcher-instances` touches no `web/` file and no ledger entry; the ledger in
+  that worktree is byte-identical to `main`'s), and left unfixed there only because that branch's
+  scope is `api/src/apps/**`.
+  This is the SECOND occurrence of the identical drift: `suite-ledger-unit-census-drifted-red`
+  (FIXED 2026-08-05) recorded the same census going red for the same reason, one file at a time.
+  The gate is not in `npm run ci:lane`, so nothing forces the entry at merge - which is why it rots
+  and why one fix did not hold. CONSEQUENCE IF NOT CLOSED: the one census that would catch a web
+  unit suite quietly deleted is permanently red, so its output carries no information.
+  CLOSE BY: add the five names to `frontend_unit.surviving` with their target gate, and then either
+  put `gate:ledger` in `ci:lane` or record in `docs/decisions.md` why a gate nothing runs is worth
+  keeping.
+
 - **`f5-crawl-specs-race-the-background-runner`** (2026-08-19, OPEN, MEDIUM, test-estate - found by
   the api contract lane going red on a loaded box while closing
   `artifact-family-test-leaks-watchers`; **NOT caused by that work**, proven below). Two specs in
@@ -1357,29 +1376,86 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
      correct diagnosis was already written down and was dismissed in favour of a plausible one that
      nobody measured.
 
-  **This was never only a test problem.** Under Node's default `--unhandled-rejections=throw`, the
-  identical condition on a server host kills the API process - for a hot-reload convenience whose
-  absence costs nothing, since serving reads from disk.
+  **SECOND CORRECTION, 2026-08-19 (adversarial verification of the first one). THE ESCALATION THIS
+  PARAGRAPH USED TO CARRY WAS FALSE AND IS WITHDRAWN.** It read: "this was never only a test
+  problem - under Node's default `--unhandled-rejections=throw`, the identical condition on a
+  server host kills the API process". It does not, and `api/src/server.ts` is where that was
+  checkable all along. `boot()` installs `process.on('uncaughtException')` and
+  `process.on('unhandledRejection')` - both log and continue - as its FIRST two statements, before
+  `loadConfig()`, before `buildApp()`, and therefore long before `bootState()` reaches
+  `appRegistry.start()`. Registering an `unhandledRejection` listener also switches Node's
+  `--unhandled-rejections=throw` default off outright (measured on Node 20.19.4: the same unhandled
+  EMFILE rejection kills the process and exits 1 with no listener; with a listener installed it logs,
+  the process keeps running its timers, and it exits 0), and server.ts's own header records this as
+  carried policy - "process-level exception posture: uncaughtException/unhandledRejection log and
+  continue". On a server host this condition therefore
+  produced a `[unhandledRejection]` log line per failing watch and nothing else. The API process was
+  never at risk from it.
+  The TEST half of the claim stands, and is the whole reason this was worth fixing: **vitest fails a
+  RUN on an unhandled rejection regardless of any process-level listener**, which is exactly the
+  observable this entry opened on. Recorded at this length because an entry written to correct a
+  wrong diagnosis is the last place that should overstate in the other direction - and this one did
+  it on its second line, in the same move that corrected somebody else's overreach.
 
-  **Deterministic repro** (the original was reproducible only by luck of host load): occupy the
-  instance pool from a helper process - worker threads work, one instance each - until a fresh
-  `fs.watch(os.tmpdir(), () => {})` throws `EMFILE`, then run
-  `npx vitest run tests/contract/build-failure.test.ts` from `api/`. Before the fix: 5 tests pass,
-  5 unhandled EMFILE rejections, **exit 1**. After: 5 tests pass, 0 unhandled, **exit 0**, one
-  `[app-registry] host is out of filesystem watch capacity (EMFILE)` warning, all 5 apps still
-  registered and served.
+  **Deterministic repro, and it needs nothing global.** The original observable was reproducible
+  only by luck of host load, and the first repro written for it still needed the whole per-user
+  inotify instance pool occupied by a helper process - disruptive on a box running several agent
+  sessions. It is not the only way to make chokidar raise an `error`: an unreadable directory
+  inside a watched dist does it with a chmod. `mkdir <projectDir>/dist/locked && chmod 000` on it,
+  register the app, and chokidar emits `EACCES: permission denied, watch '<dist>/locked'` down the
+  same `_handleError` path EMFILE takes. Measured both ways on this host:
+  - **without the error listener**: the test itself reports PASSED, and the run prints
+    `Unhandled Rejection - Error: EACCES: permission denied, watch ...` and **exits 1**. That is
+    the finding's original signature exactly - green tests, red run.
+  - **with it**: **exit 0**, zero unhandled rejections, one `[app-registry] watcher error:` warning
+    (EMFILE/ENOSPC take the deduplicated capacity branch instead), and the app still registered and
+    served.
+  Committed as a case in `api/tests/apps/app-registry-watch-live.test.ts`, which probes first and
+  skips where mode bits cannot deny (root, or a filesystem that ignores them).
 
-  **FIXED** in `api/src/apps/app-registry.ts`: (a) the watcher carries an `error` listener that
-  degrades EMFILE/ENOSPC to a single warning - the actual fix for both the lane and the server;
-  (b) the per-app `Map<appId, FSWatcher>` is collapsed to ONE lazily-created watcher driven with
-  `add()`/`unwatch()`, with events routed back to an app by longest matching watched-path prefix,
-  which bounds the failure reports to one per condition instead of one per app and removes the
-  per-app bookkeeping; (c) `register()` is serialised per appId, closing the guard-then-`await`
-  window that let two concurrent registers for one id orphan a watch. Pinned by
-  `api/tests/apps/app-registry-watcher.test.ts` (chokidar mocked: one watcher for N apps, routing
-  incl. nested and same-prefix-sibling trees, unregister isolation, stop-then-register re-arming,
-  no surviving timers, the error listener) and `api/tests/apps/app-registry-watch-live.test.ts`
-  (real chokidar + real fs; skips, rather than reddening, when the host itself cannot watch).
+  **FIXED** in `api/src/apps/app-registry.ts`: (a) every app's watcher carries an `error` listener
+  that degrades EMFILE/ENOSPC to a warning, deduplicated by a registry-level flag so one host
+  condition produces ONE warning however many apps are served - this is the actual fix, and the
+  only part of the change the observable required; (b) `register()`/`unregister()` are serialised
+  per appId, closing the guard-then-`await` window that let two concurrent registers for one id
+  leave the first's watcher open forever, and `stop()` now DRAINS in-flight ops before tearing the
+  state down, which closes that same orphan from the other side (a register in flight across a stop
+  used to resume afterwards and arm a watcher nothing held a reference to); (c) the manifest/dist
+  test is by whole path - `<projectDir>/manifest.json` exactly, and dist matched on a path SEGMENT -
+  rather than `endsWith('manifest.json')`, which also claimed a build output named
+  `app-manifest.json` and swallowed its dist notification; (d) debounce timers are keyed
+  appId -> file instead of a flat `${appId}:${filePath}` map swept by `startsWith('${appId}:')`,
+  which let an app called `a` cancel the pending reload of an unrelated app called `a:b` (a
+  manifest's `id` is any non-empty string, and boot puts every user's apps in that one map). Pinned
+  by
+  `api/tests/apps/app-registry-watcher.test.ts` (chokidar and manifest reads mocked: per-app
+  watchers, the ignore pattern asserted by SOURCE rather than by a RegExp in the expected position,
+  event handling, unregister isolation, stop-then-register re-arming, no surviving timers, the error
+  listener and its dedup, the stop-drain) and `api/tests/apps/app-registry-watch-live.test.ts` (real
+  chokidar + real fs: the repro above, event delivery, shared and nested trees, and watch-descriptor
+  accounting counted out of `/proc/self/fdinfo`; skips, rather than reddening, when the host itself
+  cannot watch).
+
+  **TRIED, MEASURED, AND REVERTED: one watcher for the whole registry.** The first attempt at this
+  fix also collapsed the per-app `Map<appId, FSWatcher>` into a single lazily-created watcher driven
+  with `add()`/`unwatch()`, on the premise that watcher count was the scarce resource. Per (2) it is
+  not, and the collapse then broke three things that per-app `close()` gets right:
+  - *It leaked the descriptors it was meant to conserve.* `FSWatcher.unwatch(path)` closes only the
+    closers registered under that exact path string (chokidar 5.0.0 `_closePath`); every directory
+    chokidar discovered BELOW it keeps its own live `fs.watch`. Measured by counting `inotify wd:`
+    lines in `/proc/self/fdinfo` with 8 apps of `dist/` + 10 subdirectories: armed 96 descriptors,
+    after unregistering all 8 the collapsed version still held 80; per-app `close()` held 0. The
+    process footprint would have become the high-water mark of every app ever registered, reachable
+    from `POST /api/company-space/:artifactId/stop` and `POST /api/dev/unregister`.
+  - *`unwatch()` is permanent.* It calls `_addIgnoredPath(path, {recursive:true})`, so unregistering
+    an app NESTED in another app's tree blinded the enclosing app for that subtree for the life of
+    the watcher, and re-registering did not heal it.
+  - *It silently narrowed the listener contract.* Routing one shared watcher's event to a single
+    winning app meant that of two ids registered over the same project dir (what a fork or rename
+    mid-flight leaves behind) only the first-registered was ever notified; per-app watchers notify
+    both, as they always had.
+  All three are now pinned as live measurements in `app-registry-watch-live.test.ts` rather than as
+  assertions about bookkeeping, and all three go red against the collapsed implementation.
 
   **NOT fixed, because it does not exist:** a "~128 apps" production ceiling. Per (2) above, the
   per-user cap a Cortex host serving many apps can actually reach is `max_user_watches` (65536

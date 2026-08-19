@@ -1,8 +1,8 @@
 /**
  * App registry (ch07 §7.3; carryover B2 - adapted). Tracks REGISTERED (served) apps
  * and the metadata static serving needs: distDir, projectDir, userId, name, manifest.
- * Every registered app's manifest.json and dist directory are watched (100 ms per-file
- * debounce); dist changes notify listeners (cache busting / reload).
+ * Each registered app's manifest.json and dist directory are watched via chokidar
+ * (100 ms per-file debounce); dist changes notify listeners (cache busting / reload).
  * Boot scans the sandbox root's user-* project directories and registers only
  * projects with a valid manifest.json. Unregister keeps static files on disk.
  *
@@ -10,31 +10,41 @@
  * hot-reloading) - dead weight in the new architecture; agent-facing content is
  * ch08's concern and never lives inside user app trees.
  *
- * ONE WATCHER FOR THE WHOLE REGISTRY (2026-08-19; findings `artifact-family-test-leaks-watchers`,
- * corrected in place that day - read it before assuming what this bought). The registry used to
- * hold a `Map<appId, FSWatcher>` - one chokidar watcher per served app, each closing over its own
- * appId. It now holds a single lazily-created FSWatcher
- * and drives it with `add()` / `unwatch()`, routing each event back to an app by LONGEST
- * matching watched-path prefix. Two things this buys, and one thing it deliberately does not:
+ * WATCH FAILURES NEVER REACH THE TEST LANE OR THE LOG AS NOISE (2026-08-19; findings
+ * `artifact-family-test-leaks-watchers`). chokidar surfaces an `fs.watch` failure as an `error`
+ * event, and an EventEmitter 'error' with no listener throws - here, inside chokidar's own promise
+ * chain, so it lands as an unhandled rejection. The API process survives that (server.ts installs
+ * `uncaughtException` / `unhandledRejection` handlers that log and continue, before anything calls
+ * `appRegistry.start()`), but vitest fails a RUN on an unhandled rejection even when every test
+ * passes, which is how this surfaced. Every watcher therefore carries an `error` listener, and the
+ * EMFILE/ENOSPC warning is deduplicated ACROSS watchers by a single registry-level flag, so a host
+ * out of watch capacity produces one warning rather than one per served app. Serving is unaffected
+ * either way: it reads from disk and never consults a watcher.
  *
- *   - It bounds the failure noise. When the host cannot hand out watches at all (see the error
- *     handling below), chokidar reports one error per watcher, so N served apps used to produce
- *     N reports of one condition. One watcher reports it once.
- *   - It removes per-app watcher bookkeeping: one object, one set of listeners, one close.
- *   - It does NOT change how many inotify INSTANCES the process uses. libuv keeps a single
- *     inotify fd per event loop and every `fs.watch` in the process adds a watch DESCRIPTOR to
- *     it, so 1 watcher and 300 watchers both cost exactly one instance (measured, chokidar
- *     5.0.0 / Node 20.19.4 / Linux 6.17). Anyone reaching for this file to raise a supposed
- *     "~128 apps" ceiling from `fs.inotify.max_user_instances` is chasing the wrong resource:
- *     the per-user cap that a server hosting many apps can actually hit is
- *     `max_user_watches` (one per watched file and directory), and that is a function of the
- *     PATHS watched, which collapsing the watchers does not change.
+ * ONE WATCHER PER APP, DELIBERATELY (same date, after measuring the alternative). Collapsing the
+ * `Map<appId, FSWatcher>` into a single registry-wide watcher driven with `add()` / `unwatch()`
+ * looks like a saving and is not:
  *
- * WATCH FAILURES NEVER TAKE THE PROCESS DOWN. Watching is a hot-reload convenience; serving
- * reads from disk and does not depend on it. chokidar surfaces `fs.watch` failures as an
- * `error` event, and an EventEmitter 'error' with no listener becomes an unhandled rejection -
- * which, under Node's default `--unhandled-rejections=throw`, kills the API server. The single
- * watcher therefore always carries an error listener that degrades to a warning.
+ *   - It saves no inotify INSTANCES. libuv keeps one inotify fd per event loop and every
+ *     `fs.watch` in the process adds a watch DESCRIPTOR to it, so 1 watcher and 300 watchers both
+ *     cost exactly one instance (measured, chokidar 5.0.0 / Node 20.19.4 / Linux 6.17). Anyone
+ *     reaching for this file to raise a supposed "~128 apps" ceiling from
+ *     `fs.inotify.max_user_instances` is chasing the wrong resource: the per-user cap a server
+ *     hosting many apps can actually hit is `max_user_watches` (one per watched file and
+ *     directory), a function of the PATHS watched, which the watcher count does not change.
+ *   - It LEAKS the descriptors it was supposed to conserve. `FSWatcher.unwatch(path)` closes only
+ *     the closers registered under that exact path string (chokidar 5.0.0 `_closePath`); every
+ *     directory chokidar discovered BELOW it keeps its own live `fs.watch`. Measured with 8 apps
+ *     of `dist/` + 10 subdirectories each: `close()` per app releases 96 of 96 descriptors,
+ *     `unwatch()` releases 16. The process footprint would become the high-water mark of every app
+ *     ever registered, reachable from `POST /api/company-space/:artifactId/stop` and
+ *     `POST /api/dev/unregister`.
+ *   - `unwatch()` is also permanent: it calls `_addIgnoredPath(path, {recursive:true})`, so
+ *     unregistering an app NESTED inside another app's tree would blind the enclosing app for that
+ *     subtree for the life of the watcher, and re-registering would not heal it.
+ *
+ * `close()` has none of those properties, and the one thing the collapse genuinely bought - one
+ * failure report instead of N - is bought here by the shared warning flag instead.
  */
 import { readdir } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
@@ -58,22 +68,27 @@ export interface RegisteredApp {
 
 export type DistChangeListener = (appId: string) => void;
 
-/** Identical to the options the per-app watchers used; kept in one place now there is one watcher. */
+/** chokidar options, identical for every app's watcher; kept in one place. */
 const WATCH_OPTIONS = {
   ignoreInitial: true,
   persistent: true,
   ignored: /(^|[/\\])\.|node_modules/,
 } as const;
 
+/** Bound on `stop()`'s drain: ops that keep chaining must never hang shutdown. */
+const MAX_DRAIN_ROUNDS = 50;
+
 class AppRegistry {
   private apps = new Map<string, RegisteredApp>();
-  /** THE watcher. Created lazily on the first register, so a process that serves no app watches nothing. */
-  private watcher: FSWatcher | null = null;
-  /** Routing table: appId -> the absolute paths handed to the watcher for it. */
-  private watchedPaths = new Map<string, string[]>();
-  /** How many apps want each path watched - two apps may legitimately share one (nested trees). */
-  private pathRefs = new Map<string, number>();
-  private debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private watchers = new Map<string, FSWatcher>();
+  /**
+   * appId -> watched file -> pending 100 ms timer. Nested rather than keyed `${appId}:${filePath}`
+   * with a `startsWith('${appId}:')` sweep on unregister: a manifest's `id` is an arbitrary
+   * non-empty string (`validateManifest`), so an app called `a` unregistering used to cancel the
+   * pending timers of an unrelated app called `a:b`, and boot registers every user's apps into
+   * this one map.
+   */
+  private debounceTimers = new Map<string, Map<string, ReturnType<typeof setTimeout>>>();
   private distChangeListeners: DistChangeListener[] = [];
   private _sandboxRoot: string | null = null;
   /** Serialises register/unregister per appId (see `serialize`). */
@@ -90,9 +105,9 @@ class AppRegistry {
     return this.serialize(appId, () => this.registerLocked(appId, projectDir, userId, name));
   }
 
-  /** Unregister an app and stop watching its paths. Static files remain on disk. */
+  /** Unregister an app and close its watcher. Static files remain on disk. */
   async unregister(appId: string): Promise<void> {
-    return this.serialize(appId, async () => this.unregisterLocked(appId));
+    return this.serialize(appId, () => this.unregisterLocked(appId));
   }
 
   getApp(appId: string): RegisteredApp | undefined {
@@ -146,30 +161,42 @@ class AppRegistry {
   }
 
   /**
-   * Close the watcher and clear the registry (shutdown obligation, ch07 §7.16). Leaves the
-   * registry re-armable: a later `register()` creates a fresh watcher from scratch. Suites that
-   * call `stop()` between cases and keep going depend on that.
+   * Close every watcher and clear the registry (shutdown obligation, ch07 §7.16). Leaves the
+   * registry re-armable: a later `register()` builds fresh watchers. Suites that call `stop()`
+   * between cases and keep going depend on that.
+   *
+   * It DRAINS the op chains first. `registerLocked` awaits `readManifest` mid-flight, so a stop
+   * that tore the state down underneath an in-flight register would let that register resume
+   * afterwards and arm a watcher nobody holds a reference to - the exact orphan `serialize` was
+   * added to prevent, re-opened from the other side.
    */
   async stop(): Promise<void> {
-    const watcher = this.watcher;
-    this.watcher = null;
+    await this.drainOps();
+    const watchers = [...this.watchers.values()];
+    this.watchers.clear();
     this.apps.clear();
-    this.watchedPaths.clear();
-    this.pathRefs.clear();
     this.opChain.clear();
-    for (const timer of this.debounceTimers.values()) clearTimeout(timer);
+    for (const byFile of this.debounceTimers.values()) for (const timer of byFile.values()) clearTimeout(timer);
     this.debounceTimers.clear();
     this.distChangeListeners = [];
     this.watchLimitWarned = false;
-    if (watcher) await watcher.close();
+    await Promise.all(watchers.map((w) => w.close()));
+  }
+
+  /** Wait for in-flight register/unregister work to settle (bounded; ops may chain). */
+  private async drainOps(): Promise<void> {
+    for (let round = 0; round < MAX_DRAIN_ROUNDS && this.opChain.size > 0; round++) {
+      // Links never reject (see `serialize`), so this settles rather than short-circuits.
+      await Promise.all([...this.opChain.values()]);
+    }
   }
 
   /**
    * Runs `op` after any in-flight register/unregister for the SAME appId has settled.
    * `registerLocked` checks `apps.has(appId)` and then AWAITS `readManifest`, so without this
    * two concurrent registers for one id both pass the guard and the second overwrites the
-   * first's routing entry, orphaning its watched paths. Failures never poison the chain: the
-   * next link runs whichever way the previous one settled.
+   * first's watcher entry, leaving the first's watcher open forever. Failures never poison the
+   * chain: the next link runs whichever way the previous one settled.
    */
   private serialize<T>(appId: string, op: () => Promise<T>): Promise<T> {
     const prior = this.opChain.get(appId) ?? Promise.resolve();
@@ -186,7 +213,7 @@ class AppRegistry {
   }
 
   private async registerLocked(appId: string, projectDir: string, userId?: string, name?: string): Promise<void> {
-    if (this.apps.has(appId)) this.unregisterLocked(appId);
+    if (this.apps.has(appId)) await this.unregisterLocked(appId);
 
     let manifest: AppManifest | null = null;
     try {
@@ -210,108 +237,59 @@ class AppRegistry {
       manifest,
     };
     this.apps.set(appId, app);
-    this.watchApp(appId, projectDir, distDir);
+    this.startWatcher(appId, projectDir, distDir);
     console.log(`[app-registry] registered "${appId}" (${resolvedName}) - dist: ${distDir}`);
   }
 
-  private unregisterLocked(appId: string): void {
-    const paths = this.watchedPaths.get(appId);
-    if (paths) {
-      this.watchedPaths.delete(appId);
-      // Only stop watching a path no other registered app still wants (nested trees can share one).
-      const dropped = paths.filter((path) => this.releasePath(path));
-      if (dropped.length > 0) this.watcher?.unwatch(dropped);
-    }
-    const prefix = `${appId}:`;
-    for (const [key, timer] of this.debounceTimers.entries()) {
-      if (key.startsWith(prefix)) {
-        clearTimeout(timer);
-        this.debounceTimers.delete(key);
-      }
-    }
-    this.apps.delete(appId);
-  }
-
-  /** Add this app's paths to the shared watcher, creating it on first use. */
-  private watchApp(appId: string, projectDir: string, distDir: string): void {
-    const paths = [resolve(projectDir, 'manifest.json'), resolve(distDir)];
-    this.watchedPaths.set(appId, paths);
-    const fresh = paths.filter((path) => this.retainPath(path));
-    if (fresh.length === 0) return; // already watched for another app sharing the tree
-
-    if (!this.watcher) {
-      const watcher = chokidarWatch(fresh, WATCH_OPTIONS);
-      watcher.on('add', (path: string) => this.onFsEvent(path, 'change'));
-      watcher.on('change', (path: string) => this.onFsEvent(path, 'change'));
-      watcher.on('unlink', (path: string) => this.onFsEvent(path, 'unlink'));
-      watcher.on('error', (err: unknown) => this.onWatchError(err));
-      this.watcher = watcher;
-      return;
-    }
-    this.watcher.add(fresh);
-  }
-
-  private retainPath(path: string): boolean {
-    const next = (this.pathRefs.get(path) ?? 0) + 1;
-    this.pathRefs.set(path, next);
-    return next === 1;
-  }
-
-  private releasePath(path: string): boolean {
-    const next = (this.pathRefs.get(path) ?? 1) - 1;
-    if (next <= 0) {
-      this.pathRefs.delete(path);
-      return true;
-    }
-    this.pathRefs.set(path, next);
-    return false;
-  }
-
   /**
-   * Map a watcher event back to the app that asked for it. LONGEST matching watched-path prefix
-   * wins, and a match is a whole path SEGMENT (`<watched>` or `<watched>/...`) - never a bare
-   * substring - so `/apps/site` cannot claim an event under `/apps/site-backup`, and an app
-   * nested inside another app's tree gets its own events rather than its parent's.
+   * `close()`, never `unwatch()`. See the header: `unwatch()` releases only the descriptor for the
+   * exact path handed to it and permanently ignores that subtree; `close()` releases every
+   * descriptor this app's watcher took.
    */
-  private routeToApp(filePath: string): string | undefined {
-    let bestApp: string | undefined;
-    let bestLength = -1;
-    for (const [appId, paths] of this.watchedPaths.entries()) {
-      for (const watched of paths) {
-        if (filePath !== watched && !filePath.startsWith(watched + sep)) continue;
-        if (watched.length > bestLength) {
-          bestLength = watched.length;
-          bestApp = appId;
-        }
-      }
-    }
-    return bestApp;
+  private async unregisterLocked(appId: string): Promise<void> {
+    const watcher = this.watchers.get(appId);
+    this.watchers.delete(appId);
+    for (const timer of this.debounceTimers.get(appId)?.values() ?? []) clearTimeout(timer);
+    this.debounceTimers.delete(appId);
+    this.apps.delete(appId);
+    if (watcher) await watcher.close();
   }
 
-  private onFsEvent(filePath: string, kind: 'change' | 'unlink'): void {
-    const appId = this.routeToApp(filePath);
-    if (!appId) return;
-    if (kind === 'unlink') {
-      this.handleFileRemove(appId, filePath);
-      return;
-    }
-    const key = `${appId}:${filePath}`;
-    const existing = this.debounceTimers.get(key);
-    if (existing) clearTimeout(existing);
-    this.debounceTimers.set(
-      key,
-      setTimeout(() => {
-        this.debounceTimers.delete(key);
-        void this.handleFileChange(appId, filePath);
-      }, 100),
-    );
+  private startWatcher(appId: string, projectDir: string, distDir: string): void {
+    const watcher = chokidarWatch([resolve(projectDir, 'manifest.json'), resolve(distDir)], WATCH_OPTIONS);
+
+    const debouncedChange = (filePath: string) => {
+      let byFile = this.debounceTimers.get(appId);
+      if (!byFile) {
+        byFile = new Map();
+        this.debounceTimers.set(appId, byFile);
+      }
+      const existing = byFile.get(filePath);
+      if (existing) clearTimeout(existing);
+      byFile.set(
+        filePath,
+        setTimeout(() => {
+          const current = this.debounceTimers.get(appId);
+          current?.delete(filePath);
+          if (current?.size === 0) this.debounceTimers.delete(appId);
+          void this.handleFileChange(appId, filePath);
+        }, 100),
+      );
+    };
+
+    watcher.on('add', debouncedChange);
+    watcher.on('change', debouncedChange);
+    watcher.on('unlink', (filePath: string) => this.handleFileRemove(appId, filePath));
+    watcher.on('error', (err: unknown) => this.onWatchError(err));
+    this.watchers.set(appId, watcher);
   }
 
   /**
    * Watching is best-effort. A host at its `fs.inotify.max_user_instances` /
    * `max_user_watches` cap answers every `fs.watch` with EMFILE / ENOSPC; without this listener
-   * chokidar's error event becomes an unhandled rejection that ends the process. Serving is
-   * unaffected (static files are read from disk), so this degrades to a warning - once.
+   * chokidar's error event becomes an unhandled rejection, which reddens a whole vitest run whose
+   * tests all passed. Serving is unaffected (static files are read from disk), so this degrades to
+   * a warning - once per registry lifetime, across every app's watcher.
    */
   private onWatchError(err: unknown): void {
     const code = (err as NodeJS.ErrnoException | null)?.code;
@@ -328,16 +306,14 @@ class AppRegistry {
 
   /**
    * PRE-EXISTING, PRESERVED: a manifest edit that moves `outputDir` updates `app.distDir` but does
-   * NOT re-point the watch - the per-app watchers behaved the same way, and re-registering the app
-   * (which every build path already does) re-arms it. Left alone here so this change stays a
-   * watcher-plumbing change; the routing table deliberately keys off the paths actually WATCHED,
-   * while the dist test below keys off the app's current `distDir`, exactly as before.
+   * NOT re-point the watch; re-registering the app (which every build path already does) re-arms
+   * it.
    */
   private async handleFileChange(appId: string, filePath: string): Promise<void> {
     const app = this.apps.get(appId);
     if (!app) return;
 
-    if (filePath.endsWith('manifest.json')) {
+    if (isManifestOf(app, filePath)) {
       try {
         app.manifest = await readManifest(app.projectDir);
         if (app.manifest) {
@@ -349,17 +325,17 @@ class AppRegistry {
       }
       return;
     }
-    if (filePath.startsWith(app.distDir)) this.notifyDistChange(appId);
+    if (isUnderDist(app, filePath)) this.notifyDistChange(appId);
   }
 
   private handleFileRemove(appId: string, filePath: string): void {
     const app = this.apps.get(appId);
     if (!app) return;
-    if (filePath.endsWith('manifest.json')) {
+    if (isManifestOf(app, filePath)) {
       app.manifest = null;
       return;
     }
-    if (filePath.startsWith(app.distDir)) this.notifyDistChange(appId);
+    if (isUnderDist(app, filePath)) this.notifyDistChange(appId);
   }
 
   private notifyDistChange(appId: string): void {
@@ -371,6 +347,19 @@ class AppRegistry {
       }
     }
   }
+}
+
+/**
+ * The app's OWN manifest.json, by whole path - not `filePath.endsWith('manifest.json')`, which
+ * also claims a build output called `app-manifest.json` and swallows its dist notification.
+ */
+function isManifestOf(app: RegisteredApp, filePath: string): boolean {
+  return filePath === resolve(app.projectDir, 'manifest.json');
+}
+
+/** Inside the app's dist, matched on a whole path SEGMENT so `dist` never claims `dist-backup`. */
+function isUnderDist(app: RegisteredApp, filePath: string): boolean {
+  return filePath === app.distDir || filePath.startsWith(app.distDir + sep);
 }
 
 /** Extract the owner id from a sandbox path like .../sandboxes/user-abc123/project. */
