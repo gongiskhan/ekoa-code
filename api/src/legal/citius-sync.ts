@@ -227,6 +227,7 @@ import type { CitiusNotificacaoMeta } from './citius-mandatarios.js';
 // grows a fifth member, its `ensureSession` stops being assignable to this seam and the wiring site
 // fails to compile, which is exactly the canary a hand-copied union would not give.
 import type { EnsureSessionInput, EnsureSessionResult } from '../automation/session-establishment.js';
+import type { EgressResolution } from '../automation/egress-policy.js';
 
 /** The default logical integration this sync belongs to. */
 export const CITIUS_INTEGRATION_KEY = 'caixa-citius';
@@ -288,9 +289,31 @@ export interface CitiusSyncInput extends CitiusSyncScope {
   credentialRef?: string;
   /** Non-secret username filled alongside it. */
   username?: string;
-  /** Pairing ids that can currently provide residential egress for this org. */
+  /**
+   * Pairing ids that can currently provide residential egress for this org.
+   *
+   * DELIBERATELY LEFT UNSUPPLIED BY THIS RAIL'S ROUTER, and that is the correct closed answer rather
+   * than a gap: this rail does not drive a browser at all after establishment - it replays the
+   * captured session's cookies over SERVER-SIDE HTTP (`citius-mandatarios-http.ts`), from the
+   * datacenter, with no proxy seam anywhere in the path. Naming a residential machine here would
+   * make `checkoutSession` RELEASE a session bound to that machine's line, which this rail would
+   * then replay from a datacenter IP - the exact vantage mismatch checkout exists to refuse. The
+   * `needs-egress` outcome is the honest one until the walk can leave by a machine.
+   */
   residentialAvailable?: readonly string[];
   datacenterAvailable?: boolean;
+  /**
+   * THE HOSTED-TYPIST PERMIT (P4.1), forwarded to `ensureSession` verbatim. ABSENT ⇒ no browser is
+   * opened and the typist route becomes a `needs-human` refusal.
+   *
+   * IT IS AN INPUT AND NOT A CONSTANT because this rail must not be the one consumer that exempts
+   * itself from the locality decision (Capability Contract rule 3). It briefly hard-coded an OPEN
+   * permit, which meant a court portal's password could be typed into the hosted Chromium from a
+   * datacenter IP whatever anyone had declared about that origin - the single act this slice exists
+   * to place. The caller resolves it from the origin's posture; this module holds no posture and
+   * decides nothing.
+   */
+  hostedTypist?: { egress?: EgressResolution };
 }
 
 /**
@@ -704,14 +727,12 @@ async function runOneCitiusSync(
     ...(input.username === undefined ? {} : { username: input.username }),
     ...(input.residentialAvailable === undefined ? {} : { residentialAvailable: input.residentialAvailable }),
     ...(input.datacenterAvailable === undefined ? {} : { datacenterAvailable: input.datacenterAvailable }),
-    // THE HOSTED-TYPIST PERMIT (P4.1), stated explicitly because `ensureSession` now defaults it
-    // CLOSED: with no permit the typist route becomes a `needs-human` refusal and no browser opens.
-    // This rail predates the locality decision and takes no part in it - it has no step
-    // declaration, no posture classification and no fleet resolution to consult - so the permit
-    // here preserves exactly the behaviour it shipped with, and NAMES the gap rather than letting
-    // this rail acquire the run loop's protection by accident. Recorded in docs/findings.md as
-    // `citius-sync-establishes-its-session-outside-the-locality-decision`.
-    hostedTypist: {},
+    // THE HOSTED-TYPIST PERMIT (P4.1), forwarded and never invented. It used to be hard-coded OPEN
+    // here, which made this rail the one caller in the repo that could type a password into the
+    // hosted browser for an origin nobody had classified - a court portal, at that. Absent means no
+    // browser is opened at all, which is what an origin with no permissive declaration gets
+    // everywhere else.
+    ...(input.hostedTypist === undefined ? {} : { hostedTypist: input.hostedTypist }),
   });
 
   if (session.status === 'needs-human') {

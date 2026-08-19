@@ -1948,6 +1948,14 @@ export interface Translations {
       awaiting_daemon: string;
       needs_credentials: string;
     };
+    /**
+     * What the schedules surface says out loud when a fire ends BLOCKED (P4.1).
+     *
+     * The `schedule_blocked` notification is the only signal an ENVIRONMENT block produces - it is
+     * neutral against the failure ceiling, so it never auto-pauses and never announces itself any
+     * other way. `cause` is the `runBlocked` copy for the event's code, or the general fallback.
+     */
+    blockedFireToast: (cause: string) => string;
     emptyState: {
       title: string;
       description: string;

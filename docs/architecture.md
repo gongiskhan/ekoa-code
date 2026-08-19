@@ -244,19 +244,27 @@ machine - and the hosted Chromium is a fallback a PERMISSIVE origin may take, an
 may not, in every environment. `config.localBrowserEnabled` (default `!isProd`, unchanged) is now
 only an operator kill switch: it can CLOSE the fallback in any environment and it can never OPEN it
 for an adversarial origin, so posture is the gate and the environment is at most a second lock.
-`blocked` is a HALT, never a datacenter fallback and never a substitute machine, and it declares WHO
-can clear it: the verdict carries a REQUIRED `clearedBy: 'machine' | 'human'`. `machine` is the
-environment (a shut laptop, a fleet with no residential line right now) and halts in
-`awaiting_daemon`, which the schedule rail treats as neutral against the failure ceiling. `human`
-means waiting can never clear it, and halts in `needs_credentials` - which drives the ceiling and
-auto-pauses loudly instead of re-firing against a state that will not change. Required rather than
-optional, so a new refusal cannot inherit "neutral, retry forever" by saying nothing. The route out
-comes from
-`automation/egress-policy.ts` (`resolveEgress` against org-scoped candidates; `proxyOptionFor`
-rendered at the single launch seam in `server.ts`, because a proxy is a `newContext` launch option
-and cannot be applied afterwards), with the fleet reaching `automation/` through
-`setEgressCandidateResolver` - bound to `bridge/registry.ts` `egressCandidatesForOrg`, default
-EMPTY, and empty refuses. An ADVERSARIAL session prefers the pairing its ceremony happened on
+`blocked` is a HALT, never a datacenter fallback and never a substitute machine, and it declares WHICH
+ACT can clear it: the verdict carries a REQUIRED `clearedBy: 'start-a-machine' | 'pair-a-machine'`.
+`start-a-machine` is the environment (a shut laptop, the wrong machine dialled in) and halts in
+`awaiting_daemon`, which the schedule rail treats as neutral against the failure ceiling.
+`pair-a-machine` is an account whose fleet listing is KNOWN AND EMPTY - there is nothing to start, so
+waiting can never clear it - and halts TERMINALLY, driving the ceiling and auto-pausing loudly
+instead of re-firing against a state that cannot change. Required rather than optional, so a new
+refusal cannot inherit "neutral, retry forever" by saying nothing; and it names the ACT rather than
+the actor, because its one consumer has to pick a halt with it (`engine.ts` `refusalRecordFor` asks
+for a ceremony only when the step declares a credential - a credential ask for a step that wants none
+is a wrong specific instruction). The route out comes from
+`automation/egress-policy.ts` (`resolveEgress` against org-scoped candidates - filtered on the ROW's
+`org`, never on pairing-id membership alone, because a tenancy boundary must not rest on an id being
+unique across tenants; `proxyOptionFor` rendered at the single launch seam in `server.ts`, because a
+proxy is a `newContext` launch option and cannot be applied afterwards), with the fleet reaching
+`automation/` through `setEgressCandidateResolver` - bound to `bridge/registry.ts`
+`egressCandidatesForOrg`. THAT SEAM ANSWERS `EgressCandidate[] | null`, and the distinction is load
+bearing: `null` is "this process has no listing" (the UNBOUND default, which refuses without claiming
+anything about the org), `[]` is "the registry says this org has no machines" (which refuses
+terminally). Collapsing them let an org whose only laptop had been revoked retry a neutral halt for
+ever - see docs/findings.md `an-org-whose-only-machine-is-revoked-retried-forever`. An ADVERSARIAL session prefers the pairing its ceremony happened on
 (`sessionMetadata.establishedBy.pairingId`, reported by `ensureSession` and turned into a preference
 by `credential-gate.ts`): that machine or wait, never a colleague's. THE PREFERENCE IS SCOPED TO THE
 ORIGIN IT BELONGS TO, never to the run - a session is bound to one portal, so the gate emits it as
@@ -268,7 +276,7 @@ and asked for a ceremony the owner could perform correctly, for ever, with the n
 the identical halt - while `needs_credentials` (deliberately not neutral) drove the ceiling to the
 auto-pause. A portable credential resolves
 to `kind: 'any'` and prefers nothing. A preference whose machine the org's fleet listing no longer
-contains has been RETIRED, and the refusal changes accordingly - it is `clearedBy: 'human'`, so it
+contains has been RETIRED, and that refusal is made ONCE, in `credentialGateRecord` - see below. It
 halts TERMINALLY and names the act that fixes it (establish the session again from a machine you
 still have) instead of waiting forever, uncounted, on hardware nobody owns; it still does not fall
 through to a substitute. The ceremony request it raises carries no `preferredPairingId`, because
@@ -330,17 +338,23 @@ what the loop did until 2026-08-19, is the statement "no machine of yours can ca
 egress" - it refused every attended session there is, and made the whole ceremony-preference path
 below unreachable in production.
 
-A MACHINE THAT IS GONE IS NOT A MACHINE THAT IS ASLEEP, and the run loop answers that question in two
-places because it arrives from two directions. `resolveLocality` asks it about a preference the run
-LEARNED (`preferenceMachineRetired`); `credentialGateRecord` asks it about the machine CHECKOUT
-named, which is the earlier arrival - a ceremony session bound to a revoked machine cannot be
-released at all, so the preference is never learned and locality's own branch cannot fire. Both use
-`machineRetired` (`egress-policy.ts`) and both emit `SESSION_MACHINE_RETIRED_REASON`, so the halt
-reads the same whichever side reaches it first: a terminal `needs_credentials` asking for a ceremony,
-never the neutral `awaiting_daemon`, which is exempt from the failure ceiling and would re-fire
-forever against hardware nobody owns. An EMPTY fleet listing reads as NOT retired - the closed
-direction, so an unbound seam or a store that answered nothing can never escalate a wait into a
-terminal halt.
+A MACHINE THAT IS GONE IS NOT A MACHINE THAT IS ASLEEP, and the run loop answers that question in ONE
+place: `credentialGateRecord`, about the machine CHECKOUT named, through `machineRetired`
+(`egress-policy.ts`) and `SESSION_MACHINE_RETIRED_REASON` beside it. That is the only arrival there
+is - a ceremony session is bound to its machine's residential line, so a revoked machine makes the
+session unreleasable and the ceremony preference is never learned, which means `resolveLocality`
+cannot reach the question at all. It carried a second copy of the refusal for two rounds; nothing in
+production could reach it and it has been removed. The halt is a terminal `needs_credentials` asking
+for a ceremony, never the neutral `awaiting_daemon`, which is exempt from the failure ceiling and
+would re-fire forever against hardware nobody owns.
+
+AND AN ACCOUNT WITH NO MACHINE AT ALL IS A THIRD THING. `machineRetired` distinguishes `null` (no
+listing: not-knowing, which may never escalate a wait into a terminal halt) from `[]` (the registry
+answered and the org has no pairings: every machine it once had is gone). `resolveLocality` applies
+the same distinction to its own refusals - with no daemon connected and a known-empty listing, a
+"start your machine" halt becomes the terminal `pair-a-machine` one, because there is no machine to
+start. Reading `[]` as ignorance is what let a solo tenant who revoked their only laptop re-fire a
+neutral halt nightly, for ever, uncounted.
 
 THE LAST MILE. `locality.ts` decides a route and the engine carries it, but the only place it
 becomes actually-proxied traffic is the local-browser context provider, which renders the resolution

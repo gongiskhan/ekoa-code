@@ -105,17 +105,41 @@ export function residentialEgressPairings(
  * clear and one a laptop clears, stated once because two call sites ask it.
  *
  * `knownPairingIds` is the org's WHOLE listing, live or not (`egressCandidatesForOrg` returns every
- * non-revoked pairing), so "registered but asleep" and "revoked" are genuinely distinguishable. A
- * NON-EMPTY listing that does not contain the pairing is the registry stating the machine is gone.
- * An EMPTY listing is "this process does not know what this org has" - an unbound seam, a store
- * that answered nothing - which is not a statement that anything was retired, so the answer is NO.
- * That is the closed direction: not-knowing may never escalate a neutral wait into a terminal halt.
+ * non-revoked pairing), so "registered but asleep" and "revoked" are genuinely distinguishable.
+ *
+ * THREE INPUTS, NOT TWO, AND THE THIRD IS THE WHOLE FIX. `null` means THIS PROCESS DOES NOT KNOW
+ * what the org has - an unbound seam, a resolver that answered nothing - and not-knowing may never
+ * escalate a neutral wait into a terminal halt, so it answers NO. An EMPTY ARRAY is a different
+ * statement entirely: the registry was asked and said THIS ORG HAS NO MACHINES. Every pairing is
+ * gone from a fleet with nothing in it, so it answers YES.
+ *
+ * Conflating those two was a real dead end and not a hypothetical one (docs/findings.md
+ * `an-org-whose-only-machine-is-revoked-retried-forever`): a solo tenant with ONE laptop, an
+ * attended ceremony held on it, and then the pairing revoked, produced a genuinely empty listing -
+ * and `[] => not retired` meant the retirement branches never fired, the run halted in the halt
+ * that is NEUTRAL against the failure ceiling, and the schedule re-fired nightly forever telling
+ * the owner to connect a machine that no longer existed.
  */
-export function machineRetired(pairingId: string, knownPairingIds: readonly string[]): boolean {
+export function machineRetired(pairingId: string, knownPairingIds: readonly string[] | null): boolean {
   if (!pairingId) return false;
-  if (knownPairingIds.length === 0) return false;
+  if (knownPairingIds === null) return false;
   return !knownPairingIds.includes(pairingId);
 }
+
+/**
+ * WHAT A PERSON IS TOLD WHEN THE MACHINE A SESSION LIVES ON IS GONE.
+ *
+ * It lives beside `machineRetired` because it is the sentence that predicate's `true` produces: the
+ * fact and the words a user reads for it move together, and the one caller that turns the fact into
+ * a halt (`engine.ts` `credentialGateRecord`, on a `needs-machine` verdict naming a retired pairing)
+ * imports both from here.
+ *
+ * A PAIRING ID APPEARS NOWHERE IN IT, deliberately: it is an opaque identifier this product never
+ * shows a user, so printing one names nothing they can act on and reads as a fault code.
+ */
+export const SESSION_MACHINE_RETIRED_REASON =
+  'the machine where this session was established has been removed from your account - ' +
+  'establish this session again, from a machine you still have';
 
 /**
  * Choose the route out for a run.
@@ -133,11 +157,22 @@ export function resolveEgress(
   if (req.kind === 'datacenter') return { outcome: 'datacenter', reason: 'declared' };
   if (req.kind === 'any') return { outcome: 'datacenter', reason: 'no-requirement' };
 
-  // Residential. The org filter lives in `residentialEgressPairings`; all that is added here is the
-  // caller's optional pin, which narrows the same set rather than re-deriving it.
+  // Residential. The usability filter lives in `residentialEgressPairings` so checkout and selection
+  // cannot drift; what is added here is the caller's optional pin, which narrows the same set.
+  //
+  // THE ORG CHECK IS REPEATED ON THE CANDIDATE, and that is not redundancy. `available` is a set of
+  // PAIRING IDS, so mapping it back onto rows can only be as strong as the assumption that a pairing
+  // id identifies at most one row - and a tenancy boundary (Rule 5) must not rest on an id being
+  // unique across tenants. Without this, a foreign row carrying the same id as one of ours sorts
+  // into `usable`, and `usable[0]` hands back ANOTHER TENANT'S tailnet address as this run's proxy.
+  // Filtering the rows by org first makes the foreign row not a candidate at all, which is the
+  // property this module claims.
   const available = new Set(residentialEgressPairings(candidates, actorOrg));
   const usable = candidates.filter(
-    (c) => available.has(c.pairingId) && (req.pairingId === undefined || c.pairingId === req.pairingId),
+    (c) =>
+      c.org === actorOrg &&
+      available.has(c.pairingId) &&
+      (req.pairingId === undefined || c.pairingId === req.pairingId),
   );
 
   const chosen = usable[0];

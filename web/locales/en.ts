@@ -1846,6 +1846,7 @@ What would make your day easier?`,
       awaiting_daemon: 'Waiting for your machine',
       needs_credentials: 'Needs a credential',
     },
+    blockedFireToast: (cause: string) => `A scheduled run stopped and is waiting on you: ${cause.toLowerCase()}`,
     emptyState: {
       title: 'No schedules yet',
       description:

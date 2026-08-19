@@ -36,6 +36,8 @@ import {
   ensureSession,
   markSessionUnhealthy,
 } from '../automation/session-establishment.js';
+import { classifyOrigin } from '../automation/origin-posture.js';
+import { CITIUS_MANDATARIOS_BASE_URL } from '../legal/citius-mandatarios-http.js';
 import { CofreLockedError, CredentialOriginError } from '../cofre/index.js';
 import {
   CitiusSyncError,
@@ -111,7 +113,12 @@ export function syncRouter(deps: Partial<SyncRouterDeps> = {}): Router {
   r.post('/citius/notificacoes', async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, SyncRunRequest, req.body ?? {});
     if (!body) return;
-    const input: CitiusSyncInput = { actor: actorOf(req), runId: genRunId(), ...stripUndefined(body) };
+    const input: CitiusSyncInput = {
+      actor: actorOf(req),
+      runId: genRunId(),
+      ...stripUndefined(body),
+      ...hostedTypistPermitForPortal(body.baseUrl),
+    };
     try {
       const outcome = await syncCitiusNotifications(input, {
         establishSession,
@@ -152,6 +159,29 @@ export function syncRouter(deps: Partial<SyncRouterDeps> = {}): Router {
 /** Drop explicitly-undefined keys so `exactOptionalPropertyTypes` stays satisfiable downstream. */
 function stripUndefined<T extends object>(o: T): T {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as T;
+}
+
+/**
+ * MAY THE HOSTED TYPIST LOG IN TO THIS PORTAL - asked here, at the rail's composition point, for the
+ * same reason the run loop asks it: posture is a fact about an ORIGIN, and neither `legal/` nor
+ * `automation/session-establishment.ts` knows one.
+ *
+ * The rail briefly answered YES for itself, unconditionally. That made it the single consumer able
+ * to open the hosted Chromium and submit a lawyer's court password from a datacenter IP whatever
+ * anyone had declared about the origin - which is both the substitution P4.1 exists to stop and a
+ * per-consumer exemption from a rule everything else obeys (Capability Contract rule 3).
+ *
+ * NO ACTION DECLARATION IS PASSED, and there is none to pass: this rail runs a hard-coded portal
+ * walk, not an `IntegrationAction`, so nobody has ever declared a posture for it.
+ * `classifyOrigin(url)` with no action is CLOSED, so the answer today is a permit WITHHELD - the
+ * typist route becomes `needs-human` and the session is established by a person, on a machine of
+ * their own. That is the correct closed reading for a court portal, and it becomes an ordinary YES
+ * the moment the sync is promoted onto a declared integration action (docs/findings.md
+ * `citius-sync-establishes-its-session-outside-the-locality-decision`).
+ */
+function hostedTypistPermitForPortal(baseUrl: string | undefined): { hostedTypist?: Record<string, never> } {
+  const classification = classifyOrigin(baseUrl ?? CITIUS_MANDATARIOS_BASE_URL);
+  return classification.cloudEgressAllowed ? { hostedTypist: {} } : {};
 }
 
 /**

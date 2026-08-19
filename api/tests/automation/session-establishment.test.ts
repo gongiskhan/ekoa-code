@@ -1079,18 +1079,22 @@ describe('the establishing machine travels back with a reused session', () => {
     expect(result).not.toHaveProperty('establishedByPairingId');
   });
 
-  it('a fresh capture reports the vantage it was established FROM', async () => {
+  /**
+   * A FRESH CAPTURE NAMES NO MACHINE, and it is not a gap this suite should paper over.
+   *
+   * `reestablished` is produced by exactly one path - `establishWithTypist`, which logs in through
+   * `getLocalBrowserContext`, i.e. THIS PROCESS's hosted Chromium. A hosted login is on no machine,
+   * so there is no ceremony pairing to report and the result type does not carry the field.
+   *
+   * It briefly did, read off `EnsureSessionInput.vantage`. Nothing in production sets that field
+   * (the default is cloud/datacenter), so the case pinning it hand-built a shape this system cannot
+   * emit and proved only that the branch compiled. Driven through the REAL typist here instead.
+   */
+  it('a fresh capture by the typist names no machine - it happened in the hosted browser', async () => {
     const h = harness({ items: [sessionItem({ expiresAt: new Date(NOW - 1_000).toISOString() })] });
-    const result = await ensureSession(
-      runInput({
-        vantage: {
-          establishedBy: { kind: 'machine', pairingId: 'pair_office' },
-          boundEgress: { kind: 'residential', pairingId: 'pair_office' },
-        },
-      }),
-      h.deps,
-    );
-    expect(result).toMatchObject({ status: 'reestablished', establishedByPairingId: 'pair_office' });
+    const result = await ensureSession(runInput(), h.deps);
+    expect(result.status).toBe('reestablished');
+    expect(result).not.toHaveProperty('establishedByPairingId');
   });
 });
 

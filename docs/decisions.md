@@ -1863,3 +1863,44 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   reason stated at the fixture. Separately, `gate:ledger` remains outside `ci:lane`, which is why its
   unit census has now rotted three times; the census half is green again, the CI-lane half is a
   decision with its own blast radius.
+
+- 2026-08-19 - P4 round six, three decisions taken while closing a regression this branch introduced.
+  **(1) A FLEET LISTING HAS THREE ANSWERS, NOT TWO.** `EgressCandidateResolver` (`automation/seams.ts`)
+  answers `EgressCandidate[] | null`: `null` = this process has no listing (the UNBOUND default),
+  `[]` = the registry answered and this org has no machines. They were one value, and collapsing them
+  cost a solo tenant who revoked their only laptop the failure ceiling entirely - `machineRetired`
+  read `[]` as ignorance, no retirement branch fired, and the run halted in the NEUTRAL
+  `awaiting_daemon` so the schedule re-fired nightly for ever, uncounted, against hardware that no
+  longer existed. On `main` the same case counted and auto-paused after 20 fires: the branch had
+  turned a bounded dead end into an unbounded one. A STORE ERROR STILL THROWS rather than answering
+  `null`, deliberately - a throw is a terminal run failure and therefore bounded, where `null` would
+  restore the unbounded neutral wait for a broken database. Recorded because "empty means unknown"
+  read as a safe default and was the opposite of one.
+  **(2) `clearedBy` NAMES THE ACT, NOT THE ACTOR** - `'start-a-machine' | 'pair-a-machine'`, replacing
+  `'machine' | 'human'`. Its single consumer (`engine.ts` `refusalRecordFor`) exists to pick a halt,
+  and "a person must do something" cannot pick one: pairing hardware and establishing a session want
+  completely different things from the person, and the `needs_credentials` halt is a lie for a step
+  that declared no credential. The engine therefore asks for a ceremony only when the step's
+  declaration carries a `credentialRef`, and issues a plain non-recoverable failure otherwise - both
+  terminal, both driving the ceiling, which is the property that bounds the retry. A wrong specific
+  instruction is worse than an honest general one; that is the same rule the blocked badge follows.
+  **(3) THE CITIUS RAIL STOPS DECIDING ITS OWN HOSTED-TYPIST PERMIT.** It hard-coded `hostedTypist: {}`,
+  which made it the one consumer in the repo able to type a court password into the hosted Chromium
+  for an origin nobody had classified (Capability Contract rule 3). The permit is now an input
+  composed at `routes/sync.ts` from `classifyOrigin`, exactly as the run loop composes it. Because the
+  sync drives a hard-coded portal walk rather than a declared `IntegrationAction`, the answer today is
+  WITHHELD and a person must establish the session - accepted deliberately: the surface is behind a
+  default-off flag, has never met a real account, and a court portal nobody classified is adversarial
+  by any reading. It becomes an ordinary yes when the sync is promoted onto a declared action. Its
+  sibling gap - the rail supplies no `residentialAvailable` - is NOT a gap and was re-dispositioned
+  in `docs/findings.md`: the rail replays the session over server-side HTTP with no proxy, so naming
+  a residential machine would let checkout release a session this rail would then replay from a
+  datacenter IP.
+  **ALSO REMOVED, all reachable only from tests**: `resolveLocality`'s copy of the retirement refusal
+  (a successful checkout proves the machine is listed, so the branch could not fire),
+  `establishedByPairingId` on `EnsureSessionResult.reestablished` (the typist is hosted, so a fresh
+  capture is on no machine), and the silence around `schedule_blocked` (emitted for every blocked
+  fire, subscribed by nothing in `web/` - the schedules page now listens, toasts the cause and
+  refetches). And `resolveEgress`'s tenancy filter, which had degraded from a per-candidate org check
+  to pairing-id-set membership, is restored: a boundary must not rest on an id being unique across
+  tenants.

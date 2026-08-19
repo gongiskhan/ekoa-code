@@ -476,21 +476,36 @@ export function getLocalBrowserContext(
 // `getDaemonConnection` here). So the direction is inverted: this declares the resolver, and the
 // composition root binds it to `bridge/registry.ts` `egressCandidatesForOrg`.
 //
-// DEFAULT IS EMPTY, and empty is the CLOSED answer: with no candidates a residential requirement
-// cannot be met, so `resolveEgress` refuses (or queues) rather than falling through to a
-// datacenter route. An unbound seam must never be able to widen where a run's traffic may leave
-// from — the same posture `defaultOriginResolver` takes above.
+// `null` MEANS "I DO NOT KNOW", `[]` MEANS "THIS ORG HAS NO MACHINES", AND THE DIFFERENCE IS LOAD
+// BEARING. They used to be the same value, and collapsing them cost a whole class of run its only
+// retry cap: an org whose single laptop had been revoked produced a genuinely empty listing,
+// `machineRetired` read it as ignorance, no retirement branch fired, and the run halted in the state
+// that is NEUTRAL against the failure ceiling - so the schedule re-fired nightly forever asking the
+// owner to connect a machine that no longer existed (docs/findings.md
+// `an-org-whose-only-machine-is-revoked-retried-forever`).
+//
+// The UNBOUND default is `null`, which is the closed direction on BOTH counts: no candidate can be
+// selected (a residential requirement refuses or queues rather than falling through to a datacenter
+// route, exactly as before), AND not-knowing cannot escalate a neutral wait into a terminal halt.
+// Only a resolver that actually asked the registry may say `[]`.
+//
+// A STORE ERROR THROWS rather than answering `null`, and that is deliberate: a throw here fails the
+// run non-recoverably, which is terminal and therefore bounded. Mapping it to `null` would turn a
+// broken database into the unbounded neutral wait this seam exists to stop producing.
 // ============================================================================
 
-export type EgressCandidateResolver = (orgId: string) => Promise<EgressCandidate[]>;
+export type EgressCandidateResolver = (orgId: string) => Promise<EgressCandidate[] | null>;
 
-const defaultEgressCandidateResolver: EgressCandidateResolver = async () => [];
+const defaultEgressCandidateResolver: EgressCandidateResolver = async () => null;
 let egressCandidateResolver: EgressCandidateResolver = defaultEgressCandidateResolver;
 export function setEgressCandidateResolver(fn: EgressCandidateResolver): void {
   egressCandidateResolver = fn;
 }
-/** The machines this ORG may be routed through. Org-scoped by construction (Rule 5). */
-export function loadEgressCandidates(orgId: string): Promise<EgressCandidate[]> {
+/**
+ * The machines this ORG may be routed through, or `null` when this process has no listing at all.
+ * Org-scoped by construction (Rule 5).
+ */
+export function loadEgressCandidates(orgId: string): Promise<EgressCandidate[] | null> {
   return egressCandidateResolver(orgId);
 }
 

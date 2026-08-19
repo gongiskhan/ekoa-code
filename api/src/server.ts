@@ -687,6 +687,11 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // returns the INTERSECTION of what each machine advertises and what the org granted (I-3), which
   // is the only list selection may ever see — an advertisement is a self-assertion, not an
   // authorisation. Org-scoped by construction: a foreign machine is not a candidate at all.
+  //
+  // BINDING IT IS WHAT LETS `[]` MEAN SOMETHING. The seam answers `EgressCandidate[] | null`, and
+  // only a resolver that actually asked the registry may say `[]` - "this org has no machines",
+  // which halts a run TERMINALLY rather than waiting for hardware that does not exist. The unbound
+  // default says `null` (ignorance) precisely so a half-wired process cannot make that claim.
   setEgressCandidateResolver((orgId) => egressCandidatesForOrg(orgId));
   // 10. THE DAEMON SEAM (Cofre J-1 wiring). This is a SECURITY EVENT, not plumbing: the moment it
   // is wired, `local_command` and daemon-driven browser steps become reachable end to end, and

@@ -230,6 +230,10 @@ export async function evaluateCredentialGate(
   }
 
   if (verdict.status === 'reused' || verdict.status === 'reestablished') {
+    // ONLY A REUSED SESSION NAMES A MACHINE. A `reestablished` one was just captured by the hosted
+    // typist, which runs in this process and is on no machine at all, so there is nothing to prefer
+    // - `EnsureSessionResult` does not carry the field on that member for exactly that reason.
+    const establishedOn = verdict.status === 'reused' ? verdict.establishedByPairingId : undefined;
     return {
       kind: 'ready',
       itemId: verdict.itemId,
@@ -240,8 +244,8 @@ export async function evaluateCredentialGate(
       //
       // `origin` is the one this gate just resolved and checked out a session for, so the pairing
       // leaves here already labelled with the portal it is about.
-      ...(classification.posture === 'adversarial' && verdict.establishedByPairingId
-        ? { preferredPairing: { origin, pairingId: verdict.establishedByPairingId } }
+      ...(classification.posture === 'adversarial' && establishedOn
+        ? { preferredPairing: { origin, pairingId: establishedOn } }
         : {}),
     };
   }

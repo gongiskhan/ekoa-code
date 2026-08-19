@@ -37,6 +37,7 @@ import { Switch } from '@/components/ui/switch';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadingState } from '@/components/ui/spinner';
 import { useConfirm } from '@/components/ui/confirm-dialog';
+import { useApi } from '@/components/providers/api-provider';
 
 const TARGET_ICONS: Record<ScheduleTarget['kind'], LucideIcon> = {
   manual: ClipboardCheck,
@@ -101,6 +102,31 @@ export default function SchedulesPage() {
     toast.error(error || t.actionFailed, { testId: 'schedules-action-error' });
     clearError();
   }, [t.actionFailed]);
+
+  /**
+   * A FIRE THAT ENDED BLOCKED IS WAITING ON THE PERSON READING THIS PAGE (P4.1).
+   *
+   * `schedule_blocked` is emitted for EVERY blocked fire (`api/src/schedules/supervisor.ts`), and it
+   * exists because the ENVIRONMENT block is NEUTRAL against the failure ceiling: it never
+   * auto-pauses, so without a signal a schedule can sit waiting on a machine indefinitely while this
+   * surface shows yesterday's badge. The event shipped with NO LISTENER anywhere in the dashboard,
+   * which made the compensating signal for a blocked run reach nobody at all.
+   *
+   * Two things happen and both are load-bearing. The REFETCH makes the row's badge true without a
+   * manual reload - this page is otherwise fetched once, on mount. The TOAST is what reaches someone
+   * who is on this page for another reason, and its words come from the CODE (the standing rule:
+   * user-facing run state is derived from a code, never from server prose), falling back to the
+   * general blocked label for a cause nobody has written copy for yet.
+   */
+  const { notifications } = useApi();
+  useEffect(() => {
+    if (!notifications) return;
+    return notifications.on('schedule_blocked', (event) => {
+      const cause = event.code ? t.runBlocked[event.code as keyof typeof t.runBlocked] : undefined;
+      toast.info(t.blockedFireToast(cause ?? t.runStatus.blocked), { testId: 'schedule-blocked-toast' });
+      void load();
+    });
+  }, [notifications, load, t]);
 
   // Relative next-run text goes stale as the user sits on the page; a slow tick keeps
   // "dentro de 2 h" honest without re-fetching anything.

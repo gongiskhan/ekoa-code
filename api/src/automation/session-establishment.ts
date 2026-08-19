@@ -352,8 +352,17 @@ export type EnsureSessionResult =
       itemId: string;
       storageState: unknown;
       secrets: SecretRegistry;
-      /** As above. The vantage this process established FROM, when it was a machine. */
-      establishedByPairingId?: string;
+      /*
+       * NO `establishedByPairingId` HERE, and its absence is structural rather than an oversight.
+       * This member is produced by ONE path - `establishWithTypist`, which logs in through
+       * `getLocalBrowserContext`, i.e. THIS PROCESS's hosted Chromium. A hosted login is not on any
+       * machine, so a freshly captured session has no ceremony pairing to report and will not have
+       * one while the typist is hosted.
+       *
+       * It carried one for a while, read off `EnsureSessionInput.vantage`. No production caller sets
+       * that field (the default is cloud/datacenter), so the value was unreachable and the case
+       * pinning it hand-built a shape this system cannot emit.
+       */
     }
   /** Only a person can produce this session. `route` says which ceremony, `attempted` whether a
    *  credential was already submitted trying. */
@@ -851,17 +860,7 @@ async function establishWithTypist(
 
     // Deliberately NOT re-running checkout on the item we just made. A second verdict here would be
     // an invitation to a second login, and one automated attempt per call is the rule.
-    return {
-      status: 'reestablished',
-      itemId: item._id,
-      storageState,
-      secrets: login.secrets,
-      // The vantage this process established FROM, which is what the item now records. A cloud
-      // establishment names no machine and therefore reports none.
-      ...(vantage.establishedBy.kind === 'machine'
-        ? { establishedByPairingId: vantage.establishedBy.pairingId }
-        : {}),
-    };
+    return { status: 'reestablished', itemId: item._id, storageState, secrets: login.secrets };
   } finally {
     await browser.close().catch(() => {});
   }

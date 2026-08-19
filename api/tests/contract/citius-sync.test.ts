@@ -29,7 +29,7 @@ import { decodeHtml, parseHiddenFields } from '../../src/legal/portal-html.js';
 import { syncRouter, CITIUS_SYNC_FLAG, citiusSyncEnabled } from '../../src/routes/sync.js';
 import { CofreLockedError } from '../../src/cofre/index.js';
 import type { CitiusTransport } from '../../src/legal/citius-mandatarios-http.js';
-import type { EnsureSessionResult } from '../../src/automation/session-establishment.js';
+import type { EnsureSessionInput, EnsureSessionResult } from '../../src/automation/session-establishment.js';
 // @ts-expect-error - JS mock helper, no d.ts
 import { startMockCitius } from '../helpers/mock-citius-webforms-server.mjs';
 
@@ -42,6 +42,8 @@ const deps = { now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` 
 
 /** Swappable per test: what the injected `ensureSession` answers with. */
 let sessionAnswer: () => Promise<EnsureSessionResult>;
+/** Every establishment input the router handed down, so the PERMIT it composes can be asserted. */
+let sessionInputs: EnsureSessionInput[] = [];
 
 const liveTransport: CitiusTransport = async (url, init) =>
   fetch(url, { method: init.method, headers: init.headers, body: init.body, redirect: 'manual' });
@@ -107,7 +109,7 @@ beforeAll(async () => {
   app.use(
     '/api/v1/sync',
     syncRouter({
-      establishSession: () => sessionAnswer(),
+      establishSession: (input) => { sessionInputs.push(input); return sessionAnswer(); },
       markSessionUnhealthy: async () => true,
       enumerateDeps: { transport: liveTransport, sleep: async () => {} },
       genRunId: () => 'contract-run',
@@ -128,6 +130,7 @@ afterAll(async () => {
 beforeEach(() => {
   process.env[CITIUS_SYNC_FLAG] = 'true';
   sessionAnswer = establishedSession;
+  sessionInputs = [];
   mock.scenario({ cmd: 'reset' });
 });
 
@@ -165,6 +168,52 @@ describe('sync routes · the flag is the first gate, and it is default-OFF', () 
       expect(ErrorEnvelope.safeParse(body).success).toBe(true);
       expect((body.error as { code: string }).code).toBe('NOT_FOUND');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 1b. the hosted-typist permit - this rail obeys the same rule as every other consumer
+// ---------------------------------------------------------------------------
+
+/**
+ * P4.1 - WHO MAY TYPE A LAWYER'S COURT PASSWORD INTO THE HOSTED BROWSER.
+ *
+ * `ensureSession` opens THIS PROCESS's Chromium and submits a password only when handed a
+ * `hostedTypist` permit, and the run loop composes that permit from the origin's POSTURE. This rail
+ * briefly composed it by writing `hostedTypist: {}` into the call - an unconditional yes, for a
+ * court portal, from a datacenter IP, whatever anyone had declared. That is both the substitution
+ * P4.1 exists to stop, performed by the one act that hands over a secret, and a per-consumer
+ * exemption from a rule everything else obeys (Capability Contract rule 3).
+ *
+ * The permit is now composed at the router from `classifyOrigin`, and the sync drives a hard-coded
+ * portal walk rather than a declared `IntegrationAction`, so nobody has ever declared it permissive
+ * and the honest answer is NO. Asserted on the INPUT the rail actually received, because the seam is
+ * injected here and a mock cannot be relied on to enforce what the real one would.
+ */
+describe('sync routes · the hosted typist gets no permit for an unclassified portal', () => {
+  /**
+   * `adv2`, not `adv1`. The sync state is keyed by the acting user (hazard 4 in `citius-sync.ts`),
+   * and the walk lands rows + advances a watermark, so borrowing the same actor as the sync case
+   * below would make ITS landed count depend on whether this block ran first.
+   *
+   * The run is answered with `needs-human` so nothing is enumerated at all: the assertion is about
+   * the INPUT the rail composed, and the establishment call happens before any walk begins.
+   */
+  it('withholds the permit entirely rather than defaulting it open', async () => {
+    sessionAnswer = async () => ({
+      status: 'needs-human', route: 'attended', reason: 'a person must establish this', attempted: false,
+    });
+    const t = await tokenFor('adv2');
+    const res = await api('/api/v1/sync/citius/notificacoes', t, { method: 'POST', body: runBody() });
+    expect(res.status).toBe(200);
+    expect(sessionInputs).toHaveLength(1);
+    // ABSENT, not `{}`: presence IS the permission, so an empty object would be a yes.
+    expect(sessionInputs[0]).not.toHaveProperty('hostedTypist');
+    // ...and no residential machine either. The sync replays the captured session over SERVER-SIDE
+    // HTTP with no proxy seam, so claiming a machine would make checkout RELEASE a
+    // residential-bound session this rail would then replay from a datacenter IP - the exact
+    // vantage mismatch checkout exists to refuse.
+    expect(sessionInputs[0]).not.toHaveProperty('residentialAvailable');
   });
 });
 

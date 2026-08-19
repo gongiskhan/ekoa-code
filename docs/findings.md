@@ -33,22 +33,21 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   payload; not done here, because the payload is a contract shape and widening it is its own slice.
 
 - **`route-switch-refusal-is-neutral-but-repeats-identically`** (OPEN 2026-08-19, LOW, a named limit
-  of the `clearedBy` split, not a regression). `LocalityVerdict`'s blocked member now answers WHO
+  of the `clearedBy` split, not a regression). `LocalityVerdict`'s blocked member answers WHICH ACT
   clears it, so a refusal waiting cannot fix halts terminally instead of re-firing forever. The
   mid-run ROUTE SWITCH refusal (`refusalRecordFor`, "this step needs a different route out of the
-  network than the one this run already opened") answers `machine`, which keeps it NEUTRAL against
-  the failure ceiling - and a route switch is a property of the STEP LIST, so the next fire resolves
-  identically and blocks at the same index. It therefore repeats without bound, exactly as the
-  retired ceremony machine used to.
+  network than the one this run already opened") answers `start-a-machine`, which keeps it NEUTRAL
+  against the failure ceiling - and a route switch is a property of the STEP LIST, so the next fire
+  resolves identically and blocks at the same index. It therefore repeats without bound.
 
-  **Deliberately not changed here.** It is not in this slice's brief, and it is not the same defect:
-  the retirement is cleared by a person re-establishing a session, which `needs_credentials` names
+  **Deliberately not changed here.** It is not the same defect as the two this slice closed: those
+  are cleared by a person pairing a machine or establishing a session, and the halts name both
   precisely; a route switch is cleared by the automation's AUTHOR editing the step declarations, and
-  neither existing halt says that. Giving it an honest terminal state means a third `clearedBy`
-  value with its own ceiling rule and its own badge copy - a contract decision that deserves its own
-  slice rather than being a tail of this one. The blast radius is bounded: it needs a run whose
-  hosted context is already open for one route and a later step declaring another, which requires a
-  permissive origin AND an explicit residential/pinned declaration on a later step.
+  no existing halt says that. Giving it an honest terminal state means a third `clearedBy` value with
+  its own ceiling rule and its own badge copy - a contract decision that deserves its own slice. The
+  blast radius is bounded: it needs a run whose hosted context is already open for one route and a
+  later step declaring another, which requires a permissive origin AND an explicit
+  residential/pinned declaration on a later step.
 
 - **`retired-ceremony-halt-cannot-name-the-machine-in-the-fleet's-own-words`** (OPEN 2026-08-19,
   LOW, an honest limit of the message). The retirement halt says "the machine where this session was
@@ -66,11 +65,13 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   a device name on the pairing record plus a seam the engine can ask - worth doing when the fleet
   surface grows one, not worth a store read on a refusal path today.
 
-  2026-08-19: the same halt now has a SECOND producer, `credentialGateRecord` in `engine.ts` (see
-  the fixed section below), which unlike `locality.ts` does hold the fleet listing. It does not
-  change this: a retired pairing is absent from that listing by definition, so there is still no row
-  to read a label off. Both producers share one string, `SESSION_MACHINE_RETIRED_REASON`, so closing
-  this stays a single edit.
+  2026-08-19 (round five): the same halt gained a SECOND producer, `credentialGateRecord` in
+  `engine.ts`, which unlike `locality.ts` does hold the fleet listing. It did not change this: a
+  retired pairing is absent from that listing by definition, so there is still no row to read a label
+  off.
+  2026-08-19 (round six): back to ONE producer. `locality.ts`'s copy of the refusal was unreachable
+  in production and has been removed, and `SESSION_MACHINE_RETIRED_REASON` now lives in
+  `egress-policy.ts` beside `machineRetired`. Closing this is still a single edit.
 
 - **`suite-ledger-unit-census-drifted-red-again`** (2026-08-19, **census half FIXED 2026-08-19**;
   the CI-lane half remains OPEN, LOW, gate rot). `npm run gate:ledger` exited 1 on
@@ -163,37 +164,37 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   suite an `afterEach` that does `await cancelCrawlAndWait('s1')` before the runner reset, so no
   background run can write after the clear; and make spec 1's precondition real - hold run #1 open
   with a lookup seam that does not resolve until the spec releases it - instead of racing it.
-- **`citius-sync-establishes-its-session-outside-the-locality-decision`** (OPEN 2026-08-19, MEDIUM,
-  an exception named rather than grandfathered). P4.1 makes the unattended typist's hosted browser
-  conditional on a PERMIT that the run loop only issues for an origin whose posture allows the
+- **`citius-sync-establishes-its-session-outside-the-locality-decision`** (**PERMIT HALF FIXED
+  2026-08-19**, round six; what remains is OPEN, MEDIUM). P4.1 makes the unattended typist's hosted
+  browser conditional on a PERMIT the run loop issues only for an origin whose posture allows the
   hosted path (`EnsureSessionInput.hostedTypist`, absent-means-no). The Citius sync rail
-  (`routes/sync.ts` -> `legal/citius-sync.ts`) calls `ensureSession` DIRECTLY: it has no step
-  declaration, no posture classification and no fleet resolution to consult, so it cannot take part
-  in that decision. It therefore passes `hostedTypist: {}` unconditionally, which preserves exactly
-  the behaviour it shipped with - a login typed from the hosted browser, by the datacenter route,
-  against a court portal that is adversarial by any reading.
+  (`routes/sync.ts` -> `legal/citius-sync.ts`) calls `ensureSession` DIRECTLY, and it briefly wrote
+  `hostedTypist: {}` into that call unconditionally - an exemption from a rule everything else obeys
+  (Capability Contract rule 3), on the one rail that drives a court portal with a lawyer's
+  credential.
 
-  **Not a regression, and not fixed here.** It is the status quo made explicit: before this slice
-  the same login happened with nothing in the code even naming the question. Closing it means giving
-  that rail a locality decision of its own (an origin posture for the Citius host, plus a resolved
-  route), which is a change to a separately reviewed rail with its own completeness suite and does
-  not belong in a slice already touching the engine, the schedules rail and `web/`.
+  **FIXED.** The permit is now an INPUT (`CitiusSyncInput.hostedTypist`) composed at the rail's
+  composition point from `classifyOrigin`, exactly as the run loop composes it. The rail decides
+  nothing; it forwards. With no `IntegrationAction` declaring the Citius host permissive, the answer
+  today is a permit WITHHELD, so no hosted browser opens and the route is `needs-human`. See the
+  round-six fixed section.
 
-  **SECOND HALF, added 2026-08-19 once the run loop's version of it was fixed.** The same rail also
-  never supplies `residentialAvailable`. `CitiusSyncInput` declares the field
-  (`legal/citius-sync.ts`) and forwards it when present, but nothing in production passes it:
-  `routes/sync.ts` builds the input from `actorOf(req)`, a fresh run id and `SyncRunRequest`, and
-  that schema deliberately carries no such field - correctly, because a client asserting which
-  machines are available would be asserting an AUTHORISATION and could force checkout of a session
-  bound to any machine. So `checkoutSession` receives `[]` on this rail exactly as it did in the run
-  loop, and an attended-ceremony session for the Citius portal - stamped
-  `boundEgress: { kind: 'residential', pairingId }` by `bridge/attended.ts` - is refused
-  `needs-egress` and can never be reused by a sync. The rail then falls to the typist, i.e. the
-  hosted datacenter login described above. Mechanism now proven rather than suspected (see the fixed
-  section for the run-loop half). CLOSE BY: resolving the fleet for the caller's org in the route's
-  composition and passing it in, which is the same one-line shape `engine.ts` now uses - it is
-  cheap, but it belongs with the posture decision above rather than ahead of it, because on its own
-  it would let a ceremony session be reused by a rail that still has no view of where it may run.
+  **WHAT IS STILL OPEN, and it is narrower than it was.** The rail has no posture DECLARATION to
+  consult, so the closed default is the only answer it can ever give: a Citius session can only be
+  established by a person, and the typist can never help, however the fleet or the origin changes.
+  CLOSE BY: promoting the sync onto a declared integration action, at which point `classifyOrigin`
+  reads a real posture and this becomes an ordinary yes-or-no.
+
+  **THE FLEET HALF IS NOT A GAP - it is the correct closed answer, re-dispositioned 2026-08-19.**
+  An earlier version of this entry said the rail "never supplies `residentialAvailable`" and should.
+  It should not, and wiring it in would have been a defect. After establishment this rail does not
+  drive a browser at all: it replays the captured session's cookies over SERVER-SIDE HTTP
+  (`citius-mandatarios-http.ts`), from the datacenter, with no proxy seam anywhere in the path.
+  Naming a residential machine would make `checkoutSession` RELEASE a session bound to that machine's
+  line, which the rail would then replay from a datacenter IP - the exact vantage mismatch checkout
+  exists to refuse, and worse than the `needs-egress` refusal it replaces because it succeeds
+  silently. The refusal is the honest answer until the walk itself can leave by a machine. Pinned:
+  the rail is asserted to pass no `residentialAvailable`, with the reason on the field's docblock.
 
 - **`posture-drift-check-cannot-stop-the-act-that-navigates`** (OPEN 2026-08-19, MEDIUM, a named
   limit of the P4.1 posture-inheritance constraint). Posture is declared on an `IntegrationAction`
@@ -3163,6 +3164,100 @@ silently absorbed into a ledger note):
   `sales-crm.png` ("Página não encontrada" 404 instead of the dashboard) - `booking-system` is
   disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
   `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
+
+## Recently fixed - 2026-08-19 an empty fleet was ignorance, so a solo tenant retried forever (round six)
+
+Round five made the P4.2 slice reachable. Round six closes the regression that reachability exposed,
+plus four pieces of surface that were reachable only from a test. Each behaviour change is pinned by
+a test verified to fail against the unfixed source.
+
+- `an-org-whose-only-machine-is-revoked-retried-forever` (**MAJOR**, a regression this branch
+  introduced and did not ship). A solo tenant pairs ONE laptop, holds an attended ceremony on it,
+  then revokes the pairing without replacing it. `egressCandidatesForOrg` filters `revokedAt: null`,
+  so the org's fleet listing is genuinely `[]` - and `[]` was read as "this process does not know
+  what this org has". `machineRetired` therefore answered NO, so NEITHER retirement branch fired
+  (`credentialGateRecord`'s, and `resolveLocality`'s); with no daemon connected the run halted
+  `awaiting_daemon`, which THIS BRANCH newly made NEUTRAL against the failure ceiling
+  (`NEUTRAL_BLOCKED_CODES`); and the schedule re-fired nightly, forever, uncounted, telling the owner
+  to connect a machine that no longer existed.
+  On `main` the same case mapped to `failed` and auto-paused after 20 fires with `autoPausedAt` shown
+  in the UI. The branch converted a BOUNDED dead end into an UNBOUNDED one - the exact pathology its
+  own retirement fix was written to remove, re-created for the tenant least equipped to notice.
+  ALSO WORTH RECORDING: the reviewer's suggested mechanism alone would not have fixed it. Making
+  `machineRetired` answer YES for `[]` repairs `credentialGateRecord`'s branch, but that branch is
+  never reached in this scenario - with no daemon connected `resolveLocality` refuses BEFORE the
+  credential gate runs (`localityRecord ? {} : await credentialGateRecord(...)`), so the fix had to
+  reach `resolveLocality` too. The code won that argument.
+  FIXED, in three places that had to move together:
+  (a) `EgressCandidateResolver` (`automation/seams.ts`) now answers `EgressCandidate[] | null`, and
+  the UNBOUND default is `null`. `null` = no listing, `[]` = the registry says this org has no
+  machines. A store error still THROWS rather than answering `null`, because a throw is a terminal
+  run failure and therefore bounded, where `null` would restore the unbounded neutral wait.
+  (b) `machineRetired` takes `readonly string[] | null`: `null` answers NO (not-knowing may never
+  escalate), `[]` answers YES (every pairing is gone from a fleet with nothing in it).
+  (c) `resolveLocality` gains the branch that matches the case: with no daemon connected and a
+  KNOWN-EMPTY listing, a refusal that would have said "start your machine" says
+  `NO_MACHINE_IN_ACCOUNT_REASON` instead and answers `clearedBy: 'pair-a-machine'`, which is
+  terminal. The engine turns that into the ceremony halt when the step DECLARES a credential (the
+  solo-tenant case: pair a machine, then establish the session) and into a plain non-recoverable
+  failure when it does not - a credential ask for a step that wants none is a wrong specific
+  instruction, which is worse than an honest general one.
+  `clearedBy` was renamed from `'machine' | 'human'` to `'start-a-machine' | 'pair-a-machine'`,
+  because its one consumer has to pick a halt with it and "a person must do something" was never
+  enough to pick one.
+  MUTATIONS, all verified red: `null`->`[]` on the unbound default, `[]`->NO on `machineRetired`,
+  and deleting the `resolveLocality` branch.
+
+- `resolveLocality-carried-a-retirement-branch-nothing-could-reach` (dead surface, removed). Round
+  three's `preferenceMachineRetired` was unreachable in production and its own suite was the only
+  caller. A preference is LEARNED only from a checkout that SUCCEEDED, and `bridge/attended.ts` -
+  the single writer of `establishedBy: { kind: 'machine' }` - always stamps
+  `boundEgress: { kind: 'residential', pairingId }` from the same id, so a successful checkout proves
+  the machine is in the fleet listing and `machineRetired` cannot be true of it. Round five had
+  already moved the live refusal one step earlier, into `credentialGateRecord`. REMOVED, together
+  with the case that pinned it; `SESSION_MACHINE_RETIRED_REASON` moved to `egress-policy.ts`, beside
+  the predicate whose `true` produces it and next to its one remaining caller.
+
+- `establishedByPairingId-on-a-fresh-capture-was-unreachable` (dead surface + a dishonest fixture).
+  `EnsureSessionResult.reestablished` carried the field, read off `EnsureSessionInput.vantage`. That
+  input has NO production supplier - the default is cloud/datacenter - and it cannot get one while
+  the typist is hosted: `establishWithTypist` logs in through `getLocalBrowserContext`, i.e. this
+  process's Chromium, which is on no machine. The test asserting it hand-built the vantage, so it
+  proved the branch compiled and nothing else - the same fixture-honesty failure round five closed
+  twice over. REMOVED from the result type and the return; the case now drives the REAL typist and
+  asserts the honest negative. `credential-gate.ts` reads the pairing from `reused` only.
+
+- `schedule_blocked-was-emitted-into-a-channel-with-no-listener` (dead signal). The supervisor
+  notifies the owner on every blocked fire, and it exists precisely because the ENVIRONMENT block is
+  neutral against the ceiling: it never auto-pauses and announces itself no other way. Nothing in
+  `web/` subscribed - no `notifications.on('schedule_blocked', ...)` anywhere - so the compensating
+  signal reached nobody. FIXED: the schedules list page subscribes, toasts the CAUSE's words (derived
+  from the code, never server prose, falling back to the general blocked label), and refetches so the
+  row's badge stops showing the previous outcome. Pinned in
+  `web/__tests__/components/schedules-page.test.tsx` on rendered text, not on a subscription
+  existing.
+
+- `resolveEgress-tenancy-filter-degraded-to-pairing-id-membership` (Rule 5). Extracting
+  `residentialEgressPairings` left `resolveEgress` narrowing its ROWS by a set of pairing IDS:
+  `candidates.filter((c) => available.has(c.pairingId) && ...)`. That is only as strong as the
+  assumption that a pairing id identifies at most one row, and a tenancy boundary must not rest on an
+  id being unique across tenants - `registerPairing` is reachable by two orgs and nothing enforces
+  global uniqueness. A foreign row sharing one of our ids, listed first, becomes `usable[0]` and its
+  tailnet address becomes the run's proxy: one tenant's portal traffic leaving through another
+  tenant's house. FIXED: `c.org === actorOrg` restored on the row filter. Pinned in
+  `api/tests/security/locality-isolation.test.ts` with a deliberately colliding id.
+
+- `citius-sync-hard-coded-an-open-hosted-typist-permit` (Rule 3). The rail wrote
+  `hostedTypist: {}` into its `ensureSession` call unconditionally, making it the one consumer in the
+  repo able to type a lawyer's court password into the hosted Chromium, from a datacenter IP, for an
+  origin nobody had classified. FIXED: the permit is an INPUT (`CitiusSyncInput.hostedTypist`,
+  absent-means-no) composed at the rail's composition point (`routes/sync.ts`) from `classifyOrigin`,
+  exactly as the run loop composes it. The sync drives a hard-coded portal walk rather than a declared
+  `IntegrationAction`, so nothing declares it permissive and the answer today is a permit WITHHELD -
+  the typist route becomes `needs-human` and a person establishes the session on a machine of their
+  own, which is the correct closed reading for a court portal. It becomes an ordinary yes the moment
+  the sync is promoted onto a declared action. Pinned on the input the rail actually received
+  (`api/tests/contract/citius-sync.test.ts`).
 
 ## Recently fixed - 2026-08-19 P4.2 was dead code in production (round five)
 

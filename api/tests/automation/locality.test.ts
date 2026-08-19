@@ -44,13 +44,21 @@ function machine(over: Partial<EgressCandidate> = {}): EgressCandidate {
   };
 }
 
+/**
+ * `candidates: null` IS THE DEFAULT, and it is not the same as `[]`.
+ *
+ * `null` means this process has no fleet listing (an unbound seam) - ignorance, which changes
+ * nothing about how a refusal is cleared. `[]` means the registry answered and the org HAS NO
+ * MACHINES, which is a dead end no laptop can clear and refuses terminally. Cases that are not about
+ * the fleet take the ignorant default, so that a refusal they assert on is the one they meant.
+ */
 function input(over: Partial<LocalityInput> = {}): LocalityInput {
   return {
     classification: ADVERSARIAL,
     declaredTarget: CLOUD,
     offlinePolicy: 'fail',
     daemonConnected: false,
-    candidates: [],
+    candidates: null,
     actorOrg: ORG,
     inProcessFallbackEnabled: true,
     ...over,
@@ -171,41 +179,38 @@ describe('preferential bridge — adversarial sessions only (P4.2)', () => {
 });
 
 /**
- * THE RETIRED CEREMONY MACHINE - the halt that used to have no exit.
+ * A CEREMONY PREFERENCE POINTING AT A MACHINE THE FLEET NO LONGER LISTS.
  *
- * `preferredPairingId` comes off a stored session and is never revised, so retiring the laptop that
- * established it left the preference pointing at hardware nobody owns: every later fire blocked,
- * forever, and no owner action cleared it. The registry can tell "asleep" from "gone" (its listing
- * carries every non-revoked pairing, live or not), so this refuses differently and names the act
- * that fixes it.
+ * THE REFUSAL FOR THAT IS NOT MADE HERE, and this module used to carry a copy of it that nothing in
+ * production could reach. A preference is only ever LEARNED from a session checkout that SUCCEEDED,
+ * and a ceremony session is bound to its machine's residential line (`bridge/attended.ts` is the one
+ * writer of `establishedBy: machine`, and it stamps `boundEgress: residential` from the same id), so
+ * a checkout that succeeded is itself proof the machine is still listed. The dead end is caught one
+ * step earlier, at the checkout that REFUSES - `engine.ts` `credentialGateRecord`, against
+ * `machineRetired` - and `tests/automation/engine-locality.test.ts` drives it there.
+ *
+ * What remains here is what this module really does with a preference, and it is worth pinning: it
+ * never substitutes another household's machine for the one a session was made on.
  */
-describe('a ceremony machine that was retired', () => {
-  const retired = (over: Partial<LocalityInput> = {}) =>
+describe('a ceremony preference the connected fleet cannot satisfy', () => {
+  const preferring = (over: Partial<LocalityInput> = {}) =>
     resolveLocality(input({
       preferredPairingId: 'pair_gone',
-      // The fleet listing knows the org and does not contain `pair_gone`: it was revoked.
       candidates: [machine({ pairingId: 'pair_now' })],
       ...over,
     }));
 
-  it('refuses with the act that fixes it, instead of waiting for hardware nobody owns', () => {
-    const v = retired();
-    expect(v.kind).toBe('blocked');
-    expect(v.kind === 'blocked' && v.reason).toMatch(/has been removed from your account/);
-    expect(v.kind === 'blocked' && v.reason).toMatch(/establish this session again/);
-    expect(v.kind === 'blocked' && v.reason).not.toMatch(/pair_gone/);
-  });
-
   it('does NOT quietly fall through to another machine - a homeless session is not a portable one', () => {
-    // The available machine is live, granted and advertising residential egress. Retiring the
-    // ceremony machine does not make running there any less of a substitution.
-    const v = retired({ daemonConnected: true, daemonPairingId: 'pair_now' });
+    // The available machine is live, granted and advertising residential egress. That the preferred
+    // one is missing from the listing does not make running here any less of a substitution.
+    const v = preferring({ daemonConnected: true, daemonPairingId: 'pair_now' });
     expect(v.kind).toBe('blocked');
+    expect(v.kind === 'blocked' && v.reason).toMatch(/where its session was established/);
   });
 
-  it('an EMPTY listing is not a retirement - not knowing may never move a session', () => {
-    // The seam answered nothing (unbound, or a store that returned no rows). That is ignorance, not
-    // a statement that anything was revoked, so the ordinary preference refusal stands.
+  it('a CONNECTED daemon keeps the refusal neutral even against an empty listing', () => {
+    // A live connection is itself proof this account has hardware, whatever the listing says, so the
+    // "you have no machines" terminal refusal must not fire here.
     const v = resolveLocality(input({
       preferredPairingId: 'pair_gone',
       candidates: [],
@@ -213,22 +218,82 @@ describe('a ceremony machine that was retired', () => {
       daemonPairingId: 'pair_now',
     }));
     expect(v.kind).toBe('blocked');
+    expect(v.kind === 'blocked' && v.clearedBy).toBe('start-a-machine');
     expect(v.kind === 'blocked' && v.reason).toMatch(/where its session was established/);
-    expect(v.kind === 'blocked' && v.reason).not.toMatch(/removed from your account/);
   });
 
   it('a PERMISSIVE origin is untouched by it - its credential never asked for a machine', () => {
-    const v = retired({ classification: PERMISSIVE });
+    const v = preferring({ classification: PERMISSIVE });
     expect(v.kind).toBe('in-process');
   });
 
-  it('an author PIN is the author\'s business, retired or not', () => {
-    const v = retired({ declaredTarget: { kind: 'pinned', pairingId: 'pair_gone' } });
+  it('an author PIN names its own machine, because the author wrote that id', () => {
+    const v = preferring({ declaredTarget: { kind: 'pinned', pairingId: 'pair_gone' } });
     expect(v.kind).toBe('blocked');
-    // Their literal, echoed back; not the re-establish instruction, which is about a preference
-    // this module inferred rather than a target they chose.
     expect(v.kind === 'blocked' && v.reason).toMatch(/pair_gone/);
-    expect(v.kind === 'blocked' && v.reason).not.toMatch(/removed from your account/);
+  });
+});
+
+/**
+ * AN ACCOUNT WITH NO MACHINE IN IT - the regression this branch had to be stopped from shipping.
+ *
+ * A solo tenant pairs one laptop, holds an attended ceremony on it, then revokes the pairing without
+ * replacing it. `egressCandidatesForOrg` filters out revoked rows, so the org's listing is genuinely
+ * `[]`. Every refusal in this module that names a machine is an instruction to go and start one, and
+ * the halt carrying it is NEUTRAL against the failure ceiling because opening a laptop clears it -
+ * so with no laptop to open, the schedule re-fired nightly forever, uncounted, telling the owner to
+ * connect hardware that no longer existed. A bounded dead end turned into an unbounded one.
+ *
+ * The fix is that `[]` and `null` stopped being the same value: `[]` is the registry saying THIS ORG
+ * HAS NO MACHINES, which refuses terminally, and `null` is this process not knowing, which does not.
+ */
+describe('an account whose fleet listing is empty', () => {
+  const emptyFleet = (over: Partial<LocalityInput> = {}) => resolveLocality(input({ candidates: [], ...over }));
+
+  it('refuses TERMINALLY instead of telling the owner to start a machine they do not have', () => {
+    const v = emptyFleet();
+    expect(v.kind).toBe('blocked');
+    expect(v.kind === 'blocked' && v.clearedBy).toBe('pair-a-machine');
+    expect(v.kind === 'blocked' && v.reason).toMatch(/no machine is paired to your account/);
+  });
+
+  it('...where NOT KNOWING the fleet keeps the neutral wait - ignorance may never escalate', () => {
+    const v = resolveLocality(input({ candidates: null }));
+    expect(v.kind).toBe('blocked');
+    expect(v.kind === 'blocked' && v.clearedBy).toBe('start-a-machine');
+    expect(v.kind === 'blocked' && v.reason).toMatch(/none is connected/);
+  });
+
+  it('holds for a step that only needs a machine because of its DECLARATION, not its posture', () => {
+    // Permissive origin, hosted browser allowed - but the author asked to leave by a residential
+    // line, and there is no machine to provide one. Waiting cannot produce hardware either.
+    const v = emptyFleet({
+      classification: PERMISSIVE,
+      declaredTarget: { kind: 'any', capability: 'egress.residential' },
+    });
+    expect(v.kind).toBe('blocked');
+    expect(v.kind === 'blocked' && v.clearedBy).toBe('pair-a-machine');
+  });
+
+  it('...and for `queue`, which has nothing to queue behind', () => {
+    const v = emptyFleet({
+      classification: PERMISSIVE,
+      declaredTarget: { kind: 'any', capability: 'egress.residential' },
+      offlinePolicy: 'queue',
+    });
+    expect(v.kind === 'blocked' && v.clearedBy).toBe('pair-a-machine');
+  });
+
+  it('...and when the hosted browser is switched off, which a machine would have made moot', () => {
+    const v = emptyFleet({ classification: PERMISSIVE, inProcessFallbackEnabled: false });
+    expect(v.kind === 'blocked' && v.clearedBy).toBe('pair-a-machine');
+  });
+
+  it('does NOT block a step that never needed a machine at all', () => {
+    // The whole hazard of a fleet-shaped rule is that it stops work the fleet has nothing to do
+    // with. A permissive origin on the hosted browser runs, empty account or not.
+    const v = emptyFleet({ classification: PERMISSIVE });
+    expect(v.kind).toBe('in-process');
   });
 });
 
@@ -247,13 +312,22 @@ describe('the route out reaches the launch seam', () => {
     });
   });
 
-  it('a declared residential requirement with no machine REFUSES rather than using the datacenter', () => {
+  /**
+   * THE FLEET HERE IS NON-EMPTY AND MERELY ASLEEP, on purpose. These cases are about the ROUTE
+   * refusal, and an EMPTY listing is a different fact with a different answer (an account with no
+   * machine refuses terminally - see that suite). Using `[]` as shorthand for "no usable machine"
+   * would silently move these two off the branches they are named for.
+   */
+  const asleep = [machine({ live: false })];
+
+  it('a declared residential requirement with no LIVE machine REFUSES rather than using the datacenter', () => {
     const v = resolveLocality(input({
       classification: PERMISSIVE,
       declaredTarget: { kind: 'any', capability: 'egress.residential' },
-      candidates: [],
+      candidates: asleep,
     }));
     expect(v.kind).toBe('blocked');
+    expect(v.kind === 'blocked' && v.clearedBy).toBe('start-a-machine');
   });
 
   it('offlinePolicy queue on a permissive residential step halts as "waiting", not as a datacenter run', () => {
@@ -261,7 +335,7 @@ describe('the route out reaches the launch seam', () => {
       classification: PERMISSIVE,
       declaredTarget: { kind: 'any', capability: 'egress.residential' },
       offlinePolicy: 'queue',
-      candidates: [],
+      candidates: asleep,
     }));
     expect(v.kind).toBe('blocked');
     expect(v.kind === 'blocked' && v.reason).toMatch(/waiting for a machine/);
@@ -433,7 +507,8 @@ describe('the hosted typist gets the work’s own door, or no door at all', () =
   });
 
   it('a refused step gets no password typed for it', () => {
-    expect(hostedTypistPermitFor({ kind: 'blocked', clearedBy: 'machine', reason: 'x' })).toBeUndefined();
+    expect(hostedTypistPermitFor({ kind: 'blocked', clearedBy: 'start-a-machine', reason: 'x' })).toBeUndefined();
+    expect(hostedTypistPermitFor({ kind: 'blocked', clearedBy: 'pair-a-machine', reason: 'x' })).toBeUndefined();
   });
 
   /**
@@ -488,41 +563,26 @@ describe('sameRoute — a context launched for one route is not reused for anoth
 });
 
 /**
- * P4.2 - WHO CLEARS THE BLOCK, on every refusal this module can produce.
+ * P4.2 - WHAT ACT CLEARS THE BLOCK, on every refusal this module can produce.
  *
  * WHY THIS SUITE EXISTS. `blocked` used to carry a reason and nothing else, so every refusal was
  * routed to the same halt - `awaiting_daemon`, which the schedule rail treats as NEUTRAL against
  * the failure ceiling because opening a laptop clears it. That is true of a machine being OFF and
- * false of a machine being GONE, and the retired-ceremony-machine refusal inherited the neutrality
- * anyway: a schedule re-firing nightly, forever, against a condition nothing could resolve, with
- * the ceiling never counting one attempt.
+ * false of an account having no machine at all, and the second inherited the neutrality anyway: a
+ * schedule re-firing nightly, forever, against a condition nothing could resolve, with the ceiling
+ * never counting one attempt.
  *
  * `clearedBy` is REQUIRED on the verdict, so a new refusal cannot inherit "retry forever" by saying
- * nothing. This suite is the census that keeps the answers honest: the retirement case is the ONLY
- * `human` one, and every environment refusal stays `machine` - because making them all terminal
- * would auto-pause schedules for owners whose only sin is a shut laptop.
+ * nothing, and it names the ACT rather than the actor because the consumer has to pick a halt with
+ * it. This suite is the census that keeps the answers honest: `pair-a-machine` is reachable only
+ * from a KNOWN-EMPTY listing, and every environment refusal stays `start-a-machine` - because making
+ * them all terminal would auto-pause schedules for owners whose only sin is a shut laptop.
  */
-describe('every locality refusal says who can clear it', () => {
+describe('every locality refusal says which act can clear it', () => {
   const RETIRED = 'pair_ceremony_gone';
 
-  it('a RETIRED ceremony machine is cleared by a person, never by waiting', () => {
-    const v = resolveLocality(input({
-      preferredPairingId: RETIRED,
-      // A NON-EMPTY listing without the pairing is the registry stating the machine is gone.
-      candidates: [machine({ pairingId: 'pair_other' })],
-      daemonConnected: true,
-      daemonPairingId: 'pair_other',
-    }));
-    expect(v.kind).toBe('blocked');
-    expect(v.kind === 'blocked' && v.clearedBy).toBe('human');
-    // The act that fixes it, in words - and never the opaque pairing id, which names nothing a
-    // person can act on and reads as a fault code.
-    expect(v.kind === 'blocked' && v.reason).toMatch(/establish this session again/);
-    expect(v.kind === 'blocked' && v.reason).not.toContain(RETIRED);
-  });
-
-  it('a ceremony machine that is merely ASLEEP is cleared by the machine', () => {
-    // Same preference, but the fleet still lists it: registered and switched off, not retired.
+  it('a ceremony machine that is merely ASLEEP is cleared by starting it', () => {
+    // The fleet still lists it: registered and switched off. A machine of theirs IS dialled in.
     const v = resolveLocality(input({
       preferredPairingId: RETIRED,
       candidates: [machine({ pairingId: RETIRED, live: false }), machine({ pairingId: 'pair_other' })],
@@ -530,20 +590,20 @@ describe('every locality refusal says who can clear it', () => {
       daemonPairingId: 'pair_other',
     }));
     expect(v.kind).toBe('blocked');
-    expect(v.kind === 'blocked' && v.clearedBy).toBe('machine');
+    expect(v.kind === 'blocked' && v.clearedBy).toBe('start-a-machine');
   });
 
-  it('an EMPTY fleet listing is not a statement that anything was retired', () => {
-    // "This process does not know what this org has" - an unbound seam, a store that answered
-    // nothing. Not-knowing may never turn a preference into a terminal halt.
+  it('an UNKNOWN fleet listing is not a statement that anything was retired', () => {
+    // `null` - "this process does not know what this org has", an unbound seam. Not-knowing may
+    // never turn a preference into a terminal halt.
     const v = resolveLocality(input({
       preferredPairingId: RETIRED,
-      candidates: [],
+      candidates: null,
       daemonConnected: true,
       daemonPairingId: 'pair_other',
     }));
     expect(v.kind).toBe('blocked');
-    expect(v.kind === 'blocked' && v.clearedBy).toBe('machine');
+    expect(v.kind === 'blocked' && v.clearedBy).toBe('start-a-machine');
   });
 
   /**
@@ -551,17 +611,18 @@ describe('every locality refusal says who can clear it', () => {
    *
    * WHAT WAS WRONG WITH THE OLD SHAPE. It was five hand-written inputs under a docblock claiming to
    * cover "every refusal this module can produce". Nothing connected the claim to the code: a new
-   * `clearedBy: 'human'` branch - the exact mistake that made this suite necessary in the first
-   * place - could be added, reached in production, and leave these assertions green, because the
-   * list simply would not mention it. A list of examples cannot be a census of a function.
+   * terminal branch - the exact mistake that made this suite necessary in the first place - could be
+   * added, reached in production, and leave these assertions green, because the list simply would
+   * not mention it. A list of examples cannot be a census of a function.
    *
    * WHAT THIS DOES INSTEAD. It walks the CROSS PRODUCT of the whole input space (postures, declared
    * targets, offline policies, ceremony preferences, daemon states, fleet listings, the kill switch
    * - several thousand combinations), collects every distinct refusal the module actually emits,
    * and asserts against the collected set:
    *
-   *   1. the `human` refusals are EXACTLY the retired ceremony machine, so a new terminal branch is
-   *      red the moment any input reaches it;
+   *   1. the TERMINAL refusals are exactly the ones enumerated, so a new terminal branch is red the
+   *      moment any input reaches it - and so is an existing neutral one that quietly becomes
+   *      terminal, which is how a schedule starts auto-pausing on a shut laptop;
    *   2. the FULL set of refusals is exactly the one enumerated here, so a new refusal of either
    *      kind is red as well - it cannot slip in as "one more machine one";
    *   3. no refusal answers BOTH ways, which would mean the same condition sometimes auto-pauses a
@@ -572,38 +633,40 @@ describe('every locality refusal says who can clear it', () => {
    * drift away from what the product tells people.
    */
   describe('a census over the whole input space, not a list of remembered cases', () => {
-    /** The one refusal a person must act on. Everything else is the environment. */
-    const RETIREMENT =
-      'the machine where this session was established has been removed from your account - ' +
-      'establish this session again, from a machine you still have';
+    /** The one refusal no amount of waiting clears. Everything else is a machine being off. */
+    const NO_MACHINE =
+      'no machine is paired to your account, and this step runs only on one - ' +
+      'pair a machine, then establish this session from it';
 
-    /** Every refusal `resolveLocality` can emit, with who clears it. Pairing ids normalised. */
-    const EXPECTED: ReadonlyArray<readonly [string, 'machine' | 'human']> = [
-      [RETIREMENT, 'human'],
-      ['this step is pinned to machine <pairing>; the machine currently connected is a different one', 'machine'],
+    type ClearingAct = 'start-a-machine' | 'pair-a-machine';
+
+    /** Every refusal `resolveLocality` can emit, with the act that clears it. Pairing ids normalised. */
+    const EXPECTED: ReadonlyArray<readonly [string, ClearingAct]> = [
+      [NO_MACHINE, 'pair-a-machine'],
+      ['this step is pinned to machine <pairing>; the machine currently connected is a different one', 'start-a-machine'],
       [
         'this step must run on the machine where its session was established, and a different machine ' +
           'of yours is connected - start that machine, or establish this session again from the one you want to use',
-        'machine',
+        'start-a-machine',
       ],
       [
         'this origin is adversarial: the step is pinned to machine <pairing>, and that machine is not connected',
-        'machine',
+        'start-a-machine',
       ],
       [
         'this origin is adversarial: the step runs only on the machine where its session was established, ' +
           'and that machine is not connected',
-        'machine',
+        'start-a-machine',
       ],
       [
         'this origin is adversarial, so its browser steps run only on one of your machines, and none is connected',
-        'machine',
+        'start-a-machine',
       ],
-      ['no machine is connected and the in-process browser fallback is disabled', 'machine'],
-      ['waiting for a machine: no machine in this org is advertising residential egress', 'machine'],
-      ['waiting for a machine: the pinned machine <pairing> is not available with residential egress', 'machine'],
-      ['no machine in this org is advertising residential egress', 'machine'],
-      ['the pinned machine <pairing> is not available with residential egress', 'machine'],
+      ['no machine is connected and the in-process browser fallback is disabled', 'start-a-machine'],
+      ['waiting for a machine: no machine in this org is advertising residential egress', 'start-a-machine'],
+      ['waiting for a machine: the pinned machine <pairing> is not available with residential egress', 'start-a-machine'],
+      ['no machine in this org is advertising residential egress', 'start-a-machine'],
+      ['the pinned machine <pairing> is not available with residential egress', 'start-a-machine'],
     ];
 
     /** A pairing id is an INPUT, not a branch; the branch is the sentence around it. */
@@ -628,8 +691,10 @@ describe('every locality refusal says who can clear it', () => {
         { daemonConnected: true, daemonPairingId: 'pair_home' },
         { daemonConnected: true, daemonPairingId: 'pair_other' },
       ];
-      const fleets: EgressCandidate[][] = [
-        // "This process does not know what this org has" - ignorance, never a retirement.
+      const fleets: Array<EgressCandidate[] | null> = [
+        // "This process does not know what this org has" - ignorance, which changes nothing.
+        null,
+        // The registry answered: this org HAS NO MACHINES. A different fact, and a terminal one.
         [],
         [machine({ pairingId: 'pair_home' })],
         [machine({ pairingId: 'pair_home' }), machine({ pairingId: 'pair_other' })],
@@ -697,12 +762,14 @@ describe('every locality refusal says who can clear it', () => {
       expect(ambiguous).toEqual([]);
     });
 
-    it('the ONLY refusal a person must clear is the retired ceremony machine', () => {
+    it('the ONLY refusal waiting cannot clear is the account with no machine in it', () => {
       const seen = censusOfRefusals();
-      const human = [...seen.entries()].filter(([, answers]) => answers.has('human')).map(([reason]) => reason);
+      const terminal = [...seen.entries()]
+        .filter(([, answers]) => [...answers].some((a) => a !== 'start-a-machine'))
+        .map(([reason]) => reason);
       // Everything else is "a machine of yours is off", which a schedule must be free to wait out:
       // making them terminal would auto-pause schedules for owners whose only sin is a shut laptop.
-      expect(human).toEqual([RETIREMENT]);
+      expect(terminal).toEqual([NO_MACHINE]);
     });
 
     it('every refusal answers the way this file says it does', () => {

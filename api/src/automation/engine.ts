@@ -44,12 +44,12 @@ import {
   resolveLocality,
   hostedTypistPermitFor,
   sameRoute,
-  SESSION_MACHINE_RETIRED_REASON,
   type LocalityVerdict,
 } from './locality.js';
 import {
   machineRetired,
   residentialEgressPairings,
+  SESSION_MACHINE_RETIRED_REASON,
   type EgressCandidate,
   type EgressResolution,
 } from './egress-policy.js';
@@ -579,8 +579,26 @@ async function runOrRehearse(
    * for a ceremony" and answers with a plain terminal failure rather than a halt naming nowhere.
    */
   let stepOrigin: string | null = null;
-  /** The org's machines, read ONCE per run rather than per step. */
-  let egressCandidates: readonly EgressCandidate[] | null = null;
+  /**
+   * The org's machines, read ONCE per run rather than per step.
+   *
+   * THREE STATES, NOT TWO. `undefined` = not read yet (the memo sentinel); `null` = read, and this
+   * process has no listing (an unbound seam); `[]` = read, and the org genuinely has no machines.
+   * The last two used to be one value, which is what let an account whose only laptop was revoked
+   * retry forever - see `seams.ts` `loadEgressCandidates` and docs/findings.md
+   * `an-org-whose-only-machine-is-revoked-retried-forever`.
+   */
+  let egressCandidates: readonly EgressCandidate[] | null | undefined;
+  /**
+   * The listing, read at most once. The MEMO IS THE SENTINEL, so this cannot depend on call order:
+   * the previous shape used `??=` against a `null`-initialised variable, which made "not read yet"
+   * and "no listing" the same state and left a reader that ran first quietly answering for one when
+   * it meant the other.
+   */
+  const fleetNow = async (): Promise<readonly EgressCandidate[] | null> => {
+    if (egressCandidates === undefined) egressCandidates = await loadEgressCandidates(ctx.orgId);
+    return egressCandidates;
+  };
   /**
    * THE MACHINES CHECKOUT MAY RELEASE A RESIDENTIAL-BOUND SESSION FOR - the fleet fact the
    * credential gate needs, and the one this loop used to withhold entirely.
@@ -600,28 +618,24 @@ async function runOrRehearse(
    * may be released" cannot answer differently.
    */
   const residentialAvailableNow = async (): Promise<readonly string[]> => {
-    egressCandidates ??= await loadEgressCandidates(ctx.orgId);
-    return residentialEgressPairings(egressCandidates, ctx.orgId);
+    // No listing is the same as no usable machine FOR SELECTION - the closed direction, and the one
+    // this seam has always taken. The distinction between "no listing" and "no machines" matters to
+    // retirement, not to whether a session may be released.
+    return residentialEgressPairings((await fleetNow()) ?? [], ctx.orgId);
   };
   /**
    * EVERY machine the org still has, live or not - a different question from the one above, and the
    * difference is what separates "start your laptop" from "that laptop is gone".
    *
-   * LOADS THE LISTING ITSELF rather than reading whatever the call above happened to leave behind.
-   * `egressCandidates` is memoised, so this is still ONE store read per run - what it buys is that
-   * the answer cannot depend on CALL ORDER. Reading the shared variable directly worked only
-   * because argument evaluation reaches `residentialAvailable` first; reorder those two arguments
-   * and this would quietly answer `[]`, `machineRetired` would answer false for every machine, and
-   * the terminal retirement halt would silently become the unbounded `awaiting_daemon` retry it
-   * exists to remove - with every suite still green, because an empty listing is a legitimate state
-   * that this module must keep treating as "not retired".
-   *
-   * That empty state is the closed direction on purpose: it means "this process does not know what
-   * this org has", and not-knowing must never escalate a neutral wait into a terminal halt.
+   * `null` TRAVELS THROUGH rather than being flattened to `[]`, and that is the whole point:
+   * `machineRetired` answers NO for `null` (this process does not know what the org has, and
+   * not-knowing may never escalate a neutral wait into a terminal halt) and YES for `[]` (the
+   * registry was asked and said the org has no machines, so every pairing it once had is gone).
+   * Flattening them was the defect: a solo tenant who revoked their only laptop produced `[]`, it
+   * read as ignorance, and the run re-fired nightly forever against hardware that no longer existed.
    */
-  const knownPairingsNow = async (): Promise<readonly string[]> => {
-    egressCandidates ??= await loadEgressCandidates(ctx.orgId);
-    return egressCandidates.map((c) => c.pairingId);
+  const knownPairingsNow = async (): Promise<readonly string[] | null> => {
+    return (await fleetNow())?.map((c) => c.pairingId) ?? null;
   };
   const getBrowser = (): BrowserSession | null => {
     if (!browser) {
@@ -669,7 +683,7 @@ async function runOrRehearse(
    * ceremony pairing the first call did not have.
    */
   const resolveLocalityForStep = async (index: number, step: Step): Promise<LocalityVerdict> => {
-    egressCandidates ??= await loadEgressCandidates(ctx.orgId);
+    const candidates = await fleetNow();
     const declaration = resolveStepDeclaration(step);
     // The ACTION the origin declaration is ABOUT. `resolveStepOrigin` walks backwards to the
     // nearest step that states a URL, so a browser step inherits the portal the run navigated to
@@ -701,7 +715,7 @@ async function runOrRehearse(
       daemonConnected: !!connection,
       ...(connection?.pairingId ? { daemonPairingId: connection.pairingId } : {}),
       ...(preferredPairingId ? { preferredPairingId } : {}),
-      candidates: egressCandidates,
+      candidates,
       actorOrg: ctx.orgId,
       inProcessFallbackEnabled: loadAutomationConfig().localBrowserEnabled,
     });
@@ -726,7 +740,7 @@ async function runOrRehearse(
           kind: 'blocked',
           // The drift is a fact about THIS run's live session, and the next fire starts from a
           // fresh one. Neutral, as it has always been.
-          clearedBy: 'machine',
+          clearedBy: 'start-a-machine',
           reason:
             `this run's hosted browser is on ${live}, which is not the origin this step's posture ` +
             'was declared for - it will not carry a step onto an undeclared site',
@@ -736,21 +750,35 @@ async function runOrRehearse(
     return verdict;
   };
 
-  /** A locality verdict this loop must refuse, as the halt record the outer loop already knows. */
+  /**
+   * A locality verdict this loop must refuse, as the halt record the outer loop already knows.
+   *
+   * THE VERDICT'S `clearedBy` PICKS THE HALT, and it is the only thing that does. A block WAITING
+   * CANNOT CLEAR must never be carried as the environment halt: `awaiting_daemon` is neutral against
+   * the failure ceiling by design - the laptop opens and the next fire works - and a condition no
+   * laptop can fix inherits that neutrality as an UNBOUNDED retry against a state that never changes
+   * (docs/findings.md `an-org-whose-only-machine-is-revoked-retried-forever`). Both terminal halts
+   * below drive the ceiling and auto-pause the schedule loudly instead; which one is used is about
+   * what the person is asked to DO, not about how it counts.
+   */
   const refusalRecordFor = (step: Step, index: number, verdict: LocalityVerdict): StepRecord | undefined => {
     if (verdict.kind === 'blocked') {
-      // A block WAITING CANNOT CLEAR must not be carried as the environment halt. `awaiting_daemon`
-      // is neutral against the failure ceiling by design - the laptop opens and the next fire works
-      // - and a condition no laptop can fix inherits that neutrality as an UNBOUNDED retry against
-      // a state that never changes (docs/findings.md, the retired ceremony machine). So it halts as
-      // the state that means "a person must do something", which drives the ceiling and auto-pauses
-      // the schedule loudly instead.
-      if (verdict.clearedBy === 'human') {
-        return stepOrigin
+      if (verdict.clearedBy === 'pair-a-machine') {
+        // TERMINAL EITHER WAY - the property that matters, and the one `awaiting_daemon` would
+        // destroy. What is left is WHICH terminal halt, and that turns on whether a ceremony is an
+        // honest thing to ask this person for.
+        //
+        // A step that DECLARES a credential for a known origin is the case the whole branch exists
+        // for: the account's only machine was revoked after a session was established on it, so
+        // pairing a replacement is necessary and not sufficient, and `needs_credentials` is the halt
+        // that carries the portal's `/cofre` deep link to finish the job.
+        //
+        // A step that declares NONE gets the plain non-recoverable failure. Sending a person to the
+        // Cofre to establish a credential nothing asked for is a wrong specific instruction, which
+        // is worse than an honest general one - the same reasoning the blocked badge follows.
+        const wantsCredential = resolveStepDeclaration(step).credentialRefs.length > 0;
+        return stepOrigin && wantsCredential
           ? localityNeedsCeremonyRecord(step, index, verdict.reason, stepOrigin, automation.name)
-          // No origin to name, so there is no honest ceremony to ask for. Still TERMINAL: an
-          // ordinary non-recoverable failure drives the ceiling exactly as the halt above does, and
-          // falling back to `awaiting_daemon` here would reopen the very hole this branch closes.
           : localityTerminalFailureRecord(step, index, verdict.reason);
       }
       return localityBlockedRecord(step, index, verdict.reason);
@@ -2465,9 +2493,10 @@ async function credentialGateRecord(
   step: Step,
   /**
    * EVERY PAIRING THE ORG STILL HAS, live or not - the fleet listing that decides whether a
-   * `needs-machine` refusal is a wait or a dead end. See the `needs-machine` case below.
+   * `needs-machine` refusal is a wait or a dead end, or `null` when this process has no listing at
+   * all. See the `needs-machine` case below, and `machineRetired` for why `null` and `[]` differ.
    */
-  knownPairings: readonly string[],
+  knownPairings: readonly string[] | null,
   automationName: string,
 ): Promise<{
   record?: StepRecord;
@@ -2504,11 +2533,18 @@ async function credentialGateRecord(
       // that can never change. A ceremony session is bound to its machine's residential line
       // (`bridge/attended.ts` stamps `boundEgress: { kind: 'residential', pairingId }` beside
       // `establishedBy`), so REVOKING that machine makes `checkoutSession` refuse the session
-      // outright - and the run never learns the ceremony pairing at all, which is why
-      // `resolveLocality`'s own retirement branch cannot catch this one. Same dead end, reached one
-      // step earlier, and it must produce the same answer: `awaiting_daemon` is exempt from the
-      // failure ceiling (`NEUTRAL_BLOCKED_CODES`), so a schedule would otherwise re-fire against
-      // retired hardware forever, uncounted, with nothing the owner could do.
+      // outright - and the run never learns the ceremony pairing at all. That is why THIS is the
+      // only place the question is asked: `resolveLocality` reads a preference it can only have
+      // learned from a checkout that SUCCEEDED, and a checkout that succeeded proves the machine is
+      // still listed, so its own copy of this branch was unreachable and is gone. The answer must be
+      // terminal: `awaiting_daemon` is exempt from the failure ceiling (`NEUTRAL_BLOCKED_CODES`), so
+      // a schedule would otherwise re-fire against retired hardware forever, uncounted, with nothing
+      // the owner could do.
+      //
+      // `knownPairings` MAY BE `null`, and that is not the same as `[]`. `null` is "this process has
+      // no fleet listing", which `machineRetired` answers NO to - not-knowing may never send a person
+      // to repeat a ceremony. `[]` is the registry saying the org has no machines, which is a
+      // retirement of everything it once had.
       //
       // The pairing named here is `boundEgress.pairingId`, which for every session this product can
       // actually emit IS the machine the ceremony happened on - the one writer stamps both from the

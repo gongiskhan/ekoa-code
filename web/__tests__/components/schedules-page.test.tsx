@@ -36,6 +36,34 @@ vi.mock('next/link', () => ({
   ),
 }));
 
+/**
+ * The notifications stream, as a HAND-DRIVEN fake.
+ *
+ * The page subscribes to `schedule_blocked` on the per-user stream (P4.1). A real `ApiProvider`
+ * would open an EventSource jsdom has no server for, so the provider is replaced with one whose
+ * `on` registers into a map this file can fire - which is what makes "a blocked fire reaches the
+ * person reading this page" assertable at all.
+ */
+const notificationHandlers = new Map<string, (event: Record<string, unknown>) => void>();
+const emitNotification = (event: Record<string, unknown>): void => {
+  notificationHandlers.get(event.type as string)?.(event);
+};
+
+vi.mock('@/components/providers/api-provider', () => ({
+  useApi: () => ({
+    api: {},
+    notifications: {
+      on: (type: string, handler: (event: Record<string, unknown>) => void) => {
+        notificationHandlers.set(type, handler);
+        return () => notificationHandlers.delete(type);
+      },
+      onStatusChange: () => () => {},
+      status: 'open',
+      close: () => {},
+    },
+  }),
+}));
+
 vi.mock('@/lib/api', () => ({
   api: {
     schedules: {
@@ -124,6 +152,7 @@ beforeEach(() => {
     loadError: undefined,
   });
   useToastStore.setState({ toasts: [] });
+  notificationHandlers.clear();
   seedAuth('user');
 });
 
@@ -319,5 +348,63 @@ describe('a blocked fire in the list says WHICH block it was', () => {
 
     const badge = await screen.findByTestId('schedule-run-status-blocked');
     expect(badge).toHaveTextContent('À sua espera');
+  });
+});
+
+/**
+ * P4.1 - A BLOCKED FIRE REACHES THE PERSON, INSTEAD OF NOBODY.
+ *
+ * `schedule_blocked` is emitted for every blocked fire, and it exists for a specific reason: the
+ * ENVIRONMENT block (`awaiting_daemon`) is NEUTRAL against the failure ceiling, so it never
+ * auto-pauses and never announces itself any other way - a schedule can sit waiting on a machine
+ * indefinitely while this page, fetched once on mount, shows yesterday's badge.
+ *
+ * It shipped with NO LISTENER anywhere in the dashboard. The event was emitted into a channel
+ * nothing read, which is the same thing as not emitting it: the compensating signal reached nobody.
+ * These pin both halves of the fix - the words a person sees, and the refetch that makes the row
+ * true - and both are asserted from the OUTSIDE, on rendered text, not on a subscription existing.
+ */
+describe('a fire that ended blocked', () => {
+  it('tells the person reading the page, in the words of the CAUSE', async () => {
+    mocked.schedules.list.mockResolvedValue({ items: [schedule()] });
+    renderPage();
+    await screen.findByText('Relatório semanal');
+
+    emitNotification({ type: 'schedule_blocked', scheduleId: 'sch-mine', runId: 'r1', code: 'awaiting_daemon' });
+
+    await waitFor(() => {
+      expect(toastMessages().join(' ')).toContain('aguarda o seu computador');
+    });
+    // The pre-P4.1 copy sent a user whose laptop is shut to go and approve something. There is no
+    // approval on this surface; they would look for one.
+    expect(toastMessages().join(' ')).not.toContain('aprovação');
+  });
+
+  it('refetches, so the row badge stops showing the previous outcome', async () => {
+    mocked.schedules.list.mockResolvedValue({
+      items: [schedule({ lastRun: { runId: 'r0', status: 'ok', at: '2026-01-01T09:00:00.000Z' } })],
+    });
+    renderPage();
+    await screen.findByTestId('schedule-run-status-ok');
+
+    mocked.schedules.list.mockResolvedValue({
+      items: [schedule({ lastRun: { runId: 'r1', status: 'blocked', at: '2026-01-01T10:00:00.000Z', code: 'needs_credentials' } })],
+    });
+    emitNotification({ type: 'schedule_blocked', scheduleId: 'sch-mine', runId: 'r1', code: 'needs_credentials' });
+
+    const badge = await screen.findByTestId('schedule-run-status-blocked');
+    expect(badge).toHaveTextContent('Falta uma credencial');
+  });
+
+  /** A cause nobody has written copy for still says something true, rather than nothing at all. */
+  it('falls back to the general blocked words for an unknown code', async () => {
+    mocked.schedules.list.mockResolvedValue({ items: [schedule()] });
+    renderPage();
+    await screen.findByText('Relatório semanal');
+
+    emitNotification({ type: 'schedule_blocked', scheduleId: 'sch-mine', runId: 'r2', code: 'something_new' });
+    await waitFor(() => {
+      expect(toastMessages().join(' ')).toContain('à sua espera');
+    });
   });
 });

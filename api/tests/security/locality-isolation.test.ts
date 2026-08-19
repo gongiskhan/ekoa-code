@@ -5,6 +5,7 @@ import { bridgePairings, bridgeCapabilityGrants } from '../../src/data/stores.js
 import { grantCapability } from '../../src/bridge/capability-grants.js';
 import {
   registerPairing,
+  revokePairing,
   egressCandidatesForOrg,
   __resetLiveConnectionsForTests,
 } from '../../src/bridge/registry.js';
@@ -17,6 +18,7 @@ import { resolveLocality } from '../../src/automation/locality.js';
 import {
   machineRetired,
   residentialEgressPairings,
+  resolveEgress,
   type EgressCandidate,
 } from '../../src/automation/egress-policy.js';
 import { classifyOrigin } from '../../src/automation/origin-posture.js';
@@ -82,13 +84,13 @@ const PERMISSIVE = classifyOrigin('https://portal.example.com', {
   httpConfig: { baseUrl: 'https://portal.example.com' },
 });
 
-function localityFor(actorOrg: string, candidates: readonly EgressCandidate[]) {
+function localityFor(actorOrg: string, candidates: readonly EgressCandidate[] | null) {
   return resolveLocality({
     classification: PERMISSIVE,
     declaredTarget: { kind: 'any', capability: 'egress.residential' },
     offlinePolicy: 'fail',
     daemonConnected: false,
-    candidates: candidates.map((c) => ({ ...c, live: true })),
+    candidates: candidates?.map((c) => ({ ...c, live: true })) ?? null,
     actorOrg,
     inProcessFallbackEnabled: true,
   });
@@ -104,7 +106,7 @@ describe('a run never leaves through another tenant\'s machine', () => {
     // Not "filtered later" — absent. A foreign machine is not a candidate at all, which is the
     // only construction under which a later refactor of the filter cannot reintroduce the leak.
     const forB = await loadEgressCandidates(ORG_B);
-    expect(forB.map((c) => c.pairingId)).toEqual(['pair_b']);
+    expect(forB?.map((c) => c.pairingId)).toEqual(['pair_b']);
   });
 
   it('org A HALTS rather than borrowing the perfectly good machine next door', async () => {
@@ -141,11 +143,81 @@ describe('a run never leaves through another tenant\'s machine', () => {
     });
   });
 
-  it('the unbound seam answers EMPTY, which refuses — an unwired resolver cannot widen egress', async () => {
+  /**
+   * THE UNBOUND SEAM SAYS `null`, NOT `[]`, AND BOTH HALVES OF THAT MATTER.
+   *
+   * It must not widen egress: an unwired resolver cannot become "all machines", so nothing is
+   * selectable and the run halts. And it must not NARROW the answer to a retirement either - `[]`
+   * now means "the registry says this org has no machines", which refuses terminally and sends a
+   * person to pair hardware. A process that has simply not wired its seam knows neither.
+   */
+  it('the unbound seam answers UNKNOWN, which refuses without claiming the org has no machines', async () => {
     await armedMachine('pair_a', ORG_A, 'http://100.64.1.1:1080');
-    // No `setEgressCandidateResolver` call: the default. It must not fall back to "all machines".
+    // No `setEgressCandidateResolver` call: the default.
+    expect(await loadEgressCandidates(ORG_A)).toBeNull();
+    const verdict = localityFor(ORG_A, await loadEgressCandidates(ORG_A));
+    expect(verdict.kind).toBe('blocked');
+    expect(verdict.kind === 'blocked' && verdict.clearedBy).toBe('start-a-machine');
+  });
+
+  /** ...and a BOUND resolver over an org with nothing in it says exactly that, terminally. */
+  it('a bound resolver over an org with no pairings answers EMPTY, which is terminal', async () => {
+    setEgressCandidateResolver(egressCandidatesForOrg);
     expect(await loadEgressCandidates(ORG_A)).toEqual([]);
-    expect(localityFor(ORG_A, await loadEgressCandidates(ORG_A)).kind).toBe('blocked');
+    const verdict = localityFor(ORG_A, await loadEgressCandidates(ORG_A));
+    expect(verdict.kind).toBe('blocked');
+    expect(verdict.kind === 'blocked' && verdict.clearedBy).toBe('pair-a-machine');
+  });
+});
+
+/**
+ * THE ORG FILTER RUNS ON THE ROW, NOT ON THE ID - and this is what forces it to.
+ *
+ * `resolveEgress` narrows its rows with a SET OF PAIRING IDS computed by `residentialEgressPairings`
+ * (which is org-scoped). Mapping that set back onto rows is only as strong as the assumption that a
+ * pairing id identifies at most one row, and a tenancy boundary must not rest on an id being unique
+ * across tenants: `registerPairing` is reachable by two orgs, ids arrive from clients, and nothing
+ * in the store enforces global uniqueness.
+ *
+ * So the attack is one line long: give the foreign row THE SAME pairing id as one of ours, and put
+ * it first. With the org check dropped from the row filter, the id is "available", the foreign row
+ * passes, `usable[0]` picks it, and the run's proxy becomes ANOTHER TENANT'S tailnet address - one
+ * company's portal traffic leaving through another company's house, invisible from both sides.
+ */
+describe('a colliding pairing id does not carry a run into another tenant', () => {
+  const COLLIDING = 'pair_shared';
+  const ours: EgressCandidate = {
+    pairingId: COLLIDING, org: ORG_A, capabilities: ['egress.residential'],
+    egressEndpoint: 'http://100.64.1.1:1080', live: true,
+  };
+  /** Identical in every way that selection looks at, except the org. Listed FIRST. */
+  const theirs: EgressCandidate = { ...ours, org: ORG_B, egressEndpoint: 'http://100.64.9.9:1080' };
+
+  it('selection takes OUR row, never the foreign one that shares its id', () => {
+    const resolution = resolveEgress(
+      { requirement: { kind: 'residential' }, offlinePolicy: 'fail' },
+      [theirs, ours],
+      ORG_A,
+    );
+    expect(resolution).toEqual({
+      outcome: 'machine', pairingId: COLLIDING, proxyUrl: 'http://100.64.1.1:1080',
+    });
+  });
+
+  it('...and with only the foreign row present it refuses rather than borrowing the address', () => {
+    const resolution = resolveEgress(
+      { requirement: { kind: 'residential' }, offlinePolicy: 'fail' },
+      [theirs],
+      ORG_A,
+    );
+    expect(resolution.outcome).toBe('refused');
+    expect(JSON.stringify(resolution)).not.toContain('100.64.9.9');
+  });
+
+  it('the same holds through the whole locality decision, which is what production calls', () => {
+    const verdict = localityFor(ORG_A, [theirs, ours]);
+    expect(verdict.kind).toBe('in-process');
+    expect(JSON.stringify(verdict)).not.toContain('100.64.9.9');
   });
 });
 
@@ -169,7 +241,7 @@ describe('a session is never released for another tenant\'s machine', () => {
     await armedMachine('pair_b', ORG_B, 'http://100.64.9.9:1080');
     setEgressCandidateResolver(egressCandidatesForOrg);
 
-    const forA = (await loadEgressCandidates(ORG_A)).map((c) => ({ ...c, live: true }));
+    const forA = (await loadEgressCandidates(ORG_A))!.map((c) => ({ ...c, live: true }));
     expect(residentialEgressPairings(forA, ORG_A)).toEqual(['pair_a']);
   });
 
@@ -188,7 +260,7 @@ describe('a session is never released for another tenant\'s machine', () => {
   it('an own machine that is asleep, ungranted, or has no endpoint is not releasable either', async () => {
     await armedMachine('pair_a', ORG_A, 'http://100.64.1.1:1080');
     setEgressCandidateResolver(egressCandidatesForOrg);
-    const own = (await loadEgressCandidates(ORG_A)).map((c) => ({ ...c, live: true }))[0]!;
+    const own = (await loadEgressCandidates(ORG_A))!.map((c) => ({ ...c, live: true }))[0]!;
 
     expect(residentialEgressPairings([{ ...own, live: false }], ORG_A)).toEqual([]);
     // I-3: a candidate's capability list is advertised INTERSECT granted, so an empty one means the
@@ -203,14 +275,34 @@ describe('a session is never released for another tenant\'s machine', () => {
   });
 
   /**
-   * `machineRetired` decides whether a machine halt is a WAIT or a terminal ask, and the EMPTY case
-   * is the one that matters: an unbound seam, or a store that answered nothing, must never read as
-   * "your machine was removed" - that would send a person to repeat a ceremony they do not need,
-   * and would do it precisely when this process knows least.
+   * `machineRetired` decides whether a machine halt is a WAIT or a terminal ask, and the two EMPTY
+   * answers are the ones that matter - they used to be one value.
+   *
+   *   - `null`: an unbound seam, or nothing asked. It must never read as "your machine was removed",
+   *     which would send a person to repeat a ceremony they do not need, precisely when this process
+   *     knows least.
+   *   - `[]`: the registry ANSWERED and the org has no pairings. Reading THAT as ignorance is what
+   *     let a solo tenant who revoked their only laptop retry a neutral halt forever.
    */
-  it('an empty fleet listing is never read as a retirement', async () => {
-    expect(machineRetired('pair_a', [])).toBe(false);
+  it('an UNKNOWN fleet listing is never read as a retirement, and an EMPTY one always is', async () => {
+    expect(machineRetired('pair_a', null)).toBe(false);
+    expect(machineRetired('pair_a', [])).toBe(true);
     expect(machineRetired('pair_a', ['pair_other'])).toBe(true);
     expect(machineRetired('pair_a', ['pair_a', 'pair_other'])).toBe(false);
+  });
+
+  /**
+   * THE EMPTY LISTING IS A REAL PRODUCTION SHAPE, and this proves it from the store rather than
+   * asserting it: revoking an org's only pairing is an ordinary admin action
+   * (`bridge/registry.ts` `revokePairing`), and `egressCandidatesForOrg` filters revoked rows out.
+   */
+  it('revoking an org\'s only pairing really does produce an empty listing', async () => {
+    await armedMachine('pair_a', ORG_A, 'http://100.64.1.1:1080');
+    setEgressCandidateResolver(egressCandidatesForOrg);
+    expect((await loadEgressCandidates(ORG_A))?.map((c) => c.pairingId)).toEqual(['pair_a']);
+
+    await revokePairing('pair_a');
+    expect(await loadEgressCandidates(ORG_A)).toEqual([]);
+    expect(machineRetired('pair_a', [])).toBe(true);
   });
 });

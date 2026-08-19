@@ -1847,6 +1847,7 @@ O que tornaria o seu dia mais fácil?`,
       awaiting_daemon: 'Aguarda o seu computador',
       needs_credentials: 'Falta uma credencial',
     },
+    blockedFireToast: (cause: string) => `Uma execução agendada parou e está à sua espera: ${cause.toLowerCase()}`,
     emptyState: {
       title: 'Ainda não há agendamentos',
       description:

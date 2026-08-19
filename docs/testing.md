@@ -61,7 +61,8 @@ where they touch the dashboard.
   browser step itself. Deleting half B reddens the half-B case alone. A third case connects the
   ceremony machine and expects the run to COMPLETE, so neither is satisfiable by an engine that
   simply refuses everything. `automation/locality.test.ts` additionally censuses `clearedBy` across
-  every refusal the module can produce - the retirement is the only `human` one - and
+  every refusal the module can produce - an account with NO machine in it is the only refusal waiting
+  cannot clear - and
   `automation/service.test.ts` pins BOTH blocked codes reaching `startRunForTrigger`, not just
   `awaiting_daemon`. On the web side the badge's own spec is not enough: the two PAGES that render
   it are pinned separately (`components/schedules-page.test.tsx`,
@@ -101,14 +102,16 @@ where they touch the dashboard.
   EFFECT instead - a second browser context that should not exist, and the proxy a login actually
   left through - which is the general move when a mutation survives.
 - **A census must be a census.** `locality.test.ts`'s `clearedBy` coverage was five hand-written
-  inputs under a docblock claiming to cover every refusal the module produces; a new
-  `clearedBy: 'human'` branch could be added, reached, and leave it green. It now walks the CROSS
-  PRODUCT of the input space (postures, targets, offline policies, preferences, daemon states, fleet
-  listings, the kill switch), collects every distinct refusal actually emitted, and asserts the
-  collected set against an enumerated one - so a new refusal of either kind reddens it. A census
-  only catches what its space REACHES, which is not a formality: a branch conditioned on more than
-  two fleet candidates was missed by the first version of the space, which is why it carries a
-  larger fleet.
+  inputs under a docblock claiming to cover every refusal the module produces; a new terminal branch
+  could be added, reached, and leave it green. It now walks the CROSS PRODUCT of the input space
+  (postures, targets, offline policies, preferences, daemon states, fleet listings, the kill switch),
+  collects every distinct refusal actually emitted, and asserts the collected set against an
+  enumerated one - so a new refusal of either kind reddens it, and so does an existing NEUTRAL one
+  quietly turning terminal, which is how a schedule starts auto-pausing on a shut laptop. A census
+  only catches what its space REACHES, which is not a formality, twice over: a branch conditioned on
+  more than two fleet candidates was missed by the first version of the space (hence the larger
+  fleet), and the space carried `[]` as its only empty listing until `[]` and `null` became different
+  facts - so the terminal empty-account branch would have been invisible to it.
 - **`api/tests/automation/local-browser-context.test.ts`** - the LAST MILE, and the reason the
   provider takes its browser as an argument. Deciding a route is proved everywhere; APPLYING it was
   proved nowhere, because the application lived in an inline closure in `server.ts` that nothing

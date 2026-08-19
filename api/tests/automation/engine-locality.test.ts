@@ -195,12 +195,17 @@ describe('engine locality', () => {
     });
   });
 
-  it('...and halts rather than falling back to the datacenter when that machine is gone', async () => {
+  it('...and halts rather than falling back to the datacenter when that machine is asleep', async () => {
     setIntegrationActionDeclarationResolver(async () => ({
       posture: 'permissive',
       httpConfig: { baseUrl: 'https://portal.example.com' },
     }));
-    setEgressCandidateResolver(async () => []); // the fleet went dark
+    // Listed but not live: a machine exists, it is simply switched off, so the halt is the NEUTRAL
+    // one and the next fire works once it wakes. (An EMPTY listing is a different fact with a
+    // different answer - see `an org whose only machine was revoked` below.)
+    setEgressCandidateResolver(async (orgId) => [
+      { pairingId: 'pair_home', org: orgId, capabilities: ['egress.residential'], egressEndpoint: 'http://100.64.0.7:1080', live: false },
+    ]);
     await seed('a_resi_gone', [
       integrationStep,
       { ...waitStep, declaration: { target: { kind: 'any', capability: 'egress.residential' } } } as Step,
@@ -209,6 +214,42 @@ describe('engine locality', () => {
 
     expect(contextRequests).toEqual([]);
     expect(result.status).toBe('awaiting_daemon');
+  });
+
+  /**
+   * AN ACCOUNT WITH NO MACHINE IN IT - the regression, driven through the real engine.
+   *
+   * The default seam resolver answers `null` ("this process has no listing"), which must keep the
+   * NEUTRAL halt: not-knowing may never escalate a wait into a terminal failure. A resolver that
+   * really asked the registry and got nothing answers `[]`, which is the registry saying THIS ORG
+   * HAS NO MACHINES - and that is a dead end no laptop can clear, so it must not be neutral.
+   *
+   * The pair is asserted together because either one alone is satisfiable by the wrong code: making
+   * everything terminal auto-pauses schedules for an unwired seam, and making everything neutral is
+   * the defect.
+   */
+  it('an UNKNOWN fleet keeps the neutral machine halt', async () => {
+    // No `setEgressCandidateResolver`: the unbound default, which answers `null`.
+    await seed('a_fleet_unknown', [waitStep]);
+    const result = await runAutomation('a_fleet_unknown', ctx);
+    expect(result.status).toBe('awaiting_daemon');
+    const run = (await automationRuns.get(result.runId)) as unknown as { steps: Array<{ error?: { message?: string } }> };
+    expect(run.steps[0]?.error?.message).toMatch(/none is connected/);
+  });
+
+  it('a KNOWN-EMPTY fleet halts TERMINALLY instead of waiting for a machine that cannot arrive', async () => {
+    setEgressCandidateResolver(async () => []); // the registry answered: this org has no machines
+    await seed('a_fleet_empty', [waitStep]);
+    const result = await runAutomation('a_fleet_empty', ctx);
+
+    // NOT `awaiting_daemon`: that code is exempt from the failure ceiling
+    // (`NEUTRAL_BLOCKED_CODES`), so a schedule would re-fire nightly forever telling the owner to
+    // connect a machine their account does not have.
+    expect(result.status).toBe('failed');
+    expect(contextRequests).toEqual([]);
+    const run = (await automationRuns.get(result.runId)) as unknown as { steps: Array<{ error?: { message?: string } }> };
+    expect(run.steps[0]?.error?.message).toMatch(/no machine is paired to your account/);
+    expect(run.steps[0]?.error?.message).toMatch(/pair a machine/);
   });
 
   it('a connected machine carries the undeclared origin — the bridge is the default, not a refusal', async () => {
@@ -1106,9 +1147,9 @@ describe('a session whose ceremony machine has been retired stops asking', () =>
       contextRequests.push({ ownerUserId, ...(egress ? { egress } : {}) });
       throw new Error('no real Chromium in this suite');
     });
-    // A NON-EMPTY fleet listing that does not contain the ceremony pairing is the registry stating
-    // the machine is gone. (An EMPTY listing means "this process does not know what this org has",
-    // which is not a statement that anything was retired - see `preferenceMachineRetired`.)
+    // A fleet listing that does not contain the ceremony pairing is the registry stating the machine
+    // is gone. (`null` - no listing at all - is a different fact: ignorance, which never reads as a
+    // retirement. See `machineRetired`.)
     setEgressCandidateResolver(async (orgId) => [
       { pairingId: LIVE_PAIRING, org: orgId, capabilities: ['egress.residential'], egressEndpoint: 'http://100.64.0.9:1080', live: true },
     ]);
@@ -1248,6 +1289,118 @@ describe('a session whose ceremony machine has been retired stops asking', () =>
     await seed('a_asleep', retiredSteps());
     const result = await runAutomation('a_asleep', ctx);
     expect(result.status).toBe('awaiting_daemon');
+  });
+
+  /**
+   * ================= THE SOLO TENANT WHO REVOKED THEIR ONLY LAPTOP =================
+   *
+   * The block above needs a SECOND machine to be reachable: the retirement is detected because the
+   * listing still contains something. Take that second machine away and every mechanism in the slice
+   * quietly stopped working.
+   *
+   * WHAT WENT WRONG, exactly. One laptop, an attended ceremony held on it, then `revokePairing`.
+   * `egressCandidatesForOrg` filters revoked rows, so the org's listing is `[]` - and `[]` used to
+   * read as "this process does not know what this org has". `machineRetired` therefore answered NO,
+   * so neither retirement branch fired; with no daemon connected the run halted `awaiting_daemon`,
+   * which this slice made NEUTRAL against the failure ceiling; and the schedule re-fired nightly,
+   * forever, uncounted, telling the owner to connect a machine that no longer existed. A dead end
+   * that used to be bounded (on main it counted as `failed` and auto-paused after 20 fires) became
+   * unbounded - the exact pathology the retirement work was written to remove.
+   *
+   * NO DAEMON IS CONNECTED HERE, and that is the whole reason this needs its own block rather than a
+   * variant above: with nothing dialled in, `resolveLocality` refuses BEFORE the credential gate
+   * runs, so the gate's retirement branch never gets a chance to answer.
+   */
+  describe('an org whose only machine was revoked', () => {
+    beforeEach(() => {
+      // The registry ANSWERED, and this org has nothing: the shape `egressCandidatesForOrg` returns
+      // once the only pairing is revoked. `tests/security/locality-isolation.test.ts` drives that
+      // revocation against the real store, so this fixture is a shape production emits.
+      setEgressCandidateResolver(async () => []);
+      setDaemonConnectionResolver(() => null);
+    });
+
+    it('halts TERMINALLY rather than waiting nightly for hardware the account does not have', async () => {
+      await seed('a_solo_revoked', retiredSteps());
+      const result = await runAutomation('a_solo_revoked', ctx);
+
+      // `awaiting_daemon` is the regression: exempt from the failure ceiling, so the schedule never
+      // auto-pauses and the owner is never told anything is wrong.
+      expect(result.status).toBe('needs_credentials');
+      expect(contextRequests).toEqual([]);
+    });
+
+    it('asks for the acts that actually clear it - pair a machine, then establish the session', async () => {
+      await seed('a_solo_revoked_req', retiredSteps());
+      const result = await runAutomation('a_solo_revoked_req', ctx);
+      const run = (await automationRuns.get(result.runId)) as unknown as {
+        steps: Array<{ index: number; error?: { message?: string } }>;
+        credentialRequest?: { origin?: string; mode?: string; portalDeepLink?: string; reason?: string };
+      };
+      expect(run.credentialRequest?.mode).toBe('ceremony');
+      expect(run.credentialRequest?.origin).toBe(PORTAL);
+      expect(run.credentialRequest?.portalDeepLink).toContain('/cofre?origin=');
+      const message = run.steps.find((s) => s.index === 1)?.error?.message ?? '';
+      expect(message).toMatch(/no machine is paired to your account/);
+      // A pairing id is an opaque identifier this product never shows a user.
+      expect(message).not.toContain(RETIRED_PAIRING);
+    });
+
+    /**
+     * A STEP THAT WANTS NO CREDENTIAL GETS THE OTHER TERMINAL HALT.
+     *
+     * Still terminal - that is the property that bounds the retry - but not a credential ask:
+     * sending a person to the Cofre to establish something the step never declared is a wrong
+     * specific instruction, and a wrong specific instruction is worse than an honest general one.
+     */
+    it('...and a step declaring no credential fails terminally without asking for one', async () => {
+      await seed('a_solo_revoked_nocred', [integrationStep, { ...waitStep, id: 's_plain' } as Step]);
+      const result = await runAutomation('a_solo_revoked_nocred', ctx);
+
+      expect(result.status).toBe('failed');
+      const run = (await automationRuns.get(result.runId)) as unknown as {
+        steps: Array<{ index: number; error?: { message?: string } }>;
+        credentialRequest?: unknown;
+      };
+      expect(run.credentialRequest).toBeUndefined();
+      expect(run.steps.find((s) => s.index === 1)?.error?.message ?? '').toMatch(/no machine is paired/);
+    });
+
+    /**
+     * ...AND THE UNBOUND SEAM IS STILL NEUTRAL, driven through the same fixture so the difference is
+     * the LISTING and nothing else. A process that has not wired its resolver knows nothing about
+     * this org, and not-knowing must never auto-pause anybody's schedule.
+     */
+    it('an UNKNOWN listing over the identical run keeps the neutral machine halt', async () => {
+      setEgressCandidateResolver(async () => null);
+      await seed('a_solo_unknown', retiredSteps());
+      const result = await runAutomation('a_solo_unknown', ctx);
+      expect(result.status).toBe('awaiting_daemon');
+    });
+  });
+
+  /**
+   * THE SAME DISTINCTION ONE LAYER IN: what `credentialGateRecord` is told about the fleet.
+   *
+   * With a machine DIALLED IN, locality answers `bridge` and the credential gate runs, so checkout's
+   * `needs-machine` refusal reaches the retirement question. The listing the engine hands it must
+   * carry `null` through rather than flattening it to `[]` - `machineRetired(id, [])` is TRUE, so a
+   * process with no listing would declare every session's machine retired and send its owner to
+   * repeat a ceremony they do not need, precisely when it knows least.
+   */
+  it('an UNKNOWN listing never reads as a retirement, even with a machine connected', async () => {
+    setEgressCandidateResolver(async () => null);
+    await seed('a_unknown_listing_bridge', retiredSteps());
+    const result = await runAutomation('a_unknown_listing_bridge', ctx);
+
+    // The neutral machine halt (checkout wants `pair_retired`, which is not available), NOT the
+    // terminal ceremony ask.
+    expect(result.status).toBe('awaiting_daemon');
+    const run = (await automationRuns.get(result.runId)) as unknown as {
+      steps: Array<{ index: number; error?: { message?: string } }>;
+    };
+    expect(run.steps.find((s) => s.index === 1)?.error?.message ?? '')
+      .not.toMatch(/has been removed from your account/);
   });
 });
 

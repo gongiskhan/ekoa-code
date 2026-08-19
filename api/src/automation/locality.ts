@@ -43,11 +43,28 @@
  * carry NO preference. Their posture is permissive, which resolves to `kind: 'any'`: any route out
  * is fine, because nothing about them is bound to where they were made.
  *
- * A preference is not a life sentence. A pairing the org's fleet listing no longer contains has
- * been RETIRED, and `preferenceMachineRetired` turns that into a refusal that names the act which
- * fixes it - establish the session again from a machine you still have - rather than an eternal
- * wait for hardware nobody owns. It does NOT silently fall through to another machine: a retired
- * ceremony machine makes the session homeless, not portable.
+ * A preference is not a life sentence, and the refusal for a ceremony machine that no longer exists
+ * is NOT made here. It cannot be: this module only ever LEARNS a preference from a session checkout
+ * that succeeded, and a ceremony session is bound to its machine's residential line, so a checkout
+ * that succeeded proves the machine is still in the fleet. The dead end is reached one step EARLIER,
+ * at the checkout that refuses (`engine.ts` `credentialGateRecord` on a `needs-machine` verdict,
+ * against `machineRetired` and `SESSION_MACHINE_RETIRED_REASON` in `egress-policy.ts`). This module
+ * used to carry a second copy of that refusal; nothing in production could reach it, so it is gone.
+ *
+ * ================================ AN ACCOUNT WITH NO MACHINES ================================
+ * Every refusal below that names a machine is, in effect, a promise that one can arrive: open the
+ * laptop and the next fire works, with nobody touching the schedule. That is why those halts are
+ * NEUTRAL against the failure ceiling.
+ *
+ * An account whose fleet listing is KNOWN AND EMPTY withdraws the promise. There is no laptop to
+ * open, so waiting cannot clear anything, and carrying such a halt as the neutral one is an
+ * UNBOUNDED retry against a state that never changes on its own - the exact pathology this slice
+ * exists to remove, re-created for the tenant least able to spot it (docs/findings.md
+ * `an-org-whose-only-machine-is-revoked-retried-forever`). So a known-empty fleet refuses TERMINALLY
+ * and names pairing a machine as the act.
+ *
+ * `candidates: null` is the OTHER thing an empty answer can mean - this process does not know what
+ * the org has, an unbound seam - and it keeps the neutral wait. Not-knowing may never escalate.
  *
  * A PREFERENCE BELONGS TO ONE ORIGIN, NEVER TO A RUN. `preferredPairingId` is read off ONE session,
  * and a session is bound to ONE origin. A run that touches two portals therefore carries two
@@ -81,7 +98,6 @@ import type { OfflinePolicy, StepTarget } from '@ekoa/shared';
 import type { OriginClassification } from './origin-posture.js';
 import { resolveTargetPosture } from './origin-posture.js';
 import {
-  machineRetired,
   resolveEgress,
   type EgressCandidate,
   type EgressRequirement,
@@ -106,24 +122,31 @@ export type LocalityVerdict =
       kind: 'blocked';
       reason: string;
       /**
-       * WHO CLEARS THIS BLOCK, and therefore whether REPEATING the run can ever help.
+       * THE ACT THAT CLEARS THIS BLOCK, and therefore whether REPEATING the run can ever help.
        *
-       *   - `machine` - the environment is what is missing (a laptop is shut, a fleet has no
-       *     residential machine right now). Opening the laptop clears it with nobody touching the
-       *     schedule, so the fire is NEUTRAL against the failure ceiling
+       *   - `start-a-machine` - the environment is what is missing: a laptop is shut, or the machine
+       *     a session was made on is not the one dialled in. The owner opening it clears the block
+       *     with nobody touching the schedule, so the fire is NEUTRAL against the failure ceiling
        *     (`schedules/supervisor.ts` `NEUTRAL_BLOCKED_CODES`) and the run halts in
        *     `awaiting_daemon`.
-       *   - `human` - waiting CANNOT clear it, because the condition is not about a machine being
-       *     off. The run halts in `needs_credentials`, which drives the ceiling and eventually
-       *     auto-pauses the schedule loudly, instead of re-firing nightly against a state that
-       *     will never change on its own.
+       *   - `pair-a-machine` - the account has NO machine (`fleetIsKnownEmpty`), so there is nothing
+       *     to start and waiting can never clear it. The run halts TERMINALLY, drives the ceiling,
+       *     and eventually auto-pauses the schedule loudly instead of re-firing nightly against a
+       *     state that cannot change on its own. WHICH terminal halt is the caller's judgement -
+       *     `engine.ts` `refusalRecordFor` asks for a ceremony only when the step actually declares
+       *     a credential, because a credential halt for a step that wants none sends a person to
+       *     the Cofre to fix something that is not broken.
        *
        * REQUIRED, not optional, and that is the point. An optional field would let a new blocked
-       * branch inherit "neutral, retry forever" by saying nothing - which is exactly how the
-       * retired-ceremony-machine refusal below became an unbounded retry against a machine that no
-       * longer exists. Every refusal now has to answer the question out loud.
+       * branch inherit "neutral, retry forever" by saying nothing - which is exactly how an account
+       * with no machines in it inherited an unbounded wait for a machine that could never arrive.
+       * Every refusal has to answer the question out loud.
+       *
+       * IT NAMES THE ACT AND NOT THE ACTOR (it was `'machine' | 'human'`) because "a person must do
+       * something" is not enough to pick a halt with, and picking one is the only thing the consumer
+       * does with this field.
        */
-      clearedBy: 'machine' | 'human';
+      clearedBy: 'start-a-machine' | 'pair-a-machine';
     };
 
 export interface LocalityInput {
@@ -139,9 +162,7 @@ export interface LocalityInput {
   daemonConnected: boolean;
   /**
    * The pairing where THIS SESSION's ceremony happened
-   * (`sessionMetadata.establishedBy.pairingId`). A preference for adversarial origins only, and one
-   * this module refuses DIFFERENTLY when the fleet listing says that machine is gone - see
-   * `preferenceMachineRetired`.
+   * (`sessionMetadata.establishedBy.pairingId`). A preference for adversarial origins only.
    *
    * IT MUST BE THE PREFERENCE FOR `classification`'s OWN ORIGIN. A session belongs to one portal;
    * handing this module another portal's ceremony machine makes every refusal below name the wrong
@@ -149,8 +170,16 @@ export interface LocalityInput {
    * `preferredPairingByOrigin` - and this module cannot check it, which is why it is said here.
    */
   preferredPairingId?: string;
-  /** The org's machines, as the registry sees them (advertised INTERSECT granted). */
-  candidates: readonly EgressCandidate[];
+  /**
+   * The org's machines, as the registry sees them (advertised INTERSECT granted), or `null` when
+   * this process HAS NO LISTING - an unbound seam (`seams.ts` `loadEgressCandidates`).
+   *
+   * `null` and `[]` are different facts and this module treats them differently: `[]` is the
+   * registry saying THIS ORG HAS NO MACHINES, which is a dead end no laptop can clear, and `null` is
+   * ignorance, which keeps the neutral wait. Selection is unaffected either way - both offer no
+   * candidate, so a residential requirement cannot be met from either.
+   */
+  candidates: readonly EgressCandidate[] | null;
   /** The RUN's org. `resolveEgress` filters candidates by it - the tenancy boundary (Rule 5). */
   actorOrg: string;
   /** The env kill switch (`EKOA_AUTOMATION_LOCAL_BROWSER`). Never the posture gate. */
@@ -190,50 +219,37 @@ export function egressRequirementFor(input: {
 }
 
 /**
- * Has the ceremony machine been RETIRED - i.e. is this preference about a machine that no longer
- * exists, rather than one that is merely switched off?
+ * DOES THIS ACCOUNT HAVE ANY MACHINE AT ALL - asked of the LISTING, which is the only thing that can
+ * answer it, and answered only when the listing exists.
  *
- * WHY THE QUESTION IS WORTH ASKING. `preferredPairingId` is read off a stored session and is never
- * revised. Retire the laptop that established it (`revokePairing`, an ordinary admin action) and
- * the preference outlives the machine: every later fire resolves to `blocked` "waiting" for a
- * machine that is gone, forever, and NOTHING the owner does clears it - not connecting the new
- * machine, not re-pairing, not disabling and re-enabling. A halt with no way out is its own defect,
- * and it is worse than the substitution the preference exists to prevent, because a substitution is
- * at least visible.
- *
- * THE TEST. A NON-EMPTY fleet listing that does not contain the pairing is the registry stating the
- * machine is gone: `egressCandidatesForOrg` lists every non-revoked pairing in the org, live or
- * not, so "registered but asleep" and "revoked" are genuinely distinguishable here. An EMPTY
- * listing is "this process does not know what this org has" - an unbound seam, a store that
- * answered nothing - which is not a statement that anything was retired, so the preference stands.
- * That is the closed direction: not-knowing may never change where a session is allowed to run.
- *
- * WHAT THE ANSWER IS *NOT* USED FOR. Dropping the preference and letting selection pick some other
- * machine, which was the first shape of this fix and is wrong: substituting a colleague's household
- * for the retired one is precisely the swap P4.2 forbids, and the machine being retired does not
- * make it less of a swap. A retired ceremony machine means the SESSION has no home any more, and
- * the honest answer is to say so and name the act that fixes it - establish this session again from
- * a machine you still have, which mints an item carrying a pairing that exists.
+ * `egressCandidatesForOrg` returns every NON-REVOKED pairing in the org, live or not, so an empty
+ * array is not "everyone is asleep": it is "there is nothing to wake". `null` is the other empty
+ * answer - no listing was obtained - and it is not an answer to this question at all.
  */
-function preferenceMachineRetired(input: LocalityInput): boolean {
-  if (!input.preferredPairingId) return false;
-  return machineRetired(input.preferredPairingId, input.candidates.map((c) => c.pairingId));
+function fleetIsKnownEmpty(input: LocalityInput): boolean {
+  return input.candidates !== null && input.candidates.length === 0;
 }
 
 /**
- * WHAT A PERSON IS TOLD WHEN THE MACHINE A SESSION LIVES ON IS GONE - one string, because two
- * different refusals arrive at it and a user must not be able to tell them apart.
+ * WHAT A PERSON IS TOLD WHEN THEIR ACCOUNT HAS NO MACHINE IN IT.
  *
- * The refusal below is reached when the run LEARNED the ceremony machine and locality then refused
- * it. `credentialGateRecord` (`engine.ts`) reaches the same fact one step EARLIER, from checkout:
- * a ceremony session is bound to its machine's residential line, so when that machine is retired
- * the session cannot even be released and the preference is never learned at all. Same situation,
- * same remedy, so the same words - and a pairing id appears in neither, because it is an opaque
- * identifier this product never shows a user and printing one reads as a fault code.
+ * Every other refusal in this module says a machine is not CONNECTED, which is an instruction: go
+ * and start it. That instruction is a lie to an owner who has none, and the halt carrying it was the
+ * neutral one, so a schedule repeated the lie nightly and forever. This names the act that actually
+ * exists - pair a machine - and the halt carrying it is terminal.
+ *
+ * It names BOTH acts because the case that produces it most often is a solo tenant who revoked their
+ * only laptop AFTER establishing a session on it: pairing a replacement is necessary and not
+ * sufficient, since the session is still bound to hardware that is gone.
+ *
+ * NOT EXPORTED, unlike `SESSION_MACHINE_RETIRED_REASON` next door: that one has a second producer in
+ * `engine.ts` and must be one string; this one is emitted here and nowhere else. The census in
+ * `tests/automation/locality.test.ts` compares it as a LITERAL on purpose, so re-wording what the
+ * product tells people is a deliberate edit there rather than a silent drift.
  */
-export const SESSION_MACHINE_RETIRED_REASON =
-  'the machine where this session was established has been removed from your account - ' +
-  'establish this session again, from a machine you still have';
+const NO_MACHINE_IN_ACCOUNT_REASON =
+  'no machine is paired to your account, and this step runs only on one - ' +
+  'pair a machine, then establish this session from it';
 
 /**
  * Decide where this step runs.
@@ -252,7 +268,7 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
   });
   const resolution = resolveEgress(
     { requirement, offlinePolicy: input.offlinePolicy },
-    input.candidates,
+    input.candidates ?? [],
     input.actorOrg,
   );
   // WHO NAMED THE MACHINE decides how the refusal is worded. An `authorPin` is a literal the author
@@ -261,31 +277,6 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
   // is an opaque UUID nothing in the product ever shows a user - printing it names nothing and
   // reads as a fault code, so those messages describe the machine and the way out instead.
   const authorPin = input.declaredTarget.kind === 'pinned' ? input.declaredTarget.pairingId : undefined;
-
-  // ---- 0. A ceremony machine that no longer exists ------------------------------------------
-  // Checked FIRST, and before the bridge, because every answer below it would be a lie: "that
-  // machine is not connected" is wrong about a machine that was removed, and "run it here instead"
-  // is the substitution P4.2 exists to refuse. Only when the preference is what the requirement
-  // actually became - an author's explicit pin is the author's business, and a permissive origin
-  // resolves to `any` and never asks about a machine at all.
-  if (
-    !authorPin &&
-    requirement.kind === 'residential' &&
-    requirement.pairingId === input.preferredPairingId &&
-    preferenceMachineRetired(input)
-  ) {
-    return {
-      kind: 'blocked',
-      // WAITING NEVER FIXES THIS ONE, and that is what separates it from every other refusal here.
-      // The other blocks are about a machine being OFF; this one is about a machine being GONE. No
-      // laptop can be opened to clear it, so carrying it as the neutral environment halt meant a
-      // schedule re-firing nightly, forever, against a condition that cannot resolve - the failure
-      // ceiling never counting a single one of them. A person re-establishing the session is the
-      // only thing that ends it, so it halts as the state that means exactly that.
-      clearedBy: 'human',
-      reason: SESSION_MACHINE_RETIRED_REASON,
-    };
-  }
 
   // ---- 1. The bridge ------------------------------------------------------------------------
   if (input.daemonConnected) {
@@ -299,9 +290,10 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
     }
     return {
       kind: 'blocked',
-      // The named machine EXISTS (it survived the retirement check above) and is merely not the one
-      // dialled in. Starting it clears this with nobody touching the schedule, so it is neutral.
-      clearedBy: 'machine',
+      // A machine IS dialled in, just not this one. Starting the right one clears this with nobody
+      // touching the schedule, so it is neutral - and it stays neutral whatever the listing says,
+      // because a connected daemon is itself proof that this account has hardware.
+      clearedBy: 'start-a-machine',
       reason: authorPin
         ? `this step is pinned to machine ${authorPin}; the machine currently connected is a different one`
         : 'this step must run on the machine where its session was established, and a different ' +
@@ -310,8 +302,31 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
     };
   }
 
-  // ---- 2. The hosted browser, gated by POSTURE and not by the environment --------------------
+  // ---- 2. AN ACCOUNT WITH NO MACHINE IN IT ---------------------------------------------------
+  //
+  // Placed HERE, after the bridge and before every "not connected" refusal below, because those
+  // refusals are instructions to go and start something and this is the case where there is nothing
+  // to start. `egressCandidatesForOrg` lists every non-revoked pairing in the org, live or not, so
+  // an empty listing is not "all asleep" - it is "none exists".
+  //
+  // The listing does NOT decide whether the step needed a machine at all, so this cannot short
+  // circuit the permissive/hosted path: it fires only when one of the refusals below would have.
+  // That is why it is expressed as an adjustment to those branches rather than as a return of its
+  // own - see `noMachineToStart`.
+  const noMachineToStart = fleetIsKnownEmpty(input);
+  /** The refusal to use when a "start your machine" halt is about to be issued to an empty fleet. */
+  const noMachineInAccount: LocalityVerdict = {
+    kind: 'blocked',
+    // NOT `establish-the-session`: nothing here knows that a session is even involved, and a
+    // credential halt for a step that declared no credential sends a person to the Cofre to fix
+    // something that is not broken. The act is pairing hardware, and the halt says so.
+    clearedBy: 'pair-a-machine',
+    reason: NO_MACHINE_IN_ACCOUNT_REASON,
+  };
+
+  // ---- 3. The hosted browser, gated by POSTURE and not by the environment --------------------
   if (!input.classification.cloudEgressAllowed) {
+    if (noMachineToStart) return noMachineInAccount;
     // No machine is connected, and this origin may not be carried by the hosted browser. The
     // OFFLINE POLICY has nothing to add here: `queue` and `fail` produce the same halt, because
     // there is no queue to join — the run stops and re-fires once a machine is back — and
@@ -322,8 +337,9 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
     return {
       kind: 'blocked',
       // Every branch here is "no machine of yours is connected" - the environment, which the owner
-      // fixes by opening a laptop rather than by establishing anything.
-      clearedBy: 'machine',
+      // fixes by opening a laptop rather than by establishing anything. (The owner who HAS no
+      // laptop was answered above; reaching this line means the account has hardware.)
+      clearedBy: 'start-a-machine',
       reason: authorPin
         ? `this origin is ${input.classification.posture}: the step is pinned to machine ${authorPin}, ` +
           'and that machine is not connected'
@@ -335,14 +351,15 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
     };
   }
   if (!input.inProcessFallbackEnabled) {
+    if (noMachineToStart) return noMachineInAccount;
     return {
       kind: 'blocked',
-      clearedBy: 'machine',
+      clearedBy: 'start-a-machine',
       reason: 'no machine is connected and the in-process browser fallback is disabled',
     };
   }
 
-  // ---- 3. ...and the route out it gets -------------------------------------------------------
+  // ---- 4. ...and the route out it gets -------------------------------------------------------
   switch (resolution.outcome) {
     case 'datacenter':
     case 'machine':
@@ -352,13 +369,16 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
       // is permissive, so this is a declared choice rather than a silent substitution.
       return { kind: 'in-process', egress: resolution };
     case 'queue':
-      // Literally "waiting for a machine": the run stops and re-fires once one is back.
-      return { kind: 'blocked', clearedBy: 'machine', reason: `waiting for a machine: ${resolution.reason}` };
+      // Literally "waiting for a machine": the run stops and re-fires once one is back. An account
+      // with none has nothing to wait for, so the queue is not a queue.
+      if (noMachineToStart) return noMachineInAccount;
+      return { kind: 'blocked', clearedBy: 'start-a-machine', reason: `waiting for a machine: ${resolution.reason}` };
     case 'refused':
     default:
       // The fleet cannot meet the declared requirement RIGHT NOW - a machine advertising
       // residential egress is missing, not retired. Registering or waking one clears it.
-      return { kind: 'blocked', clearedBy: 'machine', reason: resolution.reason };
+      if (noMachineToStart) return noMachineInAccount;
+      return { kind: 'blocked', clearedBy: 'start-a-machine', reason: resolution.reason };
   }
 }
 
@@ -408,7 +428,7 @@ function bridgeEgressFor(
   }
   return resolveEgress(
     { requirement: { kind: 'residential', pairingId: input.daemonPairingId }, offlinePolicy: 'fail' },
-    input.candidates,
+    input.candidates ?? [],
     input.actorOrg,
   );
 }
