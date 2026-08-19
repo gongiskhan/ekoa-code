@@ -210,3 +210,38 @@ restart**. After changing `api/`:
    Mongo and is wiped on restart: `node .claude/skills/run-ekoa-code/provision-credential.mjs` (see
    `docs/operations-runbook.md`). `GET /health` should read `claudeAuth.ok=true`,
    `meteringAnomalies=0`, `gatewayUnmeteredCalls=0` before you trust a live model turn.
+
+### The composition root's own bindings (P4, 2026-08-19)
+
+A seam BODY being testable is not the same as its BINDING being tested, and the difference is a
+whole class of surviving mutant. Both P4 bindings in `api/src/server.ts` were deleted, one at a
+time, with the entire suite still green and exit 0:
+
+- `setEgressCandidateResolver(...)` - without it `loadEgressCandidates` returns the default `null`
+  ("this process has no listing"), so `fleetIsKnownEmpty` is never true and `machineRetired` always
+  answers no. Both terminal halts P4 added become unreachable and the unbounded neutral retry
+  returns.
+- `setLocalBrowserContextProvider(...)` - reverted to the pre-P4 closure, `proxyOptionFor` is never
+  applied, so every run that resolved a machine route leaves from the datacenter while every
+  decision above it reports success.
+
+They survived for a structural reason worth stating as a rule: **every suite that exercises a seam
+installs its own implementation first**, which overrides whatever the composition root did. A suite
+that begins with `setX(fake)` can never observe the production binding of `X`, so a repository whose
+seams are all tested that way has no coverage of its composition root at all - and a clean deletion
+takes the imports with it, so lint and typecheck stay silent too.
+
+THE RULE. A seam whose production binding carries behaviour (not merely "some function is present")
+gets a composition-root test that boots the real `buildApp` and asserts the seam answers as the REAL
+implementation. `api/tests/automation/composition-root-locality.test.ts` and
+`api/tests/llm/ruleset-resolver.test.ts` are the two instances. Two things make such a test honest:
+
+1. Reset the seams to their defaults BEFORE `buildApp`, and never re-bind afterwards.
+2. Assert something only the real implementation can produce. `loadEgressCandidates` answering `[]`
+   is the example - the unbound default answers `null`, and "not null" is exactly the distinction
+   the branch's terminal halts rest on. Asserting merely that a function was installed would pass
+   against a resolver bound to `async () => []`.
+
+Where the real implementation needs a resource a test cannot have (here: a Playwright launch), the
+resource is injected at the composition root through `RuntimeDeps` rather than reached for inside
+the binding - optional, defaulting to production's, so the binding under test is the one that ships.

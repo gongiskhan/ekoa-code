@@ -205,6 +205,7 @@ import { listEmailIntegrations, sendAppEmail, type AppEmailDeps, type AppEmailCo
 import { getArtifactById, projectDirFor } from './apps/app-paths.js';
 import { listVisibleMemories } from './memory/index.js';
 import { getSharedBrowser } from './services/browser-pool.js';
+import type { Browser } from 'playwright';
 // B2 (WS-C): the credential-egress allow-list and the credential SHADOW comparator both live in
 // integrations/credential-cofre.ts — one implementation, reachable from the seams below and from a
 // test, rather than a derivation written inline in the composition root where nothing can exercise it.
@@ -242,6 +243,14 @@ import { denyListRulesetFieldsFor } from './services/deny-list.js';
 export interface RuntimeDeps {
   now: () => number;
   genId: () => string;
+  /**
+   * How this process opens the shared hosted Chromium. Defaults to `getSharedBrowser`, which is a
+   * real Playwright launch — so the ONE composition-root binding that turns a resolved egress route
+   * into an actual proxy could not be observed without launching a browser, and consequently was
+   * observed by nothing (`tests/automation/composition-root-locality.test.ts` is what closes that).
+   * Optional: every existing caller passes `{ now, genId }` and gets production's opener.
+   */
+  openBrowser?: () => Promise<Browser>;
 }
 
 /**
@@ -682,16 +691,27 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // silent datacenter run for every residential automation - was caught by no suite.
   // `localBrowserContextProviderUsing` takes the browser as an ARGUMENT, which is what makes it
   // drivable from a test; this line is now only the binding.
-  setLocalBrowserContextProvider(localBrowserContextProviderUsing(getSharedBrowser));
+  //
+  // AND THE BINDING ITSELF IS OBSERVED, because moving the body did not by itself make this line
+  // testable - deleting it left the whole suite green, since every automation test installs its own
+  // provider before touching the engine. `deps.openBrowser` (production: `getSharedBrowser`) is how
+  // `tests/automation/composition-root-locality.test.ts` drives THIS line with a recording browser
+  // and asserts the proxy actually reaches `newContext`.
+  setLocalBrowserContextProvider(localBrowserContextProviderUsing(deps.openBrowser ?? getSharedBrowser));
   // 9b. The org's machines, for egress selection (Cofre WS-I). `egressCandidatesForOrg` already
   // returns the INTERSECTION of what each machine advertises and what the org granted (I-3), which
   // is the only list selection may ever see — an advertisement is a self-assertion, not an
-  // authorisation. Org-scoped by construction: a foreign machine is not a candidate at all.
+  // authorisation. That now covers the ADDRESS as well as the capability: a machine whose
+  // advertised endpoint is not the one the org's grant names is not a residential candidate and
+  // carries no endpoint at all. Org-scoped by construction: a foreign machine is not a candidate.
   //
   // BINDING IT IS WHAT LETS `[]` MEAN SOMETHING. The seam answers `EgressCandidate[] | null`, and
   // only a resolver that actually asked the registry may say `[]` - "this org has no machines",
   // which halts a run TERMINALLY rather than waiting for hardware that does not exist. The unbound
-  // default says `null` (ignorance) precisely so a half-wired process cannot make that claim.
+  // default says `null` (ignorance) precisely so a half-wired process cannot make that claim - and
+  // deleting this line restored that ignorance with the whole suite still green, which is why
+  // `tests/automation/composition-root-locality.test.ts` now asserts the `[]` an unbound seam
+  // cannot produce.
   setEgressCandidateResolver((orgId) => egressCandidatesForOrg(orgId));
   // 10. THE DAEMON SEAM (Cofre J-1 wiring). This is a SECURITY EVENT, not plumbing: the moment it
   // is wired, `local_command` and daemon-driven browser steps become reachable end to end, and

@@ -1997,3 +1997,24 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   `string | null | undefined`: `undefined` means "this registration is not an advertisement" (the
   CONNECT path registers before the machine has said anything and must not erase what it said last
   time), `null` or an unusable address means "this advertisement offers no egress" and CLEARS.
+
+- 2026-08-19 - P4 round eight: THE COMPOSITION ROOT'S OWN BINDINGS ARE TESTED, and one of them
+  needed a seam to be testable at all.
+  Two `server.ts` lines were surviving mutants - each deleted, whole suite green, exit 0: the
+  `setEgressCandidateResolver` binding (whose absence returns the fleet seam to `null`, "I do not
+  know", making BOTH terminal branches this branch added unreachable and restoring the unbounded
+  neutral retry) and the `setLocalBrowserContextProvider` binding (whose reversion to the pre-P4
+  closure drops the proxy, so every residential run silently leaves from the datacenter while every
+  decision above it reports success). Moving the provider BODY into
+  `localBrowserContextProviderUsing` last round made the body drivable and moved the untestable line
+  one call up; nothing observed the binding, because every automation suite installs its own seam
+  before touching the engine.
+  **THE DECISION**: `RuntimeDeps` gains an OPTIONAL `openBrowser`, defaulting to `getSharedBrowser`.
+  Production is unchanged and every existing `buildApp(cfg, {now, genId})` caller is unaffected; what
+  it buys is that `tests/automation/composition-root-locality.test.ts` can boot the REAL `buildApp`
+  and assert the proxy reaches `newContext` without launching Chromium. The rejected alternative was
+  to brand the provider function and assert the brand - it would redden on both mutations, but it
+  asserts a tag rather than the behaviour, and a binding test that cannot see the behaviour is the
+  same category of comfort as the suites that installed their own seam. The egress half needs no
+  seam: the test asserts the resolver answers `[]` for an org with no machines, which is the exact
+  statement the unbound `null` default cannot make.
