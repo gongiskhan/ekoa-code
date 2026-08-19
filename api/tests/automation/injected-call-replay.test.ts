@@ -56,11 +56,18 @@ function recipe(over: Record<string, unknown> = {}): unknown {
   };
 }
 
-/** Two calls, two DIFFERENT hosts - the shape a single-verdict posture gets wrong. */
+/**
+ * Two calls, two DIFFERENT hosts - the shape a single-verdict posture gets wrong.
+ *
+ * The SECOND call carries the `ref` hole and the first carries none, which is what a real compile
+ * produces (the opening hop of a flow routinely takes no argument) and is also the shape that pins
+ * the argument-coverage check as a RECIPE-wide question: `ref` is honoured by exactly one call, and
+ * it is not the first, so any reading that stops at one call refuses a perfectly ordinary recipe.
+ */
 const TWO_ORIGIN_RECIPE = recipe({
   injectedCalls: [
     { method: 'GET', urlTemplate: 'https://portal.example/api/cases', headerNames: [], idempotent: true },
-    { method: 'GET', urlTemplate: 'https://cdn.other.example/api/docs', headerNames: [], idempotent: true },
+    { method: 'GET', urlTemplate: 'https://cdn.other.example/api/docs?ref={{input.ref}}', headerNames: [], idempotent: true },
   ],
 });
 
@@ -96,6 +103,11 @@ const base = {
   integrationKey: 'portal',
   actionName: 'read_case',
   args: { ref: '2024-1' },
+  // A READ, stated. `mutates` is REQUIRED on `ReplayInput` - the seam above normalises it
+  // fail-closed once (`runAutomationForAction`) and this module is handed the answer - so a case
+  // that forgets to say is a compile error rather than a silently mutating action whose read-only
+  // recipe replays. The coverage refusal keyed on it has its own cases below.
+  mutates: false,
 };
 
 describe('replayCompiledAction - the in-page rung', () => {
@@ -458,13 +470,127 @@ describe('replayCompiledAction - what an ARGUMENT may not decide', () => {
   it('REFUSES a missing argument rather than blanking the hole and widening the query', async () => {
     const browser = session({ status: 200, bodyText: '{"items":[]}' });
     const result = await replayCompiledAction(
-      // `ref` is what the template asks for; the run supplies something else entirely.
-      { ...base, args: { unrelated: 'x' }, browser, classify: always(ADVERSARIAL) },
+      // NOTHING supplied, so this is the missing-hole refusal and ONLY that one. Supplying an
+      // UNRELATED argument instead - which is what this case used to do - trips the coverage
+      // refusal below first, and both messages contain the substring "ref" (from "refusing"), so
+      // the assertion would have passed while testing the other rule.
+      { ...base, args: {}, browser, classify: always(ADVERSARIAL) },
       { loadRecipe: async () => recipe() },
     );
     expect(result.outcome).toBe('no-recipe');
-    expect((result as { reason: string }).reason).toContain('ref');
+    expect((result as { reason: string }).reason).toMatch(/needs argument\(s\) ref\b/);
     // The point of the refusal: `?ref=` would have fetched every case in the tenant.
+    expect(browser.calls).toHaveLength(0);
+  });
+
+  // ===========================================================================================
+  // THE MIRROR REFUSAL: AN ARGUMENT NO HOLE CAN CARRY.
+  //
+  // `assertHolesSupplied` proves args ⊇ holes; these prove holes ⊇ args. Without the second half a
+  // recipe compiled around one question answers every later one with the same data: the caller asks
+  // for case 2025-9, the call the recipe holds is the 2024-1 one it was compiled from, and the run
+  // reports SUCCESS. The compile already refuses to LEARN that; a recipe written by an older build,
+  // or a caller that starts passing a new argument, reaches the replay with exactly that shape.
+  //
+  // Every case asserts the CONSEQUENCE - `browser.calls` - and not only the outcome string: the
+  // whole failure being prevented is a call that goes out and answers the wrong question.
+  // ===========================================================================================
+  it('REFUSES an argument the recipe has NO HOLE for, rather than answering the question it was compiled around', async () => {
+    const browser = session({ status: 200, bodyText: '{"items":[{"id":41}]}' });
+    const result = await replayCompiledAction(
+      // The recipe's one call is `?ref={{input.ref}}`. `status` can reach nothing in it, so a
+      // replay would fetch the same page of cases whatever the caller filtered on.
+      { ...base, args: { ref: '2024-1', status: 'closed' }, browser, classify: always(ADVERSARIAL) },
+      { loadRecipe: async () => recipe() },
+    );
+    expect(result.outcome).toBe('no-recipe');
+    // Anchored on the phrase, not on the bare argument name: a loose `toContain('status')` would
+    // also match any message that happened to use the word, which is how the missing-argument case
+    // above quietly matched "ref" inside "refusing".
+    expect((result as { reason: string }).reason).toMatch(/no hole for argument\(s\) status\b/);
+    expect(browser.calls).toHaveLength(0);
+  });
+
+  it('…and the SAME recipe with the SAME argument set minus that one replays - the refusal is about the argument', async () => {
+    // THE CONTROL. Without it "nothing was sent" would also hold for a harness that cannot send.
+    const browser = session({ status: 200, bodyText: '{"items":[{"id":41}]}' });
+    const result = await replayCompiledAction(
+      { ...base, args: { ref: '2024-1' }, browser, classify: always(ADVERSARIAL) },
+      { loadRecipe: async () => recipe() },
+    );
+    expect(result.outcome).toBe('ok');
+    expect((browser.calls[0] as { url: string }).url).toBe('https://portal.example/api/cases?ref=2024-1');
+  });
+
+  it('accepts an argument honoured by ONE call of several - coverage is the RECIPE\'s, not one call\'s', async () => {
+    // `TWO_ORIGIN_RECIPE`'s second call has no hole at all. A per-call reading of this rule would
+    // refuse a perfectly ordinary multi-hop recipe, so the union is the unit and this pins it.
+    const browser = session({ status: 200, bodyText: '{"items":[{"id":1}]}' });
+    const result = await replayCompiledAction(
+      { ...base, args: { ref: '2024-1' }, browser, classify: always(ADVERSARIAL) },
+      { loadRecipe: async () => TWO_ORIGIN_RECIPE },
+    );
+    expect(result.outcome).toBe('ok');
+    expect((browser.calls as Array<{ url: string }>).map((c) => c.url)).toEqual([
+      'https://portal.example/api/cases',
+      'https://cdn.other.example/api/docs?ref=2024-1',
+    ]);
+  });
+
+  it('counts a hole in the BODY as coverage - a POST search parameterises there, not in the URL', async () => {
+    const browser = session({ status: 200, bodyText: '{"items":[]}' });
+    const result = await replayCompiledAction(
+      { ...base, args: { q: 'processos' }, browser, classify: always(ADVERSARIAL), writeAssent: true },
+      {
+        loadRecipe: async () => recipe({
+          injectedCalls: [{
+            method: 'POST',
+            urlTemplate: 'https://portal.example/api/search',
+            bodyTemplate: '{"q":"{{input.q}}"}',
+            headerNames: [],
+            idempotent: false,
+          }],
+        }),
+      },
+    );
+    expect(result.outcome).toBe('ok');
+    expect((browser.calls[0] as { body: string }).body).toBe('{"q":"processos"}');
+  });
+
+  it('does NOT demand a hole for a SECRET-SHAPED argument name - the compile never writes one', async () => {
+    // `network-capture.inputHoles` skips these on both counts: never holed (a recipe that says "put
+    // the password here" is a recipe that needs a password) and never required to be found. Reading
+    // the same vocabulary here is what keeps the two sides from disagreeing - and disagreeing would
+    // refuse every replay of every authenticated action that takes a credential argument.
+    const browser = session({ status: 200, bodyText: '{"items":[{"id":1}]}' });
+    const result = await replayCompiledAction(
+      { ...base, args: { ref: '2024-1', sessionToken: 'abcdefgh' }, browser, classify: always(ADVERSARIAL) },
+      { loadRecipe: async () => recipe() },
+    );
+    expect(result.outcome).toBe('ok');
+    // …and it did not ride out on the wire either: it filled no hole, so it is in no URL.
+    expect((browser.calls[0] as { url: string }).url).toBe('https://portal.example/api/cases?ref=2024-1');
+  });
+
+  it('does NOT demand a hole for a NULL argument - it carries nothing the compile could have found', async () => {
+    const browser = session({ status: 200, bodyText: '{"items":[{"id":1}]}' });
+    const result = await replayCompiledAction(
+      { ...base, args: { ref: '2024-1', notes: null, extra: undefined }, browser, classify: always(ADVERSARIAL) },
+      { loadRecipe: async () => recipe() },
+    );
+    expect(result.outcome).toBe('ok');
+  });
+
+  it('REFUSES a NON-SCALAR argument even where a hole bears its name - `[object Object]` is not a value', async () => {
+    const browser = session({ status: 200, bodyText: '{"items":[]}' });
+    const result = await replayCompiledAction(
+      { ...base, args: { ref: { from: '2024-01', to: '2024-12' } }, browser, classify: always(ADVERSARIAL) },
+      { loadRecipe: async () => recipe() },
+    );
+    expect(result.outcome).toBe('no-recipe');
+    expect((result as { reason: string }).reason).toMatch(/argument\(s\) ref that are not scalar values/);
+    // The failure prevented is not an error - it is `?ref=%5Bobject%20Object%5D` returning the
+    // collection's default page and the run calling that a success.
     expect(browser.calls).toHaveLength(0);
   });
 
@@ -638,14 +764,26 @@ describe('replayCompiledAction - what an ARGUMENT may not decide', () => {
     });
   });
 
+  // ===========================================================================================
+  // THE LAST PROOF: A RESOLVED CALL CARRIES NO LIVE CREDENTIAL.
+  //
+  // `assertNoCredentialRodeIn` scans the RESOLVED url AND the RESOLVED body, and they are two legs
+  // rather than one because they are two different disclosures: a credential in a query string
+  // lands in the site's access logs, one in a body lands in its application logs. The suite pinned
+  // the URL leg only, and dropping the body leg from the loop left the whole automation and
+  // security lane green - so the leg that guards a POST recipe was covered by nothing at all.
+  // Both variants are pinned here now, each against its own control.
+  // ===========================================================================================
+  const LIVE_VALUE = ['live', 'session', 'token', '9f2'].join('-');
+
   it('refuses to send a resolved URL that contains a live credential value', async () => {
     const browser = session({ status: 200, bodyText: '{}' });
     await expect(
       replayCompiledAction(
         {
           ...base,
-          args: { ref: 'live-session-token-9f2' },
-          secrets: secretRegistryFromValues(['live-session-token-9f2']),
+          args: { ref: LIVE_VALUE },
+          secrets: secretRegistryFromValues([LIVE_VALUE]),
           browser,
           classify: always(ADVERSARIAL),
         },
@@ -653,5 +791,52 @@ describe('replayCompiledAction - what an ARGUMENT may not decide', () => {
       ),
     ).rejects.toThrow(/live credential/i);
     expect(browser.calls).toHaveLength(0);
+  });
+
+  /** A POST whose one argument lands in the BODY and nowhere in the URL - so the URL leg cannot
+   *  see it and only the body leg can. This is the ordinary shape of a portal's search. */
+  const bodyRecipe = () => recipe({
+    injectedCalls: [{
+      method: 'POST',
+      urlTemplate: 'https://portal.example/api/search',
+      bodyTemplate: '{"q":"{{input.q}}"}',
+      headerNames: [],
+      idempotent: false,
+    }],
+  });
+
+  it('refuses to send a resolved BODY that contains one - the URL leg cannot see a POST\'s argument', async () => {
+    const browser = session({ status: 200, bodyText: '{}' });
+    await expect(
+      replayCompiledAction(
+        {
+          ...base,
+          args: { q: LIVE_VALUE },
+          secrets: secretRegistryFromValues([LIVE_VALUE]),
+          browser,
+          classify: always(ADVERSARIAL),
+          writeAssent: true,
+        },
+        { loadRecipe: async () => bodyRecipe() },
+      ),
+    ).rejects.toThrow(/live credential/i);
+    expect(browser.calls).toHaveLength(0);
+  });
+
+  it('…and sends the identical POST when the argument is not a live value - the refusal is about the value', async () => {
+    const browser = session({ status: 200, bodyText: '{"items":[]}' });
+    const result = await replayCompiledAction(
+      {
+        ...base,
+        args: { q: 'processos' },
+        secrets: secretRegistryFromValues([LIVE_VALUE]),
+        browser,
+        classify: always(ADVERSARIAL),
+        writeAssent: true,
+      },
+      { loadRecipe: async () => bodyRecipe() },
+    );
+    expect(result.outcome).toBe('ok');
+    expect((browser.calls[0] as { body: string }).body).toBe('{"q":"processos"}');
   });
 });

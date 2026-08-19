@@ -40,12 +40,20 @@
  * (`network-capture.ts` templates path segments and query values only), and `resolveCall` re-proves
  * it: the resolved URL's origin must equal the template's literal origin, or the replay refuses.
  *
- * ── A MISSING ARGUMENT IS A REFUSAL, NOT AN EMPTY STRING ─────────────────────────────────────
+ * ── THE HOLES AND THE ARGUMENTS ARE THE SAME SET, PROVED BOTH WAYS ───────────────────────────
  *
- * `interpolate` renders an absent input as ''. For a step description that is harmless; for a
- * replayed query it silently WIDENS the call - `?ref={{input.ref}}` with no `ref` becomes `?ref=`,
- * which on most APIs means "everything". A replay that fetches more than it was asked for is worse
- * than a replay that does not happen, so every hole a template names must be supplied.
+ * A MISSING ARGUMENT IS A REFUSAL, NOT AN EMPTY STRING. `interpolate` renders an absent input as
+ * ''. For a step description that is harmless; for a replayed query it silently WIDENS the call -
+ * `?ref={{input.ref}}` with no `ref` becomes `?ref=`, which on most APIs means "everything". A
+ * replay that fetches more than it was asked for is worse than a replay that does not happen, so
+ * every hole a template names must be supplied (`assertHolesSupplied`).
+ *
+ * AND AN ARGUMENT WITH NO HOLE IS A REFUSAL TOO, for the mirror-image reason: a call with no hole
+ * for it is a CONSTANT with respect to it, so the replay fetches whatever the recipe was compiled
+ * around, hands it back, and reports SUCCESS while the caller's actual question went unasked. The
+ * compile already refuses to LEARN that shape; refusing it only there leaves every recipe written
+ * by an older build, and every caller that starts passing a new argument, replaying a constant
+ * (`assertEveryArgumentHasAHole`).
  *
  * ── THE RECIPE IS READ THROUGH `recipe-store`, NEVER THROUGH `resolveDefinition` ──────────────
  *
@@ -82,6 +90,7 @@
  */
 import { RecipeShapeError, parseCompiledRecipe, type CompiledRecipe, type InjectedCall } from '../recipe.js';
 import { parseResponseShape, shapeMismatch } from '../response-shape.js';
+import { SECRET_SHAPED_INPUT_NAME } from '../engine.js';
 import { guardedFetch } from '../../services/url-fetcher.js';
 import type { SecretRegistry } from '../../security/redaction.js';
 import type { OriginClassification } from '../origin-posture.js';
@@ -112,7 +121,11 @@ export type ReplayResult =
   /** Every call ran and every expectation held. `data` is the LAST call's body - the same "last
    *  meaningful output wins" rule `extractActionRunOutput` already applies to a run. */
   | { outcome: 'ok'; calls: ReplayedCall[]; data: unknown; recipeVersion: number }
-  /** No recipe, or one this build cannot read. The caller runs the ordinary vision path. */
+  /**
+   * No recipe, one this build cannot read, or one that cannot carry THIS run's arguments (a hole
+   * nothing supplied, an argument no hole can take). The caller runs the ordinary vision path,
+   * which sees every argument - so the answer is still right, it is merely not cheap.
+   */
   | { outcome: 'no-recipe'; reason: string }
   /** The site answered differently than the recipe expects. Routes to `self-heal.ts`. */
   | { outcome: 'drift'; reason: string; recipeVersion: number; failedIndex: number }
@@ -162,8 +175,16 @@ export interface ReplayInput {
    * Distinct from `writeAssent`, which says a human APPROVED the write. This says the action IS one,
    * and it is what the coverage check below is judged against: a recipe with no write in it cannot
    * be the whole of an action that writes, however freely it replays.
+   *
+   * REQUIRED. The field is optional only at the seam the executor hands it across, where Rule 7
+   * forbids an added field from changing an existing implementer; `runAutomationForAction` reads it
+   * fail-closed there (only a literal `false` is a read - `integrations/action-consent.ts`) and
+   * everything below is handed the answer. An OPTIONAL boolean here would mean this module had to
+   * re-decide what an absent value means, and the first cut of it decided wrong: `=== true`, so an
+   * action whose `mutates` never arrived - or arrived as `"false"`, or `0` - replayed a read-only
+   * recipe and reported success for a write that never happened.
    */
-  mutates?: boolean;
+  mutates: boolean;
 }
 
 export interface ReplayDeps {
@@ -214,7 +235,7 @@ export async function replayCompiledAction(input: ReplayInput, deps: ReplayDeps)
   // `learnFromRun` refuses to STORE either shape for a mutating action, so in a healthy system this
   // never fires. It is the second, independent line - for a recipe written by an older build, or
   // one whose action was re-declared `mutates` after it was learned.
-  if (input.mutates === true && firstWrite(recipe) === undefined) {
+  if (input.mutates && firstWrite(recipe) === undefined) {
     return {
       outcome: 'does-not-cover',
       reason:
@@ -231,6 +252,16 @@ export async function replayCompiledAction(input: ReplayInput, deps: ReplayDeps)
   if (!input.writeAssent) {
     const blocked = firstWrite(recipe);
     if (blocked) return { outcome: 'write-gate', blocked, recipeVersion: recipe.version };
+  }
+
+  // ── EVERY ARGUMENT MUST BE ABLE TO REACH THE WIRE ─────────────────────────────────────────
+  // Checked over the WHOLE recipe, before the per-call fill: an argument may legitimately be
+  // honoured by the third call and by no other, so the question "can this argument land anywhere"
+  // has no answer at the level of one call. See `assertEveryArgumentHasAHole`.
+  try {
+    assertEveryArgumentHasAHole(recipe, input.args);
+  } catch (err) {
+    return { outcome: 'no-recipe', reason: err instanceof Error ? err.message : String(err) };
   }
 
   // ── RESOLVE AND ROUTE EVERY CALL FIRST ────────────────────────────────────────────────────
@@ -696,12 +727,86 @@ function renderBodyTemplate(bodyTemplate: string, args: Record<string, unknown>)
 }
 
 /**
+ * FAIL CLOSED ON AN ARGUMENT THE RECIPE HAS NO HOLE FOR - the other half of `assertHolesSupplied`.
+ *
+ * The two together say one thing: THE RECIPE'S HOLES AND THE RUN'S ARGUMENTS ARE THE SAME SET.
+ * `assertHolesSupplied` proves `args ⊇ holes` (a hole nobody filled would widen the query);
+ * this proves `holes ⊇ args` (an argument nothing can carry).
+ *
+ * ── WHY AN IGNORED ARGUMENT IS A REFUSAL AND NOT A SHRUG ─────────────────────────────────────
+ *
+ * A compiled call with no hole for an argument is a CONSTANT with respect to it. Replaying it
+ * fetches whatever the recipe was compiled around, hands that back, and the run reports success -
+ * so a caller asking for case 2025-9 is answered with case 2024-1 and nothing anywhere says
+ * otherwise. That is the same silent-wrong-answer failure the COMPILE already refuses
+ * (`network-capture.ts`, "an argument this pass could not find refuses the whole compile"), and
+ * refusing it only at compile time leaves it wide open at replay: a recipe compiled by an older
+ * build, one compiled for a narrower argument set, or an action whose caller simply passes a new
+ * argument, all reach this function with a recipe that cannot honour what was asked.
+ *
+ * The refusal is a FALL-THROUGH (`no-recipe`), exactly as the missing-argument refusal is: the
+ * caller then runs the action's authored steps, which DO see every argument. Refusing the replay
+ * costs the optimisation; replaying regardless costs the answer.
+ *
+ * ── THE TWO EXEMPTIONS ARE THE COMPILE'S OWN, AND HAVE TO BE ─────────────────────────────────
+ *
+ * `inputHoles` (`network-capture.ts`) declines to hole two families, so a recipe legitimately has
+ * no hole for them and demanding one here would refuse every replay of a perfectly good recipe:
+ *
+ *   - a SECRET-SHAPED argument NAME. Never holed (a recipe that says "put the password here" is a
+ *     recipe that needs a password) and never required to be found, because a credential correctly
+ *     appears nowhere in a URL. Read through the same `SECRET_SHAPED_INPUT_NAME` the compile uses,
+ *     so the two sides cannot disagree about which names those are;
+ *   - an argument that is `null`/`undefined`. It carries nothing to look for and the compile
+ *     ignores it, so it is not an argument this recipe is failing to honour.
+ *
+ * A NON-SCALAR argument is refused rather than exempted, which is again the compile's own answer
+ * (`unlocatable`): there is no verbatim form of an object to have templated, so no recipe can be
+ * shown to honour one - and if a hole DID happen to bear its name, `String(value)` would put
+ * `[object Object]` on the wire. Both readings say refuse.
+ */
+function assertEveryArgumentHasAHole(recipe: CompiledRecipe, args: Record<string, unknown>): void {
+  const holes = new Set<string>();
+  for (const call of recipe.injectedCalls) {
+    for (const name of inputHolesOf(call.urlTemplate)) holes.add(name);
+    if (call.bodyTemplate !== undefined) for (const name of inputHolesOf(call.bodyTemplate)) holes.add(name);
+  }
+  const unusable: string[] = [];
+  const ignored: string[] = [];
+  for (const [name, value] of Object.entries(args)) {
+    if (SECRET_SHAPED_INPUT_NAME.test(name)) continue;
+    if (value === null || value === undefined) continue;
+    if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+      unusable.push(name);
+      continue;
+    }
+    if (!holes.has(name)) ignored.push(name);
+  }
+  // Reported separately because they are different facts about the run, and the operator's fix
+  // differs: one is an argument shape no recipe can carry, the other a recipe that predates it.
+  if (unusable.length > 0) {
+    throw new RecipeShapeError(
+      `the replayed call was given argument(s) ${unusable.sort().join(', ')} that are not scalar values, `
+      + 'so no compiled call can be shown to honour them - refusing to replay it',
+    );
+  }
+  if (ignored.length > 0) {
+    throw new RecipeShapeError(
+      `the replayed call has no hole for argument(s) ${ignored.sort().join(', ')}, so it would return the `
+      + 'data it was compiled around whatever this caller asked for - refusing to replay it',
+    );
+  }
+}
+
+/**
  * FAIL CLOSED ON A MISSING ARGUMENT.
  *
  * `interpolate` renders an unsupplied `{{input.ref}}` as the empty string. On a step description
  * that is a cosmetic gap; in a replayed query string it is a semantic change - `?ref=` means "all
  * of them" on most APIs - so the replay would quietly fetch a superset of what it was asked for and
  * report success. Every hole a template names must be supplied, or nothing is sent.
+ *
+ * The mirror of `assertEveryArgumentHasAHole` above; read the two together.
  */
 function assertHolesSupplied(call: Pick<InjectedCall, 'urlTemplate' | 'bodyTemplate'>, args: Record<string, unknown>): void {
   const named = [...inputHolesOf(call.urlTemplate), ...(call.bodyTemplate ? inputHolesOf(call.bodyTemplate) : [])];

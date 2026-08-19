@@ -452,7 +452,10 @@ describe('the write assent crosses the automation seam, and only when a human ga
    * POST - the ordinary "this portal serves its search over POST" case - and lives in
    * `automation/replay-mount.test.ts` ("a FIRST compile that writes is not stored either").
    */
-  async function learnedRecipeFor(exchange: Record<string, unknown>): Promise<{ stored: boolean; success: boolean }> {
+  async function learnedRecipeFor(
+    exchange: Record<string, unknown>,
+    action: IntegrationAction = boundAutomationAction(true, 'send_via_auto'),
+  ): Promise<{ stored: boolean; success: boolean; observed: boolean }> {
     const { automationBackedActionHandler } = await import('../../src/automation/service.js');
     const { automations } = await import('../../src/data/stores.js');
     await automations.deleteMany({});
@@ -462,18 +465,21 @@ describe('the write assent crosses the automation seam, and only when a human ga
     } as never);
 
     let stored = false;
-    const action = boundAutomationAction(true, 'send_via_auto');
+    /** WAS THE RECORDER EVEN OFFERED? The engine arms the machine's network recorder if and only if
+     *  it is handed this sink, so its presence IS the arming decision as the engine sees it. */
+    let observed = false;
     await seed('autokey', [action], { userId: OWNER, orgId: ORG }, 'none');
     // A REAL approval, through the real gate - so the assent that reaches the seam is one a human
     // actually gave, not a boolean this test set.
     await approveAction({ orgId: ORG, userId: OWNER }, describeAction('autokey', action), 'always');
 
     const out = await executeUserIntegrationAction(
-      { orgId: ORG, ownerUserId: OWNER, integrationKey: 'autokey', actionName: 'send_via_auto', args: { ref: '2024-1' } },
+      { orgId: ORG, ownerUserId: OWNER, integrationKey: 'autokey', actionName: action.actionName, args: { ref: '2024-1' } },
       {
         runAutomationBackedAction: automationBackedActionHandler({
           replay: async () => ({ outcome: 'no-recipe', reason: 'never discovered' }),
           run: (async (_id: unknown, _ctx: unknown, options: { observeNetwork?: (b: unknown[]) => void }) => {
+            observed = typeof options?.observeNetwork === 'function';
             options?.observeNetwork?.([exchange]);
             return { runId: 'run-1', status: 'completed', durationMs: 1, summary: 'ok', lastStepIndex: 0 };
           }) as never,
@@ -483,7 +489,7 @@ describe('the write assent crosses the automation seam, and only when a human ga
         }) as never,
       },
     );
-    return { stored, success: out.success };
+    return { stored, success: out.success, observed };
   }
 
   /** The site's own private API, as a discovery pass captures it. */
@@ -511,6 +517,50 @@ describe('the write assent crosses the automation seam, and only when a human ga
     expect(success).toBe(true);
   });
 
+  // ===========================================================================================
+  // THE FAIL-CLOSED READING OF `mutates`, PROVED BY CONSEQUENCE.
+  //
+  // `mutates` arrives off a `config.json` that is parsed rather than schema-validated, and off Mongo
+  // rows an agent authored. `action-consent.ts` states the rule for the whole repo: ONLY A LITERAL
+  // `false` IS A READ; absent, `"false"`, `0`, `null` are all writes. The spine reads the same field
+  // for a different decision - may this action learn a recipe at all - and the first cut read it as
+  // `=== true`, which inverts the rule for exactly the values that arrive unvalidated.
+  //
+  // The consequence of getting it wrong is not one extra dialog. An action that really writes, whose
+  // `mutates` never arrived, would store the reads its pass happened to see and every later run
+  // would replay them, answer `ok`, and report SUCCESS while nothing was submitted.
+  //
+  // Asserted on what was STORED and on whether the recorder was even offered - never on what the
+  // seam was handed, which is a statement about a function call rather than about a refusal.
+  // ===========================================================================================
+  describe('an action whose `mutates` is not a literal false is a WRITE, whatever it is', () => {
+    /** The field ABSENT, which is the shape an unvalidated `config.json` or an agent-authored row
+     *  routinely has. The cast is the point: `IntegrationAction.mutates` is typed as required and
+     *  is not validated at the boundary, so this is a document the system really does meet. */
+    const noMutatesField = {
+      actionName: 'ambiguous_via_auto',
+      description: 'via automação',
+      automationBinding: { automationId: 'auto-x' },
+    } as unknown as IntegrationAction;
+
+    it('stores no recipe and never even arms the recorder', async () => {
+      const { stored, observed, success } = await learnedRecipeFor(CAPTURED_READ, noMutatesField);
+      expect(stored).toBe(false);
+      // ARMING IS THE SECURITY HALF: the machine's recorder holds live header VALUES while armed,
+      // so a run that can never produce a recipe must never arm one.
+      expect(observed).toBe(false);
+      // …and the action still runs, which is what makes fail-closed affordable here.
+      expect(success).toBe(true);
+    });
+
+    it('…while a literal `false` DOES learn from the identical pass - the control that makes the refusal mean something', async () => {
+      const declaredRead = { ...noMutatesField, actionName: 'declared_read_via_auto', mutates: false } as IntegrationAction;
+      const { stored, observed } = await learnedRecipeFor(CAPTURED_READ, declaredRead);
+      expect(stored).toBe(true);
+      expect(observed).toBe(true);
+    });
+  });
+
   it('the replay\'s gate is keyed on the RECIPE\'s writes, not on the action\'s declaration', async () => {
     const { replayCompiledAction } = await import('../../src/automation/executors/injected-call.js');
     const stored = {
@@ -532,6 +582,11 @@ describe('the write assent crosses the automation seam, and only when a human ga
       actionName: 'send_via_auto',
       args: {},
       classify: () => ({ posture: 'permissive' as const, requiresAttendedAuth: false, cloudEgressAllowed: true }),
+      // The ACTION declares a write and the recipe contains one, so `does-not-cover` cannot fire
+      // and what is under test here is the write gate alone. Stated rather than defaulted: with
+      // `mutates: false` the same recipe would still be write-gated, which is the point of the
+      // case name - the gate is keyed on the RECIPE, not on the declaration.
+      mutates: true,
     };
     // NO ASSENT: refused, and it names the template rather than a resolved URL (which would carry
     // the caller's arguments into an error message).

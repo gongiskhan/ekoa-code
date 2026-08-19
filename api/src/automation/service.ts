@@ -1247,8 +1247,16 @@ export interface ActionRunInput {
    * a WRITE action routinely compiles only the reads it happened to watch underneath it - the write
    * itself may be a form post, a non-JSON response, or a login-shaped body the compile drops. Storing
    * that read-only recipe would make every later run replay the reads, answer `ok` and report SUCCESS
-   * while the write never happened. So `learnFromRun` refuses to compile one, and the replay refuses
-   * to run one (`does-not-cover`), and the action goes on writing by its authored steps.
+   * while the write never happened. So the learn refuses to compile one, and the replay refuses to
+   * run one (`does-not-cover`), and the action goes on writing by its authored steps.
+   *
+   * OPTIONAL AT THE SEAM, DEFINITE INSIDE IT (Rule 7 additive). A caller that predates the field
+   * leaves it absent, and this function reads that the way the rest of the repo reads `mutates`:
+   * ONLY A LITERAL `false` IS A READ (`integrations/action-consent.ts`, `actionRequiresConsent`).
+   * Absent, `"false"`, `0`, `null` - every one of those is a WRITE here, which costs a caller that
+   * cannot say the OPTIMISATION and never the correctness: the action still runs its authored steps.
+   * The normalisation happens once, at the top of `runAutomationForAction`, and everything below is
+   * handed a definite boolean.
    */
   mutates?: boolean;
 }
@@ -1377,8 +1385,35 @@ export async function runAutomationForAction(
   // the proof that no credential rode into a resolved URL runs against the values that actually
   // exist on this run - the check was inert until this line existed, because the mount passed none.
   const secrets = secretRegistryFromValues(Object.values(input.credentialFields));
-  /** Named ⇒ this action can carry a recipe. Unnamed callers behave exactly as they did pre-P2. */
-  const learnable = Boolean(input.integrationKey && input.actionName);
+  /** Named ⇒ this action can carry a recipe, so its recipe is TRIED. Unnamed callers behave exactly
+   *  as they did pre-P2: straight to the automation, replaying nothing and learning nothing. */
+  const named = Boolean(input.integrationKey && input.actionName);
+  /**
+   * DOES THIS ACTION WRITE? Read fail-closed, exactly once, here.
+   *
+   * This repo has one reading of `mutates` and it is `actionRequiresConsent`'s: only a LITERAL
+   * `false` is a read. `mutates` comes off a `config.json` that is parsed rather than
+   * schema-validated and off Mongo rows an agent authored, so absent / `"false"` / `0` / `null`
+   * all mean WRITE. Everything below is handed this boolean rather than re-reading the field.
+   */
+  const mutating = input.mutates !== false;
+  /**
+   * COULD THIS RUN PRODUCE A STORED RECIPE AT ALL? Decided BEFORE anything is armed.
+   *
+   * A mutating action stores no recipe in this slice, by two refusals that are one rule read from
+   * both sides: a compiled call set that WRITES was never shown to the human who approved the
+   * action, and one that does NOT write cannot be the whole of an action that does. So for a
+   * mutating action the learning pass is not merely wasted - the machine's recorder holds the LIVE
+   * HEADER VALUES of an authenticated session while it is armed (`clients/bridge/src/browser/
+   * capture.ts`), so arming it for a run that can never produce a recipe extends a credential's
+   * exposure window for no benefit whatsoever. The decision therefore happens here, before the
+   * engine is called, and not inside `learnFromRun` after the values have already been held,
+   * shipped and compiled.
+   *
+   * The REPLAY is still tried for a mutating action (`named` above, not this): a recipe an older
+   * build stored has to be seen to be refused and cleared.
+   */
+  const storable = named && !mutating;
 
   // ── 1. REPLAY FIRST (slice P2.3) ───────────────────────────────────────────────────────────
   //
@@ -1407,7 +1442,7 @@ export async function runAutomationForAction(
   // the action's own authored steps - precisely what the owner approved when they approved the
   // action. Declining to optimise a write is the conservative choice, not a bypass of one.
   let driftReason: string | undefined;
-  if (learnable) {
+  if (named) {
     const replay = deps.replay ?? replayIntegrationAction;
     const result = await replay({
       orgId: input.orgId,
@@ -1417,7 +1452,7 @@ export async function runAutomationForAction(
       args: input.args,
       secrets,
       ...(input.writeAssent !== undefined ? { writeAssent: input.writeAssent } : {}),
-      ...(input.mutates !== undefined ? { mutates: input.mutates } : {}),
+      mutates: mutating,
     }).catch((err: unknown) => {
       // A replay that THREW is a fall-through like any other. It is an optimisation on the hot
       // path of every automation-backed action; a defect in it must not be able to break actions
@@ -1484,18 +1519,25 @@ export async function runAutomationForAction(
   const runId = randomUUID();
   const emit = runEventEmitterFactory(runId);
 
-  // ── 2. THE RUN, INSTRUMENTED (slice P2.1/P2.2) ─────────────────────────────────────────────
+  // ── 2. THE RUN, INSTRUMENTED - BUT ONLY IF THE INSTRUMENT CAN PAY FOR ITSELF (P2.1/P2.2) ───
   //
   // The automation drives its authored steps exactly as it always has. Underneath it, the machine
   // records what the page's own JavaScript asks the server for, and the sink below collects it.
   // This is the LEARNING pass, and it is the run that was going to happen anyway.
+  //
+  // `storable`, NOT `named`. The recorder is a credential holding while it is armed - it keeps the
+  // live value of every header name the authenticated page sends, because that map is what an
+  // injected replay resolves names against. Arming it for an action whose recipe can never be
+  // stored (see `storable` above) would hold those values, ship a full pass's request and response
+  // bodies across the wire, redact them twice and compile them - to reach a refusal that was
+  // already decidable before the run started. The wasted work is the least of it.
   const captured: LocalBrowserCapture[] = [];
   const run = deps.run ?? runAutomation;
   const result = await run(input.binding.automationId, ctx, {
     runId,
     inputs,
     ...(emit ? { emit } : {}),
-    ...(learnable ? { observeNetwork: (batch: LocalBrowserCapture[]) => { captured.push(...batch); } } : {}),
+    ...(storable ? { observeNetwork: (batch: LocalBrowserCapture[]) => { captured.push(...batch); } } : {}),
   });
   const status: string = result.status;
   if (status === 'completed' || status === 'succeeded') {
@@ -1504,7 +1546,7 @@ export async function runAutomationForAction(
     // Only from a run that SUCCEEDED. A recipe distilled from a pass that ended on a sign-in wall
     // replays nothing and reports success forever, which is worse than having no recipe at all -
     // the run's own status is the goal gate, and it is a stricter one than a second vision opinion.
-    if (learnable) {
+    if (storable) {
       await learnFromRun({ input, secrets, captured, driftReason, deps }).catch((err: unknown) => {
         // Learning is a by-product. A store hiccup must not turn a run that WORKED into a failure.
         console.warn(`[automation] could not compile a recipe for ${input.integrationKey}/${input.actionName}: ${err instanceof Error ? err.message : String(err)}`);
@@ -1609,23 +1651,22 @@ async function learnFromRun(args: {
   //
   // THE WORST FAILURE THIS SPINE CAN HAVE, and the two refusals are one rule read from both sides.
   // A `mutates` action whose compile CONTAINS a write is refused above (nobody approved that call
-  // set). A `mutates` action whose compile contains NO write is refused here - because replaying it
-  // would issue the reads, answer `ok`, and report SUCCESS while the write never happened. Nobody
-  // finds out until somebody checks the far system.
+  // set). A `mutates` action whose compile contains NO write must be refused too - replaying it
+  // would issue the reads, answer `ok`, and report SUCCESS while the write never happened, and
+  // nobody finds out until somebody checks the far system.
+  //
+  // THE SECOND HALF IS NOT ENFORCED HERE, AND DELIBERATELY SO. It is decided by `storable` in
+  // `runAutomationForAction`, BEFORE the run - because it is the only one of these refusals that is
+  // knowable in advance, and knowing it in advance is what lets the recorder stay disarmed. A
+  // duplicate `input.mutates` check on this line would be unreachable (nothing calls this function
+  // for a mutating action), and an unreachable gate is a gate a reviewer trusts and a mutation test
+  // cannot kill. One decision, at the point where it also buys something.
   //
   // A recipe is not allowed to be a SUBSET of its action. Together the two refusals mean a mutating
   // action stores no recipe at all in this slice, and that is stated rather than engineered around:
   // there is no surface here that shows a human a compiled call set and takes an answer about it, so
   // there is nothing that could make one safe. The action keeps writing by its authored steps, at
   // full cost, correctly.
-  if (input.mutates === true) {
-    console.warn(
-      `[automation] not storing a recipe for ${integrationKey}/${actionName}: the action is declared as ` +
-        'writing and the compiled call set performs no write, so replaying it would report success ' +
-        'without performing the action. The action keeps running its authored steps.',
-    );
-    return;
-  }
 
   const captures = deps.captures ?? capturedCallsStore;
   await persistEvidence(captures, { orgId: input.orgId, integrationKey, actionName, captureId }, exchanges, secrets);

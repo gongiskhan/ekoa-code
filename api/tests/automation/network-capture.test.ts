@@ -43,9 +43,28 @@ describe('redactCaptures - the second boundary (trap T8)', () => {
     expect(JSON.stringify(out)).not.toContain('s3cret-session-token');
   });
 
+  // THE NAME-PATTERN LEG, ON THE URL AND ON BOTH BODIES. It is what catches a value the run's
+  // registry NEVER HELD - a token the SITE minted, which is the commonest thing a discovery pass
+  // sees and the one thing value-keyed redaction is structurally unable to find. The URL half was
+  // pinned and the body half was not: `redactBodyByName` could be dropped from this pipeline with
+  // the whole automation and security lane still green, and the evidence collection would then
+  // carry a site-minted secret verbatim and durably.
   it('masks a conventionally-named query value the registry never held', () => {
     const [out] = redactCaptures([capture({ url: 'https://portal.example/api/cases?access_token=whatever-this-is' })]);
     expect(out!.url).not.toContain('whatever-this-is');
+  });
+
+  it('masks a conventionally-named field in the RESPONSE body the registry never held', () => {
+    const [out] = redactCaptures([capture({ responseBody: '{"items":[],"access_token":"whatever-this-is"}' })]);
+    expect(out!.responseBody).not.toContain('whatever-this-is');
+    // …and it MASKS rather than drops the field: the SHAPE is what a later replay must expect, and
+    // a body with the key removed would teach a drift check to expect the wrong thing.
+    expect(out!.responseBody).toContain('access_token');
+  });
+
+  it('masks one in the REQUEST body too - a form post is where a credential is typed', () => {
+    const [out] = redactCaptures([capture({ method: 'POST', requestBody: 'user=maria&password=whatever-this-is' })]);
+    expect(out!.requestBody).not.toContain('whatever-this-is');
   });
 
   it('keeps header NAMES, lower-cased, sorted and de-duplicated', () => {

@@ -49,6 +49,12 @@ const base = {
   ownerUserId: OWNER,
   integrationKey: 'portal',
   actionName: 'list_cases',
+  // A READ, DECLARED. `mutates` is optional at this seam (Rule 7) and is read the way the rest of
+  // the repo reads it - only a literal `false` is a read - so a case that leaves it out is a
+  // MUTATING action, arms no recorder and learns nothing. That is deliberate and has its own cases
+  // below ("a recipe may not be a SUBSET of its action"); every case that means to exercise the
+  // learn has to say so here.
+  mutates: false,
 };
 
 /** One captured exchange: an internal JSON API call, which is the only thing a compile keeps. */
@@ -719,6 +725,75 @@ describe('the run\'s live credential values reach every check that takes them', 
       const recipe = await recipes.getRecipe('o1', 'portal', 'list_cases');
       expect(recipe!.injectedCalls[0]!.headerNames).toContain('x-csrf-token');
       expect(await captures.listCapture({ orgId: 'o1', integrationKey: 'portal', actionName: 'list_cases', captureId: 'cap-1' })).toHaveLength(1);
+    });
+
+    // -----------------------------------------------------------------------------------------
+    // …AND THE OTHER WRITE ROUTE, WHICH WAS COVERED BY NOTHING.
+    //
+    // A recipe reaches the store two ways: `putRecipe` on a first compile (above) and
+    // `supersedeRecipe` on a heal. Both take the run's registry and both refuse on it. Only the
+    // first was pinned against the real store: `self-heal.test.ts` covers the heal by asserting
+    // that the registry was PASSED to a fake `supersedeRecipe` that answers a canned success - so
+    // the real store could ignore `opts.secrets` on the supersede path entirely and every suite in
+    // this repo stayed green, with a live credential landing in a stored recipe.
+    //
+    // That is the difference between "the argument was handed over" and "the refusal happens", and
+    // only the second is a control. Same poisoned pass, same registry, the OTHER route.
+    // -----------------------------------------------------------------------------------------
+    describe('…including on the SUPERSEDE route, which is the other way a recipe is written', () => {
+      /** Plant a clean recipe so the heal has something to supersede - `supersedeRecipe` answers
+       *  `notfound` for an action that has never learned, and a refusal for the wrong reason is no
+       *  evidence at all. */
+      async function plantV1(): Promise<void> {
+        const written = await recipes.putRecipe('o1', 'portal', 'list_cases', {
+          goal: 'replay of portal/list_cases',
+          injectedCalls: [{
+            method: 'GET',
+            urlTemplate: 'https://portal.example/api/cases?ref={{input.ref}}',
+            headerNames: ['x-csrf-token'],
+            idempotent: true,
+          }],
+          scriptedSteps: [],
+          lessons: [],
+        }, {});
+        expect(written.verdict).toBe('ok');
+      }
+
+      /** The DRIFT route: a `drift` outcome sets `driftReason`, which is what sends the compile
+       *  through `healDriftedRecipe` -> `supersedeRecipe` instead of `putRecipe`. */
+      async function healFrom(exchange: unknown) {
+        return runAutomationForAction(
+          { ...base, credentialFields: { token: LIVE } },
+          {
+            replay: async () => ({ outcome: 'drift', reason: 'replayed call 1 answered 404', recipeVersion: 1, failedIndex: 0 }),
+            run: runObserving([exchange]),
+            supersedeRecipe: (o, k, a, next, opts) => recipes.supersedeRecipe(o, k, a, next, opts ?? {}),
+            captures,
+            captureId: () => 'cap-2',
+          },
+        );
+      }
+
+      it('refuses the SUPERSEDE, leaving the live recipe at v1 and its evidence unwritten', async () => {
+        await plantV1();
+        const result = await healFrom(poisoned);
+        expect(result.success).toBe(true);
+        // NOT superseded: the version did not move and the poisoned header name is nowhere.
+        const recipe = await recipes.getRecipe('o1', 'portal', 'list_cases');
+        expect(recipe!.version).toBe(1);
+        expect(JSON.stringify(recipe)).not.toContain(LIVE);
+        expect(await captures.listCapture({ orgId: 'o1', integrationKey: 'portal', actionName: 'list_cases', captureId: 'cap-2' })).toEqual([]);
+      });
+
+      it('…and DOES supersede for the identical pass with an ordinary header name', async () => {
+        // THE CONTROL for the route: same drift, same registry, one character different.
+        await plantV1();
+        const result = await healFrom({ ...EXCHANGE, requestHeaderNames: ['accept', 'x-csrf-token'] });
+        expect(result.success).toBe(true);
+        const recipe = await recipes.getRecipe('o1', 'portal', 'list_cases');
+        expect(recipe!.version).toBe(2);
+        expect(recipe!.supersedes?.version).toBe(1);
+      });
     });
   });
 });

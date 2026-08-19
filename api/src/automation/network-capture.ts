@@ -32,7 +32,6 @@
  */
 import type { LocalBrowserCapture } from '@ekoa/shared';
 import {
-  redactBodyByName,
   redactStream,
   redactUrlByName,
   type SecretRegistry,
@@ -86,8 +85,13 @@ export const MAX_COMPILED_CALLS = 24;
  *
  * `secrets` is the run's registry - optional only because a discovery pass on an origin needing no
  * stored credential resolves none. When present, every URL and body passes it BEFORE the
- * name-pattern legs (`redactUrlByName` / `redactBodyByName`), which then catch the conventionally
- * named parameter whose value the registry never held.
+ * name-pattern pass, which then catches the conventionally named parameter whose value the registry
+ * NEVER HELD - a token the site itself minted, which is the commonest thing a discovery pass sees
+ * and the one thing value-keyed redaction is structurally unable to find.
+ *
+ * The URL composes the two here (`redactUrlByName` after `secrets.redact`); the bodies get the
+ * SAME pair pre-composed as `redactStream`. Both orders are the same order, and both are pinned in
+ * `tests/automation/network-capture.test.ts` against a value the registry does not hold.
  *
  * Header names that are not names are DROPPED here rather than refused. The machine already
  * filtered them and a live capture legitimately carries HTTP/2 pseudo-headers; refusing would make
@@ -99,8 +103,13 @@ export function redactCaptures(
   secrets?: SecretRegistry,
 ): CapturedExchange[] {
   return captures.map((capture) => {
+    // `redactStream` IS the pair: registry first, then the name-pattern pass. It was wrapped in a
+    // second `redactBodyByName` here, which is the same transform applied twice - idempotent, so
+    // harmless in effect, but it re-parsed and re-serialised every captured body on the
+    // capture-persist path (the one path `redactBodyByName`'s own performance note is about), and
+    // it made the leg look like two independent legs when it is one.
     const body = (raw: string | undefined): string | undefined =>
-      raw === undefined ? undefined : redactBodyByName(redactStream(raw, secrets));
+      raw === undefined ? undefined : redactStream(raw, secrets);
     const requestBody = body(capture.requestBody);
     const responseBody = body(capture.responseBody);
     return {

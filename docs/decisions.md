@@ -2323,3 +2323,54 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   DIAGRAM CHECK (FIXED-12): `02-module-map` carries an appended as-built annotation (`(d)`) naming
   the coverage refusal, the component-wise fill and the evidence lifecycle. Appended textually so no
   existing element was rewritten.
+
+## 2026-08-19 - P2 round five: the recipe's holes are the run's arguments, `mutates` has one reading, and nothing is armed for a run that cannot learn
+
+  THE HOLES AND THE ARGUMENTS ARE THE SAME SET, PROVED BOTH WAYS. The compile already refused to
+  LEARN a recipe that ignores an argument; the replay dropped an argument no template had a hole for
+  and ran anyway, so a recipe compiled around one question answered every later one with the same
+  data and reported success. DECISION: refuse at replay too. `assertHolesSupplied` proves
+  args ⊇ holes; `assertEveryArgumentHasAHole` proves holes ⊇ args. Both refusals FALL THROUGH rather
+  than failing the action - the authored steps see every argument, so declining to replay costs the
+  optimisation and never the answer, and that asymmetry is the whole safety argument for mounting a
+  replay on the hot path at all. The coverage question is asked of the RECIPE, not of one call: a
+  flow's second hop routinely takes no argument, and a per-call reading would refuse an ordinary
+  multi-hop recipe. The two exemptions (a secret-shaped argument NAME, a null/undefined value) are
+  the compile's own and are read through the compile's own `SECRET_SHAPED_INPUT_NAME`, because two
+  copies of that vocabulary would eventually disagree and the symptom would be every authenticated
+  action refusing to replay.
+
+  `mutates` HAS ONE READING IN THIS REPO AND IT IS `!== false`. `action-consent.ts` states it and
+  `actionRequiresConsent` enforces it: the field comes off an unvalidated `config.json` and off
+  agent-authored Mongo rows, so only a literal `false` is a read. The spine restated it as `=== true`
+  in three places, which inverts the rule for exactly the values that arrive unvalidated. DECISION:
+  the executor CALLS the predicate rather than restating it; `runAutomationForAction` normalises the
+  optional seam field once, fail-closed; and everything below the seam takes a REQUIRED boolean, so a
+  caller that forgets is a compile error. The field stays optional at the seam itself (Rule 7: an
+  added field may not change an existing implementer) and the cost of the fail-closed reading is
+  borne where it is affordable - a caller that cannot say loses the optimisation, never the run.
+
+  STORABILITY IS DECIDED BEFORE THE RECORDER IS ARMED. A mutating action stores no recipe in this
+  slice; the learning pass was armed for it anyway. That is not merely wasted work: the machine's
+  recorder holds the live VALUE of every header the authenticated page sends for as long as it is
+  armed, so arming it for a run that cannot produce a recipe extends a credential's residency on the
+  user's machine and ships a full pass's bodies across the wire for nothing. DECISION: `storable`
+  is computed before the engine is called and gates the observer; the replay is still tried (a
+  recipe an older build stored must be seen to be cleared). The duplicate check inside `learnFromRun`
+  was REMOVED rather than kept as a second line - nothing reaches it any more, and an unreachable
+  gate is one a reviewer trusts and a mutation cannot kill. One decision, at the point where it also
+  buys something.
+
+  WHAT REMAINS UNPROVABLE WITHOUT A DISPLAY OR A LIVE TARGET, restated for this round: the
+  hosted-side acceptance runs against a real loopback server through the real production entry point
+  and a real chokepoint counter, and its daemon is a STAND-IN at the frame boundary because
+  `api/**` may not import `clients/**`. The daemon half is proved separately against a real Chromium
+  (`inject-inheritance.test.ts`). Nothing in either lane exercises a real third-party portal, a real
+  Cofre credential, or a headed display, and no test here claims to.
+
+  DIAGRAM CHECK (FIXED-12): no module, seam, wire shape or stored shape changed this round - the
+  three fixes are a refusal added inside an existing executor, a predicate call replacing a
+  restatement, and a boolean moved earlier in an existing function. A new as-built annotation
+  `(e)` is nevertheless appended to `docs/diagrams/02-module-map.excalidraw` naming all three, because WHEN a
+  decision is taken and HOW A FIELD IS READ are flow facts that map asserts. Appended as a new
+  element, as `(b)`/`(c)`/`(d)` were, so no existing element is rewritten.

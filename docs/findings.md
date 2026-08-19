@@ -5142,3 +5142,88 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   what a filled value must not change, and it is the clause that would catch a future weakening of
   the encoding - which is the only thing standing in front of it. The path clauses of the same proof
   ARE independently falsifiable (`..` needs no character an encoder escapes) and are pinned.
+
+- **`p2-r5-an-argument-with-no-hole-was-ignored-at-replay`** (CLOSED 2026-08-19, MAJOR, silent wrong
+  answer). The compile refuses to LEARN a recipe that ignores one of its arguments
+  (`p2` "an argument the pass could not find refuses the compile"), and the replay refused nothing:
+  an argument for which no template had a hole was simply dropped. A recipe compiled around
+  `?ref=2024-1` therefore answered every later caller with the 2024-1 data, `outcome: 'ok'`, run
+  reported SUCCESS - reachable from a recipe an older build stored, from a caller that starts
+  passing a new argument, and from an action re-declared with a wider argument set. Closed by
+  `assertEveryArgumentHasAHole` (`automation/executors/injected-call.ts`), the mirror of
+  `assertHolesSupplied`: together they prove the recipe's holes and the run's arguments are the SAME
+  SET. The refusal is a fall-through (`no-recipe`), exactly as its mirror is - the authored steps DO
+  see every argument, so refusing the replay costs the optimisation and never the answer. The two
+  exemptions are the compile's own and are read through the same `SECRET_SHAPED_INPUT_NAME`
+  vocabulary, so the two sides cannot disagree; a NON-SCALAR argument is refused rather than
+  exempted (the compile refuses it too, and a hole bearing its name would send `[object Object]`).
+  Pinned at the unit level by seven cases - three refusals asserting that NOTHING was sent, and four
+  controls (the same recipe minus the offending argument; an argument honoured by the second call of
+  two; a hole in the BODY; a secret-shaped and a null name) asserting the exact call that WAS - and
+  in the acceptance against the real fixture server, whose control sits in the same test.
+
+- **`p2-r5-mutates-was-read-as-eq-true-against-the-repo-fail-closed-rule`** (CLOSED 2026-08-19,
+  MAJOR, fail-open reading of an unvalidated field). `action-consent.ts` states the repo's one
+  reading of `mutates` and enforces it in `actionRequiresConsent`: ONLY A LITERAL `false` IS A READ,
+  because the field arrives off a `config.json` that is parsed rather than schema-validated and off
+  Mongo rows an agent authored. The spine read the same field with `=== true` in three places - the
+  executor's seam mapping (`action-executor.ts`), the learn (`service.ts`) and the replay's coverage
+  refusal (`injected-call.ts`) - which inverts the rule for exactly the values that arrive
+  unvalidated (absent, `"false"`, `0`, `null`). Consequence: an action that really writes, whose
+  `mutates` never arrived, stored the reads its pass happened to see and every later run replayed
+  them and reported success while nothing was submitted - the read-learns-a-write hole re-opened from
+  the other side. Closed by (a) reading the field through `actionRequiresConsent` at the executor, so
+  there is ONE predicate rather than a restatement of it, (b) normalising once, fail-closed, at the
+  top of `runAutomationForAction`, and (c) making `mutates` a REQUIRED boolean on `ReplayActionInput`
+  and `ReplayInput`, so a caller that forgets is a compile error rather than a silently mutating
+  action. Pinned by consequence in `tests/security/integration-write-gate.test.ts` (an action with
+  the field ABSENT stores nothing and arms nothing; the same action with a literal `false` does
+  both), verified by restoring `=== true` and watching it go red. SWEPT: `platform-call.ts` already
+  calls `actionRequiresConsent`; `automation/manifest-parser.ts:133` reads `cap.mutates === true` on
+  an ARTIFACT MANIFEST capability, which is a different field on a different type with no consumer
+  anywhere in the repo and no gate behind it - recorded here as swept, deliberately not changed.
+
+- **`p2-r5-the-recorder-was-armed-for-runs-that-could-never-store-a-recipe`** (CLOSED 2026-08-19,
+  MAJOR, credential exposure for no benefit). A mutating action stores no recipe at all in this
+  slice, by two refusals that are one rule read from both sides. The learning pass was nevertheless
+  armed for it: `observeNetwork` was gated on the action merely being NAMED, so the machine's
+  `NetworkRecorder` was created and attached, and while armed it holds the live VALUE of every
+  header the authenticated page sends (`clients/bridge/src/browser/capture.ts`, the `live` map). A
+  full pass's request and response bodies were then shipped across the wire, redacted twice and
+  compiled - to reach a refusal that was decidable before the run began. Closed by deciding
+  storability BEFORE the engine is called (`storable` in `runAutomationForAction`), which is also
+  where the fail-closed `mutates` read now lives; the replay is still TRIED for a mutating action
+  (`named`, not `storable`) so an older build's recipe is still seen and cleared. The duplicate
+  `input.mutates` check inside `learnFromRun` was REMOVED rather than left as a second line: nothing
+  calls that function for a mutating action any more, and an unreachable gate is one a reviewer
+  trusts and a mutation test cannot kill. Pinned in the acceptance ("never arms the machine's
+  recorder for the WRITE action, and does for the READ"), asserted on the capture ops the MACHINE was
+  sent, with the read action as the control in the same test.
+
+- **`p2-r5-three-unfailable-tests`** (CLOSED 2026-08-19, MINOR, test quality). Re-derived by mutating
+  each safety-critical assertion. (1) `self-heal.test.ts` "forwards the run registry so the store can
+  refuse a recipe carrying a live value" asserts the registry was passed to a FAKE `supersedeRecipe`
+  that answers a canned success, so the real store could ignore `opts.secrets` on the supersede path
+  entirely and every suite stayed green - the sibling route (`putRecipe`) WAS pinned against the real
+  store, the supersede route was not. Closed by a real-store supersede case with a live value and its
+  own control (`replay-mount.test.ts`, "…including on the SUPERSEDE route"), verified by dropping
+  `opts.secrets` from the store's supersede and watching it go red. (2)
+  `injected-call-replay.test.ts` "refuses to send a resolved URL that contains a live credential
+  value" pinned one of `assertNoCredentialRodeIn`'s two legs; deleting the BODY leg left the whole
+  automation and security lane green, so the leg guarding a POST recipe was covered by nothing.
+  Closed with a body-template case and its control. (3)
+  `discovery-replay-acceptance.test.ts` "the daemon really was asked to record" asserted
+  `daemon.armed || daemon.leaseReleased`, and `leaseReleased` is set on every run - the disjunction
+  was identically true and no mutation could falsify it. Proved by neutering `startCapture` and
+  watching that line PASS while a later one failed. Closed by asserting the capture-op LOG, which is
+  also what the new arming case above is keyed on.
+
+- **`p2-r5-captured-bodies-were-name-redacted-twice`** (CLOSED 2026-08-19, MINOR, redundant work on
+  the capture-persist path). `redactCaptures` wrapped `redactStream(raw, secrets)` in a second
+  `redactBodyByName`, but `redactStream` IS that pair (registry leg, then name leg). The transform is
+  idempotent so nothing was wrong in effect, but every captured body was parsed and re-serialised
+  twice on the one path `redactBodyByName`'s own performance note is about, and the doubling made one
+  leg read as two independent ones - which is how it survived: either copy alone kept the suites
+  green, so neither could be shown to matter. Closed by removing the wrap and pinning the leg for
+  BOTH bodies (`network-capture.test.ts`), verified by deleting the name pass inside `redactStream`
+  and watching the two new cases go red.

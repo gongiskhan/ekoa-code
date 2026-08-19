@@ -55,8 +55,17 @@ export interface ReplayActionInput {
   secrets?: SecretRegistry;
   /** The owner's answer to this action's write approval, carried down from the executor's gate. */
   writeAssent?: boolean;
-  /** The action's DECLARED effect (`IntegrationAction.mutates`). Not the assent - see `ReplayInput`. */
-  mutates?: boolean;
+  /**
+   * The action's DECLARED effect (`IntegrationAction.mutates`). Not the assent - see `ReplayInput`.
+   *
+   * REQUIRED, not optional, and that is the point: the field is optional at the SEAM
+   * (`ActionRunInput`, `AutomationBackedHandler`) because Rule 7 says an added field may not change
+   * an existing implementer, and it is normalised to a definite boolean once, fail-closed, in
+   * `runAutomationForAction`. Leaving it optional here as well would mean the repo's reading of
+   * `mutates` - only a literal `false` is a read - was stated in two places and could disagree in
+   * one of them; a required boolean makes "the caller forgot" a compile error instead.
+   */
+  mutates: boolean;
 }
 
 export interface ReplayActionDeps {
@@ -119,7 +128,7 @@ export async function replayIntegrationAction(
         // page"), which asserts the CONSEQUENCE - the machine was never asked to make the call.
         ...(input.secrets !== undefined ? { secrets: input.secrets } : {}),
         ...(input.writeAssent !== undefined ? { writeAssent: input.writeAssent } : {}),
-        ...(input.mutates !== undefined ? { mutates: input.mutates } : {}),
+        mutates: input.mutates,
       },
       { loadRecipe: async () => stored },
     );

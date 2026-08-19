@@ -63,7 +63,7 @@ import {
   type IntegrationActionHttpConfig,
 } from './definitions.js';
 import { resolveDefinition } from './definition-registry.js';
-import { checkActionConsent, targetResolutionOf, type IntegrationActionConsentDescriptor } from './action-consent.js';
+import { actionRequiresConsent, checkActionConsent, targetResolutionOf, type IntegrationActionConsentDescriptor } from './action-consent.js';
 import {
   definitionActorForCredential,
   resolveCredentialEgressBinding,
@@ -454,7 +454,16 @@ export async function executeUserIntegrationAction(
       // than inferred from the consent verdict beside it. The two are equal today and are not the
       // same statement: an approval is a fact about a human, `mutates` is a fact about the action,
       // and the recipe-coverage refusal downstream is judged against the action.
-      mutates: action.mutates === true,
+      //
+      // READ THROUGH `actionRequiresConsent`, WHICH IS THIS REPO'S ONE READING OF THE FIELD: only a
+      // literal `false` is a read. `mutates` arrives off a `config.json` that is parsed rather than
+      // schema-validated and off Mongo rows an agent authored, so absent / `"false"` / `0` / `null`
+      // must all read as WRITE. The first cut here was `action.mutates === true`, which inverted
+      // that for exactly those values - and the consequence downstream is not one extra dialog, it
+      // is a read-only recipe stored for a write action and every later run reporting success for
+      // having done nothing. Calling the predicate rather than restating it is what keeps the two
+      // gates from drifting apart.
+      mutates: actionRequiresConsent(action),
     });
   }
 

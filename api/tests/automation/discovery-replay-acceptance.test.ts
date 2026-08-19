@@ -156,6 +156,11 @@ function startFixture(): Promise<void> {
 function daemonForFixture(): DaemonConnection & {
   armed: boolean;
   leaseReleased: boolean;
+  /** Every `captureOp` this machine was sent, in order. A LOG rather than the `armed` flag: the
+   *  flag is cleared by the lease release at the end of every run, so it cannot answer "was this
+   *  machine ever asked to record?" - which is the whole question for an action whose recipe can
+   *  never be stored. */
+  captureOps: string[];
   injectFrames: Array<{ method: string; url: string; headerNames: string[] }>;
 } {
   /** The machine's live map. EMPTY until this machine watches the site talk to itself. */
@@ -191,6 +196,7 @@ function daemonForFixture(): DaemonConnection & {
   const state = {
     armed: false,
     leaseReleased: false,
+    captureOps: [] as string[],
     injectFrames: [] as Array<{ method: string; url: string; headerNames: string[] }>,
     runStep: async (frame: { capability: string; input?: unknown }) => {
       const input = (frame.input ?? {}) as Record<string, unknown>;
@@ -204,8 +210,8 @@ function daemonForFixture(): DaemonConnection & {
         visited.clear();
         return { ok: true as const };
       }
-      if (input.captureOp === 'start') { state.armed = true; return { ok: true as const, observation: { data: {} } }; }
-      if (input.captureOp === 'stop') { state.armed = false; buffered = []; return { ok: true as const, observation: { data: {} } }; }
+      if (input.captureOp === 'start') { state.captureOps.push('start'); state.armed = true; return { ok: true as const, observation: { data: {} } }; }
+      if (input.captureOp === 'stop') { state.captureOps.push('stop'); state.armed = false; buffered = []; return { ok: true as const, observation: { data: {} } }; }
 
       if (input.injectedCall) {
         const call = input.injectedCall as { method: string; url: string; headerNames: string[] };
@@ -264,6 +270,7 @@ function daemonForFixture(): DaemonConnection & {
   return state as unknown as DaemonConnection & {
     armed: boolean;
     leaseReleased: boolean;
+    captureOps: string[];
     injectFrames: Array<{ method: string; url: string; headerNames: string[] }>;
   };
 }
@@ -402,8 +409,12 @@ describe('ACCEPTANCE: learned on the run that was going to happen, replayed dete
     // the "zero" below would also hold for a suite in which nothing ever consults a model.
     const spentOnLearning = modelCalls();
     expect(spentOnLearning).toBeGreaterThan(0);
-    // The daemon really was asked to record - the property that makes the spine reachable at all.
-    expect(daemon.armed || daemon.leaseReleased).toBe(true);
+    // THE DAEMON REALLY WAS ASKED TO RECORD - the property that makes the spine reachable at all.
+    // Asserted on the OPS LOG rather than on `daemon.armed`: `armed` is cleared by the lease
+    // release at the end of every run, and the previous form of this line (`armed || leaseReleased`)
+    // was therefore satisfied by the release alone - it stayed green with the arming removed
+    // entirely, which is no evidence about arming at all.
+    expect(daemon.captureOps).toContain('start');
 
     // What it learned: the site's own call, templated on the run's argument, with the session
     // header remembered BY NAME.
@@ -517,6 +528,43 @@ describe('ACCEPTANCE: learned on the run that was going to happen, replayed dete
     // …and the run that did happen is a real one, so the fall-through is a fall-through.
     expect((result.data as { runId?: string }).runId).toBeTruthy();
   }, 60_000);
+
+  it('an argument the recipe has NO HOLE for refuses too, rather than answering the question it was compiled around', async () => {
+    // THE MIRROR of the case above, and the one that has no error to hide behind: every hole IS
+    // supplied, the call resolves, the route is available - and replaying it would fetch
+    // `?ref=2024-1` and hand that back as the answer to a DIFFERENT question. The caller sees
+    // `success: true` either way, so the only place the difference is visible is the wire.
+    setDaemonConnectionResolver(() => daemonForFixture());
+    await runTheAction();
+    expect((await recipes.getRecipe(actor.orgId, KEY, ACTION))!.injectedCalls[0]!.urlTemplate)
+      .toBe(`${origin}/api/cases?ref={{input.ref}}`);
+
+    transport = resetAgentState({ oneShotText: RESOLVER_JSON });
+    const machine = daemonForFixture();
+    setDaemonConnectionResolver(() => machine);
+    requests = [];
+
+    // `status` cannot reach anything in that template. The recipe is a CONSTANT with respect to it.
+    const result = await runTheAction({ ref: '2024-1', status: 'closed' });
+
+    // NOT REPLAYED, and the machine was never asked to make the call.
+    expect(result.success).toBe(true);
+    expect((result.data as { replayed?: boolean }).replayed).toBeUndefined();
+    expect(machine.injectFrames).toEqual([]);
+    // THE FALL-THROUGH IS A REAL RUN: the authored steps DO see every argument, so the caller still
+    // gets a correct answer. Refusing the replay costs the optimisation, not the result.
+    expect((result.data as { runId?: string }).runId).toBeTruthy();
+
+    // …and the CONTROL, in the same test so the two cannot drift: the same recipe, the same
+    // machine shape, the argument set the recipe was compiled for - and it replays.
+    transport = resetAgentState({ oneShotText: RESOLVER_JSON });
+    const control = daemonForFixture();
+    setDaemonConnectionResolver(() => control);
+    const replayed = await runTheAction({ ref: '2024-1' });
+    expect((replayed.data as { replayed?: boolean }).replayed).toBe(true);
+    expect(control.injectFrames.map((f) => f.url)).toEqual([`${origin}/api/cases?ref=2024-1`]);
+    expect(modelCalls()).toBe(0);
+  }, 60_000);
 });
 
 describe('ACCEPTANCE: a site that changes drifts, re-learns on the next run, and supersedes', () => {
@@ -596,6 +644,41 @@ describe('ACCEPTANCE: a recipe may not be a SUBSET of the action it belongs to',
     const wrote = await runTheAction({ ref: '2024-1' }, WRITE_ACTION);
     expect(wrote.success).toBe(true);
     expect(await recipes.getRecipe(actor.orgId, KEY, WRITE_ACTION)).toBeNull();
+  }, 60_000);
+
+  // ===========================================================================================
+  // …AND THE RECORDER IS NEVER ARMED FOR IT, WHICH IS A SECURITY PROPERTY AND NOT A SAVING.
+  //
+  // While a recorder is armed it holds the LIVE VALUE of every header the authenticated page sends
+  // (`clients/bridge/src/browser/capture.ts` - the `live` map, which is what an injected replay
+  // resolves names against). Arming it for an action whose recipe can NEVER be stored extends a
+  // credential's residency on the user's machine, and ships a full pass's request and response
+  // bodies across the wire, to reach a refusal that was decidable before the run began.
+  //
+  // The decision therefore has to be taken BEFORE the engine runs, and this is the only place that
+  // can tell the difference: entered at `executeUserIntegrationAction`, so `mutates` is read off
+  // the resolved action and crosses the real seam, and asserted on what the MACHINE was asked.
+  // ===========================================================================================
+  it('never arms the machine\'s recorder for the WRITE action, and does for the READ - decided before the run', async () => {
+    await approveTheWrite();
+
+    const readMachine = daemonForFixture();
+    setDaemonConnectionResolver(() => readMachine);
+    expect((await runTheAction()).success).toBe(true);
+    // THE CONTROL, first: the identical automation on the identical fixture DOES arm. Without it
+    // "no capture op" would also hold for a fixture that never receives one.
+    expect(readMachine.captureOps).toContain('start');
+
+    transport = resetAgentState({ oneShotText: RESOLVER_JSON });
+    const writeMachine = daemonForFixture();
+    setDaemonConnectionResolver(() => writeMachine);
+    const wrote = await runTheAction({ ref: '2024-1' }, WRITE_ACTION);
+
+    // THE PROPERTY: the machine was never asked to record anything at all.
+    expect(writeMachine.captureOps).toEqual([]);
+    // …and the action still ran, at full cost, correctly.
+    expect(wrote.success).toBe(true);
+    expect((wrote.data as { runId?: string }).runId).toBeTruthy();
   }, 60_000);
 
   it('a read-only recipe already on a writing action is REFUSED, cleared, and the action runs', async () => {

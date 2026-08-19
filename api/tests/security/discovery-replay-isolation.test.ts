@@ -137,13 +137,13 @@ describe('replay: one org\'s learning never runs for another', () => {
 
     // OWNER SIDE FIRST: org B replays it, so the refusal below is the gate and not an empty store.
     const owner = await replayIntegrationAction(
-      { orgId: 'orgB', ownerUserId: userB.userId, integrationKey: KEY, actionName: ACTION, args: {} },
+      { orgId: 'orgB', ownerUserId: userB.userId, integrationKey: KEY, actionName: ACTION, args: {}, mutates: false },
       replayDeps,
     );
     expect(owner.outcome).toBe('ok');
 
     const foreign = await replayIntegrationAction(
-      { orgId: 'orgA', ownerUserId: userA.userId, integrationKey: KEY, actionName: ACTION, args: {} },
+      { orgId: 'orgA', ownerUserId: userA.userId, integrationKey: KEY, actionName: ACTION, args: {}, mutates: false },
       replayDeps,
     );
     expect(foreign.outcome).toBe('no-recipe');
@@ -161,7 +161,7 @@ describe('replay: one org\'s learning never runs for another', () => {
     // decides whether it may be taken.
     const noSession = { ...replayDeps, openSession: async () => null };
     const permissive = await replayIntegrationAction(
-      { orgId: 'orgB', ownerUserId: userB.userId, integrationKey: KEY, actionName: ACTION, args: {} },
+      { orgId: 'orgB', ownerUserId: userB.userId, integrationKey: KEY, actionName: ACTION, args: {}, mutates: false },
       noSession,
     );
     // Org B's own declaration lets it leave from the server (the call itself then fails on the
@@ -176,7 +176,7 @@ describe('replay: one org\'s learning never runs for another', () => {
     expect((permissive as { reason: string }).reason).toContain('could not be made');
 
     const closed = await replayIntegrationAction(
-      { orgId: 'orgA', ownerUserId: userA.userId, integrationKey: KEY, actionName: ACTION, args: {} },
+      { orgId: 'orgA', ownerUserId: userA.userId, integrationKey: KEY, actionName: ACTION, args: {}, mutates: false },
       noSession,
     );
     expect(closed.outcome).toBe('unavailable');
@@ -194,7 +194,7 @@ describe('replay: posture does not travel from one origin to the next', () => {
     const noSession = { ...replayDeps, openSession: async () => null };
 
     const result = await replayIntegrationAction(
-      { orgId: 'orgA', ownerUserId: userA.userId, integrationKey: KEY, actionName: ACTION, args: {} },
+      { orgId: 'orgA', ownerUserId: userA.userId, integrationKey: KEY, actionName: ACTION, args: {}, mutates: false },
       noSession,
     );
     expect(result.outcome).toBe('unavailable');
@@ -207,7 +207,7 @@ describe('replay: posture does not travel from one origin to the next', () => {
     const noSession = { ...replayDeps, openSession: async () => null };
 
     const result = await replayIntegrationAction(
-      { orgId: 'orgA', ownerUserId: userA.userId, integrationKey: KEY, actionName: ACTION, args: {} },
+      { orgId: 'orgA', ownerUserId: userA.userId, integrationKey: KEY, actionName: ACTION, args: {}, mutates: false },
       noSession,
     );
     // Same precision as above: the single-origin recipe in this tenant genuinely TOOK the
