@@ -26,6 +26,7 @@ export {
   // sides, so the step Cortex sends and the step the daemon runs cannot drift apart.
   LocalBrowserLocator,
   LocalBrowserAction,
+  LocalBrowserLeaseOp,
   LocalBrowserStepInput,
   LocalBashStepInput,
   LocalToolInvokeInput,

@@ -33,6 +33,7 @@ import {
   LocalToolInvokeInput,
   type BridgeCapability,
   type LocalBashObservation,
+  type LocalBrowserLeaseOp,
   type LocalBrowserObservation,
 } from '../wire/index.js';
 import {
@@ -152,38 +153,39 @@ async function runBrowserStep(
     ledgerAutomation(ctx, 'browser', 'invalid', 'denied', undefined, 'invalid browser step');
     return { ok: false, error: 'passo de navegador inválido' };
   }
-  const { owner, action } = parsed.data;
+  const { owner } = parsed.data;
 
-  // ---- END OF RUN -------------------------------------------------------------
-  // The one signal that drops the run's page and WIPES the injected session out of the jar. It is
-  // handled before anything touches a browser - and before a profile is even resolved, because the
-  // lease is keyed by runId alone: there is no page to act on and no observation to report, and a
-  // release that had to open a page in order to end a run would be absurd. It still passes both
-  // gates above, and it is still ledgered, because it is still a remote instruction to do something
-  // on this machine.
-  if (action.action === 'release') {
-    await deps.profiles.releaseRun(envelope.runId).catch(() => undefined);
-    ledgerAutomation(ctx, 'browser', 'release', 'ran');
-    return { ok: true };
-  }
-
+  // THE PROFILE IS RESOLVED FIRST, for every frame including the lifecycle ones. It is what scopes
+  // a frame to an owner: `runs` is a process-wide map keyed by an opaque string, so a `release`
+  // handled before this point could end a lease belonging to somebody else by naming its id. Page
+  // verbs were always scoped this way (they act on the profile's own page); the lifecycle verbs are
+  // now no weaker than the verbs they end.
   const profileId = deps.profileIdFor
     ? deps.profileIdFor({ capability: 'browser', runId: envelope.runId, owner })
     : owner;
+  // The lease this frame belongs to. It is NOT the runId: one lease spans a run AND every
+  // sub-automation run beneath it (see `LocalBrowserStepInput`). Absent from an older Cortex, and
+  // the runId is then the honest fallback - one lease per run, which is what that Cortex means.
+  const leaseId = parsed.data.leaseId ?? envelope.runId;
 
+  if ('leaseOp' in parsed.data) return await runLeaseOp(parsed.data.leaseOp, leaseId, profileId, ctx, deps);
+
+  const { action } = parsed.data;
   try {
     // ONE LEASE FOR THE WHOLE RUN. Cortex sends one invoke per act/assert/observe, so a lease taken
     // and released per FRAME closed the page and cleared the jar between every pair of steps - each
     // step after the first ran on a fresh about:blank, signed out. `withRunLease` keys the lease by
-    // runId: the first step takes it, every later step of the same run gets the same page back, and
-    // the teardown happens at the `release` above or at the daemon's idle backstop.
+    // leaseId: the first step takes it, every later step naming it gets the same page back, and the
+    // teardown happens at the `release` lifecycle op (`runLeaseOp` below) or, if Cortex went away,
+    // at the daemon's idle backstop.
     //
-    // ACQUIRE STILL SERIALISES per profile, so a second RUN on the same profile now queues for the
-    // duration of the first run rather than interleaving with it - which is the correct reading of
-    // one browser, one jar. The backstop bounds that wait.
+    // ACQUIRE STILL SERIALISES per profile, so a second LEASE on the same profile now queues for the
+    // duration of the first one rather than interleaving with it - which is the correct reading of
+    // one browser, one jar. The backstop bounds that wait. A sub-automation is NOT a second lease:
+    // it names its parent's, which is why it does not queue behind a lease its parent is waiting on.
     return await deps.profiles.withRunLease(
       {
-        runId: envelope.runId,
+        leaseId,
         profileId,
         // A THUNK: the Cofre session is resolved only when the lease is actually taken, i.e. on the
         // first step of the run. Re-resolving it per step would re-read credential material for a
@@ -232,12 +234,66 @@ async function runBrowserStep(
       },
     );
   } catch (err) {
-    // A launch that failed, a manager already shut down, or a run the idle backstop reaped. All
-    // three are reported by name rather than degraded into a step that "ran" on nothing.
-    const reason = err instanceof Error ? err.message : String(err);
+    // A launch that failed, a manager already shut down, a lease the idle backstop reaped, or a
+    // frame naming a lease on another owner's profile. All of them are reported by name rather than
+    // degraded into a step that "ran" on nothing.
+    const reason = errorText(err);
     ledgerAutomation(ctx, 'browser', action.action, 'error', undefined, reason);
     return { ok: false, error: reason };
   }
+}
+
+/**
+ * The two LIFECYCLE operations on a lease. Neither touches a page, which is why both are answered
+ * before a profile context is ever needed: there is nothing to act on and nothing to observe, and a
+ * release that had to open a browser in order to end a run would be absurd. Both still passed the
+ * advertisement and tier-2 gates above, and both are LEDGERED, because both are still remote
+ * instructions about state on this machine - and the pair of them is the audit record of how long
+ * this machine held an authenticated browser session for a given run.
+ */
+async function runLeaseOp(
+  op: LocalBrowserLeaseOp,
+  leaseId: string,
+  profileId: string,
+  ctx: Tier2Context,
+  deps: ToolExecutorDeps,
+): Promise<ToolExecutionResult> {
+  if (op === 'keepalive') {
+    try {
+      const held = deps.profiles.touchRun(leaseId, { profileId });
+      ledgerAutomation(ctx, 'browser', 'keepalive', 'ran');
+      // `held:false` is the honest answer for a lease this machine no longer has - Cortex asked to
+      // keep something alive that is already gone. Saying so beats a bare ok, which would let a run
+      // believe its session is still resident right up until its next step is refused.
+      return { ok: true, output: { held } };
+    } catch (err) {
+      const reason = errorText(err);
+      ledgerAutomation(ctx, 'browser', 'keepalive', 'denied', undefined, reason);
+      return { ok: false, error: reason };
+    }
+  }
+
+  // END OF RUN. The one moment a whole run's injected session leaves a jar that outlives it.
+  try {
+    await deps.profiles.releaseRun(leaseId, { profileId });
+  } catch (err) {
+    // A FAILED WIPE IS NOT A SUCCESSFUL RELEASE. Swallowing this (which is what a
+    // `.catch(() => undefined)` here did) meant the daemon answered `ok:true` and Cortex recorded a
+    // run that ended cleanly, while an authenticated Cofre session stayed resident in a profile the
+    // user's next automation shares. It is ledgered as an error on this machine and reported as a
+    // failed step on the wire, so it is visible at both ends.
+    const reason = errorText(err);
+    ledgerAutomation(ctx, 'browser', 'release', 'error', undefined, reason);
+    deps.log?.(`Aviso: não foi possível terminar limpamente a sessão de navegador de uma execução (${reason}).`);
+    return { ok: false, error: reason };
+  }
+  ledgerAutomation(ctx, 'browser', 'release', 'ran');
+  return { ok: true };
+}
+
+/** A thrown value as one line of text. */
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 // ---------------------------------------------------------------------------

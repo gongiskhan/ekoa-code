@@ -214,12 +214,6 @@ export async function runBrowserAction(page: ProfilePage, action: LocalBrowserAc
     case 'noop':
       // The hosted resolver decided the step is already satisfied. Do not touch the browser.
       return undefined;
-    case 'release':
-      // A LIFECYCLE verb, not a page action: `runBrowserStep` ends the run and returns before it
-      // ever asks the lease for a page. Reaching here means that interception was lost, and running
-      // on would observe (and screenshot) a page belonging to a run that just ended - so it fails
-      // loudly instead.
-      throw new BrowserStepError('o fim de execução é tratado antes do navegador, não como um passo');
     case 'expect_visible': {
       const target = resolveLocator(page, action.locator);
       return await target.isVisible({ timeout: DEFAULT_TIMEOUT_MS }).catch(() => false);

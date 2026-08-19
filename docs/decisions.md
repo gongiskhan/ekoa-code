@@ -1166,8 +1166,9 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   `api/tests/security/bridge-ingress-redaction.test.ts`, including an end-to-end case that drives a
   real `tool.result` with an observation object over a real socket and asserts on what the awaiting
   `invokeTool` caller resolves with.
-- 2026-08-19 - THE DAEMON'S BROWSER LEASE IS SCOPED TO A RUN, AND A RUN ENDS TWO WAYS: AN EXPLICIT
-  `release` VERB, AND AN IDLE BACKSTOP THAT EXISTS FOR SECURITY RATHER THAN HYGIENE.
+- 2026-08-19 - THE DAEMON'S BROWSER LEASE IS SCOPED TO A RUN AND KEYED BY A LEASE ID, AND A LEASE
+  ENDS THREE WAYS: AN EXPLICIT `release`, AN IDLE BACKSTOP THAT EXISTS FOR SECURITY RATHER THAN
+  HYGIENE, AND SHUTDOWN.
   THE DEFECT, STATED PLAINLY. Cortex dispatches ONE `tool.invoke` PER ACTION -
   `DaemonBrowserSession.dispatch` is reached from every `act()`, `assert()` and `observe()`, so a
   five-action step is five frames. `runBrowserStep` acquired a `ProfileLease` per FRAME and released
@@ -1188,37 +1189,90 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   pages daemon-side and needs no teardown". That comment was the bug: with no run-end signal on the
   wire, the end of each INVOKE was the only place the daemon had to hang teardown on, and it hung it
   there. The fix is the signal, not a bigger cache.
-  THE WIRE CHANGE (Rule 7, additive). `LocalBrowserAction` gains one member, `{action:'release'}`. It
-  is a LIFECYCLE verb and NOT a member of Cortex's `PlaywrightAction`, deliberately: keeping it out
-  of the resolver's vocabulary is what makes it impossible for the planner, the action cache or the
-  vision tier to resolve an ordinary step INTO a run teardown. Only `dispose()` emits it. It rides
-  the ordinary browser envelope, so it passes gate 1 and gate 2 like every other step and is
-  ledgered like every other step - it is still a remote instruction to do something on somebody's
-  machine. An older daemon refuses it at its zod boundary (fail-closed, and that daemon still has
-  the old per-invoke teardown); an older Cortex never sends one. Pinned by
-  `shared/src/local-execution.test.ts` and `api/tests/automation/browser-session-dispose.test.ts`.
-  WHY AN IDLE BACKSTOP IS NOT OPTIONAL, AND WHY TWO MINUTES. An explicit release only arrives if
-  Cortex is alive to send it. If it dies, is killed, or its socket drops mid-run, an explicit-only
-  design leaves an AUTHENTICATED Cofre session resident in a jar that the next automation on that
-  profile inherits, and a headed browser window open on somebody's desktop, indefinitely. That is a
-  containment failure, not untidiness, so the backstop is a security control. Its window is chosen
-  from both ends: it must sit ABOVE the largest legitimate gap between two invokes of one run -
-  hosted think time, a cache miss going out to the vision resolver, then the verifier, then possibly
-  the rehearsal fixer, several model round trips - and as far BELOW that as it can, because for the
-  whole window a live session sits unattended. Two minutes is the smallest value that clears a
-  vision escalation, and it is exactly Cortex's own per-invocation timeout: past that point Cortex
-  has already given up on the step, so a longer window buys nothing and only lengthens the exposure.
-  The timer is armed AFTER each step completes and a BUSY run is never reaped (the timer re-arms
-  instead), so the window bounds idleness rather than the duration of a slow step.
-  A REAPED RUN IS REFUSED, NOT SILENTLY RESTARTED. The tempting behaviour for a late invoke is to
+  THE KEY IS A LEASE ID, NOT THE RUN ID, and this is the correction the first attempt at this change
+  got wrong (see the review entry below). Cortex mints one lease id per execution PASS and threads
+  it down the call tree through `RunContext.browserLease`. Two things force that:
+    - A SUB-AUTOMATION is a separate run - own runId, own run record - on the same owner, hence the
+      same daemon connection and the same profile, executing while its parent is blocked on it.
+      Keyed by runId the child queued on the per-profile chain behind a lease the parent could not
+      release until the child returned: a deadlock on the most ordinary composition in the product,
+      with the idle backstop then reaping the parent because a run WAITING on a child looks exactly
+      like an abandoned one. Sharing the lease also means the child continues on the page its parent
+      left open, which is what a sub-automation should do.
+    - A RESUMED run (`needs_credentials` -> the user unlocks -> `dispatchCredentialResume`) re-enters
+      under the SAME runId. Ended leases are tombstoned, so a per-run key would have refused every
+      resumed pass for the rest of the daemon's life. A per-pass id takes a clean lease.
+  THE WIRE CHANGE (Rule 7, additive). `LocalBrowserStepInput` becomes a two-arm union: a PAGE STEP
+  (`{owner, leaseId?, action}`) and a LIFECYCLE OP (`{owner, leaseId?, leaseOp}` where `leaseOp` is
+  `release` or `keepalive`). The lifecycle verbs are deliberately NOT members of `LocalBrowserAction`
+  and not members of Cortex's `PlaywrightAction`: everything in the action union is something a
+  resolver, the planner or the vision tier can emit for a step, so a lifecycle verb living there
+  would be one bad model completion away from a step that ends its own run - and the daemon's page
+  runner would need a case for a verb that must never reach a page. Keeping them apart makes that a
+  property of the SHAPE. `leaseId` is optional in both directions: an older Cortex sends none and the
+  daemon falls back to the runId (one lease per run, exactly what that Cortex means); an older daemon
+  refuses the lifecycle arm at its zod boundary, fail-closed, and its lease is ended by the idle
+  backstop instead of promptly. Pinned by `shared/src/local-execution.test.ts`,
+  `api/tests/automation/lease-verbs-are-not-resolvable.test.ts` and
+  `api/tests/automation/browser-session-dispose.test.ts`.
+  WHY AN IDLE BACKSTOP IS NOT OPTIONAL, AND WHY TWO MINUTES SURVIVES ONLY BECAUSE OF THE KEEPALIVE.
+  An explicit release only arrives if Cortex is alive to send it. If it dies, is killed, or its
+  socket drops mid-run, an explicit-only design leaves an AUTHENTICATED Cofre session resident in a
+  jar that the next automation on that profile inherits, and a headed browser window open on
+  somebody's desktop, indefinitely. That is a containment failure, not untidiness, so the backstop is
+  a security control and wants to be short. But a LIVE run legitimately goes minutes without a
+  browser step - blocked on a sub-automation, on a slow API call, or on a human solving a CAPTCHA in
+  that very window (`pause_for_user` has NO timeout by design: "the user decides how long they
+  need"). A pure timer cannot tell those from an abandoned lease, so it would have to be either
+  uselessly long or wrong, and wrong here means closing the browser out from under somebody
+  mid-CAPTCHA. So Cortex heartbeats every live lease (`leaseOp:'keepalive'`, every 45s from
+  `DaemonBrowserSession`) and the two-minute window bounds SILENCE from a Cortex that is still there:
+  several lost heartbeats' tolerance, and exactly Cortex's own per-invocation timeout, past which it
+  has already given up on the step. The timer is armed AFTER each step completes and a BUSY lease is
+  never reaped (the timer re-arms), so the window bounds idleness rather than the duration of a slow
+  step.
+  A REAPED LEASE IS REFUSED, NOT SILENTLY RESTARTED. The tempting behaviour for a late invoke is to
   acquire a fresh lease. That would recreate the original defect under a new cause - a blank page and
-  an empty jar, reported to Cortex as a step that ran. Ended runs are tombstoned in a bounded FIFO
-  (200) and a step naming one fails by name.
-  THE COST, NAMED. A second RUN on the same profile now queues for the duration of the first rather
+  an empty jar, reported to Cortex as a step that ran. Ended leases are tombstoned in a bounded FIFO
+  (200) and a step naming one fails by name. Because a lease id belongs to ONE pass, a tombstone can
+  never refuse a resumed run.
+  THE COST, NAMED. A second LEASE on the same profile queues for the duration of the first rather
   than interleaving with it. That is the correct reading of one browser, one jar, one Chromium
   singleton - the interleaving it replaces was not concurrency, it was two runs corrupting each
-  other's page - and the backstop bounds the wait. There is no queue timeout; a run blocked behind a
-  long one waits, and that is recorded in `docs/findings.md` rather than papered over.
+  other's page - and the backstop bounds the wait. A sub-automation is not a second lease, so the
+  common nesting case does not queue at all. There is no queue timeout; a run blocked behind a long
+  one waits, and that is recorded in `docs/findings.md` rather than papered over.
+
+- 2026-08-19 - THE RUN-END WIPE IS LOUD, AND THE LIFECYCLE VERBS ARE OWNER-SCOPED LIKE EVERY OTHER
+  VERB.
+  THE WIPE. Releasing a lease is the ONE moment a whole run's injected Cofre session leaves a jar
+  that outlives it - the profile is persistent, its cookies are a file on disk. The first attempt
+  swallowed a failure at three levels (`clearCookies().catch(() => undefined)`,
+  `lease.release().catch(() => undefined)`, `releaseRun().catch(() => undefined)`) and then answered
+  `{ok:true}` with a ledger row saying `ran`. That is the worst combination available: an
+  authenticated session left resident in a profile the user's next automation shares, and both ends
+  recording a run that ended cleanly. Now `clearCookies` throws, `releaseRun` propagates after
+  dropping its bookkeeping (the lease is over either way; what failed is the cleanup), the executor
+  ledgers `error` and answers a failed step, and Cortex logs it against the runId. Where there is no
+  caller to answer - the idle reap, and `closeAll` at shutdown - it is said out loud to the operator
+  instead. The profile mutex is still given back on the failure path: a failed wipe must not also
+  deadlock every later run on that profile.
+  THE ORDER OF THE THREE TEARDOWN ACTS, each of which has to be where it is: seeded localStorage
+  first, because removing a key needs a LIVE page (on a persistent profile localStorage is on disk,
+  so closing the page does not clear it); then the page, so nothing can be handed a `Set-Cookie` by a
+  request still in flight after the jar is wiped; then the jar, last and in a `finally`, so it
+  happens even if either step above throws.
+  OWNER SCOPING. `runs` is one process-wide map and a lease id is an opaque string on the wire. Page
+  verbs are owner-scoped by construction - they resolve a profile and act on that profile's page -
+  but the first attempt answered `release` BEFORE resolving a profile, so a frame carrying owner A
+  and a lease id belonging to owner B ended B's run: dropped their page, wiped their jar, and left
+  their next step refused by name. The profile is now resolved for every browser frame, lifecycle
+  ones included, and a lease may only be touched from the profile it was taken on.
+  A STEP IN FLIGHT WHEN THE RELEASE LANDS. Cortex sends the release from a run `finally` and an
+  invoke it has already given up waiting for can still be executing on the machine. That step asked
+  the lease for a page, found `runPage` nulled by the release, and opened a BRAND NEW one that
+  nothing would ever close - an orphan window holding the profile context open, outside every
+  lifecycle the file defines. `page()` now refuses after release, by name.
 
 - 2026-08-19 - THREE PROFILE LIFECYCLE FIXES THAT SHIPPED WITH THE RUN-SCOPED LEASE.
   1. THE STALE-LOCK RECOVERY WAS DEAD CODE AGAINST THE BROWSER IT WAS WRITTEN FOR. It skipped any
@@ -1227,10 +1281,10 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   `existsSync` FOLLOWS the link, so it returned false for precisely the dangling lock a crashed
   Chrome leaves - the one case the recovery exists for - and every later launch died on it. Now
   `lstatSync`, which stats the link itself. The sweep still never touches a lock while this process
-  holds a context for that profile. That guard is belt-and-braces and is currently unreachable
-  through the public API: a mutation removing it alone leaves the suite green, and that is stated in
-  the code comment rather than left for a reviewer to discover. It stays because the function is
-  destructive and the next call site added to it should not have to rediscover the invariant.
+  holds a context for that profile. That guard is belt-and-braces and is unreachable through the
+  public API; rather than leave a guard nothing can fail (which is indistinguishable from a guard
+  that does not work, on a function that runs `rm` against a live browser's lock), it is pinned by a
+  test that calls the private method directly, and the code comment says so.
   2. IDLE-CLOSE DROPPED THE MAP ENTRY BEFORE THE CLOSE RESOLVED. `held.delete(key)` ran, then
   `context.close()` was fired and not awaited, so for the whole duration of Chromium's shutdown the
   map said "no context for this profile". An acquire landing in that window swept the singleton
@@ -1242,8 +1296,29 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   never re-checked. A waiter that woke after `closeAll` therefore launched a fresh HEADED browser
   into a daemon that was in the middle of shutting down. The check now lives in `ensureContext`, so
   a waiter that wakes after close is refused rather than served. `closeAll` additionally releases
-  live runs BEFORE closing their contexts: on a PERSISTENT profile the cookies are on disk, so
+  live leases BEFORE closing their contexts: on a PERSISTENT profile the cookies are on disk, so
   closing a context out from under a held lease would leave the injected session behind after the
-  daemon exits.
-  All three are pinned by `test/browser/run-lease.test.ts`, and each was verified to turn that suite
-  RED when reverted in the source.
+  daemon exits. And the daemon's SIGINT/SIGTERM handler AWAITS that teardown, bounded at 10s, before
+  it prints "stopped" and lets the process exit - `void profiles.closeAll()` could exit with the
+  wipe still in flight.
+  All three are pinned by `test/browser/run-lease.test.ts` and `test/cli/serve-teardown.test.ts`,
+  and each was verified to turn its suite RED when reverted in the source.
+
+- 2026-08-19 - WHAT THE ADVERSARIAL REVIEW OF THE RUN-SCOPED LEASE CAUGHT, RECORDED BECAUSE THE
+  PATTERN IS MORE REUSABLE THAN THE BUGS.
+  The first attempt at the change above passed its own suite and was wrong in two ways worth naming.
+  A NEW LIFETIME NEEDS ITS COMPOSITION CASES ENUMERATED. Widening a lock's scope from one invoke to
+  one run made two shapes that were previously fine into deadlock and refusal: a `sub_automation`
+  (parent blocked, child queued behind the parent's own hold) and a resumed run (same runId, ended
+  lease). Neither is exotic - both are shipped features - and neither is visible from the file the
+  lock lives in. The lesson: when a lock's scope changes, walk the callers that can be INSIDE it.
+  FOUR TESTS THAT COULD NOT FAIL. A tautology asserting a literal array against itself; a suite whose
+  docblock stated a security claim about `serve()` while every test called the helper directly (the
+  pre-change `void profiles.closeAll()` could be restored with the suite green); a `throw` on an
+  unreachable switch case; and a guard on a private method with no public path. An unfailable test is
+  a defect in itself: it costs the same to maintain, reads as coverage, and pins nothing. Each is now
+  either pinned where it CAN fail (the schema itself, the signal handler, the private method called
+  directly) or removed with the shape that made it unreachable. Where a pin genuinely cannot live in
+  the module it constrains - `shared/` may not import `api/` under FIXED-1 - it moved to the module
+  that holds the invariant rather than staying as decoration.
+

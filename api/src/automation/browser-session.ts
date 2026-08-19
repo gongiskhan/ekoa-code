@@ -103,22 +103,95 @@ export interface BrowserSession {
   /** Trimmed accessibility outline from the latest observation, if any. */
   accessibilitySnapshot(): string | undefined;
   /**
-   * Release per-run resources at run end. BOTH implementations need it.
+   * Release THIS SESSION's own resources. BOTH implementations need it: the
+   * in-process session closes its per-run page so pages do not accumulate, and
+   * the daemon session stops the keepalive heartbeat it holds for the run's
+   * browser lease.
    *
-   * This used to be documented as "the daemon session manages pages daemon-side
-   * and needs no teardown", and `DaemonBrowserSession` accordingly did not
-   * implement it - which meant there was no run-end signal on the bridge at all.
-   * The daemon's only remaining place to hang teardown was therefore the END OF
-   * EACH INVOKE, and since this class sends one invoke per `act`/`assert`/
-   * `observe`, the daemon closed the page and cleared the whole cookie jar
-   * between every pair of steps: every browser step after the first ran on a
-   * fresh `about:blank`, signed out. A multi-step flow could not work.
-   *
-   * So the daemon now holds one page and one jar per `runId`, and this is the
-   * signal that ends it. It stays OPTIONAL on the interface only because a test
-   * double need not supply one.
+   * IT IS NOT THE RUN-END SIGNAL, and the difference matters. Ending the
+   * daemon's lease is `releaseBrowserLease`, which the engine calls ONCE for a
+   * whole call tree - a sub-automation has its own session but shares its
+   * parent's lease, so a session that ended the lease on dispose would tear the
+   * browser down under the parent the moment a sub-automation finished.
    */
   dispose?(): Promise<void>;
+}
+
+/**
+ * One browser lease, shared by a run and every sub-automation run beneath it.
+ *
+ * WHY IT IS NOT THE RUN ID. The daemon holds one page and one cookie jar per
+ * lease. A sub-automation is a separate run - own runId, own run record - on the
+ * same owner, therefore the same daemon and the same profile; keyed by runId it
+ * would queue behind the lease its parent holds for the whole parent run, while
+ * the parent is blocked waiting for it. That is a deadlock on the most ordinary
+ * composition the product has, and the two-minute idle backstop then reaped the
+ * parent while it waited. The parent's lease id travels down `RunContext`
+ * instead, so parent and child are one tenant of one lease and the child
+ * continues on the page its parent left open.
+ *
+ * WHY IT IS MINTED PER PASS rather than derived from the root run id: a run that
+ * halts on `needs_credentials` and is resumed re-enters with the SAME runId, and
+ * the daemon tombstones a lease id when its lease ends so a late step cannot be
+ * served a blank page. A per-pass id means the resumed pass takes a clean lease
+ * instead of colliding with the tombstone its own earlier pass left.
+ *
+ * `used` is set by the session the first time it actually SENDS a frame naming
+ * this lease - not when a session is constructed, which the engine does for
+ * every step of a daemon-connected run whatever its type. It is READ BY THE
+ * OWNING PASS: the run that minted the lease must send the release even when the
+ * browser was only ever driven by a sub-automation (they share this object, so
+ * the child's mark is visible to the parent), and must not send one for a run
+ * tree that never opened a browser at all.
+ */
+export interface BrowserLease {
+  readonly id: string;
+  used: boolean;
+}
+
+/** How often a live run tells the daemon its lease is still wanted. Comfortably under the daemon's
+ *  two-minute idle backstop, so several lost heartbeats in a row are survivable, and far above the
+ *  cost of one frame. See `releaseBrowserLease` for why the heartbeat exists at all. */
+export const BROWSER_KEEPALIVE_MS = 45_000;
+
+/**
+ * END OF RUN on the daemon: drop the page, and WIPE the injected Cofre session
+ * out of a cookie jar that outlives the run.
+ *
+ * Called once per call tree, from the engine's run `finally`, by the pass that
+ * minted the lease - never by a sub-automation, which would end the browser
+ * under its parent.
+ *
+ * IT NEVER THROWS (the engine's `finally` must not lose the run's real outcome)
+ * BUT IT IS NEVER SILENT. A release the daemon could not complete means an
+ * authenticated session may still be resident in a profile the user's next
+ * automation shares; that is a security-relevant outcome, so it is logged as an
+ * error rather than swallowed. A machine that has gone away is the one benign
+ * case and reads the same way, which is the right trade: the daemon's idle
+ * backstop then ends the lease, minutes later.
+ */
+export async function releaseBrowserLease(
+  conn: DaemonConnection,
+  input: { leaseId: string; ownerUserId: string; runId: string },
+): Promise<void> {
+  try {
+    const env = await conn.runStep({
+      capability: 'browser',
+      input: { owner: input.ownerUserId, leaseId: input.leaseId, leaseOp: 'release' },
+      runId: input.runId,
+    });
+    if (!env.ok) {
+      console.error(
+        `[automation] daemon could not end the browser session for run ${input.runId}: ` +
+          `${env.error?.message ?? 'unknown reason'} - a session may still be resident on that machine`,
+      );
+    }
+  } catch (err) {
+    console.error(
+      `[automation] the machine did not answer the browser session release for run ${input.runId} ` +
+        `(${err instanceof Error ? err.message : String(err)}); its idle backstop will end the lease`,
+    );
+  }
 }
 
 /**
@@ -128,14 +201,37 @@ export class DaemonBrowserSession implements BrowserSession {
   private readonly conn: DaemonConnection;
   private readonly runId: string;
   private readonly ownerUserId: string;
+  /**
+   * The lease every frame from this session names, and the object this session MARKS AS USED the
+   * first time it sends one. Defaults to a private lease named after the runId, which is what a run
+   * with no parent and no children means anyway.
+   *
+   * Marking happens on the first dispatch and not at construction because the engine builds a
+   * session for every step of a daemon-connected run regardless of the step's type: constructing
+   * one proves nothing, sending a frame is what makes the daemon take a lease that then has to be
+   * given back.
+   */
+  private readonly lease: BrowserLease;
+  private readonly keepAliveMs: number;
+  private keepAlive: ReturnType<typeof setInterval> | undefined;
   private last: BrowserObservationData = {};
   private lastScreenshotB64 = '';
   private observed = false;
 
-  constructor(opts: { connection: DaemonConnection; runId: string; ownerUserId: string }) {
+  constructor(opts: {
+    connection: DaemonConnection;
+    runId: string;
+    ownerUserId: string;
+    lease?: BrowserLease;
+    /** 0 disables the heartbeat (tests that drive the lifecycle by hand). */
+    keepAliveMs?: number;
+  }) {
     this.conn = opts.connection;
     this.runId = opts.runId;
     this.ownerUserId = opts.ownerUserId;
+    this.lease = opts.lease ?? { id: opts.runId, used: false };
+    this.keepAliveMs = opts.keepAliveMs ?? BROWSER_KEEPALIVE_MS;
+    this.startKeepAlive();
   }
 
   async act(action: PlaywrightAction, opts?: BrowserActOptions): Promise<void> {
@@ -219,34 +315,15 @@ export class DaemonBrowserSession implements BrowserSession {
   }
 
   /**
-   * END OF RUN - the signal that lets the daemon hold one page and one cookie
-   * jar for the whole run instead of tearing down after every single step.
+   * Stop this session's heartbeat. It does NOT end the daemon's lease - see the
+   * interface comment and `releaseBrowserLease`: the lease outlives a
+   * sub-automation's session and is ended once, by the pass that minted it.
    *
-   * It goes out as the `release` browser verb on the ordinary step envelope, so
-   * it passes the same capability and tier-2 gates every other step does and is
-   * ledgered on the machine like every other step. It carries the `runId`,
-   * which is what the daemon keys the lease by.
-   *
-   * NEVER THROWS. The engine calls this from its run `finally`, so a throw here
-   * would replace the run's real outcome with a teardown error. A machine that
-   * has already gone away simply never gets the frame, and the daemon's own
-   * idle backstop reaps the lease - which is exactly why that backstop exists
-   * rather than being left to this call.
-   *
-   * It deliberately does NOT go through `dispatch`: a release carries no
-   * observation, and feeding an empty one into `ingest` would leave the session
-   * claiming page state for a page that no longer exists.
+   * NEVER THROWS. The engine calls it from its run `finally`, where a throw
+   * would replace the run's real outcome with a teardown error.
    */
   async dispose(): Promise<void> {
-    try {
-      await this.conn.runStep({
-        capability: 'browser',
-        input: { owner: this.ownerUserId, action: { action: 'release' } },
-        runId: this.runId,
-      });
-    } catch {
-      /* the machine is gone; the daemon's idle backstop ends the run's lease */
-    }
+    this.stopKeepAlive();
   }
 
   // --- internals ------------------------------------------------------------
@@ -267,23 +344,76 @@ export class DaemonBrowserSession implements BrowserSession {
       },
       opts?.onProgress ? { onProgress: opts.onProgress } : undefined,
     );
+    // The daemon has now taken the lease, so the run that owns it must give it
+    // back. Marked from the FIRST step rather than at construction, which proves
+    // nothing: the engine builds a session for every step of a daemon-connected
+    // run, whatever its type.
+    this.lease.used = true;
     this.ingest(env);
     return env;
   }
 
   /**
+   * THE RUN IS STILL ALIVE. The daemon reaps a lease nothing has arrived for in
+   * two minutes, because a Cortex that died mid-run must not leave an
+   * authenticated jar and a headed window resident on somebody's machine. But a
+   * live run routinely goes minutes without a browser step - it is blocked on a
+   * sub-automation, on a slow API call, or on a HUMAN solving a CAPTCHA in that
+   * very window (`pause_for_user` has no timeout on purpose) - and reaping those
+   * would close the browser out from under the person using it. This is the
+   * signal that separates "nobody is driving this" from "nobody is driving this
+   * right now", and it is what lets the daemon's window stay short.
+   *
+   * ARMED AT CONSTRUCTION, BUT SILENT UNTIL THE LEASE IS ACTUALLY TAKEN - and the
+   * gap between those two is the whole reason it works this way. A run whose
+   * browser work happens entirely inside a SUB-AUTOMATION never dispatches from
+   * its own session: it would have nothing to heartbeat with while it sat through
+   * a ten-minute api_call between the sub-automation and its next browser step,
+   * and the lease its child opened would be reaped out from under it. The timer
+   * therefore exists from the start and reads the SHARED lease object, so any
+   * pass in the tree can keep the tree's lease alive. Until something has taken
+   * the lease there is nothing to keep alive, so it sends nothing.
+   *
+   * Best-effort by construction: a heartbeat that fails changes nothing (the
+   * next one is 45 seconds away, and several in a row have to be lost before the
+   * backstop fires), and it must never surface as a run error.
+   */
+  private startKeepAlive(): void {
+    if (this.keepAlive || this.keepAliveMs <= 0) return;
+    const timer = setInterval(() => {
+      if (!this.lease.used) return; // nothing has taken the lease yet
+      void this.conn
+        .runStep({
+          capability: 'browser',
+          input: { owner: this.ownerUserId, leaseId: this.lease.id, leaseOp: 'keepalive' },
+          runId: this.runId,
+        })
+        .catch(() => undefined);
+    }, this.keepAliveMs);
+    // The heartbeat must never be the reason a process stays alive.
+    timer.unref?.();
+    this.keepAlive = timer;
+  }
+
+  private stopKeepAlive(): void {
+    if (!this.keepAlive) return;
+    clearInterval(this.keepAlive);
+    this.keepAlive = undefined;
+  }
+
+  /**
    * Map a cortex PlaywrightAction/PlaywrightAssertion ({kind,...}) to the daemon
-   * browser capability's input shape ({owner, action:{action,...}}). The locator
-   * union is identical on both sides, so it passes through unchanged. (Actions the
-   * daemon doesn't yet support — dblclick/select/check/uncheck/wait_for/scroll —
-   * are rejected by the daemon's zod with a clear error; the engine's vision
-   * fallback handles that. Reconcile the daemon action set as a follow-up.)
+   * browser capability's input shape ({owner, leaseId, action:{action,...}}). The
+   * locator union is identical on both sides, so it passes through unchanged, and
+   * the daemon now runs the whole vocabulary - the six verbs this comment used to
+   * list as unsupported (dblclick/select/check/uncheck/wait_for/scroll) were
+   * reconciled in `shared/src/ekoa-local.ts` and `browser/executor.ts`.
    */
   private toDaemonInput(
     input: PlaywrightAction | PlaywrightAssertion,
-  ): { owner: string; action: Record<string, unknown> } {
+  ): { owner: string; leaseId: string; action: Record<string, unknown> } {
     const { kind, ...rest } = input as { kind: string } & Record<string, unknown>;
-    return { owner: this.ownerUserId, action: { action: kind, ...rest } };
+    return { owner: this.ownerUserId, leaseId: this.lease.id, action: { action: kind, ...rest } };
   }
 
   /** Absorb a daemon observation into the cached page state. */

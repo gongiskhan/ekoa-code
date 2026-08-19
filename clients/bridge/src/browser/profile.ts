@@ -37,33 +37,55 @@
  * `about:blank` with no cookies: EVERY browser step after the first acted on a blank page. A
  * multi-step flow - which is the entire point of a browser capability - could not work.
  *
- * So the lease is now keyed by `runId` (`withRunLease`): one page and one jar alive across every
- * invoke of one run, and the teardown hangs off the END OF THE RUN. Two things end a run, and both
- * have to exist:
+ * So the lease is now keyed by a LEASE ID (`withRunLease`): one page and one jar alive across every
+ * invoke that names it, and the teardown hangs off the end of the lease.
  *
- *   1. EXPLICIT. Cortex sends the `release` browser verb from `DaemonBrowserSession.dispose()`,
- *      which the engine calls in its run `finally`. This is the normal path and it is prompt.
+ * THE KEY IS A LEASE ID AND NOT THE RUN ID, and that is not cosmetic. Cortex mints one lease id per
+ * execution PASS and threads it down the call tree, so:
+ *   - a SUB-AUTOMATION (its own runId, same owner, therefore the same profile) is the SAME tenant of
+ *     its parent's lease. Keyed by runId it would instead queue behind a lease its parent holds for
+ *     the whole parent run, while the parent waits for the child: a deadlock on the most ordinary
+ *     composition in the product. It also means the child continues on the page its parent left
+ *     open, which is what a sub-automation should do anyway.
+ *   - a RESUMED run (needs_credentials -> the user unlocks -> the run continues under the SAME
+ *     runId) arrives with a NEW lease id, so it takes a clean lease instead of colliding with the
+ *     tombstone the previous pass left.
+ *
+ * THREE THINGS END A LEASE, and all three have to exist:
+ *
+ *   1. EXPLICIT. Cortex sends `leaseOp:'release'` from the engine's run `finally`. The normal path,
+ *      and the prompt one.
  *   2. IDLE BACKSTOP (`RUN_IDLE_MS`). If Cortex dies, is killed, or its socket drops mid-run, the
  *      explicit release never arrives - and an idle-free design would then leave a HEADED browser
  *      window open on somebody's desktop and, worse, an AUTHENTICATED Cofre session resident in a
  *      jar that the next run of any automation on this profile inherits. The backstop is a security
  *      control before it is hygiene: it is the upper bound on how long an injected session can sit
  *      in the jar with nobody driving it.
+ *   3. SHUTDOWN. `closeAll` releases live leases BEFORE closing their contexts, because the profile
+ *      is persistent and closing the context underneath a lease would leave the session ON DISK.
  *
- * WHY TWO MINUTES. The window has to sit above the largest legitimate gap between two consecutive
- * invokes of one run and as far below that as it can. The gap is hosted-side think time: a step's
- * cache miss goes out to the vision resolver, then the verifier, then possibly the rehearsal fixer -
- * several model round trips - while Cortex's own per-invocation timeout is two minutes (the daemon
- * runtime's own comment names it). Anything under about a minute would reap live runs during a slow
- * vision escalation; anything much over two minutes is just a longer time for an authenticated jar
- * to sit unattended, and buys nothing, because a Cortex that has not spoken for two minutes has
- * already blown its own invocation budget. The timer is armed AFTER each step completes, never
- * during one, so a slow step is never reaped out from under itself.
+ * WHY TWO MINUTES, AND WHY A KEEPALIVE MAKES THAT HONEST. The window bounds how long an
+ * authenticated jar may sit with nobody driving it, so it wants to be short. But a LIVE run can
+ * legitimately go minutes without a browser step: it is blocked on a sub-automation, on a slow API
+ * call, or on a human solving a CAPTCHA in that very window (`pause_for_user` deliberately has no
+ * timeout - the user decides how long they need). A pure timer cannot tell those from an abandoned
+ * lease, so it would have to be either uselessly long or wrong, and "wrong" here means reaping the
+ * browser out from under somebody mid-CAPTCHA. Cortex therefore heartbeats every live lease
+ * (`leaseOp:'keepalive'`), and the window is what bounds SILENCE from a Cortex that is still there.
+ * Two minutes is several heartbeats' worth of tolerance and matches Cortex's own per-invocation
+ * timeout: a Cortex that has not spoken in two minutes has already blown its own budget. The timer
+ * is armed AFTER each step completes, never during one, so a slow step is never reaped mid-flight.
  *
- * A REAPED RUN IS REFUSED, NOT SILENTLY RESTARTED. If a late invoke arrived for a run the backstop
- * already reaped, acquiring a fresh lease for it would recreate the exact bug this file exists to
- * fix - a blank page and an empty jar, reported as success. The runId is tombstoned instead and the
- * step fails by name.
+ * A REAPED LEASE IS REFUSED, NOT SILENTLY RESTARTED. If a late invoke arrives for a lease the
+ * backstop already reaped, handing it a fresh one would recreate the exact bug this file exists to
+ * fix - a blank page and an empty jar, reported as success. The lease id is tombstoned instead and
+ * the step fails by name.
+ *
+ * THE WIPE IS NOT ALLOWED TO FAIL QUIETLY. Releasing a lease is the ONE moment a whole run's
+ * injected session is cleared out of a jar that outlives it. A `catch(() => undefined)` there would
+ * mean a failed wipe leaves an authenticated session resident on disk while Cortex is told the run
+ * ended cleanly - the worst combination available. So `releaseRun` drops its bookkeeping, and then
+ * THROWS, and the executor turns that into a failed step on the wire.
  */
 import { chmodSync, lstatSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -90,14 +112,14 @@ const LAUNCH_TIMEOUT_MS = 60_000;
 const IDLE_CLOSE_MS = 10 * 60_000;
 
 /**
- * How long a RUN may hold its lease with no step arriving before the daemon reaps it. See the file
- * header for the derivation: above one hosted vision escalation, at Cortex's own per-invocation
- * timeout, and no higher - because for this whole window an injected Cofre session is resident in
- * the jar with nobody driving it.
+ * How long a lease may go with NOTHING arriving for it - no step, no keepalive - before the daemon
+ * reaps it. See the file header for the derivation: it bounds silence from a Cortex that is still
+ * alive (which heartbeats), not the length of a run, and for this whole window an injected Cofre
+ * session is resident in the jar with nobody driving it.
  */
 const RUN_IDLE_MS = 2 * 60_000;
 
-/** How many reaped runIds are remembered so a late invoke is refused by name rather than served a
+/** How many ended lease ids are remembered so a late invoke is refused by name rather than served a
  *  blank page. Bounded: it is a tombstone list, not a run history. */
 const MAX_ENDED_RUNS = 200;
 
@@ -210,6 +232,10 @@ export interface ProfileManagerDeps {
   runIdleMs?: number;
 }
 
+/** Why a lease is no longer live. Carried on the tombstone so a late step is refused by the reason
+ *  that actually applies, not by a generic one. */
+type LeaseEnd = 'idle' | 'released';
+
 interface HeldProfile {
   context: ProfileContext;
   userDataDir: string;
@@ -223,15 +249,21 @@ interface HeldProfile {
   closing?: Promise<void>;
 }
 
-/** One run's hold on a profile: the lease itself plus the bookkeeping the idle backstop needs. */
+/** One lease's hold on a profile: the lease itself plus the bookkeeping the idle backstop needs. */
 interface RunHold {
-  /** The profile key this run took. A run that somehow targets a different profile releases the
-   *  first before taking the second, rather than silently holding two. */
+  /**
+   * The profile key this lease took, and the SCOPE of every later operation naming it. A `release`
+   * or `keepalive` arriving under a different owner - hence a different profile - is refused rather
+   * than served: `runs` is a process-wide map, and without this check a frame naming owner A could
+   * end a lease belonging to owner B by guessing its id. Every page verb is already owner-scoped by
+   * construction (it resolves a profile and acts on that profile's page); this is what makes the
+   * lifecycle verbs no weaker than the verbs they end.
+   */
   profileKey: string;
-  /** Resolves to the run's lease. Held as the PROMISE so a release that arrives mid-acquire can
-   *  wait for the acquire it is cancelling instead of racing it. */
+  /** Resolves to the lease. Held as the PROMISE so a release that arrives mid-acquire can wait for
+   *  the acquire it is cancelling instead of racing it. */
   lease: Promise<ProfileLease>;
-  /** Steps currently executing against this lease. The backstop never reaps a busy run. */
+  /** Steps currently executing against this lease. The backstop never reaps a busy lease. */
   busy: number;
   idleTimer?: ReturnType<typeof setTimeout>;
 }
@@ -244,14 +276,15 @@ export class ProfileManager {
   /** Per-profileId serialisation chain - INDEPENDENT of `held` so a queued acquire survives a
    *  context that was idle-closed between the two. */
   private readonly chains = new Map<string, Promise<void>>();
-  /** runId -> the lease that run holds. THE run-scoped lease: one entry per live run. */
+  /** leaseId -> the hold it has on a profile. One entry per live lease (see the file header for why
+   *  the key is a lease id and not a runId). */
   private readonly runs = new Map<string, RunHold>();
   /**
-   * runIds whose lease is gone, and why. A step arriving for one of these is REFUSED: quietly
-   * handing it a fresh lease would restore the blank-page-every-step bug under a different cause.
+   * lease ids that are gone, and why. A step arriving for one of these is REFUSED: quietly handing
+   * it a fresh lease would restore the blank-page-every-step bug under a different cause.
    * Bounded FIFO - a Map iterates in insertion order, so the oldest key is the one to evict.
    */
-  private readonly endedRuns = new Map<string, 'idle' | 'released'>();
+  private readonly endedRuns = new Map<string, LeaseEnd>();
   private closed = false;
 
   constructor(private readonly deps: ProfileManagerDeps) {}
@@ -262,16 +295,16 @@ export class ProfileManager {
   }
 
   /**
-   * Run ONE step against the run's lease, taking the lease on the first step of the run and KEEPING
-   * it - the page, its cookies and its seeded localStorage - for every later step of the same run.
-   * This is the API the executor uses; `acquire` below is the primitive underneath it.
+   * Run ONE step against a lease, taking the lease on the first step that names it and KEEPING it -
+   * the page, its cookies and its seeded localStorage - for every later step that names the same
+   * id. This is the API the executor uses; `acquire` below is the primitive underneath it.
    *
    * `session` is a THUNK because it is only consulted when the lease is actually taken. Resolving
    * the Cofre session again on every step would re-read credential material for a jar that already
-   * carries it, and would also be a lie about lifetime: the session is injected ONCE per run.
+   * carries it, and would also be a lie about lifetime: the session is injected ONCE per lease.
    */
   async withRunLease<T>(
-    input: { runId: string; profileId: string; session?: () => ProfileSession | null },
+    input: { leaseId: string; profileId: string; session?: () => ProfileSession | null },
     fn: (lease: ProfileLease) => Promise<T>,
   ): Promise<T> {
     const hold = await this.holdForRun(input);
@@ -282,31 +315,81 @@ export class ProfileManager {
       hold.busy -= 1;
       // Arm the backstop from the END of the step: a slow step must never be reaped mid-flight,
       // and the window is meant to bound IDLE time, not total time.
-      this.armRunIdle(input.runId, hold);
+      this.armRunIdle(input.leaseId, hold);
     }
   }
 
   /**
-   * END OF RUN. Drops the run's page and CLEARS the injected session out of the shared jar; the
-   * profile context stays warm for the next run. Idempotent, and safe to call for a run that was
-   * already reaped - Cortex's `dispose()` runs in a `finally` and must never throw out of it.
+   * THE RUN IS STILL ALIVE - the keepalive. Re-arms the idle backstop for a lease nobody is driving
+   * at this instant, which is the ordinary state of a run blocked on a sub-automation, on a slow
+   * API call, or on a human at a CAPTCHA in that very window.
+   *
+   * Answers whether the lease is still held, so Cortex is told the truth rather than silently
+   * heartbeating something that no longer exists. Never creates a lease: a keepalive means "keep
+   * what I have", and inventing a page and an empty jar in response to one would be exactly the
+   * silent-blank-page failure this file exists to remove.
    */
-  async releaseRun(runId: string, reason: 'idle' | 'released' = 'released'): Promise<void> {
-    const hold = this.runs.get(runId);
-    // Tombstone FIRST, and with the real reason, so a step racing the teardown is refused with the
-    // message that names what actually happened. Tombstoned even when there is nothing to release:
-    // the run is over either way, and a later step must be refused rather than handed a blank page.
-    this.markRunEnded(runId, reason);
-    if (!hold) return;
-    this.runs.delete(runId);
-    if (hold.idleTimer) clearTimeout(hold.idleTimer);
-    const lease = await hold.lease.catch(() => null);
-    await lease?.release().catch(() => undefined);
+  touchRun(leaseId: string, opts: { profileId?: string } = {}): boolean {
+    const hold = this.runs.get(leaseId);
+    if (!hold) return false;
+    this.assertScope(hold, opts.profileId);
+    this.armRunIdle(leaseId, hold);
+    return true;
   }
 
-  /** runIds currently holding a lease. For the status surface and tests. */
+  /**
+   * END OF LEASE. Drops the page and CLEARS the injected session out of the shared jar; the profile
+   * context stays warm for the next run. Idempotent, and safe to call for a lease that was already
+   * reaped - the engine calls this from a run `finally`.
+   *
+   * IT THROWS WHEN THE WIPE FAILS, and that is the whole reason it is written this way. This call
+   * is the single moment a whole run's authenticated session leaves a jar that outlives it. If it
+   * swallowed the failure the daemon would answer `ok:true`, the run record would say the run ended
+   * cleanly, and an injected Cofre session would stay resident in a profile the user's next
+   * automation shares. A failed wipe is a security event and has to reach the wire. The bookkeeping
+   * (map entry, timer, tombstone) is dropped BEFORE the wipe is attempted, so a throw leaves no
+   * half-live lease behind: the lease is over either way, what failed is the cleanup.
+   */
+  async releaseRun(
+    leaseId: string,
+    opts: { reason?: LeaseEnd; profileId?: string } = {},
+  ): Promise<void> {
+    const hold = this.runs.get(leaseId);
+    if (!hold) {
+      // Nothing to release. An EXISTING tombstone is refreshed with the newer reason (a release
+      // arriving after the backstop already reaped the lease is the ordinary case), but a lease id
+      // this machine has never seen does NOT get one: minting a tombstone from an unknown id would
+      // let a frame pre-refuse a lease that has not started yet, and the scope check has nothing to
+      // check it against. A release for a lease that was never taken is simply a no-op.
+      if (this.endedRuns.has(leaseId)) this.markRunEnded(leaseId, opts.reason ?? 'released');
+      return;
+    }
+    this.assertScope(hold, opts.profileId);
+    // Tombstone FIRST, and with the real reason, so a step racing the teardown is refused with the
+    // message that names what actually happened. A lease id belongs to ONE execution pass, so this
+    // can never refuse a resumed run.
+    this.markRunEnded(leaseId, opts.reason ?? 'released');
+    this.runs.delete(leaseId);
+    if (hold.idleTimer) clearTimeout(hold.idleTimer);
+    const lease = await hold.lease.catch(() => null);
+    await lease?.release();
+  }
+
+  /** Lease ids currently holding a profile. For the status surface and tests. */
   openRuns(): string[] {
     return [...this.runs.keys()];
+  }
+
+  /**
+   * A lifecycle verb may only touch a lease on the profile it names. `runs` is process-wide and a
+   * lease id is just a string on the wire, so without this a frame carrying owner A and a lease id
+   * belonging to owner B would end B's run. `profileId` is omitted only by internal callers
+   * (`closeAll`), which are not answering a frame.
+   */
+  private assertScope(hold: RunHold, profileId?: string): void {
+    if (profileId === undefined) return;
+    if (hold.profileKey === sanitizeProfileId(profileId)) return;
+    throw new ProfileError('esta sessão de navegador pertence a outro perfil');
   }
 
   /**
@@ -362,6 +445,13 @@ export class ProfileManager {
       userDataDir: this.userDataDirFor(key),
       context,
       page: async (): Promise<ProfilePage> => {
+        // REFUSED AFTER RELEASE, and this is not defensive decoration. A step can still be in
+        // flight when the run's explicit release lands - Cortex sends the release from a run
+        // `finally` while an invoke it gave up waiting for is still executing here. That step then
+        // asks for a page, finds `runPage` nulled by the release, and opens a BRAND NEW ONE that
+        // nothing will ever close: an orphan window on the user's desktop, holding the profile
+        // context open, outside every lifecycle this file defines.
+        if (released) throw new ProfileError('a sessão de navegador desta execução já foi encerrada');
         if (runPage && !runPage.isClosed()) return runPage;
         runPage = await context.newPage();
         return runPage;
@@ -381,18 +471,34 @@ export class ProfileManager {
       },
       release: async (): Promise<void> => {
         if (released) return;
+        // Set BEFORE anything is torn down, so a step still in flight cannot open a page behind the
+        // teardown (see `page()` above).
         released = true;
+        const page = runPage;
+        runPage = null;
         try {
-          // Order matters: clear the SESSION while the context is still usable, then drop pages.
-          // Doing it the other way round leaves the jar populated if a page close throws.
-          await this.clearSession(context, session ?? null, seeded);
+          // THE ORDER IS THREE STEPS AND EACH ONE HAS TO BE WHERE IT IS.
+          //  1. localStorage FIRST, because removing a seeded key needs a LIVE page: on a
+          //     persistent profile localStorage is on disk, so closing the page does not clear it.
+          //  2. Then close the page, so nothing can be handed a `Set-Cookie` by a request still in
+          //     flight AFTER the jar is wiped - a cookie written after the wipe survives it.
+          //  3. Then the jar. Last, and in a `finally`, so it happens even if either step above
+          //     throws: an unremoved localStorage key is untidy, an unwiped cookie jar is a live
+          //     session in a profile the next automation shares.
+          await this.clearSeededStorage(context, session ?? null, seeded);
+          if (page && !page.isClosed()) await page.close().catch(() => undefined);
         } finally {
-          if (runPage && !runPage.isClosed()) {
-            await runPage.close().catch(() => undefined);
+          try {
+            // NOT swallowed. `releaseRun` propagates this to the executor, which answers the wire
+            // with a failed step - a run must never be told it ended cleanly while its session is
+            // still resident in a jar the next run shares.
+            await context.clearCookies();
+          } finally {
+            // The profile mutex is given back whatever happened: a failed wipe must not also
+            // deadlock every later run on this profile.
+            this.armIdleClose(key);
+            releaseHold();
           }
-          runPage = null;
-          this.armIdleClose(key);
-          releaseHold();
         }
       },
     };
@@ -407,10 +513,14 @@ export class ProfileManager {
    */
   async closeAll(): Promise<void> {
     this.closed = true;
-    // Release live runs FIRST. Closing the context underneath a lease would drop the jar without
+    // Release live leases FIRST. Closing the context underneath a lease would drop the jar without
     // clearing it, which on a persistent profile means the injected session survives on DISK.
-    for (const runId of [...this.runs.keys()]) {
-      await this.releaseRun(runId).catch(() => undefined);
+    // A wipe that fails here has nowhere to be answered - the daemon is going away - so it is SAID
+    // OUT LOUD to the operator instead of swallowed, and shutdown continues.
+    for (const leaseId of [...this.runs.keys()]) {
+      await this.releaseRun(leaseId).catch((err: unknown) => {
+        this.deps.log?.(`Aviso: não foi possível limpar a sessão de navegador de uma execução (${errorText(err)}).`);
+      });
     }
     const contexts = [...this.held.values()];
     this.held.clear();
@@ -429,27 +539,28 @@ export class ProfileManager {
   // --- internals ------------------------------------------------------------
 
   /**
-   * The run's hold, taken on its first step. A run that already holds one gets it back untouched -
-   * same page, same cookies - which is the whole point of the run scope.
+   * The lease's hold, taken on the first step that names it. A lease that is already held is handed
+   * back untouched - same page, same cookies - which is the whole point of the run scope, and is
+   * also what makes a sub-automation's steps land on its parent's page instead of deadlocking
+   * behind the parent's hold.
    */
   private async holdForRun(input: {
-    runId: string;
+    leaseId: string;
     profileId: string;
     session?: () => ProfileSession | null;
   }): Promise<RunHold> {
     if (this.closed) throw new ProfileError('o gestor de perfis já foi encerrado');
     const key = sanitizeProfileId(input.profileId);
 
-    const existing = this.runs.get(input.runId);
+    const existing = this.runs.get(input.leaseId);
     if (existing) {
-      if (existing.profileKey === key) return existing;
-      // A run that changes profile mid-flight. Give the first one back (which clears its session)
-      // before taking the second, rather than holding two profiles for one run.
-      await this.releaseRun(input.runId);
-      this.endedRuns.delete(input.runId);
+      // A lease belongs to ONE profile. A step naming it under another owner is refused rather than
+      // quietly migrating the lease - see `assertScope`.
+      this.assertScope(existing, input.profileId);
+      return existing;
     }
 
-    const ended = this.endedRuns.get(input.runId);
+    const ended = this.endedRuns.get(input.leaseId);
     if (ended) {
       // Serving this would mean a fresh page and an empty jar reported as a working step - exactly
       // the failure the run-scoped lease exists to remove. Fail by name instead.
@@ -462,25 +573,26 @@ export class ProfileManager {
 
     const lease = this.acquire(key, input.session?.() ?? null);
     const hold: RunHold = { profileKey: key, lease, busy: 0 };
-    this.runs.set(input.runId, hold);
+    this.runs.set(input.leaseId, hold);
     // A failed acquire must not leave a poisoned hold behind: the next step should be free to try
     // again (a launch can fail transiently), and awaiting a rejected promise twice is not a retry.
     lease.catch(() => {
-      if (this.runs.get(input.runId) === hold) this.runs.delete(input.runId);
+      if (this.runs.get(input.leaseId) === hold) this.runs.delete(input.leaseId);
     });
     await lease;
     return hold;
   }
 
   /**
-   * The idle backstop. Reaps a run whose lease has sat unused for `runIdleMs` - the case where
-   * Cortex died and the explicit `release` will never arrive. A BUSY run is never reaped; the timer
-   * simply re-arms, because the window bounds idleness, not the length of a step.
+   * The idle backstop. Reaps a lease that has sat with nothing arriving for it - no step, no
+   * keepalive - for `runIdleMs`, which is the case where Cortex died and the explicit release will
+   * never come. A BUSY lease is never reaped; the timer simply re-arms, because the window bounds
+   * silence, not the length of a step.
    */
-  private armRunIdle(runId: string, hold: RunHold): void {
-    // The run may have been released while this step was running (`withRunLease` arms from its
+  private armRunIdle(leaseId: string, hold: RunHold): void {
+    // The lease may have been released while this step was running (`withRunLease` arms from its
     // `finally`). Arming a timer on a hold nobody owns leaves a timer with nothing to reap.
-    if (this.runs.get(runId) !== hold) return;
+    if (this.runs.get(leaseId) !== hold) return;
     const idleMs = this.deps.runIdleMs ?? RUN_IDLE_MS;
     if (hold.idleTimer) {
       clearTimeout(hold.idleTimer);
@@ -488,22 +600,26 @@ export class ProfileManager {
     }
     if (idleMs <= 0) return;
     const timer = setTimeout(() => {
-      if (this.runs.get(runId) !== hold) return; // already released explicitly
+      if (this.runs.get(leaseId) !== hold) return; // already released explicitly
       if (hold.busy > 0) {
-        this.armRunIdle(runId, hold);
+        this.armRunIdle(leaseId, hold);
         return;
       }
       this.deps.log?.('A sessão de navegador de uma execução expirou por inactividade e foi encerrada.');
-      void this.releaseRun(runId, 'idle').catch(() => undefined);
+      void this.releaseRun(leaseId, { reason: 'idle' }).catch((err: unknown) => {
+        // The reap has no caller to answer, so the failure would otherwise be silent - and a reap
+        // whose WIPE failed is the case where an authenticated jar is still resident.
+        this.deps.log?.(`Aviso: não foi possível limpar a sessão de navegador expirada (${errorText(err)}).`);
+      });
     }, idleMs);
     timer.unref?.();
     hold.idleTimer = timer;
   }
 
-  /** Remember that a run ended, bounded. Insertion order is the eviction order. */
-  private markRunEnded(runId: string, reason: 'idle' | 'released'): void {
-    this.endedRuns.delete(runId);
-    this.endedRuns.set(runId, reason);
+  /** Remember that a lease ended, bounded. Insertion order is the eviction order. */
+  private markRunEnded(leaseId: string, reason: LeaseEnd): void {
+    this.endedRuns.delete(leaseId);
+    this.endedRuns.set(leaseId, reason);
     while (this.endedRuns.size > MAX_ENDED_RUNS) {
       const oldest = this.endedRuns.keys().next().value;
       if (oldest === undefined) break;
@@ -593,11 +709,12 @@ export class ProfileManager {
    * That is enforced TWICE, and honestly: the real enforcement is the caller - `ensureContext`
    * returns the warm context long before it reaches here, and reaches here after an idle close only
    * once it has awaited that close and dropped the entry. The `held` check below is belt-and-braces
-   * for a destructive function, and it is currently UNREACHABLE through the public API (a mutation
-   * removing it alone leaves the suite green; a mutation removing the caller's short-circuit turns
-   * it red). It stays because the next call site added to this function should not have to
-   * rediscover the invariant. The cross-process case is bounded elsewhere: `serve.ts` refuses a
-   * second daemon on the same home via the pidfile.
+   * for a destructive function, and it is genuinely UNREACHABLE through the public API. It stays
+   * because the next call site added to this function should not have to rediscover the invariant -
+   * and because a guard nothing can fail is indistinguishable from a guard that does not work, it
+   * is pinned by a test that calls THIS METHOD directly ("the guard on the destructive function
+   * itself", run-lease.test.ts) rather than left to be believed. The cross-process case is bounded
+   * elsewhere: `serve.ts` refuses a second daemon on the same home via the pidfile.
    */
   private clearStaleSingletonLock(key: string, userDataDir: string): void {
     if (this.held.has(key)) return;
@@ -617,17 +734,20 @@ export class ProfileManager {
   }
 
   /**
-   * Undo the run's session. Cookies go through `clearCookies` (the whole jar - the profile is the
-   * daemon's own and holds nothing a run should keep); seeded localStorage keys are removed from
-   * whatever pages are still open on those origins. A page already closed took its localStorage
-   * with it only if the origin has no other page, so the removal is attempted, never assumed.
+   * Half of undoing the run's session: the seeded localStorage keys, removed from whatever pages
+   * are still open on those origins. It needs a LIVE page - on a persistent profile localStorage
+   * lives on disk, so a closed page keeps its keys - which is why the caller does this before it
+   * closes anything.
+   *
+   * BEST EFFORT, unlike the cookie wipe the caller does afterwards. These are per-page removals of
+   * keys this run itself seeded, on pages that may legitimately have navigated away or closed
+   * mid-teardown; the jar wipe is the one that must be loud if it fails.
    */
-  private async clearSession(
+  private async clearSeededStorage(
     context: ProfileContext,
     session: ProfileSession | null,
     seeded: Set<string>,
   ): Promise<void> {
-    await context.clearCookies().catch(() => undefined);
     if (!session || seeded.size === 0) return;
     const pages = safePages(context);
     for (const page of pages) {
@@ -681,6 +801,12 @@ export function sanitizeProfileId(profileId: string): string {
   const trimmed = (profileId ?? '').trim();
   const safe = trimmed.replace(/[^A-Za-z0-9._-]/g, '-').replace(/^[.-]+/, '').slice(0, 100);
   return safe.length > 0 ? safe : 'default';
+}
+
+/** A thrown value as one line of operator-facing text. Never the value itself - a rejection from
+ *  Playwright can quote a cookie. */
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function safePages(context: ProfileContext): ProfilePage[] {

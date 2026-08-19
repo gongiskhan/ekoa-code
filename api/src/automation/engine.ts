@@ -44,6 +44,8 @@ import { rebaseSelfUrl } from './self-url.js';
 import { isCredentialAdjacentFailure } from './human-action-routing.js';
 import {
   DaemonBrowserSession,
+  releaseBrowserLease,
+  type BrowserLease,
   type BrowserSession,
 } from './browser-session.js';
 import {
@@ -192,6 +194,15 @@ export interface RunContext {
   /** Tracks the automation IDs in the current call chain to detect cycles. */
   visitedAutomationIds: Set<string>;
   parentRunId?: string;
+  /**
+   * THE BROWSER LEASE THE WHOLE CALL TREE SHARES (see `BrowserLease`).
+   *
+   * Set only on the context a `sub_automation` step builds for its child. A run that arrives
+   * without one is the OUTERMOST pass: it mints the lease, is the only pass that ends it, and hands
+   * this same object down so every sub-automation beneath it drives the browser its parent holds
+   * rather than queueing behind it forever.
+   */
+  browserLease?: BrowserLease;
   /** Used for SSE event correlation. */
   traceId: string;
   /**
@@ -496,6 +507,13 @@ async function runOrRehearse(
   let sessionState = credentials && typeof credentials === 'object'
     ? (credentials as Record<string, unknown>)['storageState']
     : undefined;
+  // THE BROWSER LEASE FOR THIS CALL TREE. An outermost pass mints one and owns
+  // its end; a sub-automation inherits its parent's through `ctx` and must not
+  // end it (see `BrowserLease`). Minted whether or not this run ends up using a
+  // browser - it costs a uuid, and deciding later would mean the sub-automation
+  // step needing to know something the parent has not discovered yet.
+  const browserLease: BrowserLease = ctx.browserLease ?? { id: randomUUID(), used: false };
+  const ownsBrowserLease = ctx.browserLease === undefined;
   // The browser session is created lazily on first browser use so a run with
   // only api_call/integration steps still works without any browser.
   let browser: BrowserSession | null = null;
@@ -505,7 +523,15 @@ async function runOrRehearse(
         // Session injection is LOCAL-SESSION-ONLY today: the daemon owns its
         // own persistent profile and the bridge protocol has no cookie
         // channel yet, so `sessionState` is deliberately NOT forwarded here.
-        browser = new DaemonBrowserSession({ connection, runId, ownerUserId: ctx.ownerUserId });
+        browser = new DaemonBrowserSession({
+          connection,
+          runId,
+          ownerUserId: ctx.ownerUserId,
+          // The session marks the lease used on its first frame. Marking it here
+          // would mark every daemon-connected run, browser step or not: this
+          // factory runs for EVERY step (`executeStep({ browser: getBrowser() })`).
+          lease: browserLease,
+        });
       } else if (loadAutomationConfig().localBrowserEnabled) {
         browser = new LocalBrowserSession({ runId, ownerUserId: ctx.ownerUserId, sessionState });
       } else {
@@ -672,6 +698,7 @@ async function runOrRehearse(
         index: i,
         runId,
         ctx,
+        browserLease,
         inputs,
         previousStep,
         retryLedger,
@@ -1403,10 +1430,26 @@ async function runOrRehearse(
     });
   } finally {
     ctx.visitedAutomationIds.delete(automationId);
-    // Release the per-run browser session. The daemon session is a no-op (the
-    // daemon owns the page lifecycle); the in-process LocalBrowserSession closes
-    // its per-run page here so pages don't accumulate across runs.
+    // This pass's own session: the in-process one closes its per-run page so pages
+    // don't accumulate; the daemon one stops its keepalive heartbeat.
     await (browser as BrowserSession | null)?.dispose?.();
+    // END OF RUN on the daemon, and the ONE place it happens. Conditions, each
+    // load-bearing:
+    //   - `ownsBrowserLease`: a sub-automation shares its parent's lease. A child
+    //     that released here would drop the page, wipe the jar and sign the user
+    //     out from under the parent the moment it returned.
+    //   - `browserLease.used`: sent when ANY pass in this tree opened a daemon
+    //     browser, including a sub-automation while this pass never touched one -
+    //     `used` is a field on the shared object precisely so the owner can see
+    //     that. A tree that never opened a browser sends nothing, rather than a
+    //     frame (and a ledger row) per integration-only run.
+    if (ownsBrowserLease && browserLease.used && connection) {
+      await releaseBrowserLease(connection, {
+        leaseId: browserLease.id,
+        ownerUserId: ctx.ownerUserId,
+        runId,
+      });
+    }
   }
 }
 
@@ -1429,6 +1472,14 @@ interface ExecuteStepArgs {
   index: number;
   runId: string;
   ctx: RunContext;
+  /**
+   * The browser lease of the call tree this step belongs to. Only `sub_automation`
+   * reads it, and only to hand it down: it is what makes a child run a tenant of its
+   * parent's browser instead of a second one queueing behind it. It is NOT taken off
+   * `ctx`, because on the OUTERMOST pass `ctx.browserLease` is undefined by
+   * definition - that pass is the one that minted it.
+   */
+  browserLease: BrowserLease;
   inputs: Record<string, unknown>;
   /**
    * The step that ran immediately before this one in the same run.
@@ -1453,7 +1504,7 @@ interface ExecuteStepArgs {
 }
 
 async function executeStep(args: ExecuteStepArgs): Promise<StepRecord> {
-  const { browser, daemonConnected, automation, step, index, runId, ctx, inputs } = args;
+  const { browser, daemonConnected, automation, step, index, runId, ctx, browserLease, inputs } = args;
   const stepStart = Date.now();
 
   // Defensive: a malformed step (null, missing id/type, or an obsolete
@@ -1517,6 +1568,15 @@ async function executeStep(args: ExecuteStepArgs): Promise<StepRecord> {
         const sub = await runAutomation(step.subAutomationId, {
           ...ctx,
           parentRunId: runId,
+          // THE SAME BROWSER LEASE OBJECT, not a copy and not a fresh one. The child
+          // is a different run on the same owner, hence the same daemon and the same
+          // profile: with a lease of its own it would queue behind the one this run
+          // holds for its whole duration, while this run is blocked waiting for the
+          // child - a deadlock, plus an idle backstop that reaped the waiting parent.
+          // Sharing it also means the child continues on the page this run left open,
+          // which is what a sub-automation is for. Passed by REFERENCE so the child
+          // setting `used` is visible to the pass that has to send the release.
+          browserLease,
           // visitedAutomationIds is the same set (mutated by recursive call)
         }, {
           inputs: applyArgsTemplate(step.argsTemplate ?? {}, inputs, undefined, undefined, ctx.triggerEvent?.payload),
@@ -1590,12 +1650,12 @@ async function executeStep(args: ExecuteStepArgs): Promise<StepRecord> {
 
       case 'browser': {
         if (!browser) return awaitingDaemonRecord(baseRecord, stepStart, index, 'browser');
-        return await executeBrowserStep({ browser, daemonConnected, automation, step, index, runId, ctx, inputs, baseRecord, stepStart, retryLedger: args.retryLedger });
+        return await executeBrowserStep({ browser, daemonConnected, automation, step, index, runId, ctx, browserLease, inputs, baseRecord, stepStart, retryLedger: args.retryLedger });
       }
 
       case 'verify': {
         if (!browser) return awaitingDaemonRecord(baseRecord, stepStart, index, 'browser');
-        return await executeVerifyStep({ browser, daemonConnected, automation, step, index, runId, ctx, inputs, baseRecord, stepStart, previousStep: args.previousStep });
+        return await executeVerifyStep({ browser, daemonConnected, automation, step, index, runId, ctx, browserLease, inputs, baseRecord, stepStart, previousStep: args.previousStep });
       }
 
       case 'local_command': {

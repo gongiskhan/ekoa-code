@@ -37,8 +37,9 @@ let pageDefaults: { visible: boolean; screenshotFails: boolean };
 let hugeA11y: boolean;
 /** The profile manager `buildRuntime` wired, so the run-lease assertions can see its state. */
 let profiles: ProfileManager;
-/** The one cookie jar every fake context shares, so a wipe is visible to the assertions. */
-let jar: { cleared: number; cookiesAdded: number[] };
+/** The one cookie jar every fake context shares, so a wipe is visible to the assertions.
+ *  `clearFails` makes the wipe fail the way a wedged browser does. */
+let jar: { cleared: number; cookiesAdded: number[]; clearFails: boolean };
 
 interface FakePage extends ProfilePage {
   actions: string[];
@@ -121,15 +122,23 @@ function makePage(): FakePage {
 }
 
 function fakeContext(): ProfileContext {
+  // Bound to the jar that exists NOW, not to whatever the module-level `jar` points at when the
+  // call happens: a manager from an earlier test can still fire its idle backstop after that test
+  // ended, and a late wipe must land on its own test's jar rather than on the running one's.
+  const myJar = jar;
+  const myPages = pages;
   return {
     newPage: async () => {
       const p = makePage();
-      pages.push(p);
+      myPages.push(p);
       return p;
     },
-    pages: () => pages,
-    addCookies: async (c) => void jar.cookiesAdded.push(c.length),
-    clearCookies: async () => void (jar.cleared += 1),
+    pages: () => myPages,
+    addCookies: async (c) => void myJar.cookiesAdded.push(c.length),
+    clearCookies: async () => {
+      if (myJar.clearFails) throw new Error('browser context is closed');
+      myJar.cleared += 1;
+    },
     addInitScript: async () => undefined,
     close: async () => undefined,
   };
@@ -168,7 +177,9 @@ function buildRuntime(
     enablement,
     profiles,
     toolSession: SESSION,
-    profileIdFor: () => 'test-profile',
+    // Mirrors serve.ts: one profile per OWNER. Owner-dependent on purpose - a constant here would
+    // make every frame land on one profile and hide the scoping the lifecycle verbs depend on.
+    profileIdFor: ({ owner }) => owner ?? 'test-profile',
     ...(opts.sessionStateFor ? { sessionStateFor: opts.sessionStateFor } : {}),
   });
 }
@@ -182,9 +193,25 @@ async function invoke(runtime: DaemonRuntime, frame: Omit<Extract<BridgeFrame, {
   return result;
 }
 
-const browserStep = (action: Record<string, unknown>, runId = 'r1'): Record<string, unknown> => ({
+const browserStep = (
+  action: Record<string, unknown>,
+  runId = 'r1',
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> => ({
   capability: 'browser',
-  input: { owner: 'u1', action },
+  input: { owner: 'u1', action, ...extra },
+  runId,
+});
+
+/** A LIFECYCLE frame - `release` or `keepalive`. A different arm of the step payload from a page
+ *  action, which is what keeps a resolver structurally unable to emit one. */
+const leaseStep = (
+  leaseOp: 'release' | 'keepalive',
+  runId = 'r1',
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> => ({
+  capability: 'browser',
+  input: { owner: 'u1', leaseOp, ...extra },
   runId,
 });
 
@@ -202,7 +229,7 @@ beforeEach(() => {
   pages = [];
   pageDefaults = { visible: true, screenshotFails: false };
   hugeA11y = false;
-  jar = { cleared: 0, cookiesAdded: [] };
+  jar = { cleared: 0, cookiesAdded: [], clearFails: false };
 });
 
 afterEach(() => {
@@ -643,7 +670,7 @@ describe('THE RUN-SCOPED LEASE - a run is a sequence of steps, not a sequence of
       input: browserStep({ action: 'navigate', url: 'https://portal.test/inbox' }, 'r1'),
     });
     sent = [];
-    await invoke(runtime, { invocationId: 'i2', capability: 'desktop.automation', input: browserStep({ action: 'release' }, 'r1') });
+    await invoke(runtime, { invocationId: 'i2', capability: 'desktop.automation', input: leaseStep('release', 'r1') });
     sent = [];
     const other = await invoke(runtime, {
       invocationId: 'i3',
@@ -669,7 +696,7 @@ describe('THE RELEASE VERB - the run-end signal DaemonBrowserSession.dispose sen
     expect(profiles.openRuns()).toEqual(['r1']);
 
     sent = [];
-    const res = await invoke(runtime, { invocationId: 'i2', capability: 'desktop.automation', input: browserStep({ action: 'release' }) });
+    const res = await invoke(runtime, { invocationId: 'i2', capability: 'desktop.automation', input: leaseStep('release') });
 
     expect(res.ok).toBe(true);
     expect(jar.cleared).toBe(1);
@@ -680,27 +707,27 @@ describe('THE RELEASE VERB - the run-end signal DaemonBrowserSession.dispose sen
     const runtime = buildRuntime();
     await invoke(runtime, { invocationId: 'i1', capability: 'desktop.automation', input: browserStep({ action: 'screenshot' }) });
     sent = [];
-    const res = await invoke(runtime, { invocationId: 'i2', capability: 'desktop.automation', input: browserStep({ action: 'release' }) });
+    const res = await invoke(runtime, { invocationId: 'i2', capability: 'desktop.automation', input: leaseStep('release') });
     expect(res.output).toBeUndefined();
     expect(res.screenshotB64).toBeUndefined();
   });
 
   it('is LEDGERED - it is still a remote instruction to act on this machine', async () => {
     const runtime = buildRuntime();
-    await invoke(runtime, { invocationId: 'i1', capability: 'desktop.automation', input: browserStep({ action: 'release' }) });
+    await invoke(runtime, { invocationId: 'i1', capability: 'desktop.automation', input: leaseStep('release') });
     expect(automationRows().at(-1)).toMatchObject({ tool: 'browser', detail: 'release', outcome: 'ran' });
   });
 
   it('passes the SAME gates as any other step - an unadvertised machine refuses it', async () => {
     const runtime = buildRuntime({ capabilities: ['local.filesystem'] });
-    const res = await invoke(runtime, { invocationId: 'i1', capability: 'desktop.automation', input: browserStep({ action: 'release' }) });
+    const res = await invoke(runtime, { invocationId: 'i1', capability: 'desktop.automation', input: leaseStep('release') });
     expect(res.ok).toBe(false);
     expect(automationRows().at(-1)).toMatchObject({ outcome: 'denied', reason: 'capability not advertised' });
   });
 
   it('opens NO browser for a run that never took one (dispose after a run with no browser step)', async () => {
     const runtime = buildRuntime();
-    const res = await invoke(runtime, { invocationId: 'i1', capability: 'desktop.automation', input: browserStep({ action: 'release' }) });
+    const res = await invoke(runtime, { invocationId: 'i1', capability: 'desktop.automation', input: leaseStep('release') });
     expect(res.ok).toBe(true);
     expect(pages).toHaveLength(0);
   });
@@ -715,7 +742,7 @@ describe('THE RELEASE VERB - the run-end signal DaemonBrowserSession.dispose sen
       input: browserStep({ action: 'navigate', url: 'https://portal.test/inbox' }),
     });
     sent = [];
-    await invoke(runtime, { invocationId: 'i2', capability: 'desktop.automation', input: browserStep({ action: 'release' }) });
+    await invoke(runtime, { invocationId: 'i2', capability: 'desktop.automation', input: leaseStep('release') });
     sent = [];
     const late = await invoke(runtime, {
       invocationId: 'i3',
@@ -726,6 +753,200 @@ describe('THE RELEASE VERB - the run-end signal DaemonBrowserSession.dispose sen
     expect(late.error).toContain('encerrada');
     expect(pages).toHaveLength(1); // no second page was ever opened
     expect(automationRows().at(-1)).toMatchObject({ outcome: 'error' });
+  });
+
+  it('is SCOPED TO THE OWNER: another owner naming this lease does not end this run', async () => {
+    // `runs` is one process-wide map and the lease id is an opaque string on the wire. The release
+    // used to be answered before a profile was ever resolved, so a frame carrying owner B and a
+    // lease id belonging to owner A dropped A's page, wiped A's jar, and left A's next step refused
+    // by name. Every page verb was already scoped this way; the lifecycle verbs were not.
+    const runtime = buildRuntime({
+      sessionStateFor: () => ({ cookies: [{ name: 'sid', value: 'v', domain: 'portal.test' }] }),
+    });
+    await invoke(runtime, {
+      invocationId: 'i1',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'navigate', url: 'https://portal.test/inbox' }, 'r1', { leaseId: 'lease-a' }),
+    });
+    sent = [];
+
+    const stolen = await invoke(runtime, {
+      invocationId: 'i2',
+      capability: 'desktop.automation',
+      // Owner B, run of B's own - naming A's lease.
+      input: { capability: 'browser', input: { owner: 'u2', leaseId: 'lease-a', leaseOp: 'release' }, runId: 'r9' },
+    });
+
+    expect(stolen.ok).toBe(false);
+    expect(profiles.openRuns()).toEqual(['lease-a']);
+    expect(jar.cleared).toBe(0);
+    expect(pages[0]!.closed).toBe(false);
+
+    // ... and the owner still ends their own run normally.
+    sent = [];
+    const own = await invoke(runtime, {
+      invocationId: 'i3',
+      capability: 'desktop.automation',
+      input: leaseStep('release', 'r1', { leaseId: 'lease-a' }),
+    });
+    expect(own.ok).toBe(true);
+    expect(jar.cleared).toBe(1);
+  });
+
+  it('REPORTS A FAILED WIPE as a failed step instead of a clean run end', async () => {
+    // Three `catch(() => undefined)`s used to swallow this and answer ok:true with a ledger row
+    // saying `ran`, while the injected Cofre session stayed resident in a profile the user's next
+    // automation shares. The wire and the ledger both have to say what happened.
+    const runtime = buildRuntime({
+      sessionStateFor: () => ({ cookies: [{ name: 'sid', value: 'v', domain: 'portal.test' }] }),
+    });
+    await invoke(runtime, {
+      invocationId: 'i1',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'navigate', url: 'https://portal.test/inbox' }),
+    });
+    jar.clearFails = true;
+    sent = [];
+
+    const res = await invoke(runtime, { invocationId: 'i2', capability: 'desktop.automation', input: leaseStep('release') });
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain('browser context is closed');
+    expect(automationRows().at(-1)).toMatchObject({ tool: 'browser', detail: 'release', outcome: 'error' });
+  });
+});
+
+/**
+ * A SUB-AUTOMATION, through the frame handler.
+ *
+ * A `sub_automation` step runs a second run inside the first - its own runId, the same owner, so
+ * the same profile - while the parent sits blocked on it. Keyed by runId the child's first browser
+ * step queued behind the lease the parent could not release until the child returned; the two
+ * deadlocked, and the idle backstop then reaped the waiting parent. Cortex threads ONE lease id
+ * down the call tree, and these are the frames that come out of that.
+ */
+describe('THE NESTED RUN - one lease, two runIds', () => {
+  it('gives the child the page its parent left open, without waiting for the parent to finish', async () => {
+    const runtime = buildRuntime();
+    await invoke(runtime, {
+      invocationId: 'i1',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'navigate', url: 'https://portal.test/inbox' }, 'run-parent', { leaseId: 'lease-1' }),
+    });
+    sent = [];
+
+    // The child's frame: DIFFERENT runId, SAME lease. The parent has not released - it cannot, it
+    // is blocked waiting for this.
+    const child = await invoke(runtime, {
+      invocationId: 'i2',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'click', locator: { strategy: 'testid', value: 'linha' } }, 'run-child', {
+        leaseId: 'lease-1',
+      }),
+    });
+
+    expect(child.ok).toBe(true);
+    expect(pages).toHaveLength(1); // ONE page, ONE browser, for the whole tree
+    expect((child.output as { url: string }).url).toBe('https://portal.test/inbox');
+    expect(profiles.openRuns()).toEqual(['lease-1']);
+
+    // And the parent carries on afterwards, on the same page, because the child did not release it.
+    sent = [];
+    const parentAgain = await invoke(runtime, {
+      invocationId: 'i3',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'screenshot' }, 'run-parent', { leaseId: 'lease-1' }),
+    });
+    expect((parentAgain.output as { url: string }).url).toBe('https://portal.test/inbox');
+    expect(pages).toHaveLength(1);
+  });
+});
+
+/**
+ * THE KEEPALIVE.
+ *
+ * The idle backstop cannot tell an abandoned lease from a live run that is not touching the browser
+ * at this instant - blocked on a sub-automation, on a slow API call, or on a human at a CAPTCHA in
+ * that very window. Without this signal the window is either uselessly long or wrong.
+ */
+describe('THE KEEPALIVE VERB', () => {
+  it('holds the lease open across a gap many times the idle window', async () => {
+    const runtime = buildRuntime({
+      runIdleMs: 60,
+      sessionStateFor: () => ({ cookies: [{ name: 'sid', value: 'v', domain: 'portal.test' }] }),
+    });
+    await invoke(runtime, {
+      invocationId: 'i1',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'navigate', url: 'https://portal.test/inbox' }),
+    });
+
+    for (let i = 0; i < 8; i++) {
+      await new Promise((r) => setTimeout(r, 25));
+      sent = [];
+      const beat = await invoke(runtime, {
+        invocationId: `k${i}`,
+        capability: 'desktop.automation',
+        input: leaseStep('keepalive'),
+      });
+      expect(beat.ok, `heartbeat ${i}`).toBe(true);
+      expect(beat.output).toEqual({ held: true });
+    }
+
+    expect(profiles.openRuns()).toEqual(['r1']);
+    expect(jar.cleared).toBe(0);
+    expect(pages[0]!.closed).toBe(false);
+  });
+
+  it('answers held:false for a lease this machine no longer has, and opens no browser', async () => {
+    const runtime = buildRuntime();
+    const beat = await invoke(runtime, { invocationId: 'k1', capability: 'desktop.automation', input: leaseStep('keepalive') });
+    expect(beat.ok).toBe(true);
+    expect(beat.output).toEqual({ held: false });
+    expect(pages).toHaveLength(0);
+    expect(profiles.openRuns()).toEqual([]);
+  });
+
+  it('is ledgered, and is REFUSED when it names a lease on another owner profile', async () => {
+    const runtime = buildRuntime();
+    await invoke(runtime, {
+      invocationId: 'i1',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'screenshot' }, 'r1', { leaseId: 'lease-a' }),
+    });
+    sent = [];
+    const beat = await invoke(runtime, {
+      invocationId: 'k1',
+      capability: 'desktop.automation',
+      input: { capability: 'browser', input: { owner: 'u2', leaseId: 'lease-a', leaseOp: 'keepalive' }, runId: 'r9' },
+    });
+    expect(beat.ok).toBe(false);
+    expect(automationRows().at(-1)).toMatchObject({ tool: 'browser', detail: 'keepalive', outcome: 'denied' });
+  });
+});
+
+describe('RULE 7 - a Cortex that predates the lease id still works', () => {
+  it('falls back to the runId, so its steps still share one page and its release still ends them', async () => {
+    const runtime = buildRuntime();
+    // No `leaseId` anywhere: exactly the frames the previous Cortex sends.
+    await invoke(runtime, {
+      invocationId: 'i1',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'navigate', url: 'https://portal.test/inbox' }),
+    });
+    sent = [];
+    const second = await invoke(runtime, {
+      invocationId: 'i2',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'screenshot' }),
+    });
+    expect(pages).toHaveLength(1);
+    expect((second.output as { url: string }).url).toBe('https://portal.test/inbox');
+    expect(profiles.openRuns()).toEqual(['r1']); // keyed by the runId
+    sent = [];
+    const rel = await invoke(runtime, { invocationId: 'i3', capability: 'desktop.automation', input: leaseStep('release') });
+    expect(rel.ok).toBe(true);
+    expect(profiles.openRuns()).toEqual([]);
   });
 });
 

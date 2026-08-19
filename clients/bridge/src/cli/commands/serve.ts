@@ -292,28 +292,76 @@ export async function serve(args: string[], ctx: CliContext): Promise<number> {
       ctx.io.err(`${pt.errPrefix} ${pt.serveSurfaceFailed(surfacePort, err.message)}`);
     });
 
-  return await new Promise<number>((resolve) => {
+  const stopped = installShutdown({
+    io: ctx.io,
+    socket,
+    runtime,
+    profiles,
+    surface: () => surface,
+    onExit: () => removeDaemonPid(home),
+  });
+  void socket.connect();
+  return await stopped;
+}
+
+/**
+ * WHAT A SIGNAL DOES, as one testable function.
+ *
+ * This is a whole function rather than a closure inside `serve` because its ORDER is a security
+ * property and the security property was previously untestable: `serve` needs a config file, a
+ * pairing, a live socket and a real SIGINT before any of this runs, so nothing could assert it and
+ * a regression in it was invisible. The signal registration is injected for the same reason - a
+ * test that raised a real SIGINT would be asking the test runner to shut itself down.
+ *
+ * THE ORDER IS THE POINT:
+ *  1. Credential material, SYNCHRONOUSLY. A shutdown that closes browsers before it overwrites held
+ *     secrets is a shutdown that can be interrupted with the secrets still resident.
+ *  2. The socket and the local surface, so nothing new arrives while the rest happens.
+ *  3. The browsers, AWAITED (see `teardownBrowsers`) - the wipe that clears an injected session out
+ *     of a jar whose cookies are a file on disk. `serveStopped` is printed and the process is
+ *     allowed to exit only AFTER that resolves or times out. `void profiles.closeAll()` here was
+ *     the bug: it let the process exit with the wipe still in flight.
+ *  4. THE PIDFILE LAST, and this is a change. The pidfile is the CROSS-PROCESS lock on the profile
+ *     directory - `browser/profile.ts` rests its "an in-process mutex is sufficient" argument on it
+ *     - so dropping it before the browsers have closed opens a window in which a second `serve` on
+ *     the same home may start and launch Chromium against a `userDataDir` the dying daemon has not
+ *     released: exactly the SingletonLock collision the lock exists to prevent. It is held until
+ *     the profiles are actually free (or the teardown deadline has passed, after which holding it
+ *     would just prevent a restart).
+ */
+export function installShutdown(deps: {
+  io: CliContext['io'];
+  socket: { close(): void };
+  runtime: { zeroizeSecrets(): void };
+  profiles: { closeAll(): Promise<void> };
+  surface: () => { close(): Promise<void> } | undefined;
+  onExit: () => void;
+  teardownMs?: number;
+  /** Injected so a test can fire the handler without raising a real signal at the test runner. */
+  onSignal?: (signal: 'SIGINT' | 'SIGTERM', handler: () => void) => void;
+}): Promise<number> {
+  return new Promise<number>((resolve) => {
     let done = false;
     const shutdown = (): void => {
       if (done) return;
       done = true;
-      ctx.io.out(pt.serveStopping);
-      socket.close();
-      // Credential material first, and SYNCHRONOUSLY: a shutdown that closes browsers before it
-      // overwrites held secrets is a shutdown that can be interrupted with the secrets still
-      // resident. Then the headed windows, which would otherwise outlive the daemon that owns them.
-      runtime.zeroizeSecrets();
-      void surface?.close();
-      removeDaemonPid(home);
-      // AWAITED, not fire-and-forget - see `teardownBrowsers`.
-      void teardownBrowsers(profiles, () => ctx.io.err(`${pt.errPrefix} ${pt.serveTeardownTimedOut}`)).then(() => {
-        ctx.io.out(pt.serveStopped);
+      deps.io.out(pt.serveStopping);
+      deps.socket.close();
+      deps.runtime.zeroizeSecrets();
+      void deps.surface()?.close();
+      void teardownBrowsers(
+        deps.profiles,
+        () => deps.io.err(`${pt.errPrefix} ${pt.serveTeardownTimedOut}`),
+        deps.teardownMs ?? SHUTDOWN_TEARDOWN_MS,
+      ).then(() => {
+        deps.onExit();
+        deps.io.out(pt.serveStopped);
         resolve(EXIT.OK);
       });
     };
-    process.once('SIGINT', shutdown);
-    process.once('SIGTERM', shutdown);
-    void socket.connect();
+    const on = deps.onSignal ?? ((signal, handler): void => void process.once(signal, handler));
+    on('SIGINT', shutdown);
+    on('SIGTERM', shutdown);
   });
 }
 

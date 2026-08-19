@@ -364,9 +364,16 @@ export type LocalBrowserLocator = z.infer<typeof LocalBrowserLocator>;
  *
  * The vocabulary is the WHOLE of `PlaywrightAction` + `PlaywrightAssertion`, including the six
  * verbs (`dblclick`/`select`/`check`/`uncheck`/`wait_for`/`scroll`) the daemon previously could
- * not run - `browser-session.ts` called reconciling that gap a follow-up, and this is it - PLUS
- * one verb that is deliberately NOT in either Cortex union: `release`, the run-end lifecycle
- * signal (see its own comment below).
+ * not run - `browser-session.ts` called reconciling that gap a follow-up, and this is it.
+ *
+ * IT IS A PAGE VOCABULARY, AND ONLY THAT. The browser lease's lifecycle verbs (`release`,
+ * `keepalive`) are NOT members: they live on `LocalBrowserStepInput.leaseOp`, a different arm of
+ * the step payload. That separation is structural rather than stylistic. Everything in THIS union
+ * is something a resolver, a planner or the vision tier can emit for a step - so a lifecycle verb
+ * sitting here would be one bad model completion away from a step that ends its own run, and the
+ * daemon's page runner would need a case for a verb that must never reach a page. Keeping the two
+ * apart means `runBrowserAction`'s exhaustive switch covers exactly the verbs that touch a page,
+ * and "no step can end its own run" is a property of the shape rather than of a review comment.
  */
 export const LocalBrowserAction = z.discriminatedUnion('action', [
   z.object({ action: z.literal('navigate'), url: z.string() }),
@@ -392,26 +399,6 @@ export const LocalBrowserAction = z.discriminatedUnion('action', [
   }),
   z.object({ action: z.literal('screenshot') }),
   z.object({ action: z.literal('noop'), reason: z.string() }),
-  /**
-   * END OF RUN - a LIFECYCLE verb, not a page action, and the only run-end signal on the wire.
-   *
-   * The daemon holds ONE page and ONE cookie jar per `runId` across every invoke of that run
-   * (`browser/profile.ts`, the run-scoped lease). Without a signal saying the run is over there is
-   * nothing to hang the teardown on, and the teardown is where the injected Cofre session is wiped
-   * out of a jar the next run will share. `DaemonBrowserSession.dispose()` sends exactly one of
-   * these from the engine's run `finally`; the daemon also reaps an idle run on its own, because a
-   * Cortex that dies mid-run must not leave an authenticated jar and a headed window behind.
-   *
-   * It is deliberately NOT a member of Cortex's `PlaywrightAction`: no resolver, planner or vision
-   * tier can ever emit it, so a step can never accidentally end its own run. `runBrowserStep`
-   * intercepts it before a page is touched, which is why it carries no locator and produces no
-   * observation.
-   *
-   * RULE 7: a new member of a discriminated union is additive. A daemon that predates it refuses
-   * the frame at its zod boundary (fail-closed, and the run just keeps the pre-existing per-invoke
-   * teardown); a Cortex that predates it simply never sends one.
-   */
-  z.object({ action: z.literal('release') }),
   // Assertions - the daemon runs them and reports the verdict on `assertionPassed`.
   z.object({ action: z.literal('expect_visible'), locator: LocalBrowserLocator }),
   z.object({ action: z.literal('expect_hidden'), locator: LocalBrowserLocator }),
@@ -421,11 +408,59 @@ export const LocalBrowserAction = z.discriminatedUnion('action', [
 ]);
 export type LocalBrowserAction = z.infer<typeof LocalBrowserAction>;
 
-/** The browser step's payload: the owner it runs for, and the one action to run. */
-export const LocalBrowserStepInput = z.object({
-  owner: z.string(),
-  action: LocalBrowserAction,
-});
+/**
+ * The two LIFECYCLE operations on a browser lease. Neither touches a page.
+ *
+ *  - `release`  END OF RUN. The daemon holds ONE page and ONE cookie jar per lease across every
+ *               invoke that names it, so something on the wire has to say the lease is finished:
+ *               that is where the page is dropped and the injected Cofre session is wiped out of a
+ *               jar the next run will share. Sent once, from the engine's run `finally`.
+ *  - `keepalive` THE LEASE IS STILL WANTED. The daemon reaps a lease nobody has driven for
+ *               `RUN_IDLE_MS`, because a Cortex that died mid-run must not leave an authenticated
+ *               jar and a headed window resident. But a live run can legitimately go minutes
+ *               without a browser step - it is blocked on a sub-automation, on a slow API call, or
+ *               on a HUMAN solving a CAPTCHA in that very window - and reaping those is a
+ *               correctness bug wearing a security control's clothes. This is the signal that
+ *               distinguishes "nobody is driving this" from "nobody is driving this RIGHT NOW",
+ *               and without it the idle window would have to be either uselessly long or wrong.
+ */
+export const LocalBrowserLeaseOp = z.enum(['release', 'keepalive']);
+export type LocalBrowserLeaseOp = z.infer<typeof LocalBrowserLeaseOp>;
+
+/**
+ * The browser step's payload: the owner it runs for, and EITHER one page action to run OR one
+ * lifecycle operation on the run's lease. Two arms, never both.
+ *
+ * `leaseId` IS NOT THE RUN ID, and that distinction is the whole reason it exists.
+ *
+ *  - A SUB-AUTOMATION is a separate run - its own runId, its own run record - executing inside its
+ *    parent's flow, on the same owner and therefore the same daemon and the same profile. Keyed by
+ *    runId, the child would queue behind a lease its parent holds for the duration of the parent
+ *    run, and the parent cannot finish until the child does: a deadlock, on the single most
+ *    ordinary composition in the product. The parent's lease id is threaded down the call tree, so
+ *    parent and child are the same tenant of one lease and the child continues on the page its
+ *    parent left open - which is also what a sub-automation should do.
+ *  - A RESUMED RUN (needs_credentials -> the user unlocks -> the run continues) reuses its runId.
+ *    Keyed by runId, the resumed pass would collide with the ended pass's tombstone and be refused
+ *    forever. Each PASS mints its own lease id, so the resumed pass takes a clean lease.
+ *
+ * Optional, so RULE 7 holds in both directions: a Cortex that predates it sends none and the daemon
+ * falls back to the runId (exactly the old behaviour), and a daemon that predates it ignores the
+ * field. The lifecycle arm is genuinely new, so an older daemon refuses THAT at its zod boundary -
+ * fail-closed, and the lease is then ended by the daemon's own idle backstop rather than promptly.
+ */
+export const LocalBrowserStepInput = z.union([
+  z.object({
+    owner: z.string(),
+    leaseId: z.string().optional(),
+    action: LocalBrowserAction,
+  }),
+  z.object({
+    owner: z.string(),
+    leaseId: z.string().optional(),
+    leaseOp: LocalBrowserLeaseOp,
+  }),
+]);
 export type LocalBrowserStepInput = z.infer<typeof LocalBrowserStepInput>;
 
 /**

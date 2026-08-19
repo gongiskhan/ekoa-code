@@ -3,6 +3,7 @@ import {
   BridgeFrame,
   LocalBrowserAction,
   LocalBrowserObservation,
+  LocalBrowserStepInput,
   LocalToolInvokeInput,
 } from './ekoa-local.js';
 
@@ -22,8 +23,9 @@ import {
  */
 // Exactly the PlaywrightAction kinds api/src/automation/types.ts declares, in the FLATTENED
 // form toDaemonInput produces. A kind missing here is a step that dies at the daemon boundary.
-// `release` is deliberately absent - it is a LIFECYCLE verb no resolver can emit (its own describe
-// block below asserts that absence rather than leaving it to be noticed).
+// The lease lifecycle verbs are absent because they are not page actions at all - they live on
+// `LocalBrowserStepInput.leaseOp`, and the describe block below asserts the union REFUSES them
+// rather than asserting that this hand-written list happens not to mention them.
 const ACTIONS: Array<Record<string, unknown>> = [
   { action: 'navigate', url: 'https://example.test/a' },
   { action: 'click', locator: { strategy: 'role', role: 'button', name: 'Entrar' } },
@@ -84,50 +86,102 @@ describe('LocalBrowserAction - the vocabulary Cortex sends and the daemon runs',
 });
 
 /**
- * CONTRACT - the run-end signal that makes the run-scoped lease possible.
+ * CONTRACT - the LEASE LIFECYCLE arm of the browser step payload.
  *
- * The daemon keeps ONE page and ONE cookie jar per runId across every invoke of that run, so
- * something on the wire has to say the run is over: that is where the page is dropped and the
- * injected Cofre session is wiped out of a jar the next run will share. Before this verb there was
- * NO run-end signal at all - `BrowserSession.dispose?()` was optional and `DaemonBrowserSession`
- * did not implement it - which forced the daemon to tear down after every single invoke, and since
- * Cortex dispatches one invoke per act/assert/observe, every browser step after the first ran on a
- * fresh blank page with an empty jar.
+ * The daemon keeps ONE page and ONE cookie jar per lease across every invoke that names it, so two
+ * things have to exist on the wire that are not page actions: `release`, which says the run is over
+ * (that is where the page is dropped and the injected Cofre session is wiped out of a jar the next
+ * run will share), and `keepalive`, which says a live run is still there while it is blocked on a
+ * sub-automation, a slow API call, or a human at a CAPTCHA.
+ *
+ * THEY ARE A SEPARATE ARM OF `LocalBrowserStepInput`, NOT MEMBERS OF `LocalBrowserAction`, and the
+ * assertions below are about that separation rather than about taste. Everything in the action
+ * union is something a resolver, a planner or the vision tier can emit for a step. A lifecycle verb
+ * living there would be one bad model completion away from a step that ends its own run, and the
+ * daemon's page runner would need a case for a verb that must never reach a page. Here, that a step
+ * cannot end its own run is a property of the SHAPE - and the first test is what fails the moment
+ * somebody adds one back to the action union.
  */
-describe('LocalBrowserAction.release - the run-end lifecycle verb', () => {
-  it('parses, and carries nothing but the verb (no locator, no page state)', () => {
-    const r = LocalBrowserAction.safeParse({ action: 'release' });
-    expect(r.success, JSON.stringify(r.success ? {} : r.error.issues)).toBe(true);
-    if (r.success) expect(r.data).toEqual({ action: 'release' });
+describe('the lease lifecycle - release and keepalive', () => {
+  it('is NOT part of the page-action vocabulary - a resolver cannot emit one', () => {
+    // THE PIN. This replaces an assertion that read `ACTIONS.some(a => a.action === 'release')` -
+    // ACTIONS being a literal array declared thirty lines above it, so no change to any source
+    // file could ever have turned it red. This one is against the schema itself.
+    expect(LocalBrowserAction.safeParse({ action: 'release' }).success).toBe(false);
+    expect(LocalBrowserAction.safeParse({ action: 'keepalive' }).success).toBe(false);
+    // The other half of the invariant - that Cortex's OWN `PlaywrightAction` union and the two
+    // runtime allowlists a resolver's output passes through do not contain them either - cannot be
+    // asserted from `shared/`, which may not import `api/` (FIXED-1). It is pinned where it lives:
+    // api/tests/automation/lease-verbs-are-not-resolvable.test.ts.
   });
 
-  it('is NOT one of the kinds a resolver can emit - a step can never end its own run', () => {
-    // `release` is absent from ACTIONS on purpose. That table mirrors api/src/automation/types.ts
-    // `PlaywrightAction`/`PlaywrightAssertion`, and adding it there would let the planner, the
-    // action cache or the vision tier resolve an ordinary step INTO a run teardown.
-    expect(ACTIONS.some((a) => a.action === 'release')).toBe(false);
+  it('parses on the lifecycle arm, carrying nothing but the op and the lease it names', () => {
+    for (const leaseOp of ['release', 'keepalive']) {
+      const r = LocalBrowserStepInput.safeParse({ owner: 'u1', leaseId: 'l1', leaseOp });
+      expect(r.success, JSON.stringify(r.success ? {} : r.error.issues)).toBe(true);
+      if (r.success) expect(r.data).toEqual({ owner: 'u1', leaseId: 'l1', leaseOp });
+    }
   });
 
-  it('RULE 7 - the union GREW: every pre-existing member still parses unchanged', () => {
+  it('REFUSES an invented lease op - the lifecycle vocabulary is closed too', () => {
+    expect(LocalBrowserStepInput.safeParse({ owner: 'u1', leaseOp: 'wipe-everything' }).success).toBe(false);
+  });
+
+  it('names an OWNER, like every other frame - it is what scopes the lease to a profile', () => {
+    expect(LocalBrowserStepInput.safeParse({ leaseOp: 'release', leaseId: 'l1' }).success).toBe(false);
+  });
+
+  it('RULE 7 - the payload GREW: every pre-existing member still parses unchanged', () => {
     for (const action of ACTIONS) {
       expect(LocalBrowserAction.safeParse(action).success, String(action.action)).toBe(true);
+      // The step arm as an older Cortex sends it: owner + action, no leaseId at all.
+      expect(LocalBrowserStepInput.safeParse({ owner: 'u1', action }).success, String(action.action)).toBe(true);
     }
   });
 
   it('rides the ordinary browser envelope - same capability, same gates, same ledger row', () => {
     const r = LocalToolInvokeInput.safeParse({
       capability: 'browser',
-      input: { owner: 'u1', action: { action: 'release' } },
+      input: { owner: 'u1', leaseId: 'l1', leaseOp: 'release' },
       runId: 'r1',
     });
     expect(r.success).toBe(true);
   });
 
-  it('needs the runId - the release names WHICH run ended, and the envelope makes it mandatory', () => {
+  it('needs the runId - the envelope always says which RUN the frame belongs to', () => {
     expect(
-      LocalToolInvokeInput.safeParse({ capability: 'browser', input: { owner: 'u1', action: { action: 'release' } } })
-        .success,
+      LocalToolInvokeInput.safeParse({ capability: 'browser', input: { owner: 'u1', leaseOp: 'release' } }).success,
     ).toBe(false);
+  });
+
+  it('the two arms are exclusive in practice: a payload with neither is refused', () => {
+    expect(LocalBrowserStepInput.safeParse({ owner: 'u1', leaseId: 'l1' }).success).toBe(false);
+  });
+});
+
+/**
+ * THE LEASE ID.
+ *
+ * It is not the runId, and both reasons are load-bearing. A SUB-AUTOMATION is a separate run on the
+ * same owner, hence the same daemon and the same profile: keyed by runId it queues behind a lease
+ * its parent holds for the whole parent run, while the parent is blocked waiting for it. A RESUMED
+ * run (needs_credentials -> unlock -> continue) re-enters under the SAME runId, and the daemon
+ * tombstones a lease id when its lease ends, so a per-run key would refuse every resumed pass.
+ */
+describe('LocalBrowserStepInput.leaseId', () => {
+  it('is OPTIONAL, so a Cortex that predates it still parses (the daemon falls back to the runId)', () => {
+    const r = LocalBrowserStepInput.safeParse({ owner: 'u1', action: { action: 'screenshot' } });
+    expect(r.success).toBe(true);
+    if (r.success) expect('leaseId' in r.data).toBe(false);
+  });
+
+  it('rides on BOTH arms - a page step and a lifecycle op name the same lease', () => {
+    expect(LocalBrowserStepInput.safeParse({ owner: 'u1', leaseId: 'l1', action: { action: 'screenshot' } }).success).toBe(true);
+    expect(LocalBrowserStepInput.safeParse({ owner: 'u1', leaseId: 'l1', leaseOp: 'keepalive' }).success).toBe(true);
+  });
+
+  it('is a STRING, not an object the daemon would have to interpret', () => {
+    expect(LocalBrowserStepInput.safeParse({ owner: 'u1', leaseId: { id: 'l1' }, action: { action: 'screenshot' } }).success).toBe(false);
   });
 });
 

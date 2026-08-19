@@ -4083,9 +4083,12 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   (b) that a real `BrowserContext` survives being held across a multi-minute run without Playwright
   reaping the page; (c) that `clearCookies()` on a real PERSISTENT context removes the on-disk jar
   rather than only the in-memory one - which is what the run-end session guarantee rests on;
-  (d) end-to-end, that a real navigate-then-click on a real site now lands on the same page. Closing
-  this needs the live-verification pass on a machine with a display, per the playbook in
-  `docs/testing.md`; it is not closable from CI and is not claimed to be.
+  (d) end-to-end, that a real navigate-then-click on a real site now lands on the same page; and
+  (e) that the 45s keepalive against the 2-minute idle window holds a REAL run open across a
+  `pause_for_user` CAPTCHA solve - the case the keepalive exists for, and the one where being wrong
+  closes the browser in front of the person using it. Closing this needs the live-verification pass
+  on a machine with a display, per the playbook in `docs/testing.md`; it is not closable from CI and
+  is not claimed to be.
 
 - **`suite-ledger-unit-census-red-on-main-59-registered-64-on-disk`** (OPEN 2026-08-19, MEDIUM, gate -
   PRE-EXISTING, not introduced here, and deliberately not fixed here). `npm run gate:ledger` fails
@@ -4102,33 +4105,28 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   those streams are in flight would collide with them. It needs to be closed by whoever owns those
   specs, before the per-PR lane can be green.
 
-- **`engine-finally-comment-still-says-the-daemon-session-dispose-is-a-no-op`** (OPEN 2026-08-19,
-  LOW, stale comment - correctness of the code is unaffected). `api/src/automation/engine.ts` (the
-  run `finally`, around the `await (browser as BrowserSession | null)?.dispose?.()` call) still
-  reads "The daemon session is a no-op (the daemon owns the page lifecycle)". That was true and is
-  now false: `DaemonBrowserSession.dispose()` sends the `release` verb that ends the daemon's
-  run-scoped lease, and it is the ONLY prompt run-end signal there is. The call site needs no code
-  change - the optional-chaining call already reaches the new implementation - so this is purely a
-  comment that now misdescribes what happens and would mislead the next reader into thinking the
-  bridge has no teardown. NOT fixed here: `api/src/automation/engine.ts` is outside this branch's
-  write scope and is in flight in another stream; whoever next touches that `finally` should correct
-  the two lines.
+- **`engine-finally-comment-still-says-the-daemon-session-dispose-is-a-no-op`** (FIXED 2026-08-19,
+  LOW, stale comment). `api/src/automation/engine.ts`'s run `finally` read "The daemon session is a
+  no-op (the daemon owns the page lifecycle)", which was true before the run-scoped lease and false
+  after it. The follow-up pass rewrote that `finally` anyway - it is now where the call tree's
+  browser lease is released (`releaseBrowserLease`, once, by the pass that minted the lease) - so
+  the comment was replaced with what actually happens, including why each of the two conditions on
+  the release is load-bearing. Pinned by `api/tests/automation/engine-sub-automation-lease.test.ts`.
 
-- **`daemon-pidfile-is-released-before-the-browsers-have-finished-closing`** (OPEN 2026-08-19, LOW,
-  race - PRE-EXISTING, unchanged by this branch). `serve`'s shutdown calls `removeDaemonPid(home)`
-  before the browser teardown has completed. The pidfile is the CROSS-PROCESS lock on the profile
-  directory - `profile.ts`'s header rests its "an in-process mutex is sufficient" argument on it -
-  so for the duration of the teardown there is a window in which a second `serve` on the same home
-  is allowed to start and can launch Chromium against a `userDataDir` the dying daemon has not
-  released, which is the SingletonLock collision the lock exists to prevent. The window was always
-  there (the teardown used to be a fire-and-forget `void profiles.closeAll()`, so the pidfile came
-  off while the browsers were still closing either way) and this branch does not widen it: the
-  teardown is now awaited, but `removeDaemonPid` still runs before it, exactly as before. Fix: move
-  `removeDaemonPid` after `teardownBrowsers` resolves, so the profile lock is held until the profile
-  is actually free. NOT done here because the ordering lives inside `serve()`'s signal-handler
-  closure and cannot be asserted without either driving a real SIGINT or extracting the whole
-  shutdown sequence into a named unit - and shipping the reorder without a test that can fail is
-  worse than shipping the window that has been there all along.
+- **`daemon-pidfile-is-released-before-the-browsers-have-finished-closing`** (FIXED 2026-08-19,
+  LOW, race). `serve`'s shutdown called `removeDaemonPid(home)` before the browser teardown had
+  completed. The pidfile is the CROSS-PROCESS lock on the profile directory - `profile.ts`'s header
+  rests its "an in-process mutex is sufficient" argument on it - so for the duration of the teardown
+  a second `serve` on the same home was allowed to start and could launch Chromium against a
+  `userDataDir` the dying daemon had not released: the SingletonLock collision the lock exists to
+  prevent. It was recorded rather than fixed because "the ordering lives inside `serve()`'s
+  signal-handler closure and cannot be asserted without extracting the whole shutdown sequence into
+  a named unit". The adversarial review of the lease change forced exactly that extraction
+  (`installShutdown`, so the SIGINT/SIGTERM wiring is testable at all), which made the fix cheap:
+  the pidfile now comes off AFTER `teardownBrowsers` resolves - or after its 10s deadline passes,
+  because past that point holding it would only prevent a restart. Pinned by
+  `test/cli/serve-teardown.test.ts` ("holds the pidfile until the profiles are actually free", plus
+  the timeout case).
 
 - **`api-suite-exits-1-on-chokidar-EMFILE-while-every-test-passes`** (OPEN 2026-08-19, HIGH, gate -
   PRE-EXISTING and flaky, not introduced here). `npm test` fails at the `@ekoa/api` workspace with
@@ -4149,3 +4147,26 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   no purpose under a contract suite, so gating `startWatcher` on the dev-serve path is the real fix.
   Until then `npm test` cannot be green on this box, and every agent reporting a green run should be
   read as "all tests passed, the process still exited 1".
+
+- **`daemon-lease-keepalive-costs-one-frame-and-one-ledger-row-per-45s-of-live-run`** (ACCEPTED
+  2026-08-19, LOW, cost - introduced deliberately by the run-scoped lease). Every live browser lease
+  is heartbeated by `DaemonBrowserSession` every 45 seconds, and each heartbeat is a signed
+  `tool.invoke` that the daemon ledgers (an fsync'd append). A run paused for a human at a CAPTCHA
+  for an hour writes ~80 rows. ACCEPTED rather than optimised, for two reasons. The alternative to a
+  heartbeat is an idle window long enough to cover a human's think time, which is the same as no
+  containment on an authenticated jar - the window is a security control, and a keepalive is what
+  lets it stay at two minutes. And the rows are not noise: they are the audit record of how long
+  this machine held an authenticated browser session open for a given run, which is exactly the kind
+  of fact the ledger exists to hold. Revisit only if a real profile shows the fsync cost mattering.
+
+- **`no-fence-between-a-late-release-and-a-resumed-run`** (OPEN 2026-08-19, LOW, race - narrow, and
+  mitigated by design rather than closed). A run that halts on `needs_credentials` writes that state
+  to the store BEFORE its `finally` runs, and the server-side observer can dispatch the resume from
+  another leg the moment a credential is unlocked. So there is a window - the width of the engine's
+  unwind - in which the resumed pass could take its lease before the halted pass's release lands.
+  The lease id is what keeps this harmless in practice: it is minted PER PASS, so the late release
+  names the OLD lease and cannot touch the resumed one; the worst outcome is the old lease being
+  released twice (idempotent) or the resumed pass briefly queueing behind it on the profile mutex.
+  A per-run key would have made this window fatal instead (the tombstone would refuse the resumed
+  pass), which is one of the two reasons the key is per-pass. NOT closed: closing it properly means
+  a fencing token on the wire, and there is no observed failure to justify one.
