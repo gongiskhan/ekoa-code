@@ -434,8 +434,11 @@ export type LocalBrowserContextProvider = (
  * exercised it: reducing the body to `return browser.newContext()` - every residential run silently
  * leaving from the datacenter, the precise outcome this slice exists to prevent - was caught by no
  * suite in the repo. The direct import was what made it untestable, so the browser arrives as an
- * ARGUMENT and the composition root passes `getSharedBrowser`. `tests/automation/local-browser-
- * context.test.ts` then drives the real function with a recording browser.
+ * ARGUMENT and the composition root passes `getSharedBrowser` (or, in a test, `RuntimeDeps`'
+ * optional `openBrowser`). `tests/automation/local-browser-context.test.ts` drives the real
+ * function with a recording browser, and `tests/automation/composition-root-locality.test.ts`
+ * drives the BINDING itself - moving the body here made it drivable, and left the untestable line
+ * one call up until that suite existed.
  *
  * WHAT IT MUST KEEP DOING, both load-bearing:
  *   - `newContext`, NEVER `launchPersistentContext`. See the section docblock above: the persistent
