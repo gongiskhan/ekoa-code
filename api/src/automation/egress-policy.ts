@@ -71,6 +71,53 @@ export type EgressResolution =
   | { outcome: 'datacenter-fallback'; reason: string };
 
 /**
+ * WHICH MACHINES CAN CARRY RESIDENTIAL EGRESS FOR THIS ORG RIGHT NOW - the one predicate, stated
+ * once.
+ *
+ * It has TWO consumers that must never disagree: `resolveEgress` below, which picks a machine to
+ * proxy a step THROUGH, and `checkoutSession` (`cofre/session-checkout.ts`), which decides whether
+ * a session BOUND to a machine's residential line may be handed out at all. A session bound to a
+ * machine that egress selection would refuse is a session the run cannot use, and a session that
+ * checkout releases for a machine selection would not choose is a route that does not exist. Two
+ * copies of this filter would let those two answers drift apart silently, so there is one.
+ *
+ * Org-scoped by construction (Rule 5): a machine in another tenant is not a candidate at all rather
+ * than a candidate that is later filtered.
+ */
+export function residentialEgressPairings(
+  candidates: readonly EgressCandidate[],
+  actorOrg: string,
+): string[] {
+  return candidates
+    .filter(
+      (c) =>
+        c.live &&
+        c.org === actorOrg &&
+        c.capabilities.includes('egress.residential') &&
+        typeof c.egressEndpoint === 'string' &&
+        c.egressEndpoint.length > 0,
+    )
+    .map((c) => c.pairingId);
+}
+
+/**
+ * IS THIS MACHINE GONE, OR MERELY SWITCHED OFF? - the difference between a halt a person must
+ * clear and one a laptop clears, stated once because two call sites ask it.
+ *
+ * `knownPairingIds` is the org's WHOLE listing, live or not (`egressCandidatesForOrg` returns every
+ * non-revoked pairing), so "registered but asleep" and "revoked" are genuinely distinguishable. A
+ * NON-EMPTY listing that does not contain the pairing is the registry stating the machine is gone.
+ * An EMPTY listing is "this process does not know what this org has" - an unbound seam, a store
+ * that answered nothing - which is not a statement that anything was retired, so the answer is NO.
+ * That is the closed direction: not-knowing may never escalate a neutral wait into a terminal halt.
+ */
+export function machineRetired(pairingId: string, knownPairingIds: readonly string[]): boolean {
+  if (!pairingId) return false;
+  if (knownPairingIds.length === 0) return false;
+  return !knownPairingIds.includes(pairingId);
+}
+
+/**
  * Choose the route out for a run.
  *
  * The `residential` branch is the only one that can fail, and when it does the OFFLINE POLICY —
@@ -86,16 +133,11 @@ export function resolveEgress(
   if (req.kind === 'datacenter') return { outcome: 'datacenter', reason: 'declared' };
   if (req.kind === 'any') return { outcome: 'datacenter', reason: 'no-requirement' };
 
-  // Residential. Org-scoped by construction: a machine in another org is not a candidate at all,
-  // so a run can never be routed through another tenant's home connection.
+  // Residential. The org filter lives in `residentialEgressPairings`; all that is added here is the
+  // caller's optional pin, which narrows the same set rather than re-deriving it.
+  const available = new Set(residentialEgressPairings(candidates, actorOrg));
   const usable = candidates.filter(
-    (c) =>
-      c.live &&
-      c.org === actorOrg &&
-      c.capabilities.includes('egress.residential') &&
-      typeof c.egressEndpoint === 'string' &&
-      c.egressEndpoint.length > 0 &&
-      (req.pairingId === undefined || c.pairingId === req.pairingId),
+    (c) => available.has(c.pairingId) && (req.pairingId === undefined || c.pairingId === req.pairingId),
   );
 
   const chosen = usable[0];

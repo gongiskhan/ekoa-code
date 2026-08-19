@@ -314,6 +314,34 @@ and typing a password out of a door the session is not then used from is not.
 `config.localBrowserEnabled` keeps its `!isProd`
 default: posture is the gate, and this slice narrows without widening anything on the way past.
 
+WHAT THE GATE IS TOLD ABOUT THE FLEET, and why withholding it was not a neutral omission. A session
+established at an attended ceremony is stamped `boundEgress: { kind: 'residential', pairingId }`
+beside its `establishedBy` (`bridge/attended.ts` is the only writer of `establishedBy: machine` in
+this repo; the hosted typist writes `cloud` + `datacenter`). `cofre/session-checkout.ts` therefore
+releases such a session only when that machine appears in `residentialAvailable`, and the run loop is
+the only thing that can say so. It does: `engine.ts` derives the list from the org fleet it already
+loaded, through `residentialEgressPairings` (`automation/egress-policy.ts`) - the SAME predicate
+`resolveEgress` uses to pick a machine to proxy through. One predicate is deliberate: "this machine
+may carry the work" and "this machine's session may be released" are two answers about one machine,
+and two copies would let them drift apart in the direction where a session is unwrapped for a route
+that does not exist. The list is an AUTHORISATION and org-scoped by construction, so it carries Rule
+5 coverage of its own (`api/tests/security/locality-isolation.test.ts`). Passing nothing, which is
+what the loop did until 2026-08-19, is the statement "no machine of yours can carry residential
+egress" - it refused every attended session there is, and made the whole ceremony-preference path
+below unreachable in production.
+
+A MACHINE THAT IS GONE IS NOT A MACHINE THAT IS ASLEEP, and the run loop answers that question in two
+places because it arrives from two directions. `resolveLocality` asks it about a preference the run
+LEARNED (`preferenceMachineRetired`); `credentialGateRecord` asks it about the machine CHECKOUT
+named, which is the earlier arrival - a ceremony session bound to a revoked machine cannot be
+released at all, so the preference is never learned and locality's own branch cannot fire. Both use
+`machineRetired` (`egress-policy.ts`) and both emit `SESSION_MACHINE_RETIRED_REASON`, so the halt
+reads the same whichever side reaches it first: a terminal `needs_credentials` asking for a ceremony,
+never the neutral `awaiting_daemon`, which is exempt from the failure ceiling and would re-fire
+forever against hardware nobody owns. An EMPTY fleet listing reads as NOT retired - the closed
+direction, so an unbound seam or a store that answered nothing can never escalate a wait into a
+terminal halt.
+
 THE LAST MILE. `locality.ts` decides a route and the engine carries it, but the only place it
 becomes actually-proxied traffic is the local-browser context provider, which renders the resolution
 into `newContext({ proxy })` (a launch option; it cannot be applied to a context that exists). That

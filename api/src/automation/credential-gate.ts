@@ -120,7 +120,23 @@ export type CredentialGateVerdict =
       preferredPairing?: { origin: string; pairingId: string };
     }
   | { kind: 'needs-credentials'; request: RunCredentialRequest }
-  | { kind: 'needs-machine'; reason: string };
+  | {
+      kind: 'needs-machine';
+      reason: string;
+      /** The origin the session was checked out for, so a caller can name it in a ceremony ask. */
+      origin: string;
+      /**
+       * THE MACHINE CHECKOUT NAMED, forwarded as a FACT rather than left folded into `reason`.
+       *
+       * `checkoutSession` refuses a residential-bound session naming the pairing it is bound to,
+       * and this module cannot tell whether that machine is merely asleep or has been REVOKED: the
+       * org's fleet listing is the only thing that answers it, and this module holds no listing.
+       * Its caller does (`engine.ts`), and the difference decides whether the run waits neutrally
+       * or halts asking a person to re-establish the session. Withholding this id would force that
+       * caller to parse it back out of an English sentence.
+       */
+      requiredPairingId?: string;
+    };
 
 export interface CredentialGateDeps {
   ensure: typeof ensureSession;
@@ -232,6 +248,8 @@ export async function evaluateCredentialGate(
   if (verdict.status === 'needs-egress') {
     return {
       kind: 'needs-machine',
+      origin,
+      ...(verdict.required.pairingId ? { requiredPairingId: verdict.required.pairingId } : {}),
       reason: `the session for ${origin} is healthy but needs residential egress from ${verdict.required.pairingId}`,
     };
   }

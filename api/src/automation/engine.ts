@@ -44,9 +44,15 @@ import {
   resolveLocality,
   hostedTypistPermitFor,
   sameRoute,
+  SESSION_MACHINE_RETIRED_REASON,
   type LocalityVerdict,
 } from './locality.js';
-import type { EgressCandidate, EgressResolution } from './egress-policy.js';
+import {
+  machineRetired,
+  residentialEgressPairings,
+  type EgressCandidate,
+  type EgressResolution,
+} from './egress-policy.js';
 import {
   getDaemonConnection,
   executeIntegrationAction,
@@ -575,6 +581,48 @@ async function runOrRehearse(
   let stepOrigin: string | null = null;
   /** The org's machines, read ONCE per run rather than per step. */
   let egressCandidates: readonly EgressCandidate[] | null = null;
+  /**
+   * THE MACHINES CHECKOUT MAY RELEASE A RESIDENTIAL-BOUND SESSION FOR - the fleet fact the
+   * credential gate needs, and the one this loop used to withhold entirely.
+   *
+   * A ceremony session is stamped `boundEgress: { kind: 'residential', pairingId }`
+   * (`bridge/attended.ts`, the only writer of `establishedBy: machine` in this repo), so
+   * `checkoutSession` releases it only when that machine is in this list. Passing nothing left
+   * `ensureSession` defaulting to `[]`, which refused EVERY attended session with
+   * `egress-unavailable`: an attended card-login session could never be reused by an automation,
+   * the run halted `awaiting_daemon` - neutral against the failure ceiling, so the schedule
+   * re-fired forever, uncounted, with nothing the owner could do - and `verdict.status === 'reused'`
+   * was never reached for a machine-established session, which made the whole P4.2 preference
+   * below unreachable in production.
+   *
+   * Read from the SAME candidate list locality resolves against, through the SAME predicate
+   * (`residentialEgressPairings`), so "this machine can carry the work" and "this machine's session
+   * may be released" cannot answer differently.
+   */
+  const residentialAvailableNow = async (): Promise<readonly string[]> => {
+    egressCandidates ??= await loadEgressCandidates(ctx.orgId);
+    return residentialEgressPairings(egressCandidates, ctx.orgId);
+  };
+  /**
+   * EVERY machine the org still has, live or not - a different question from the one above, and the
+   * difference is what separates "start your laptop" from "that laptop is gone".
+   *
+   * LOADS THE LISTING ITSELF rather than reading whatever the call above happened to leave behind.
+   * `egressCandidates` is memoised, so this is still ONE store read per run - what it buys is that
+   * the answer cannot depend on CALL ORDER. Reading the shared variable directly worked only
+   * because argument evaluation reaches `residentialAvailable` first; reorder those two arguments
+   * and this would quietly answer `[]`, `machineRetired` would answer false for every machine, and
+   * the terminal retirement halt would silently become the unbounded `awaiting_daemon` retry it
+   * exists to remove - with every suite still green, because an empty listing is a legitimate state
+   * that this module must keep treating as "not retired".
+   *
+   * That empty state is the closed direction on purpose: it means "this process does not know what
+   * this org has", and not-knowing must never escalate a neutral wait into a terminal halt.
+   */
+  const knownPairingsNow = async (): Promise<readonly string[]> => {
+    egressCandidates ??= await loadEgressCandidates(ctx.orgId);
+    return egressCandidates.map((c) => c.pairingId);
+  };
   const getBrowser = (): BrowserSession | null => {
     if (!browser) {
       // NO `blocked` GUARD HERE, on purpose. A refused step never reaches `executeStep` at all -
@@ -902,8 +950,12 @@ async function runOrRehearse(
             automationName: automation.name,
             steps: workingSteps,
             index: i,
+            // THE FLEET FACT CHECKOUT NEEDS. Withholding it is not a neutral omission: it is the
+            // statement "no machine of yours can carry residential egress", which refuses every
+            // attended session there is. See `residentialAvailableNow`.
+            residentialAvailable: await residentialAvailableNow(),
             ...(hostedBrowser ? { hostedBrowser } : {}),
-          }, step);
+          }, step, await knownPairingsNow(), automation.name);
       if (!gate.record && gate.storageState !== undefined && !browser) {
         sessionState = gate.storageState;
       }
@@ -2411,6 +2463,12 @@ async function snap(
 async function credentialGateRecord(
   input: CredentialGateInput,
   step: Step,
+  /**
+   * EVERY PAIRING THE ORG STILL HAS, live or not - the fleet listing that decides whether a
+   * `needs-machine` refusal is a wait or a dead end. See the `needs-machine` case below.
+   */
+  knownPairings: readonly string[],
+  automationName: string,
 ): Promise<{
   record?: StepRecord;
   storageState?: unknown;
@@ -2440,6 +2498,32 @@ async function credentialGateRecord(
         ...(verdict.preferredPairing ? { preferredPairing: verdict.preferredPairing } : {}),
       };
     case 'needs-machine':
+      // ---- A MACHINE THAT IS GONE, NOT ONE THAT IS ASLEEP -------------------------------------
+      //
+      // Checked FIRST, because the neutral halt below would be an unbounded retry against a state
+      // that can never change. A ceremony session is bound to its machine's residential line
+      // (`bridge/attended.ts` stamps `boundEgress: { kind: 'residential', pairingId }` beside
+      // `establishedBy`), so REVOKING that machine makes `checkoutSession` refuse the session
+      // outright - and the run never learns the ceremony pairing at all, which is why
+      // `resolveLocality`'s own retirement branch cannot catch this one. Same dead end, reached one
+      // step earlier, and it must produce the same answer: `awaiting_daemon` is exempt from the
+      // failure ceiling (`NEUTRAL_BLOCKED_CODES`), so a schedule would otherwise re-fire against
+      // retired hardware forever, uncounted, with nothing the owner could do.
+      //
+      // The pairing named here is `boundEgress.pairingId`, which for every session this product can
+      // actually emit IS the machine the ceremony happened on - the one writer stamps both from the
+      // same id - so the words below are true of it.
+      if (verdict.requiredPairingId && machineRetired(verdict.requiredPairingId, knownPairings)) {
+        return {
+          record: localityNeedsCeremonyRecord(
+            step,
+            input.index,
+            SESSION_MACHINE_RETIRED_REASON,
+            verdict.origin,
+            automationName,
+          ),
+        };
+      }
       // Honest routing: a healthy session with no way out of the network is a MACHINE problem, and
       // sending the user to the Cofre for it would be a lie. `awaiting_daemon` is the existing
       // state for "a machine of yours is needed"; P4 refines it into a `blocked` schedule outcome.

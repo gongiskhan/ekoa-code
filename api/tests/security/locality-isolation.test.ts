@@ -14,7 +14,11 @@ import {
   __resetAutomationSeamsForTests,
 } from '../../src/automation/seams.js';
 import { resolveLocality } from '../../src/automation/locality.js';
-import type { EgressCandidate } from '../../src/automation/egress-policy.js';
+import {
+  machineRetired,
+  residentialEgressPairings,
+  type EgressCandidate,
+} from '../../src/automation/egress-policy.js';
 import { classifyOrigin } from '../../src/automation/origin-posture.js';
 
 /**
@@ -142,5 +146,71 @@ describe('a run never leaves through another tenant\'s machine', () => {
     // No `setEgressCandidateResolver` call: the default. It must not fall back to "all machines".
     expect(await loadEgressCandidates(ORG_A)).toEqual([]);
     expect(localityFor(ORG_A, await loadEgressCandidates(ORG_A)).kind).toBe('blocked');
+  });
+});
+
+/**
+ * THE SAME BOUNDARY ON THE OTHER SIDE OF THE DECISION - which machines a stored SESSION may be
+ * released for.
+ *
+ * `residentialEgressPairings` is what the run loop now hands `checkoutSession` as
+ * `residentialAvailable` (`engine.ts`), and checkout releases a residential-bound session iff the
+ * machine it is bound to appears in that list. So the list is an AUTHORISATION, not a hint: a
+ * foreign pairing id in it would let one tenant's run unwrap a session bound to another tenant's
+ * house and replay it at the portal. The org filter therefore has to hold here as well as inside
+ * `resolveEgress`, and it is deliberately the same predicate so the two cannot drift apart.
+ *
+ * Driven off `egressCandidatesForOrg` rather than hand-built rows, so a resolver bound org-blind
+ * fails this exactly as it fails the suite above.
+ */
+describe('a session is never released for another tenant\'s machine', () => {
+  it('org B\'s armed machine never appears in the list checkout is given for org A', async () => {
+    await armedMachine('pair_a', ORG_A, 'http://100.64.1.1:1080');
+    await armedMachine('pair_b', ORG_B, 'http://100.64.9.9:1080');
+    setEgressCandidateResolver(egressCandidatesForOrg);
+
+    const forA = (await loadEgressCandidates(ORG_A)).map((c) => ({ ...c, live: true }));
+    expect(residentialEgressPairings(forA, ORG_A)).toEqual(['pair_a']);
+  });
+
+  it('...and refuses it even when handed the foreign candidate directly', async () => {
+    await armedMachine('pair_b', ORG_B, 'http://100.64.9.9:1080');
+    // Seam bypassed on purpose: the filter inside the predicate is the belt to the seam's braces.
+    const foreign = (await egressCandidatesForOrg(ORG_B)).map((c) => ({ ...c, live: true }));
+    expect(foreign).toHaveLength(1);
+    expect(residentialEgressPairings(foreign, ORG_A)).toEqual([]);
+  });
+
+  /**
+   * The three ways a machine of your OWN is still not releasable, each closed by default. A session
+   * bound to a machine in any of these states stays locked in the Cofre.
+   */
+  it('an own machine that is asleep, ungranted, or has no endpoint is not releasable either', async () => {
+    await armedMachine('pair_a', ORG_A, 'http://100.64.1.1:1080');
+    setEgressCandidateResolver(egressCandidatesForOrg);
+    const own = (await loadEgressCandidates(ORG_A)).map((c) => ({ ...c, live: true }))[0]!;
+
+    expect(residentialEgressPairings([{ ...own, live: false }], ORG_A)).toEqual([]);
+    // I-3: a candidate's capability list is advertised INTERSECT granted, so an empty one means the
+    // org granted this machine nothing - and a machine's own self-assertion cannot put it back.
+    expect(residentialEgressPairings([{ ...own, capabilities: [] }], ORG_A)).toEqual([]);
+    const noEndpoint: EgressCandidate = { ...own };
+    delete noEndpoint.egressEndpoint;
+    expect(residentialEgressPairings([noEndpoint], ORG_A)).toEqual([]);
+    // ...and fully armed it IS releasable, so the three refusals are about those conditions rather
+    // than about this fixture being unusable.
+    expect(residentialEgressPairings([own], ORG_A)).toEqual(['pair_a']);
+  });
+
+  /**
+   * `machineRetired` decides whether a machine halt is a WAIT or a terminal ask, and the EMPTY case
+   * is the one that matters: an unbound seam, or a store that answered nothing, must never read as
+   * "your machine was removed" - that would send a person to repeat a ceremony they do not need,
+   * and would do it precisely when this process knows least.
+   */
+  it('an empty fleet listing is never read as a retirement', async () => {
+    expect(machineRetired('pair_a', [])).toBe(false);
+    expect(machineRetired('pair_a', ['pair_other'])).toBe(true);
+    expect(machineRetired('pair_a', ['pair_a', 'pair_other'])).toBe(false);
   });
 });

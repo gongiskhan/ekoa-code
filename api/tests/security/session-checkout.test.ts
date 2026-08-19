@@ -60,6 +60,18 @@ describe('G-4: health decides FIRST, and the route follows provenance', () => {
     expect(reestablishRouteFor(sessionItem())).toBe('attended');
   });
 
+  /**
+   * A DEFENSIVE BRANCH OVER A SHAPE NOTHING CURRENTLY WRITES, and that is stated here so a reader
+   * cannot mistake this fixture for evidence that the product emits one.
+   *
+   * `sessionMetadata` is persisted opaque and never re-validated on the way back, so this function
+   * must answer for whatever a row happens to carry - which is why machine+datacenter has a branch
+   * at all. But no writer in this repo produces it: `bridge/attended.ts` writes machine+residential
+   * and the hosted typist writes cloud+datacenter (`automation/session-establishment.ts`), and
+   * `EstablishmentVantage`, the only other route to the field, has no production producer. Fixtures
+   * elsewhere that treated this pairing as an ordinary session made the whole P4.2 path look
+   * exercised while it was dead (docs/findings.md, 2026-08-19).
+   */
   it('a plain machine session re-establishes via the TYPIST', () => {
     const item = sessionItem({
       sessionMetadata: {

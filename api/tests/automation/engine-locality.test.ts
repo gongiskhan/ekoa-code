@@ -388,6 +388,146 @@ describe('a run does not switch the route out from under itself', () => {
   });
 
   /**
+   * A REFUSED STEP IS NOT GATED - and the observable is a SECOND BROWSER, not a status.
+   *
+   * `engine.ts` skips the credential gate entirely for a step locality has already refused
+   * (`localityRecord ? {} : await credentialGateRecord(...)`). Removing that guard left every suite
+   * in this repo green, because the refusal record still wins the `??` chain that decides the step
+   * record: the run status, the halt and the message are all identical either way. What changes is
+   * everything the gate DOES on the way to an answer it will not be asked for - `ensureSession`
+   * decrypts the stored credential for a step that is never going to run, and, as here, opens the
+   * hosted browser and types a password into it.
+   *
+   * THE HARM IS THE SECOND DOOR, which is the exact thing the route-switch refusal above exists to
+   * prevent. Step 2 is refused BECAUSE this run already opened a datacenter context and the step
+   * resolved to a machine. Its locality verdict is still `in-process`, so `hostedTypistPermitFor`
+   * issues a permit carrying the RESIDENTIAL route - and an ungated gate would take it and submit
+   * the password out of a door no work in this run is using. Same portal, same account, two
+   * identities, on a step whose whole point is that it may not run.
+   *
+   * The origin is the one host with a REVIEWED LOGIN RECIPE, declared permissive, because both are
+   * what it takes to reach `openBrowser` at all: without them the gate refuses earlier and a second
+   * context would never appear whether the guard existed or not.
+   */
+  it('a step locality already refused never reaches the credential gate, so no second door opens', async () => {
+    const PORTAL = 'citius.tribunaisnet.mj.pt';
+    const actor: Actor = { userId: ctx.ownerUserId, orgId: ctx.orgId, role: 'user' } as Actor;
+    setIntegrationActionDeclarationResolver(async () => ({
+      posture: 'permissive',
+      httpConfig: { baseUrl: `https://${PORTAL}/` },
+    }));
+    const { context } = workingContext(`https://${PORTAL}/`);
+    setLocalBrowserContextProvider(async (ownerUserId, egress) => {
+      contextRequests.push({ ownerUserId, ...(egress ? { egress } : {}) });
+      return context;
+    });
+    // A real password, really granted: the typist is reached only after the grant check, so without
+    // one the gate would refuse for an unrelated reason and this would prove nothing.
+    const item = await mintCofreItem(actor, {
+      type: 'password',
+      label: 'portal',
+      value: ['pw', 'P4', 'FIXTURE', '0003'].join('-'),
+      boundOrigins: [PORTAL],
+    });
+    await issueGrant(actor, item._id, 'until_locked');
+
+    await seed('a_refused_not_gated', [
+      integrationStep,
+      { ...waitStep, id: 's_dc' } as Step,
+      {
+        ...waitStep,
+        id: 's_resi_gated',
+        declaration: {
+          target: { kind: 'any', capability: 'egress.residential' },
+          credentialRefs: [`cofre:${item._id}`],
+        },
+      } as Step,
+    ]);
+    const result = await runAutomation('a_refused_not_gated', ctx);
+
+    // EXACTLY ONE context, and it is the datacenter one step 1 opened for the WORK. A second entry
+    // is the typist's, opened for a step that was already refused.
+    expect(contextRequests).toHaveLength(1);
+    expect(contextRequests[0]!.egress).toEqual({ outcome: 'datacenter', reason: 'no-requirement' });
+
+    // ...and the refusal is still the route-switch one. Were the gate consulted it would answer
+    // first-and-loudest with a credential halt, which would send a person to the Cofre for a step
+    // whose problem is the route out.
+    const run = (await automationRuns.get(result.runId)) as unknown as {
+      steps: Array<{ index: number; error?: { message?: string } }>;
+    };
+    expect(run.steps.find((s) => s.index === 2)?.error?.message).toMatch(/different route out of the network/);
+  });
+
+  /**
+   * A STEP THAT RESOLVES NO LOCALITY MUST INHERIT NONE - `engine.ts` clears `stepLocality` at the
+   * top of every iteration, before the `STEP_TYPES_NEEDING_BROWSER` check that may set it.
+   *
+   * Deleting that one line left every suite in this repo green, and the reason is that the variable
+   * is only READ again by `hostedTypistPermitFor`. An `integration` or `api_call` step has no
+   * locality of its own; without the reset it keeps the last BROWSER step's verdict and computes
+   * its typist permit from a decision made about a DIFFERENT ORIGIN. Both directions are wrong and
+   * both are silent: a stale `blocked` withholds the permit and halts `needs_credentials` for a
+   * step that could simply have logged in, and a stale `in-process`/`bridge` hands the login a
+   * proxy - which is what this pins, because it is the one that leaks.
+   *
+   * THE SHAPE. Step 1 is a browser step on PORTAL A declaring residential egress, so it resolves
+   * `in-process` through `pair_home` and opens the run's context on that machine's line. Step 2 is
+   * an INTEGRATION step on PORTAL B carrying a credential. Portal B's login has nothing to do with
+   * portal A's machine, and the permit for it must be the plain hosted browser - `{}`, no proxy.
+   * With the stale verdict the password for portal B is typed out of `pair_home`'s household line.
+   */
+  it('a step with no locality of its own does not inherit the last browser step’s door', async () => {
+    const PORTAL_A = 'portal.example.com';
+    const PORTAL_B = 'citius.tribunaisnet.mj.pt';
+    const actor: Actor = { userId: ctx.ownerUserId, orgId: ctx.orgId, role: 'user' } as Actor;
+    // Two portals, both PERMISSIVE - so posture never withholds the permit and the only thing that
+    // can decide the login's door is which step's verdict is in the variable.
+    setIntegrationActionDeclarationResolver(async (key) => ({
+      posture: 'permissive',
+      httpConfig: { baseUrl: key === 'citius' ? `https://${PORTAL_B}/` : `https://${PORTAL_A}/` },
+    }));
+    const { context } = workingContext(`https://${PORTAL_A}/`);
+    setLocalBrowserContextProvider(async (ownerUserId, egress) => {
+      contextRequests.push({ ownerUserId, ...(egress ? { egress } : {}) });
+      return context;
+    });
+    const item = await mintCofreItem(actor, {
+      type: 'password',
+      label: 'portal b',
+      value: ['pw', 'P4', 'FIXTURE', '0004'].join('-'),
+      boundOrigins: [PORTAL_B],
+    });
+    await issueGrant(actor, item._id, 'until_locked');
+
+    await seed('a_no_inherit', [
+      integrationStep,
+      {
+        ...waitStep,
+        id: 's_resi',
+        declaration: { target: { kind: 'any', capability: 'egress.residential' } },
+      } as Step,
+      {
+        id: 's_int_b',
+        description: 'call portal B',
+        type: 'integration',
+        integrationKey: 'citius',
+        integrationAction: 'fetch',
+        declaration: { credentialRefs: [`cofre:${item._id}`] },
+      } as Step,
+    ]);
+    await runAutomation('a_no_inherit', ctx);
+
+    // TWO contexts, and the SECOND one is the assertion. The first is the work's, on portal A's
+    // machine; the second is the typist's, for portal B.
+    expect(contextRequests).toHaveLength(2);
+    expect(contextRequests[0]!.egress).toEqual({ outcome: 'machine', pairingId: 'pair_home', proxyUrl: 'http://100.64.0.7:1080' });
+    // NO PROXY. Portal B's login leaves by the plain hosted browser, because nothing resolved a
+    // door for it. Inheriting step 1's verdict puts `pair_home` here instead.
+    expect(contextRequests[1]!.egress).toBeUndefined();
+  });
+
+  /**
    * P4.1 - POSTURE IS ABOUT ONE ORIGIN, AND THE PAGE MUST STILL BE ON IT.
    *
    * Posture is declared on an ACTION and applies to the origin that action is about. The step list
@@ -591,23 +731,33 @@ describe('an adversarial session prefers the machine its ceremony happened on', 
       contextRequests.push({ ownerUserId, ...(egress ? { egress } : {}) });
       throw new Error('no real Chromium in this suite');
     });
-    // BOTH machines are registered. `pair_ceremony` is merely not the one dialled in - it has NOT
-    // been retired - so this exercises the preference itself and not the retirement branch.
+    // BOTH machines are registered, LIVE, and granted residential egress. `pair_ceremony` is
+    // merely not the one DIALLED IN - the daemon seam hands back one socket per owner and it is
+    // the other machine's - so this exercises the preference itself and not the retirement branch.
+    //
+    // `pair_ceremony` being LIVE is load-bearing, not decoration: the session below is bound to
+    // that machine's residential line (which is what a ceremony actually produces), so checkout
+    // only hands the run a session - and with it the ceremony pairing - while that machine is
+    // available. A fixture that switched it off would refuse at CHECKOUT and never reach locality.
     setEgressCandidateResolver(async (orgId) => [
-      { pairingId: CEREMONY_PAIRING, org: orgId, capabilities: ['egress.residential'], egressEndpoint: 'http://100.64.0.7:1080', live: false },
+      { pairingId: CEREMONY_PAIRING, org: orgId, capabilities: ['egress.residential'], egressEndpoint: 'http://100.64.0.7:1080', live: true },
       { pairingId: OTHER_PAIRING, org: orgId, capabilities: ['egress.residential'], egressEndpoint: 'http://100.64.0.8:1080', live: true },
     ]);
 
-    // The session the run will check out, established ON `pair_ceremony`. `boundEgress:
-    // datacenter` keeps CHECKOUT out of the way: the session is healthy and reusable with no fleet
-    // condition attached, so the only thing that can refuse the run is LOCALITY.
+    // The session the run will check out, established ON `pair_ceremony` - STAMPED EXACTLY AS
+    // PRODUCTION STAMPS IT. `bridge/attended.ts` is the only writer of `establishedBy: machine`
+    // in this repo and it always writes `boundEgress: residential` beside it (the hosted typist
+    // writes cloud+datacenter; `EstablishmentVantage` has no production producer). This fixture
+    // used to pair machine+datacenter, with a comment saying that kept CHECKOUT out of the way -
+    // a variant the product cannot emit, and the reason the whole P4.2 path could be dead in
+    // production while every case here passed.
     const { item } = await captureSessionWithGrant(actor, {
       label: 'portal session',
       boundOrigins: [PORTAL],
       storageState: { cookies: [], origins: [] },
       metadata: {
         establishedBy: { kind: 'machine', pairingId: CEREMONY_PAIRING },
-        boundEgress: { kind: 'datacenter' },
+        boundEgress: { kind: 'residential', pairingId: CEREMONY_PAIRING },
         establishedAt: new Date().toISOString(),
         healthy: true,
       },
@@ -979,7 +1129,7 @@ describe('a session whose ceremony machine has been retired stops asking', () =>
       storageState: { cookies: [], origins: [] },
       metadata: {
         establishedBy: { kind: 'machine', pairingId: RETIRED_PAIRING },
-        boundEgress: { kind: 'datacenter' },
+        boundEgress: { kind: 'residential', pairingId: RETIRED_PAIRING },
         establishedAt: new Date().toISOString(),
         healthy: true,
       },
@@ -1075,7 +1225,7 @@ describe('a session whose ceremony machine has been retired stops asking', () =>
         storageState: { cookies: [], origins: [] },
         metadata: {
           establishedBy: { kind: 'machine', pairingId: LIVE_PAIRING },
-          boundEgress: { kind: 'datacenter' },
+          boundEgress: { kind: 'residential', pairingId: LIVE_PAIRING },
           establishedAt: new Date(later).toISOString(),
           healthy: true,
         },
@@ -1124,9 +1274,24 @@ describe('a session whose ceremony machine has been retired stops asking', () =>
  *
  * The fix is that a preference is filed under the ORIGIN it belongs to, and the gate hands the
  * origin over WITH the pairing so the two cannot be separated (`CredentialGateVerdict.ready`).
+ *
+ * WHAT ROUND FIVE CHANGED HERE, and why the cases below are shaped as they are. Portal A's session
+ * now carries the metadata `bridge/attended.ts` actually writes - `establishedBy: machine` WITH
+ * `boundEgress: residential` from the same pairing - so the machine's state decides WHICH of three
+ * situations the run is in, and each is a different property:
+ *   - ceremony machine LIVE, a different machine dialled in -> the session IS released, the
+ *     preference IS learned, and locality refuses portal A's steps while portal B's run. That is
+ *     the per-origin property this block is named for, and the default the `beforeEach` sets up.
+ *   - ceremony machine RETIRED -> checkout refuses the session outright, so the run halts at portal
+ *     A's own gate and never learns a preference at all. The misdirection is still the thing under
+ *     test: the halt must name PORTAL A.
+ *   - ceremony machine merely ASLEEP -> same refusal, neutral halt, still about portal A.
+ * The fixtures used to pair machine+datacenter, which made the session releasable with no fleet
+ * condition at all - a shape no code path in this repo emits, and the reason the whole path could be
+ * dead in production with every case here green.
  */
 describe('a ceremony preference for one portal does not judge steps on another', () => {
-  /** Portal A: where the session was established, on a machine that has since been retired. */
+  /** Portal A: where the session was established, on the org's ceremony machine. */
   const PORTAL_A = 'porta.example.com';
   /** Portal B: a different site entirely, which this run merely browses. */
   const PORTAL_B = 'outra.example.com';
@@ -1165,9 +1330,15 @@ describe('a ceremony preference for one portal does not judge steps on another',
       contextRequests.push({ ownerUserId, ...(egress ? { egress } : {}) });
       throw new Error('no real Chromium in this suite');
     });
-    // The fleet lists ONE machine, and it is not the ceremony machine: `pair_ceremony` reads
-    // RETIRED (a non-empty listing that does not contain it is the registry saying it is gone).
+    // BOTH machines are listed and LIVE, and the one DIALLED IN is not the ceremony machine.
+    //
+    // `pair_ceremony` being live is what makes this block reachable at all. Portal A's session is
+    // bound to that machine's residential line - the shape a ceremony actually produces - so
+    // checkout only releases it, and the run only ever LEARNS the preference, while the machine is
+    // available. Switch it off or retire it and the run halts at portal A's own gate before any
+    // preference exists, which is a different property, pinned in the two cases at the end.
     setEgressCandidateResolver(async (orgId) => [
+      { pairingId: CEREMONY_PAIRING, org: orgId, capabilities: ['egress.residential'], egressEndpoint: 'http://100.64.0.7:1080', live: true },
       { pairingId: LIVE_PAIRING, org: orgId, capabilities: ['egress.residential'], egressEndpoint: 'http://100.64.0.9:1080', live: true },
     ]);
     setDaemonConnectionResolver(() => ({
@@ -1187,7 +1358,7 @@ describe('a ceremony preference for one portal does not judge steps on another',
       storageState: { cookies: [], origins: [] },
       metadata: {
         establishedBy: { kind: 'machine', pairingId: CEREMONY_PAIRING },
-        boundEgress: { kind: 'datacenter' },
+        boundEgress: { kind: 'residential', pairingId: CEREMONY_PAIRING },
         establishedAt: new Date().toISOString(),
         healthy: true,
       },
@@ -1205,11 +1376,32 @@ describe('a ceremony preference for one portal does not judge steps on another',
     await cofreGrants.raw.deleteMany({});
   });
 
-  /** Log into portal A with the session made on the retired machine, then browse portal B. */
+  /** Log into portal A with the session made on the ceremony machine, then browse portal B. */
   const twoPortalSteps = (): Step[] => [
     { ...integrationA, declaration: { credentialRefs: [sessionRefA] } } as Step,
     integrationB,
     { id: 's_nav_b', description: 'open the inbox', type: 'navigate', url: `https://${PORTAL_B}/inbox` } as Step,
+  ];
+
+  /**
+   * Portal B FIRST, then a step on portal A that carries portal A's credential - so a halt about
+   * portal A's machine has to leave portal B's step already completed behind it.
+   *
+   * The gated step is a `navigate`, not the `integration` step, and that is deliberate rather than
+   * incidental: the engine reports ANY non-recoverable failure on an `integration` step as
+   * `awaiting_integration` before it reads the `awaiting_daemon` detail (`engine.ts`, the halt
+   * cascade), so gating the integration step would have these cases asserting a status about the
+   * integration rather than about the machine. Pre-existing and recorded in docs/findings.md as
+   * `a-machine-halt-on-an-integration-step-is-reported-as-awaiting-integration`.
+   */
+  const portalBThenGatedA = (): Step[] => [
+    integrationA,
+    integrationB,
+    { id: 's_nav_b', description: 'open the inbox', type: 'navigate', url: `https://${PORTAL_B}/inbox` } as Step,
+    {
+      id: 's_nav_a', description: 'open portal A', type: 'navigate', url: `https://${PORTAL_A}/inbox`,
+      declaration: { credentialRefs: [sessionRefA] },
+    } as Step,
   ];
 
   it('the step on portal B runs, because portal A’s ceremony machine says nothing about it', async () => {
@@ -1217,107 +1409,93 @@ describe('a ceremony preference for one portal does not judge steps on another',
     const result = await runAutomation('a_two_portals', ctx);
 
     // Portal B's step declares no credential and has no session of its own, so it carries no
-    // preference: a connected machine is a connected machine, and the bridge runs it.
+    // preference: a connected machine is a connected machine, and the bridge runs it. With the
+    // preference held run-level it inherited portal A's ceremony machine and halted here instead.
     expect(result.status).toBe('completed');
     expect(contextRequests).toEqual([]);
   });
 
-  it('...and the run never asks the owner to re-establish a portal that was not the problem', async () => {
-    await seed('a_two_portals_ask', twoPortalSteps());
-    const result = await runAutomation('a_two_portals_ask', ctx);
+  /**
+   * BOTH HALVES IN ONE RUN, which is what makes the store a MAP rather than a variable that happens
+   * to be re-read. The same run browses portal B (must run) and then portal A (must refuse), and a
+   * single latest-wins slot cannot produce both answers.
+   */
+  it('holds one answer per portal, and gives each step the one that is about its own site', async () => {
+    await seed('a_two_portals_both', [
+      { ...integrationA, declaration: { credentialRefs: [sessionRefA] } } as Step,
+      integrationB,
+      { id: 's_nav_b', description: 'open the inbox', type: 'navigate', url: `https://${PORTAL_B}/inbox` } as Step,
+      { id: 's_nav_a', description: 'open portal A', type: 'navigate', url: `https://${PORTAL_A}/inbox` } as Step,
+    ]);
+    const result = await runAutomation('a_two_portals_both', ctx);
     const run = (await automationRuns.get(result.runId)) as unknown as {
-      credentialRequest?: { origin?: string };
-      steps: Array<{ index: number; error?: { message?: string } }>;
+      steps: Array<{ index: number; status?: string; error?: { message?: string } }>;
     };
-    // The halt this used to produce named PORTAL B and asked for a ceremony there. The owner could
-    // perform it, correctly, for ever: the machine it was really about belonged to portal A.
-    expect(run.credentialRequest?.origin).not.toBe(PORTAL_B);
-    expect(run.steps.find((s) => s.index === 2)?.error?.message ?? '')
-      .not.toMatch(/has been removed from your account/);
+
+    // Portal B: no preference is filed under it, so the connected machine carries it.
+    expect(run.steps.find((s) => s.index === 2)?.status).toBe('completed');
+    // Portal A: the preference IS filed under it, and the connected machine is not the ceremony
+    // one - so the step refuses rather than replaying portal A's cookie from another household.
+    expect(result.status).toBe('awaiting_daemon');
+    expect(run.steps.find((s) => s.index === 3)?.error?.message ?? '')
+      .toMatch(/machine where its session was established/);
+    expect(contextRequests).toEqual([]);
   });
 
   /**
-   * ...AND THE PREFERENCE IS STILL HONOURED WHERE IT BELONGS, which is what makes the case above a
-   * fix rather than a decision to stop preferring anything. Same run, same retired machine, but the
-   * browser step is on PORTAL A - the site the session actually belongs to - and it halts, naming
-   * portal A, asking for the one act that clears it.
+   * ...AND A PORTAL WHOSE MACHINE IS GONE NAMES ITSELF, never the other one.
+   *
+   * This is the misdirection the map exists to stop, in the shape production can actually reach.
+   * Portal A's session is bound to its ceremony machine's residential line, so RETIRING that
+   * machine refuses the session at CHECKOUT - the run halts at portal A's own gate, before portal
+   * B is ever evaluated. The halt must be about portal A: the owner re-establishing portal B could
+   * do it correctly for ever and the next fire would produce the identical halt.
    */
-  it('the same retired machine still refuses a step on the portal it WAS established for', async () => {
-    await seed('a_two_portals_own', [
-      { ...integrationA, declaration: { credentialRefs: [sessionRefA] } } as Step,
-      integrationB,
-      { id: 's_nav_a', description: 'open portal A', type: 'navigate', url: `https://${PORTAL_A}/inbox` } as Step,
+  it('a retired ceremony machine asks for the portal it was established for, never the other one', async () => {
+    setEgressCandidateResolver(async (orgId) => [
+      { pairingId: LIVE_PAIRING, org: orgId, capabilities: ['egress.residential'], egressEndpoint: 'http://100.64.0.9:1080', live: true },
     ]);
-    const result = await runAutomation('a_two_portals_own', ctx);
-
-    expect(result.status).toBe('needs_credentials');
+    await seed('a_two_portals_retired', portalBThenGatedA());
+    const result = await runAutomation('a_two_portals_retired', ctx);
     const run = (await automationRuns.get(result.runId)) as unknown as {
       credentialRequest?: { origin?: string; mode?: string };
-      steps: Array<{ index: number; error?: { message?: string } }>;
+      steps: Array<{ index: number; status?: string; error?: { message?: string } }>;
     };
+
+    // Portal B was never the problem and is never disturbed by portal A's.
+    expect(run.steps.find((s) => s.index === 2)?.status).toBe('completed');
+    expect(result.status).toBe('needs_credentials');
     expect(run.credentialRequest?.origin).toBe(PORTAL_A);
+    expect(run.credentialRequest?.origin).not.toBe(PORTAL_B);
     expect(run.credentialRequest?.mode).toBe('ceremony');
-    expect(run.steps.find((s) => s.index === 2)?.error?.message ?? '')
+    expect(run.steps.find((s) => s.index === 3)?.error?.message ?? '')
       .toMatch(/has been removed from your account/);
     expect(contextRequests).toEqual([]);
   });
 
   /**
-   * THE LESSER VARIANT: the ceremony machine is merely ASLEEP, not retired. The misdirection is the
-   * same shape wearing the neutral halt - portal B's steps waiting on a machine portal B was never
-   * established from, forever, with nothing the owner does to portal B able to change it.
+   * THE LESSER VARIANT: the ceremony machine is merely ASLEEP, not retired. Portal A's session is
+   * still unusable - it is bound to that machine's line - but the halt is the NEUTRAL one, because
+   * opening the laptop clears it. It must still be about portal A, and portal B still runs.
    */
-  it('a ceremony machine that is merely asleep does not strand a step on another portal either', async () => {
+  it('a ceremony machine that is merely asleep gets the neutral halt, still naming its own portal', async () => {
     setEgressCandidateResolver(async (orgId) => [
       { pairingId: CEREMONY_PAIRING, org: orgId, capabilities: ['egress.residential'], egressEndpoint: 'http://100.64.0.7:1080', live: false },
       { pairingId: LIVE_PAIRING, org: orgId, capabilities: ['egress.residential'], egressEndpoint: 'http://100.64.0.9:1080', live: true },
     ]);
-    await seed('a_two_portals_asleep', twoPortalSteps());
+    await seed('a_two_portals_asleep', portalBThenGatedA());
     const result = await runAutomation('a_two_portals_asleep', ctx);
-    expect(result.status).toBe('completed');
-  });
-
-  /**
-   * TWO PORTALS, TWO SESSIONS, TWO ANSWERS - held at once.
-   *
-   * The map has to be a map and not merely a latest-wins variable that happens to be re-read: with a
-   * session on each portal, each step must get ITS OWN. Portal A's machine is retired (terminal,
-   * cleared by a person); portal B's is registered and asleep (neutral, cleared by the machine). A
-   * single slot cannot hold both, and whichever it held would misdescribe the other.
-   */
-  it('holds one answer per portal, and gives each step the one that is about its own site', async () => {
-    const ASLEEP_PAIRING = 'pair_asleep';
-    setEgressCandidateResolver(async (orgId) => [
-      { pairingId: ASLEEP_PAIRING, org: orgId, capabilities: ['egress.residential'], egressEndpoint: 'http://100.64.0.7:1080', live: false },
-      { pairingId: LIVE_PAIRING, org: orgId, capabilities: ['egress.residential'], egressEndpoint: 'http://100.64.0.9:1080', live: true },
-    ]);
-    const { item: bItem } = await captureSessionWithGrant(actor, {
-      label: 'portal B session',
-      boundOrigins: [PORTAL_B],
-      storageState: { cookies: [], origins: [] },
-      metadata: {
-        establishedBy: { kind: 'machine', pairingId: ASLEEP_PAIRING },
-        boundEgress: { kind: 'datacenter' },
-        establishedAt: new Date().toISOString(),
-        healthy: true,
-      },
-    });
-    await seed('a_two_sessions', [
-      { ...integrationA, declaration: { credentialRefs: [sessionRefA] } } as Step,
-      { ...integrationB, declaration: { credentialRefs: [`cofre:${bItem._id}`] } } as Step,
-      { id: 's_nav_b2', description: 'open the inbox', type: 'navigate', url: `https://${PORTAL_B}/inbox` } as Step,
-    ]);
-    const result = await runAutomation('a_two_sessions', ctx);
     const run = (await automationRuns.get(result.runId)) as unknown as {
-      steps: Array<{ index: number; error?: { message?: string } }>;
+      steps: Array<{ index: number; status?: string; error?: { message?: string } }>;
     };
 
-    // Portal B's step gets PORTAL B's answer: its ceremony machine is asleep, not gone, so this is
-    // the NEUTRAL halt naming a machine to start - never portal A's terminal "removed from your
-    // account", which is what a single run-level slot would have handed it.
+    expect(run.steps.find((s) => s.index === 2)?.status).toBe('completed');
     expect(result.status).toBe('awaiting_daemon');
-    const message = run.steps.find((s) => s.index === 2)?.error?.message ?? '';
-    expect(message).toMatch(/machine where its session was established/);
+    const message = run.steps.find((s) => s.index === 3)?.error?.message ?? '';
+    expect(message).toContain(PORTAL_A);
+    expect(message).not.toContain(PORTAL_B);
+    // A machine that is asleep has NOT been removed, and saying so would send the owner to repeat a
+    // ceremony they do not need.
     expect(message).not.toMatch(/has been removed from your account/);
   });
 });

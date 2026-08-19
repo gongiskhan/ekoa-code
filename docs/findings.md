@@ -66,24 +66,59 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   a device name on the pairing record plus a seam the engine can ask - worth doing when the fleet
   surface grows one, not worth a store read on a refusal path today.
 
-- **`suite-ledger-unit-census-drifted-red-again`** (2026-08-19, OPEN, LOW, gate rot - found by
-  running `npm run gate:ledger` on this branch and checking whether the red was mine; it is not).
-  `npm run gate:ledger` **exits 1** on `[FAIL] unit census mismatch: disk 64 != ledger 59 (drift or
-  omission)`. Five `web/__tests__` files exist without a `frontend_unit.surviving` entry in
-  `api/tests/SUITE_LEDGER.json`: `automations-needs-credentials`, `components/schedule-detail-page`,
-  `components/schedule-form-error`, `components/schedules-page`, `lib/schedules-authority` - the
-  schedules and needs-credentials work. **Not caused by the branch that found it**
-  (`fix/app-registry-watcher-instances` touches no `web/` file and no ledger entry; the ledger in
-  that worktree is byte-identical to `main`'s), and left unfixed there only because that branch's
-  scope is `api/src/apps/**`.
-  This is the SECOND occurrence of the identical drift: `suite-ledger-unit-census-drifted-red`
-  (FIXED 2026-08-05) recorded the same census going red for the same reason, one file at a time.
-  The gate is not in `npm run ci:lane`, so nothing forces the entry at merge - which is why it rots
-  and why one fix did not hold. CONSEQUENCE IF NOT CLOSED: the one census that would catch a web
-  unit suite quietly deleted is permanently red, so its output carries no information.
-  CLOSE BY: add the five names to `frontend_unit.surviving` with their target gate, and then either
-  put `gate:ledger` in `ci:lane` or record in `docs/decisions.md` why a gate nothing runs is worth
-  keeping.
+  2026-08-19: the same halt now has a SECOND producer, `credentialGateRecord` in `engine.ts` (see
+  the fixed section below), which unlike `locality.ts` does hold the fleet listing. It does not
+  change this: a retired pairing is absent from that listing by definition, so there is still no row
+  to read a label off. Both producers share one string, `SESSION_MACHINE_RETIRED_REASON`, so closing
+  this stays a single edit.
+
+- **`suite-ledger-unit-census-drifted-red-again`** (2026-08-19, **census half FIXED 2026-08-19**;
+  the CI-lane half remains OPEN, LOW, gate rot). `npm run gate:ledger` exited 1 on
+  `[FAIL] unit census mismatch`.
+  **CORRECTION, 2026-08-19.** The first version of this entry said "disk 64 != ledger 59" and listed
+  FIVE offenders, and stated the red was not caused by the branch that found it. Both halves were
+  right when written and the count went stale the moment this branch's own round three landed
+  `web/__tests__/components/run-status-badge.test.tsx` (commit 6e2096a) without a ledger row: the
+  real figure on `feat/p4-locality` was **disk 65 vs ledger 59**, and the sixth offender WAS this
+  branch's. Registering it here is what the same-change rule required of round three.
+  All six are now in `frontend_unit.surviving` and the census reads `65 (ledger: 65)`. Five were
+  genuinely pre-existing and are on `main`: `automations-needs-credentials` (commit 55572ee) and
+  `components/schedule-detail-page`, `components/schedule-form-error`, `components/schedules-page`,
+  `lib/schedules-authority` (commit f6b5233). The sixth is `components/run-status-badge`.
+  **WHAT IS STILL OPEN.** `npm run gate:ledger` still exits 1, on a DIFFERENT line:
+  `[FAIL] N artifact(s) are due at G12 but --run was not passed`. That is structural to the bare
+  invocation - the script only reports due artifacts green when handed `--run`, which shells out to
+  Playwright and the node drivers - and it is identical on `main`. The census line, which is the
+  half that carries information about drift, is the half this closes.
+  This was the THIRD occurrence of the identical drift (`suite-ledger-unit-census-drifted-red`,
+  FIXED 2026-08-05, was the first). It keeps recurring because `gate:ledger` is not in
+  `npm run ci:lane`, so nothing forces the entry at merge.
+  CLOSE THE REST BY: deciding whether a lane-runnable census-only mode (`--census`) goes into
+  `ci:lane`, or recording in `docs/decisions.md` why a gate nothing runs is worth keeping. Not done
+  here: adding a gate that boots Playwright and the drivers to the per-PR lane is a CI decision with
+  its own blast radius and is out of this branch's scope.
+
+- **`a-machine-halt-on-an-integration-step-is-reported-as-awaiting-integration`** (2026-08-19, OPEN,
+  MEDIUM, wrong halt copy + ceiling accounting - found while repairing the P4.2 fixtures, **not
+  caused by this branch**: the ordering is on `main` and predates locality). The engine's halt
+  cascade (`api/src/automation/engine.ts`) reads, in order, `needs_credentials`, then a BLANKET
+  `record.error?.recoverable === false && step.type === 'integration'` -> `awaiting_integration`,
+  and only THEN the `awaiting_daemon` detail. So a gated INTEGRATION step whose credential gate
+  answers `needs-machine` - "your session is fine, the machine it is bound to is asleep" - is
+  reported as `awaiting_integration` and the user is told to go connect an integration that is
+  working. Two consequences: the copy names the wrong thing, and `awaiting_integration` is NOT in
+  `NEUTRAL_BLOCKED_CODES` (`api/src/schedules/supervisor.ts`, which holds `awaiting_daemon` alone),
+  so a schedule waiting on a laptop burns its failure ceiling and auto-pauses instead of waiting.
+  More reachable after this branch, which is why it was found here: before the run loop supplied
+  `residentialAvailable`, every attended session refused at checkout regardless of step type.
+  CONSEQUENCE IF NOT CLOSED: a user whose ceremony laptop is switched off is sent to their
+  integrations page, and their schedule pauses itself for a condition that would have cleared on its
+  own. CLOSE BY: reading the `awaiting_daemon` detail BEFORE the integration-type blanket, so the
+  detail a step actually carries outranks a guess made from its type. Not done here: it changes what
+  every integration step reports and needs its own suite over the cascade.
+  WORKED AROUND IN TESTS: `api/tests/automation/engine-locality.test.ts` gates a `navigate` step
+  rather than the `integration` step wherever it asserts a machine halt, with the reason stated at
+  the fixture (`portalBThenGatedA`).
 
 - **`f5-crawl-specs-race-the-background-runner`** (2026-08-19, OPEN, MEDIUM, test-estate - found by
   the api contract lane going red on a loaded box while closing
@@ -115,6 +150,15 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   same night was 61/61 green. Expect it to recur, and expect it to be blamed on whatever change
   happens to be in the tree.
 
+  **It recurred, exactly as predicted, in the P4 round-five lane (2026-08-19).** The full api
+  workspace ran 4895 passed / 1 failed / 2 skipped over 383 files, and the one failure was spec 1
+  above. Re-measured immediately afterwards: the same file alone on the round-five tree passed
+  18/18 three times in a row, and passed 18/18 on the same branch with the round-five changes
+  STASHED - i.e. green both with and without the change, red only under contention. The changed
+  files that lane carries are all `api/src/automation/**`, which the crawl endpoints do not reach.
+  Recording the measurement rather than the reassurance, because the entry's own prediction is that
+  the next author will be told this is theirs.
+
   **CLOSE BY** (left undone here only because this branch's scope is `api/src/apps/**`): give the
   suite an `afterEach` that does `await cancelCrawlAndWait('s1')` before the runner reset, so no
   background run can write after the clear; and make spec 1's precondition real - hold run #1 open
@@ -134,6 +178,22 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   that rail a locality decision of its own (an origin posture for the Citius host, plus a resolved
   route), which is a change to a separately reviewed rail with its own completeness suite and does
   not belong in a slice already touching the engine, the schedules rail and `web/`.
+
+  **SECOND HALF, added 2026-08-19 once the run loop's version of it was fixed.** The same rail also
+  never supplies `residentialAvailable`. `CitiusSyncInput` declares the field
+  (`legal/citius-sync.ts`) and forwards it when present, but nothing in production passes it:
+  `routes/sync.ts` builds the input from `actorOf(req)`, a fresh run id and `SyncRunRequest`, and
+  that schema deliberately carries no such field - correctly, because a client asserting which
+  machines are available would be asserting an AUTHORISATION and could force checkout of a session
+  bound to any machine. So `checkoutSession` receives `[]` on this rail exactly as it did in the run
+  loop, and an attended-ceremony session for the Citius portal - stamped
+  `boundEgress: { kind: 'residential', pairingId }` by `bridge/attended.ts` - is refused
+  `needs-egress` and can never be reused by a sync. The rail then falls to the typist, i.e. the
+  hosted datacenter login described above. Mechanism now proven rather than suspected (see the fixed
+  section for the run-loop half). CLOSE BY: resolving the fleet for the caller's org in the route's
+  composition and passing it in, which is the same one-line shape `engine.ts` now uses - it is
+  cheap, but it belongs with the posture decision above rather than ahead of it, because on its own
+  it would let a ceremony session be reused by a rail that still has no view of where it may run.
 
 - **`posture-drift-check-cannot-stop-the-act-that-navigates`** (OPEN 2026-08-19, MEDIUM, a named
   limit of the P4.1 posture-inheritance constraint). Posture is declared on an `IntegrationAction`
@@ -3103,6 +3163,69 @@ silently absorbed into a ledger note):
   `sales-crm.png` ("Página não encontrada" 404 instead of the dashboard) - `booking-system` is
   disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
   `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
+
+## Recently fixed - 2026-08-19 P4.2 was dead code in production (round five)
+
+Round four's verifier found that the ENTIRE P4.2 ceremony-preference path was unreachable in the
+shipped product, and that the reason it was invisible was the fixtures. Both halves are closed here,
+each pinned by a test verified to fail against the unfixed source.
+
+- `run-loop-never-supplied-residentialAvailable` (**MAJOR**). The engine called
+  `credentialGateRecord({actor, runId, automationName, steps, index, hostedBrowser})` and never
+  passed `residentialAvailable`, so `evaluateCredentialGate` forwarded nothing, `ensureSession`
+  handed `checkoutSession` an empty list, and checkout refused **every attended session there is**
+  with `egress-unavailable`. `bridge/attended.ts` is the only production writer of
+  `establishedBy: { kind: 'machine' }` and it always stamps `boundEgress: { kind: 'residential',
+  pairingId }` beside it, so the refusal was universal for card-established sessions.
+  TWO CONSEQUENCES, both real: (a) an attended card-login session could NEVER be reused by an
+  automation, and the halt was `awaiting_daemon`, which is in `NEUTRAL_BLOCKED_CODES` - so the
+  schedule re-fired forever, uncounted, with nothing the owner could do; the same unbounded-retry
+  pathology this branch's retirement fix exists to remove, arriving by another route. (b)
+  `verdict.status === 'reused'` was never reached for a machine-established session, so
+  `establishedByPairingId` -> `preferredPairing` was never emitted and no P4.2 code ever ran.
+  FIXED: the run loop already loads the org fleet into `egressCandidates`; it now derives the list
+  through `residentialEgressPairings` (`automation/egress-policy.ts`), the SAME predicate
+  `resolveEgress` uses - so "this machine can carry the work" and "this machine's session may be
+  released" cannot drift apart. Tenancy pinned in `api/tests/security/locality-isolation.test.ts`
+  (a foreign pairing in that list would let one tenant unwrap a session bound to another's house).
+  MUTATION: dropping the argument reddens 10 cases in `engine-locality.test.ts`.
+
+- `every-P4.2-fixture-stamped-a-session-production-cannot-emit` (**MAJOR**, and the reason the above
+  was invisible). All four engine fixtures and the unit fixture paired
+  `establishedBy: { kind: 'machine' }` with `boundEgress: { kind: 'datacenter' }`, under a comment
+  saying that kept checkout out of the way. No code path in this repo produces machine+datacenter:
+  the hosted typist writes `cloud`+`datacenter`, the ceremony writes `machine`+`residential`, and
+  `EstablishmentVantage` (the only other way to reach the field) has NO production producer at all.
+  The suite therefore exercised a variant the product cannot emit while the one it does emit halted
+  at the gate. FIXED: every fixture now carries the shape `attended.ts` writes.
+
+- `the-retirement-branch-was-unreachable-for-the-same-reason` (found while repairing the fixtures,
+  deeper than the report that prompted it). Because a ceremony session is bound to its machine's
+  residential line, REVOKING that machine makes checkout refuse the session outright - so the run
+  never learns the ceremony pairing, and `resolveLocality`'s retirement branch (round three's fix
+  for exactly this dead end) could not fire in production either. The unbounded retry it was written
+  to remove was still there, one step earlier.
+  FIXED: `credentialGateRecord` now asks the fleet listing whether the machine checkout named is
+  GONE or merely asleep, through the same `machineRetired` predicate `preferenceMachineRetired`
+  uses, and produces the identical `needs_credentials` ceremony halt via the shared
+  `SESSION_MACHINE_RETIRED_REASON`. An EMPTY listing still reads as NOT retired - the closed
+  direction, so an unbound seam can never escalate a neutral wait into a terminal halt.
+  The gate carries `origin` and `requiredPairingId` as FACTS rather than folded into prose, because
+  the fleet listing lives in the engine and not in the gate.
+  MUTATION: disabling the branch reddens 4 cases.
+
+- `two unpinned engine guards` - both mutable to no effect before this round.
+  `localityRecord ? {} : await credentialGateRecord(...)`: removing the guard left every suite green
+  because the refusal record still wins the `??` chain, so status, halt and message are identical
+  either way. What changes is what the gate DOES on the way to an answer nobody asked for - it
+  decrypts the credential for a step that will never run and, on a route-switch refusal, opens the
+  hosted browser and types the password out of a door no work in the run is using. Pinned by
+  "a step locality already refused never reaches the credential gate, so no second door opens",
+  whose observable is a SECOND browser context (mutation: 1 -> 2).
+  `stepLocality = null`: deleting it let a non-browser step inherit the previous BROWSER step's
+  verdict and compute its typist permit from a decision about a different origin. Pinned by "a step
+  with no locality of its own does not inherit the last browser step's door" (mutation: the login
+  for portal B leaves through `pair_home`, the machine resolved for portal A's step).
 
 ## Recently fixed - 2026-08-18 schedules adversarial review (15 confirmed, all closed by test)
 

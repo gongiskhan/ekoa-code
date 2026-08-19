@@ -1769,3 +1769,97 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   census only catches what its space reaches, which is not a formality - a branch conditioned on more
   than two fleet candidates was missed by the first version of the space, so the space carries a
   larger fleet and the miss is recorded here rather than discovered again later.
+
+- 2026-08-19 - P4 ROUND FIVE: THE WHOLE P4.2 PATH WAS DEAD CODE IN PRODUCTION, AND THE FIXTURES
+  ARE WHY NOBODY SAW IT. Round four closed the origin-scoping; its verifier then found that
+  none of it could ever execute in the shipped product.
+
+  (1) THE RUN LOOP NEVER SUPPLIED `residentialAvailable`. `engine.ts` called the credential gate with
+  `{actor, runId, automationName, steps, index, hostedBrowser}` and nothing else, so
+  `evaluateCredentialGate` forwarded nothing, `ensureSession` handed `checkoutSession` the `[]`
+  default, and checkout refused EVERY attended session with `egress-unavailable`. That is not an edge
+  case: `bridge/attended.ts` is the only production writer of `establishedBy: { kind: 'machine' }`
+  and it always stamps `boundEgress: { kind: 'residential', pairingId }` beside it, so the refusal
+  was universal for card-established sessions. Two consequences, and the second is why this was worth
+  a round of its own: an attended card-login session could never be reused by an automation at all,
+  halting `awaiting_daemon` - which is in `NEUTRAL_BLOCKED_CODES`, so the schedule re-fired forever,
+  uncounted, with nothing the owner could do (the same unbounded-retry pathology round three's
+  retirement fix exists to remove, by another route); and `verdict.status === 'reused'` was never
+  reached for a machine-established session, so `establishedByPairingId` -> `preferredPairing` was
+  never emitted and no line of P4.2 ever ran. The run loop already had the fleet in
+  `egressCandidates`; it now derives the list from it.
+
+  (2) ONE PREDICATE, BECAUSE TWO ANSWERS ABOUT THE SAME MACHINE MUST NOT DIVERGE. The filter that
+  decides which machines can carry residential egress is now `residentialEgressPairings`
+  (`automation/egress-policy.ts`), used by BOTH `resolveEgress` (which picks a machine to proxy a
+  step through) and, via the run loop, `checkoutSession` (which decides whether a session bound to a
+  machine's line may be released at all). Copying it would let "the work may run here" and "the
+  session may be released for here" drift apart silently, in a direction where the failure is a
+  session unwrapped for a route that does not exist. It is an AUTHORISATION, not a hint - a foreign
+  pairing id in that list would let one tenant's run unwrap a session bound to another tenant's house
+  - so it ships with the Rule 5 isolation coverage in
+  `api/tests/security/locality-isolation.test.ts`, driven off `egressCandidatesForOrg` so an
+  org-blind resolver fails it.
+
+  (3) THE FIXTURES EXERCISED A SHAPE THE PRODUCT CANNOT EMIT, which is the finding behind the
+  finding. All four engine fixtures and the unit fixture paired `establishedBy: { kind: 'machine' }`
+  with `boundEgress: { kind: 'datacenter' }`, under a comment saying that kept checkout out of the
+  way. It did - by describing a session no code path in this repo produces. The hosted typist writes
+  cloud+datacenter; the ceremony writes machine+residential; `EstablishmentVantage`, the only other
+  route to the field, has NO production producer at all. So the suite proved a variant that cannot
+  exist while the one that does halted at the gate. STANDING CONSEQUENCE, recorded because this has
+  now bitten this repo three times: a fixture asserting a stored shape must name the production
+  writer that emits it, and a comment explaining that a fixture is convenient is a reason to re-read
+  it, not a reason to keep it.
+
+  (4) THE RETIREMENT BRANCH WAS UNREACHABLE FOR THE SAME REASON, one layer deeper than the report
+  that prompted this round. A ceremony session is bound to its machine's residential line, so
+  revoking that machine makes checkout refuse the session outright - the run never learns the
+  ceremony pairing, and `resolveLocality`'s retirement branch (round three's fix for exactly this
+  dead end) could not fire either. The unbounded retry it was written to remove was still there, one
+  step earlier, wearing `awaiting_daemon`. So `credentialGateRecord` now asks the fleet listing
+  whether the machine CHECKOUT named is gone or merely asleep, through the same `machineRetired`
+  predicate `preferenceMachineRetired` uses, and emits the identical halt through a shared
+  `SESSION_MACHINE_RETIRED_REASON`. WHERE THE DECISION LIVES AND WHY: the gate holds no fleet
+  listing and must not acquire one, so it hands back `origin` and `requiredPairingId` as FACTS and
+  the engine - which already holds the listing - classifies. An EMPTY listing still reads as NOT
+  retired, the closed direction, so an unbound seam can never escalate a neutral wait into a terminal
+  halt.
+
+  (5) TWO ENGINE GUARDS WERE MUTABLE TO NO EFFECT, and both are now pinned by what they actually
+  protect rather than by the status they happen to leave behind. `localityRecord ? {} : gate(...)`:
+  removing it left every suite green because the refusal record still wins the `??` chain, so the
+  status, the halt and the message are identical either way - what changes is that the gate decrypts
+  a credential for a step that will never run and, on a route-switch refusal, opens the hosted
+  browser and types the password out of a door no work in the run is using. Its test observes the
+  SECOND BROWSER CONTEXT. `stepLocality = null`: deleting it let a step with no locality of its own
+  inherit the previous BROWSER step's verdict and compute its typist permit from a decision about a
+  different origin; its test observes portal B's login leaving through the machine resolved for
+  portal A's step. A guard whose only observable is a status another branch also produces is a guard
+  no test can hold.
+
+  (5b) ONE CHANGE HERE IS DEFENSIVE AND IS NOT PINNED, SAID PLAINLY. `knownPairingsNow` first read
+  whatever `residentialAvailableNow` had left in the memoised `egressCandidates`, which was correct
+  only because argument evaluation reaches `residentialAvailable` first. Hoisting it above the gate
+  call - an edit a future reader could make for readability - would have it answer `[]`, which
+  `machineRetired` reads as "not retired" for every machine, silently turning the terminal
+  retirement halt back into the unbounded `awaiting_daemon` retry. It now loads the listing itself
+  (same memo, still one store read per run), so the hazard is structurally impossible rather than
+  ordering-dependent. MUTATION-TESTED AND THE MUTATION STAYED GREEN: no suite in the repo exercises
+  a gated NON-browser step as the first gated step of a run against a retired machine, which is the
+  only shape that reaches it - and such a suite could not assert cleanly anyway while the
+  integration-step halt mislabelling in (6) stands. So this is recorded as a defensive refactor
+  verified not to change behaviour, not as a pinned property. Making it unreachable was preferred to
+  leaving a hazard whose only defence would be a comment.
+
+  (6) WHAT THIS ROUND DELIBERATELY DID NOT FIX, both recorded in `docs/findings.md`. The engine's
+  halt cascade reports ANY non-recoverable failure on an `integration` step as
+  `awaiting_integration` BEFORE it reads the `awaiting_daemon` detail, so a gated integration step
+  whose machine is asleep tells the user to reconnect a working integration and, because
+  `awaiting_integration` is not neutral, burns the schedule's failure ceiling. Pre-existing on
+  `main`, more reachable after (1), and it changes what every integration step reports - so it gets
+  its own change and its own suite over the cascade, not a drive-by here. The locality suites gate a
+  `navigate` step instead of the `integration` step wherever they assert a machine halt, with the
+  reason stated at the fixture. Separately, `gate:ledger` remains outside `ci:lane`, which is why its
+  unit census has now rotted three times; the census half is green again, the CI-lane half is a
+  decision with its own blast radius.

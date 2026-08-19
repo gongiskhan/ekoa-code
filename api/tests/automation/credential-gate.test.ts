@@ -163,6 +163,31 @@ describe('what the halt carries', () => {
     expect(verdict.kind).toBe('needs-machine');
     expect(verdict.kind === 'needs-machine' && verdict.reason).toContain('pair_7');
   });
+
+  /**
+   * ...AND IT CARRIES THE TWO FACTS ITS CALLER CANNOT RE-DERIVE.
+   *
+   * The engine has to decide whether the machine checkout named is merely ASLEEP or has been
+   * REVOKED - the difference between a neutral wait and a terminal "re-establish this session" -
+   * and only the engine holds the fleet listing that answers it. Both facts therefore travel as
+   * DATA. Fold either back into `reason` and the caller is parsing an English sentence to route a
+   * halt; drop `requiredPairingId` and the retirement classification silently stops firing, which
+   * restores the unbounded schedule retry it exists to remove (docs/findings.md, 2026-08-19).
+   */
+  it('...and it names the machine and the portal as DATA, not only inside the message', async () => {
+    const verdict = await gate([declared({ type: 'navigate', url: 'https://portal.example/login' })], 0, {
+      ensure: async () => ({
+        status: 'needs-egress',
+        itemId: 'itm_1',
+        required: { kind: 'residential', pairingId: 'pair_7' },
+      }),
+    });
+    expect(verdict).toMatchObject({
+      kind: 'needs-machine',
+      origin: 'portal.example',
+      requiredPairingId: 'pair_7',
+    });
+  });
 });
 
 describe('credentialEstablishmentMode — what the human is asked to do', () => {

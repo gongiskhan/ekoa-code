@@ -81,6 +81,7 @@ import type { OfflinePolicy, StepTarget } from '@ekoa/shared';
 import type { OriginClassification } from './origin-posture.js';
 import { resolveTargetPosture } from './origin-posture.js';
 import {
+  machineRetired,
   resolveEgress,
   type EgressCandidate,
   type EgressRequirement,
@@ -216,9 +217,23 @@ export function egressRequirementFor(input: {
  */
 function preferenceMachineRetired(input: LocalityInput): boolean {
   if (!input.preferredPairingId) return false;
-  if (input.candidates.length === 0) return false;
-  return !input.candidates.some((c) => c.pairingId === input.preferredPairingId);
+  return machineRetired(input.preferredPairingId, input.candidates.map((c) => c.pairingId));
 }
+
+/**
+ * WHAT A PERSON IS TOLD WHEN THE MACHINE A SESSION LIVES ON IS GONE - one string, because two
+ * different refusals arrive at it and a user must not be able to tell them apart.
+ *
+ * The refusal below is reached when the run LEARNED the ceremony machine and locality then refused
+ * it. `credentialGateRecord` (`engine.ts`) reaches the same fact one step EARLIER, from checkout:
+ * a ceremony session is bound to its machine's residential line, so when that machine is retired
+ * the session cannot even be released and the preference is never learned at all. Same situation,
+ * same remedy, so the same words - and a pairing id appears in neither, because it is an opaque
+ * identifier this product never shows a user and printing one reads as a fault code.
+ */
+export const SESSION_MACHINE_RETIRED_REASON =
+  'the machine where this session was established has been removed from your account - ' +
+  'establish this session again, from a machine you still have';
 
 /**
  * Decide where this step runs.
@@ -268,9 +283,7 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
       // ceiling never counting a single one of them. A person re-establishing the session is the
       // only thing that ends it, so it halts as the state that means exactly that.
       clearedBy: 'human',
-      reason:
-        'the machine where this session was established has been removed from your account - ' +
-        'establish this session again, from a machine you still have',
+      reason: SESSION_MACHINE_RETIRED_REASON,
     };
   }
 

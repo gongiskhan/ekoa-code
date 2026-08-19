@@ -67,7 +67,7 @@ where they touch the dashboard.
   it are pinned separately (`components/schedules-page.test.tsx`,
   `components/schedule-detail-page.test.tsx`), on the WORDS a person reads, because dropping the
   `code` prop leaves a component that is correct, tested and permanently on its generic fallback.
-- **Two fixture rules this slice learned the hard way, and both generalise.**
+- **Four fixture rules this slice learned the hard way, and all four generalise.**
   (1) DRIVE EVERY MEMBER OF A SET THAT GATES BEHAVIOUR, not the cheapest one. Every locality fixture
   drove a `wait` step, so `STEP_TYPES_NEEDING_BROWSER` - the sole gate deciding which steps get a
   locality verdict at all - could be cut to `new Set(['wait'])` with 94 files and 1324 tests still
@@ -81,6 +81,25 @@ where they touch the dashboard.
   the daemon's own line or `resolveEgress`'s independent `usable[0]` pick - there was only one thing
   to pick. Any assertion about WHICH of several things was chosen needs the wrong answer to be
   available and, better, listed first.
+  (3) A FIXTURE MUST STAMP A SHAPE PRODUCTION ACTUALLY EMITS - the costliest of the four, and the
+  reason round five exists. Every P4.2 fixture paired `establishedBy: { kind: 'machine' }` with
+  `boundEgress: { kind: 'datacenter' }`, under a comment saying that kept checkout out of the way.
+  It did, by describing a session NO code path in this repo produces: `bridge/attended.ts` writes
+  machine+residential, the hosted typist writes cloud+datacenter, and `EstablishmentVantage` - the
+  only other route to the field - has no production producer at all. So the suite proved a variant
+  that cannot exist while the shape that does exist halted at the credential gate, and the entire
+  P4.2 path was dead in the shipped product with every case green. THE RULE: for any fixture that
+  stamps stored state, name the production writer that emits that exact shape, in the fixture. If
+  you cannot name one, the fixture is the bug. A comment explaining that a fixture shape is
+  CONVENIENT is a reason to re-read it, not a reason to keep it - convenience is usually the sound
+  of a real precondition being stepped over, and here the precondition was the one input the run
+  loop never supplied.
+  (4) A GUARD WHOSE ONLY OBSERVABLE IS A STATUS ANOTHER BRANCH ALSO PRODUCES IS UNPINNABLE. Two
+  engine guards were mutable to no effect: skipping the credential gate for a locality-refused step,
+  and clearing `stepLocality` between steps. Both left status, halt and message identical when
+  broken, because a different branch produced the same record. Their tests had to observe the SIDE
+  EFFECT instead - a second browser context that should not exist, and the proxy a login actually
+  left through - which is the general move when a mutation survives.
 - **A census must be a census.** `locality.test.ts`'s `clearedBy` coverage was five hand-written
   inputs under a docblock claiming to cover every refusal the module produces; a new
   `clearedBy: 'human'` branch could be added, reached, and leave it green. It now walks the CROSS

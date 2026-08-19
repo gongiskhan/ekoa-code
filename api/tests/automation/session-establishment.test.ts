@@ -1045,14 +1045,21 @@ describe('the establishing machine travels back with a reused session', () => {
     const h = harness({
       items: [sessionItem({
         metadata: {
+          // THE SHAPE `bridge/attended.ts` ACTUALLY WRITES: the only production writer of
+          // `establishedBy: machine` stamps `boundEgress: residential` from the SAME pairing id
+          // beside it. This fixture used to pair machine+datacenter so checkout would pass with no
+          // fleet input at all - a variant nothing in the product can emit, and part of why nobody
+          // noticed the run loop never supplied `residentialAvailable`.
           establishedBy: { kind: 'machine', pairingId: 'pair_home' },
-          boundEgress: { kind: 'datacenter' },
+          boundEgress: { kind: 'residential', pairingId: 'pair_home' },
           establishedAt: new Date(NOW - 60_000).toISOString(),
           healthy: true,
         },
       })],
     });
-    const result = await ensureSession(runInput(), h.deps);
+    // ...and because it IS that shape, checkout needs the machine to be available. Supplying that
+    // is the run loop's job, and `engine.ts` doing it is what makes this path reachable at all.
+    const result = await ensureSession(runInput({ residentialAvailable: ['pair_home'] }), h.deps);
     expect(result).toMatchObject({ status: 'reused', establishedByPairingId: 'pair_home' });
   });
 
