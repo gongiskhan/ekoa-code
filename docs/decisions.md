@@ -1962,3 +1962,38 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   the shape that produced the run-level `preferredPairingId` defect. And `getBrowser`'s
   `stepLocality?.kind !== 'in-process'` conjunct is removed: `resolveLocality` cannot answer
   `in-process` while a daemon is connected, so it was never enterable.
+
+- 2026-08-19 - P4 round eight, three decisions taken while closing the one path this branch OPENED:
+  a machine's self-asserted egress address becoming the org's browser proxy.
+  **(1) THE GRANT AUTHORISES A DESTINATION, NOT ONLY A CAPABILITY.** I-3 already said the right thing
+  about what a machine may be USED FOR - advertisement is a self-assertion, the org's grant is the
+  authorisation, `egressCandidatesForOrg` intersects the two - and said nothing at all about WHERE
+  the traffic would then go. The address rode the same `hello` frame and inherited none of it: the
+  intersection passed `egressEndpoint` through untouched, and this branch is what gave that value a
+  production consumer (`resolveEgress` -> `proxyOptionFor` -> `newContext({proxy})`). So
+  `CapabilityGrantDoc` gains `egressEndpoint`, `grantCapability` REQUIRES it for
+  `egress.residential` and throws otherwise, and the candidate carries neither the capability nor the
+  address unless the grant's endpoint canonically equals what the machine currently advertises. The
+  alternative considered and rejected was to surface the address on the admin listing and leave the
+  grant capability-only: it is strictly weaker (it depends on a person noticing a change), and it
+  does nothing about the case that has no person in it - a compromised daemon re-pointing itself on
+  a reconnect. The listing now carries the address as well, but as an aid to the decision rather than
+  as the control. Throwing rather than recording a routeless grant is deliberate: this is a domain
+  function whose only future caller is an admin surface, and a grant that silently authorises nothing
+  is the failure mode the field exists to remove.
+  **(2) THE PRIVATE-RANGE RULE IS DRAWN AROUND WHAT A PROXY MAY NEVER BE, NOT AROUND "PRIVATE".** The
+  obvious rule - reject RFC1918 and friends - would reject 100.64.0.0/10, which is RFC 6598 shared
+  address space and exactly what Tailscale hands out, i.e. every legitimate value of this field. So
+  `bridge/egress-endpoint.ts` refuses loopback, the unspecified address, link-local,
+  multicast/broadcast and RFC1918, and ALLOWS the two tailnet ranges by name. Link-local is refused
+  even under `EKOA_BRIDGE_ALLOW_PRIVATE_EGRESS`, because 169.254.169.254 is an instance metadata
+  endpoint and a developer switch for loopback has no business reopening it. The module states its
+  own limit rather than implying it is complete: a DNS name is accepted on shape alone (nothing
+  resolves here), which is precisely why validation is only half the fix.
+  **(3) THE ADVERTISEMENT REPLACES THE ADDRESS, VIA A TRI-STATE.** `registerPairing`'s
+  `egressEndpoint` was `string | undefined` with a keep-the-previous fallback, so a `hello` carrying
+  no endpoint kept the old route alive - a machine could never un-offer a route it once offered,
+  which is the merge-instead-of-replace defect the capability list already avoided. It is now
+  `string | null | undefined`: `undefined` means "this registration is not an advertisement" (the
+  CONNECT path registers before the machine has said anything and must not erase what it said last
+  time), `null` or an unusable address means "this advertisement offers no egress" and CLEARS.

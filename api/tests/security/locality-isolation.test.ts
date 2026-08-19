@@ -75,7 +75,7 @@ async function armedMachine(pairingId: string, org: string, endpoint: string): P
     capabilities: ['egress.residential'],
     egressEndpoint: endpoint,
   });
-  await grantCapability({ orgId: org, pairingId, capability: 'egress.residential', grantedByUserId: 'admin' });
+  await grantCapability({ orgId: org, pairingId, capability: 'egress.residential', egressEndpoint: endpoint, grantedByUserId: 'admin' });
 }
 
 /** A permissive origin declaring residential egress — the only shape that can select a machine. */

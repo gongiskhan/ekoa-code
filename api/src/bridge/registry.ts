@@ -19,7 +19,11 @@ import { randomBytes } from 'node:crypto';
 import { bridgePairings, bridgeCapabilityGrants } from '../data/stores.js';
 import { encrypt, decrypt } from '../data/crypto.js';
 import { logActivity } from '../data/activity.js';
+import { normaliseEgressEndpoint } from './egress-endpoint.js';
 import type { Doc } from '../data/store.js';
+
+/** The one capability whose grant authorises a DESTINATION and not merely an ability. */
+const EGRESS_RESIDENTIAL = 'egress.residential';
 
 /** The durable pairing row (§18.3.4). */
 export interface PairingRow extends Doc {
@@ -38,6 +42,11 @@ export interface PairingRow extends Doc {
    * The machine's tailnet address, advertised in its `hello` frame, used as the proxy target when
    * a run declares residential egress. NEVER a request-body value: it is recorded from the
    * authenticated registration, like org and owner.
+   *
+   * STORED ONLY IN CANONICAL, VALIDATED FORM (`egress-endpoint.ts`). The wire type is a free
+   * `z.string().max(255)`, so before this the field was the one part of a machine's advertisement
+   * that was believed outright: it travelled verbatim to `browser.newContext({ proxy })`. An
+   * address this row cannot carry is an address no run can be routed through.
    */
   egressEndpoint?: string;
   /**
@@ -94,7 +103,17 @@ export async function registerPairing(
     /** Advertised at registration (I-1). Replaces the prior list wholesale — a machine that stops
      *  offering a capability must stop being selected for it. */
     capabilities?: string[];
-    egressEndpoint?: string;
+    /**
+     * TRI-STATE, and the third state is a fix. `undefined` means "this registration is not an
+     * advertisement" — the CONNECT path registers a pairing before the machine has said anything
+     * about itself, and must not erase what it said last time. `null` (or an address that does not
+     * validate) means "this advertisement offers no egress", which CLEARS the stored one.
+     *
+     * It used to be `string | undefined` with a keep-the-previous fallback, so a `hello` carrying
+     * no endpoint kept the old one alive: a machine could never un-offer a route it once offered,
+     * which is precisely the merge-instead-of-replace defect the capability list already avoids.
+     */
+    egressEndpoint?: string | null;
   },
   deps?: { now?: () => number },
 ): Promise<PairingRow> {
@@ -104,6 +123,13 @@ export async function registerPairing(
   // daemon that already holds the old secret (it would deny every task, fail-closed but opaque).
   const signingSecretCiphertext =
     existing?.signingSecretCiphertext ?? encrypt(randomBytes(32).toString('hex'));
+  // The advertisement REPLACES; a non-advertisement keeps. Validation happens here rather than only
+  // at the frame handler because this is the write: whatever else calls it, an unusable address
+  // never reaches the row, and therefore never reaches a launch option.
+  const egressEndpoint =
+    input.egressEndpoint === undefined
+      ? existing?.egressEndpoint
+      : (normaliseEgressEndpoint(input.egressEndpoint) ?? undefined);
   const row: PairingRow = {
     _id: input.pairingId,
     pairingId: input.pairingId,
@@ -112,7 +138,7 @@ export async function registerPairing(
     // Advertisement REPLACES rather than merges: a machine that stops offering a capability must
     // stop being selected for it, and a merge would make revocation impossible.
     ...(input.capabilities ? { capabilities: input.capabilities } : existing?.capabilities ? { capabilities: existing.capabilities } : {}),
-    ...(input.egressEndpoint ? { egressEndpoint: input.egressEndpoint } : existing?.egressEndpoint ? { egressEndpoint: existing.egressEndpoint } : {}),
+    ...(egressEndpoint ? { egressEndpoint } : {}),
     signingSecretCiphertext,
     createdAt: existing?.createdAt ?? nowIso,
     // Preserve a revocation tombstone (§18.3.5, S4): a revoked pairingId stays revoked forever - a
@@ -389,6 +415,20 @@ export function __resetLiveConnectionsForTests(): void {
  * Egress candidates for an org (Cofre WS-I / I-2). Org-scoped by construction — a run can never be
  * routed through another tenant's home connection, because a foreign machine is not a candidate at
  * all rather than a candidate that is later filtered.
+ *
+ * THE ENDPOINT IS AUTHORISED HERE TOO, not only the capability. I-3 said the right thing about what
+ * a machine may be USED FOR and nothing at all about WHERE the traffic would go: the capability was
+ * intersected with the org's grants and the ADDRESS was passed through untouched. That gap had a
+ * concrete shape - a machine advertising `{capabilities:['egress.residential'],
+ * egressEndpoint:'http://attacker.example:8080'}` needed only the ordinary capability grant (which
+ * carries no address, and whose admin surface showed capability NAMES) for the org's hosted
+ * Chromium to launch through the attacker's proxy, credential-gated steps included; and a
+ * compromised daemon could move the destination on any reconnect with no new grant.
+ *
+ * So the grant NAMES the endpoint it authorises, and the two are compared in canonical form. A
+ * machine whose advertised address is not the one the org authorised is not a residential-egress
+ * candidate AND carries no endpoint at all - the address never leaves this function, so nothing
+ * downstream has to be trusted to re-check it.
  */
 export async function egressCandidatesForOrg(org: string): Promise<
   Array<{ pairingId: string; org: string; capabilities: string[]; egressEndpoint?: string; live: boolean }>
@@ -405,21 +445,33 @@ export async function egressCandidatesForOrg(org: string): Promise<
   const grants = (await bridgeCapabilityGrants.find({ orgId: org, revokedAt: null })) as unknown as Array<{
     pairingId: string;
     capability: string;
+    egressEndpoint?: string;
   }>;
-  const grantedBy = new Map<string, Set<string>>();
+  /** pairingId -> capability -> the endpoint that grant authorises (only `egress.residential` has one). */
+  const grantedBy = new Map<string, Map<string, string | undefined>>();
   for (const g of grants) {
-    const set = grantedBy.get(g.pairingId) ?? new Set<string>();
-    set.add(g.capability);
-    grantedBy.set(g.pairingId, set);
+    const caps = grantedBy.get(g.pairingId) ?? new Map<string, string | undefined>();
+    caps.set(g.capability, g.egressEndpoint);
+    grantedBy.set(g.pairingId, caps);
   }
 
   return rows.map((row) => {
-    const granted = grantedBy.get(row.pairingId) ?? new Set<string>();
+    const granted = grantedBy.get(row.pairingId) ?? new Map<string, string | undefined>();
+    // Re-validated at the point of USE, not only at the point of write: a row written before this
+    // rule existed, or by any other path, must not become a proxy target on the strength of being
+    // in the database already.
+    const advertised = normaliseEgressEndpoint(row.egressEndpoint);
+    const authorisedRoute =
+      advertised !== null &&
+      granted.has(EGRESS_RESIDENTIAL) &&
+      normaliseEgressEndpoint(granted.get(EGRESS_RESIDENTIAL)) === advertised;
     return {
       pairingId: row.pairingId,
       org: row.org,
-      capabilities: (row.capabilities ?? []).filter((c) => granted.has(c)),
-      ...(row.egressEndpoint ? { egressEndpoint: row.egressEndpoint } : {}),
+      capabilities: (row.capabilities ?? []).filter(
+        (c) => granted.has(c) && (c !== EGRESS_RESIDENTIAL || authorisedRoute),
+      ),
+      ...(authorisedRoute ? { egressEndpoint: advertised } : {}),
       live: isLive(row.pairingId),
     };
   });
@@ -427,10 +479,21 @@ export async function egressCandidatesForOrg(org: string): Promise<
 
 /** The raw ADVERTISED list, for an admin surface that must show what a machine offers versus what
  *  it has been granted. Never feed this to selection — that is what `egressCandidatesForOrg` is
- *  for, and the difference between the two is the whole of I-3. */
-export async function advertisedCapabilitiesForOrg(org: string): Promise<Array<{ pairingId: string; advertised: string[] }>> {
+ *  for, and the difference between the two is the whole of I-3.
+ *
+ *  IT CARRIES THE ADVERTISED ADDRESS. Granting `egress.residential` authorises a DESTINATION, and a
+ *  surface that returned capability names alone could not show the person deciding what they were
+ *  actually deciding - which is how a machine-supplied address gets authorised by someone who never
+ *  saw it. */
+export async function advertisedCapabilitiesForOrg(
+  org: string,
+): Promise<Array<{ pairingId: string; advertised: string[]; egressEndpoint?: string }>> {
   const rows = (await bridgePairings.find({ org, revokedAt: null })) as PairingRow[];
-  return rows.map((row) => ({ pairingId: row.pairingId, advertised: row.capabilities ?? [] }));
+  return rows.map((row) => ({
+    pairingId: row.pairingId,
+    advertised: row.capabilities ?? [],
+    ...(row.egressEndpoint ? { egressEndpoint: row.egressEndpoint } : {}),
+  }));
 }
 
 /**

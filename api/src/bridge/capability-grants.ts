@@ -27,16 +27,45 @@
  */
 import type { BridgeCapability } from '@ekoa/shared';
 import { bridgeCapabilityGrants } from '../data/stores.js';
+import { normaliseEgressEndpoint } from './egress-endpoint.js';
 import type { Doc } from '../data/store.js';
+
+/** The one capability whose grant authorises a DESTINATION and not merely an ability. */
+const EGRESS_RESIDENTIAL = 'egress.residential';
 
 /** A tenant's decision that one machine may be used for one capability. */
 export interface CapabilityGrantDoc extends Doc {
   orgId: string;
   pairingId: string;
   capability: string;
+  /**
+   * THE ADDRESS THIS GRANT AUTHORISES — `egress.residential` only, in canonical form.
+   *
+   * A residential-egress grant is not "this machine may carry traffic"; it is "this tenant's
+   * traffic may leave by THIS DOOR". Without the address, the grant authorised the MACHINE and the
+   * machine then chose the destination — a self-assertion sitting exactly where an authorisation
+   * was supposed to be. A daemon could advertise an attacker's proxy and have the org's hosted
+   * Chromium launch through it on the strength of an ordinary capability grant, and could move the
+   * destination again on any reconnect with no new grant and nobody asked.
+   *
+   * `egressCandidatesForOrg` compares this against what the machine CURRENTLY advertises and
+   * withholds the route (and the address) when they differ. Optional on the type only because rows
+   * for every other capability have none.
+   */
+  egressEndpoint?: string;
   grantedByUserId: string;
   createdAt: string;
   revokedAt: string | null;
+}
+
+/** A grant that cannot be recorded because the destination it would authorise is missing or
+ *  unusable. Thrown rather than stored-and-ignored: the person deciding is the one who can fix it,
+ *  and a grant that silently authorises no route is the failure this whole field exists to stop. */
+export class CapabilityGrantError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CapabilityGrantError';
+  }
 }
 
 function idFor(orgId: string, pairingId: string, capability: string): string {
@@ -48,15 +77,30 @@ function idFor(orgId: string, pairingId: string, capability: string): string {
  * because revocation here is a state rather than a tombstone — unlike a PAIRING revoke, which is
  * terminal by design (a revoked pairingId must never reconnect). Re-authorising `local.bash` on a
  * machine the admin previously turned it off for is an ordinary administrative act, not a bypass.
+ *
+ * `egress.residential` REQUIRES `egressEndpoint`, and it must be an address a run may actually be
+ * routed through (`egress-endpoint.ts`). See `CapabilityGrantDoc.egressEndpoint` for why the
+ * capability alone was never the authorisation this grant was taken to be.
  */
 export async function grantCapability(input: {
   orgId: string;
   pairingId: string;
   capability: BridgeCapability | string;
+  /** REQUIRED for `egress.residential`, meaningless (and dropped) for every other capability. */
+  egressEndpoint?: string;
   grantedByUserId: string;
   now?: () => number;
 }): Promise<CapabilityGrantDoc> {
   const at = new Date(input.now?.() ?? Date.now()).toISOString();
+  let endpoint: string | undefined;
+  if (input.capability === EGRESS_RESIDENTIAL) {
+    endpoint = normaliseEgressEndpoint(input.egressEndpoint) ?? undefined;
+    if (!endpoint) {
+      throw new CapabilityGrantError(
+        `a ${EGRESS_RESIDENTIAL} grant must name the egress endpoint it authorises, and it must be a usable proxy address`,
+      );
+    }
+  }
   const existing = (await bridgeCapabilityGrants.get(
     idFor(input.orgId, input.pairingId, input.capability),
   )) as CapabilityGrantDoc | null;
@@ -65,6 +109,7 @@ export async function grantCapability(input: {
     orgId: input.orgId,
     pairingId: input.pairingId,
     capability: input.capability,
+    ...(endpoint ? { egressEndpoint: endpoint } : {}),
     grantedByUserId: input.grantedByUserId,
     createdAt: existing?.createdAt ?? at,
     revokedAt: null,

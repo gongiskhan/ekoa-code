@@ -38,6 +38,7 @@ import {
   markStale,
   allLiveConnections,
 } from './registry.js';
+import { normaliseEgressEndpoint } from './egress-endpoint.js';
 import { spendConnectNonce } from './connect-nonce.js';
 import { acceptSessionPush, AttendedError } from './attended.js';
 import { redactInboundFrame, releasePairingSecrets } from './ingress-redaction.js';
@@ -286,13 +287,25 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
         // Advertisement REPLACES the stored list (a machine that stops offering a capability must
         // stop being selected for it) and authorises nothing by itself — `invokeTool` still requires
         // an org grant (I-3, default deny).
+        //
+        // THE ADDRESS REPLACES TOO, and is validated on the way in. `egressEndpoint` is a free
+        // string on the wire and it ends up as `browser.newContext({ proxy })` for the org's hosted
+        // Chromium, so an address that is not a usable proxy target is dropped here and the operator
+        // is told; passing `null` rather than omitting the field is what makes a hello with no
+        // endpoint CLEAR the previous one instead of keeping a route the machine no longer offers.
+        const advertisedEgress = normaliseEgressEndpoint(frame.egressEndpoint);
+        if (frame.egressEndpoint && !advertisedEgress) {
+          console.warn(
+            `[bridge][hello] refused an unusable egress endpoint: pairing=${pairingId} (not a permitted proxy address)`,
+          );
+        }
         try {
           await registerPairing({
             pairingId,
             org: live.org,
             ownerUserId: live.ownerUserId,
             capabilities: frame.capabilities,
-            ...(frame.egressEndpoint ? { egressEndpoint: frame.egressEndpoint } : {}),
+            egressEndpoint: advertisedEgress,
           });
         } catch {
           console.warn(`[bridge][hello] could not record advertisement: pairing=${pairingId}`);

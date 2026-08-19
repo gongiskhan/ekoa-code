@@ -62,7 +62,7 @@ describe('default deny', () => {
 
   it('a granted capability becomes usable; a revoked one stops', async () => {
     await machine('p1', ['egress.residential']);
-    await grantCapability({ orgId: ORG, pairingId: 'p1', capability: 'egress.residential', grantedByUserId: 'admin1' });
+    await grantCapability({ orgId: ORG, pairingId: 'p1', capability: 'egress.residential', egressEndpoint: 'http://100.64.0.5:8888', grantedByUserId: 'admin1' });
     expect(await isCapabilityGranted(ORG, 'p1', 'egress.residential')).toBe(true);
 
     expect(await revokeCapability(ORG, 'p1', 'egress.residential')).toBe(true);
@@ -73,13 +73,13 @@ describe('default deny', () => {
 
   it('a grant is per CAPABILITY, not a blanket pass for the machine', async () => {
     await machine('p1', ['egress.residential', 'local.bash']);
-    await grantCapability({ orgId: ORG, pairingId: 'p1', capability: 'egress.residential', grantedByUserId: 'admin1' });
+    await grantCapability({ orgId: ORG, pairingId: 'p1', capability: 'egress.residential', egressEndpoint: 'http://100.64.0.5:8888', grantedByUserId: 'admin1' });
     expect(await isCapabilityGranted(ORG, 'p1', 'local.bash')).toBe(false);
   });
 
   it('a grant does not cross tenants — org is part of the KEY, not a filter applied after', async () => {
     await machine('p1', ['egress.residential']);
-    await grantCapability({ orgId: ORG, pairingId: 'p1', capability: 'egress.residential', grantedByUserId: 'admin1' });
+    await grantCapability({ orgId: ORG, pairingId: 'p1', capability: 'egress.residential', egressEndpoint: 'http://100.64.0.5:8888', grantedByUserId: 'admin1' });
     expect(await isCapabilityGranted('orgB', 'p1', 'egress.residential')).toBe(false);
   });
 
@@ -100,7 +100,7 @@ describe('usable = advertised INTERSECT granted', () => {
     // The machine may have lost the hardware, or the operator removed the feature. A stale grant
     // must not resurrect a capability the machine is no longer offering.
     expect(await usableCapabilities(ORG, 'p1', [])).toEqual([]);
-    await grantCapability({ orgId: ORG, pairingId: 'p1', capability: 'egress.residential', grantedByUserId: 'admin1' });
+    await grantCapability({ orgId: ORG, pairingId: 'p1', capability: 'egress.residential', egressEndpoint: 'http://100.64.0.5:8888', grantedByUserId: 'admin1' });
     expect(await usableCapabilities(ORG, 'p1', [])).toEqual([]);
   });
 
@@ -109,7 +109,7 @@ describe('usable = advertised INTERSECT granted', () => {
   });
 
   it('both sides present → usable', async () => {
-    await grantCapability({ orgId: ORG, pairingId: 'p1', capability: 'egress.residential', grantedByUserId: 'admin1' });
+    await grantCapability({ orgId: ORG, pairingId: 'p1', capability: 'egress.residential', egressEndpoint: 'http://100.64.0.5:8888', grantedByUserId: 'admin1' });
     expect(await usableCapabilities(ORG, 'p1', ['egress.residential', 'local.bash'])).toEqual(['egress.residential']);
   });
 });
@@ -129,7 +129,7 @@ describe('THE CONSEQUENCE: selection cannot be steered by a machine advertising 
 
   it('the same machine IS selected once the org grants it', async () => {
     await machine('trusted', ['egress.residential']);
-    await grantCapability({ orgId: ORG, pairingId: 'trusted', capability: 'egress.residential', grantedByUserId: 'admin1' });
+    await grantCapability({ orgId: ORG, pairingId: 'trusted', capability: 'egress.residential', egressEndpoint: 'http://100.64.0.5:8888', grantedByUserId: 'admin1' });
 
     const candidates = (await egressCandidatesForOrg(ORG)).map((c) => ({ ...c, live: true }));
     expect(candidates[0]!.capabilities).toEqual(['egress.residential']);
@@ -139,7 +139,7 @@ describe('THE CONSEQUENCE: selection cannot be steered by a machine advertising 
 
   it('revoking the grant takes the machine out of selection without touching the pairing', async () => {
     await machine('trusted', ['egress.residential']);
-    await grantCapability({ orgId: ORG, pairingId: 'trusted', capability: 'egress.residential', grantedByUserId: 'admin1' });
+    await grantCapability({ orgId: ORG, pairingId: 'trusted', capability: 'egress.residential', egressEndpoint: 'http://100.64.0.5:8888', grantedByUserId: 'admin1' });
     await revokeCapability(ORG, 'trusted', 'egress.residential');
 
     const candidates = (await egressCandidatesForOrg(ORG)).map((c) => ({ ...c, live: true }));
@@ -153,7 +153,7 @@ describe('THE CONSEQUENCE: selection cannot be steered by a machine advertising 
 
   it('another org\'s grant does not make the machine usable here', async () => {
     await machine('p1', ['egress.residential']);
-    await grantCapability({ orgId: 'orgB', pairingId: 'p1', capability: 'egress.residential', grantedByUserId: 'other' });
+    await grantCapability({ orgId: 'orgB', pairingId: 'p1', capability: 'egress.residential', egressEndpoint: 'http://100.64.0.5:8888', grantedByUserId: 'other' });
     const candidates = await egressCandidatesForOrg(ORG);
     expect(candidates[0]!.capabilities).toEqual([]);
   });
