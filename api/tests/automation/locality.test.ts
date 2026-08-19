@@ -91,7 +91,24 @@ describe('preferential bridge — adversarial sessions only (P4.2)', () => {
       daemonPairingId: 'pair_office',
     }));
     expect(v.kind).toBe('blocked');
-    expect(v.kind === 'blocked' && v.reason).toMatch(/pair_home/);
+    // The refusal DESCRIBES the machine and names the way out. It does NOT print the pairing id:
+    // that is an internal UUID no surface in this product ever shows a user, so echoing it names
+    // nothing and reads as a fault code. (An AUTHOR's explicit `pinned` target is different - see
+    // the pinned case below - because there the id is a literal they typed themselves.)
+    const reason = v.kind === 'blocked' ? v.reason : '';
+    expect(reason).not.toMatch(/pair_home|pair_office/);
+    expect(reason).toMatch(/where its session was established/);
+    expect(reason).toMatch(/establish this session again/);
+  });
+
+  it('...and an author-PINNED target does name its machine, because the author wrote that id', () => {
+    const v = resolveLocality(input({
+      declaredTarget: { kind: 'pinned', pairingId: 'pair_declared' },
+      daemonConnected: true,
+      daemonPairingId: 'pair_office',
+    }));
+    expect(v.kind).toBe('blocked');
+    expect(v.kind === 'blocked' && v.reason).toMatch(/pair_declared/);
   });
 
   it('runs on the bridge when the connected machine IS the ceremony machine', () => {
@@ -109,18 +126,19 @@ describe('preferential bridge — adversarial sessions only (P4.2)', () => {
     expect(v.kind).toBe('blocked');
   });
 
-  it('a preferred machine that is offline WAITS and names it, never borrowing a colleague’s', () => {
+  it('a preferred machine that is REGISTERED BUT ASLEEP waits, never borrowing a colleague’s', () => {
     const v = resolveLocality(input({
       preferredPairingId: 'pair_home',
       offlinePolicy: 'queue',
-      // A DIFFERENT machine in the same org IS live and advertising residential egress. It must
-      // not be substituted: another household on another ASN is as foreign to the portal as a
-      // datacenter, and more confusing when it fails.
-      candidates: [machine({ pairingId: 'pair_colleague' })],
+      // The ceremony machine is still the org's - registered, simply not live. A DIFFERENT machine
+      // in the same org IS live and advertising residential egress, and it must not be substituted:
+      // another household on another ASN is as foreign to the portal as a datacenter, and more
+      // confusing when it fails.
+      candidates: [machine({ pairingId: 'pair_home', live: false }), machine({ pairingId: 'pair_colleague' })],
     }));
     expect(v.kind).toBe('blocked');
-    expect(v.kind === 'blocked' && v.reason).toMatch(/pair_home/);
     expect(v.kind === 'blocked' && v.reason).not.toMatch(/pair_colleague/);
+    expect(v.kind === 'blocked' && v.reason).toMatch(/not connected/);
   });
 
   it('a PERMISSIVE credential carries no preference at all (kind: any)', () => {
@@ -148,6 +166,68 @@ describe('preferential bridge — adversarial sessions only (P4.2)', () => {
       preferredPairingId: 'pair_home',
     });
     expect(req).toEqual({ kind: 'residential', pairingId: 'pair_declared' });
+  });
+});
+
+/**
+ * THE RETIRED CEREMONY MACHINE - the halt that used to have no exit.
+ *
+ * `preferredPairingId` comes off a stored session and is never revised, so retiring the laptop that
+ * established it left the preference pointing at hardware nobody owns: every later fire blocked,
+ * forever, and no owner action cleared it. The registry can tell "asleep" from "gone" (its listing
+ * carries every non-revoked pairing, live or not), so this refuses differently and names the act
+ * that fixes it.
+ */
+describe('a ceremony machine that was retired', () => {
+  const retired = (over: Partial<LocalityInput> = {}) =>
+    resolveLocality(input({
+      preferredPairingId: 'pair_gone',
+      // The fleet listing knows the org and does not contain `pair_gone`: it was revoked.
+      candidates: [machine({ pairingId: 'pair_now' })],
+      ...over,
+    }));
+
+  it('refuses with the act that fixes it, instead of waiting for hardware nobody owns', () => {
+    const v = retired();
+    expect(v.kind).toBe('blocked');
+    expect(v.kind === 'blocked' && v.reason).toMatch(/has been removed from your account/);
+    expect(v.kind === 'blocked' && v.reason).toMatch(/establish this session again/);
+    expect(v.kind === 'blocked' && v.reason).not.toMatch(/pair_gone/);
+  });
+
+  it('does NOT quietly fall through to another machine - a homeless session is not a portable one', () => {
+    // The available machine is live, granted and advertising residential egress. Retiring the
+    // ceremony machine does not make running there any less of a substitution.
+    const v = retired({ daemonConnected: true, daemonPairingId: 'pair_now' });
+    expect(v.kind).toBe('blocked');
+  });
+
+  it('an EMPTY listing is not a retirement - not knowing may never move a session', () => {
+    // The seam answered nothing (unbound, or a store that returned no rows). That is ignorance, not
+    // a statement that anything was revoked, so the ordinary preference refusal stands.
+    const v = resolveLocality(input({
+      preferredPairingId: 'pair_gone',
+      candidates: [],
+      daemonConnected: true,
+      daemonPairingId: 'pair_now',
+    }));
+    expect(v.kind).toBe('blocked');
+    expect(v.kind === 'blocked' && v.reason).toMatch(/where its session was established/);
+    expect(v.kind === 'blocked' && v.reason).not.toMatch(/removed from your account/);
+  });
+
+  it('a PERMISSIVE origin is untouched by it - its credential never asked for a machine', () => {
+    const v = retired({ classification: PERMISSIVE });
+    expect(v.kind).toBe('in-process');
+  });
+
+  it('an author PIN is the author\'s business, retired or not', () => {
+    const v = retired({ declaredTarget: { kind: 'pinned', pairingId: 'pair_gone' } });
+    expect(v.kind).toBe('blocked');
+    // Their literal, echoed back; not the re-establish instruction, which is about a preference
+    // this module inferred rather than a target they chose.
+    expect(v.kind === 'blocked' && v.reason).toMatch(/pair_gone/);
+    expect(v.kind === 'blocked' && v.reason).not.toMatch(/removed from your account/);
   });
 });
 

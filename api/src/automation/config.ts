@@ -8,8 +8,9 @@
  *
  * Env keys (noted in the G8 report for later promotion into config.ts):
  *   EKOA_APP_ORIGIN                 running frontend origin for self-URL rebasing (self-url.ts)
- *   EKOA_AUTOMATION_LOCAL_BROWSER   kill switch for the in-process Playwright fallback (the GATE is
- *                                   the origin posture - see the field docblock)
+ *   EKOA_AUTOMATION_LOCAL_BROWSER   kill switch for the in-process (hosted) Playwright browser; ON
+ *                                   outside production, OFF in production. The GATE is the origin
+ *                                   posture, not this - see the field docblock.
  *   EKOA_AUTOMATION_DATA_DIR        root for per-run step screenshots (§13.4)
  */
 import { homedir } from 'node:os';
@@ -20,18 +21,31 @@ export interface AutomationConfig {
    *  the planner guessed is rebased onto this (self-url.ts). */
   appOrigin: string;
   /**
-   * The in-process LocalBrowserSession fallback's ENV KILL SWITCH. Default ON, in EVERY
-   * environment - and it is deliberately NOT the gate.
+   * The in-process (hosted Chromium) browser's ENV KILL SWITCH. Default ON outside production, OFF
+   * in production - UNCHANGED, deliberately. P4 changed what this flag MEANS, not what it defaults
+   * to.
    *
-   * P4.1: this used to default to `!isProd`, which made the DEPLOYMENT ENVIRONMENT the answer to
-   * "may this step run in the hosted browser". That is the wrong question asked of the wrong
-   * thing: outside production every target silently ran hosted, including the portals that score
-   * datacenter IPs, and production only looked correct because the flag happened to be off there.
-   * The gate is the ORIGIN POSTURE, applied per step in `locality.ts`, in every environment - a
-   * permissive origin may be carried by the hosted browser, an adversarial one never is, and
-   * posture defaults closed, so every automation authored before posture existed is bridge-only.
-   * What remains here is an operator kill switch: false turns the fallback off even for permissive
-   * origins.
+   * WHAT IT USED TO MEAN. It was the ONLY answer to "may this step run in the hosted browser",
+   * which made the DEPLOYMENT ENVIRONMENT the answer to a question about a SITE: outside production
+   * every target silently ran hosted, including the portals that score datacenter IPs, and
+   * production only looked correct because the flag happened to be off there.
+   *
+   * WHAT IT MEANS NOW. An operator kill switch, and nothing more. The GATE is the ORIGIN POSTURE,
+   * applied per step in `locality.ts`, in every environment - a permissive origin may be carried by
+   * the hosted browser, an adversarial one never is, and posture defaults closed, so every
+   * automation authored before posture existed is bridge-only whatever this flag says.
+   *
+   * SO WHY NOT DEFAULT IT ON EVERYWHERE, now that posture is the gate? Because relative to the
+   * shipped system that is an OPENING: hosted Chromium would go from categorically unreachable in
+   * production to reachable for every origin some declaration calls permissive - on a slice whose
+   * entire purpose is to narrow where a browser may run. A slice that narrows must not widen
+   * anything on the way past. Turning it on in production is a deliberate operator act
+   * (`EKOA_AUTOMATION_LOCAL_BROWSER=true`), taken when the fleet and the posture declarations are
+   * ready for it, and not a side effect of this change. Pinned by `tests/automation/config.test.ts`
+   * in both environments.
+   *
+   * It is also the switch the credential gate's TYPIST reads (`engine.ts` builds its hosted-browser
+   * permit from it): with the hosted browser off, a password is not quietly typed into one either.
    */
   localBrowserEnabled: boolean;
   /** Root directory for per-run step screenshots (§13.4). Best-effort; failures never fail a run. */
@@ -48,9 +62,10 @@ let cached: AutomationConfig | undefined;
 
 export function loadAutomationConfig(): AutomationConfig {
   if (cached) return cached;
+  const isProd = process.env.NODE_ENV === 'production';
   cached = {
     appOrigin: process.env.EKOA_APP_ORIGIN || 'http://localhost:3000',
-    localBrowserEnabled: envBool('EKOA_AUTOMATION_LOCAL_BROWSER', true),
+    localBrowserEnabled: envBool('EKOA_AUTOMATION_LOCAL_BROWSER', !isProd),
     dataDir: process.env.EKOA_AUTOMATION_DATA_DIR || join(homedir(), '.ekoa', 'data'),
   };
   return cached;

@@ -228,6 +228,10 @@ function runInput(over: Partial<EnsureSessionInput> = {}): EnsureSessionInput {
     credentialRef: 'cofre:itm_password_1',
     loginUrl: LOGIN_URL,
     runId: 'run_1',
+    // THE HOSTED-TYPIST PERMIT (P4.1). Stated here because it now DEFAULTS CLOSED: without it every
+    // case below that expects a login gets `needs-human` instead, which is the whole point of the
+    // field. The `hosted-typist permit` suite at the end of this file drives the absent case.
+    hostedTypist: {},
     ...over,
   };
 }
@@ -1121,5 +1125,72 @@ describe('the establishing machine is read off establishedBy and nothing else', 
     const result = await ensureSession(runInput(), h.deps);
     expect(result.status).toBe('reused');
     expect(result).not.toHaveProperty('establishedByPairingId');
+  });
+});
+
+/**
+ * THE HOSTED-TYPIST PERMIT (P4.1) - the check whose absence let this module open a datacenter
+ * browser against an adversarial portal and submit a password into it.
+ *
+ * WHAT WAS WRONG. `ensureSession` asked posture exactly one question - `requiresAttendedAuth` - and
+ * asked NOTHING about whether a browser might be opened at all. Everything else it needed to reach
+ * `establishWithTypist` (a stored session that failed checkout, a `cofre:` reference, a standing
+ * grant) is ordinary state a nightly automation has, so an origin nobody had ever classified would
+ * get `defaultOpenBrowser` -> `getLocalBrowserContext(ownerUserId)` with no route argument at all:
+ * hosted Chromium, datacenter IP, password submitted.
+ *
+ * WHAT THE PERMIT IS. A statement by the CALLER - which is the only layer that knows the origin's
+ * posture and the run's locality - that the hosted browser is an acceptable place for this login,
+ * and by which route out. Absent means no, and absent is what a caller that never thought about it
+ * supplies.
+ */
+describe('the hosted-typist permit', () => {
+  it('WITHOUT a permit, a typist-routed login opens nothing and asks for a person', async () => {
+    const h = harness({ items: [] }); // no stored session ⇒ first establishment ⇒ typist route
+    const result = await ensureSession(runInput({ hostedTypist: undefined }), h.deps);
+
+    expect(result.status).toBe('needs-human');
+    expect(result.status === 'needs-human' && result.route).toBe('attended');
+    // `attempted: false` is load-bearing: it is what tells a caller no credential was SPENT, and
+    // the refusal happens before anything is unwrapped, navigated to, or typed.
+    expect(result.status === 'needs-human' && result.attempted).toBe(false);
+    expect(h.openBrowser).not.toHaveBeenCalled();
+    expect(h.typist).not.toHaveBeenCalled();
+  });
+
+  it('...and says so in terms of WHERE, not of what the password is', async () => {
+    const h = harness({ items: [] });
+    const result = await ensureSession(runInput({ hostedTypist: undefined }), h.deps);
+    expect(result.status === 'needs-human' && result.reason).toMatch(/hosted browser/);
+    expect(result.status === 'needs-human' && result.reason).toMatch(/your own machines/);
+  });
+
+  it('WITH a permit the login runs exactly as before - the permit adds a gate, not a behaviour', async () => {
+    const h = harness({ items: [] });
+    const result = await ensureSession(runInput(), h.deps);
+    expect(result.status).toBe('reestablished');
+    expect(h.typist).toHaveBeenCalledTimes(1);
+  });
+
+  it('the permit\'s ROUTE reaches the browser opener, so a login leaves by the run\'s own door', async () => {
+    const h = harness({ items: [] });
+    const egress = { outcome: 'machine' as const, pairingId: 'pair_home', proxyUrl: 'http://100.64.0.7:1080' };
+    await ensureSession(runInput({ hostedTypist: { egress } }), h.deps);
+    // Before P4.1 the opener took an owner id and nothing else, so every login left from the
+    // datacenter whatever the run had resolved - including a run whose STEPS were proxied.
+    expect(h.openBrowser).toHaveBeenCalledWith({ ownerUserId: actor.userId, egress });
+  });
+
+  it('a permit with no route opens the ordinary (datacenter) context, as it always did', async () => {
+    const h = harness({ items: [] });
+    await ensureSession(runInput({ hostedTypist: {} }), h.deps);
+    expect(h.openBrowser).toHaveBeenCalledWith({ ownerUserId: actor.userId });
+  });
+
+  it('a HEALTHY session is unaffected: reuse never wanted a browser in the first place', async () => {
+    const h = harness({ items: [sessionItem()] });
+    const result = await ensureSession(runInput({ hostedTypist: undefined }), h.deps);
+    expect(result.status).toBe('reused');
+    expect(h.openBrowser).not.toHaveBeenCalled();
   });
 });

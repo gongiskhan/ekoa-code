@@ -59,6 +59,49 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   suite an `afterEach` that does `await cancelCrawlAndWait('s1')` before the runner reset, so no
   background run can write after the clear; and make spec 1's precondition real - hold run #1 open
   with a lookup seam that does not resolve until the spec releases it - instead of racing it.
+- **`citius-sync-establishes-its-session-outside-the-locality-decision`** (OPEN 2026-08-19, MEDIUM,
+  an exception named rather than grandfathered). P4.1 makes the unattended typist's hosted browser
+  conditional on a PERMIT that the run loop only issues for an origin whose posture allows the
+  hosted path (`EnsureSessionInput.hostedTypist`, absent-means-no). The Citius sync rail
+  (`routes/sync.ts` -> `legal/citius-sync.ts`) calls `ensureSession` DIRECTLY: it has no step
+  declaration, no posture classification and no fleet resolution to consult, so it cannot take part
+  in that decision. It therefore passes `hostedTypist: {}` unconditionally, which preserves exactly
+  the behaviour it shipped with - a login typed from the hosted browser, by the datacenter route,
+  against a court portal that is adversarial by any reading.
+
+  **Not a regression, and not fixed here.** It is the status quo made explicit: before this slice
+  the same login happened with nothing in the code even naming the question. Closing it means giving
+  that rail a locality decision of its own (an origin posture for the Citius host, plus a resolved
+  route), which is a change to a separately reviewed rail with its own completeness suite and does
+  not belong in a slice already touching the engine, the schedules rail and `web/`.
+
+- **`posture-drift-check-cannot-stop-the-act-that-navigates`** (OPEN 2026-08-19, MEDIUM, a named
+  limit of the P4.1 posture-inheritance constraint). Posture is declared on an `IntegrationAction`
+  and applies to the origin that action is about. A `browser`/`wait`/`verify` step has no URL, so
+  `resolveStepOrigin` walks back to the nearest URL-bearing step - and only an `integration` step
+  yields a non-null action, so a browser step can inherit `permissive` from an API origin and then
+  be driven onto an unrelated host. The engine now refuses to carry the NEXT step when the hosted
+  session's observed origin is not the declared one, which closes the compounding case.
+
+  **It cannot close the first hop.** The act that navigates is the same act the step was authorised
+  to perform, and the engine learns where it landed only from the post-action observation. A step
+  that navigates to a bank portal and does its work in ONE act is unprotected by this check. The
+  bridge is unaffected either way (there is no substitution to make on the owner's own machine); the
+  exposure is hosted-only, and it needs a per-ACT origin gate inside the executor - i.e. refusing an
+  act whose resolved destination leaves the declared origin - which is a different slice.
+
+- **`blocked-badge-copy-is-keyed-on-codes-nothing-enumerates`** (OPEN 2026-08-19, LOW, drift risk).
+  `schedules.runBlocked` in `web/locales/*` keys its copy by `detail.code`, and those codes are
+  produced in `api/src/schedules/supervisor.ts` (`mapAutomationOutcome`, `mapIntegrationOutcome`)
+  and `api/src/automation/service.ts` with no shared enumeration between them, and
+  `ScheduleRun.detail.code` is a free `z.string().max(64)`. A new blocked cause added on the API
+  side renders the vague fallback until someone remembers the locale keys, and nothing fails when
+  they do not.
+  `web/__tests__/components/run-status-badge.test.tsx` pins that the fallback is honest (never a
+  specific wrong instruction) and that en/pt stay key-for-key, which bounds the damage; a shared
+  code vocabulary in `shared/` would end it. Deliberately not added here: it is a contract change,
+  and Rule 7 wants that decided on its own rather than as a tail of a UI fix.
+
 - **`undeclared-origins-are-bridge-only-so-a-daemonless-dev-halts-browser-steps`** (OPEN 2026-08-19,
   MEDIUM, developer ergonomics - the deliberate cost of P4.1, recorded rather than hidden). Execution
   locality is now gated by the ORIGIN POSTURE in every environment, and posture defaults

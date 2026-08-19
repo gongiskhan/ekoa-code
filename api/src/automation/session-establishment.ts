@@ -90,6 +90,7 @@ import type { SecretRegistry } from '../security/redaction.js';
 import { beginCredentialWindowForTrace, traceIsSuppressed } from '../streaming/registry.js';
 import { loginUrlForHost, recipeForHost } from './login-recipes.js';
 import { getLocalBrowserContext } from './seams.js';
+import type { EgressResolution } from './egress-policy.js';
 import {
   typistLogin,
   TypistNotSuppressed,
@@ -191,7 +192,14 @@ export interface EstablishmentBrowser {
   close(): Promise<void>;
 }
 
-export type BrowserOpener = (input: { ownerUserId: string }) => Promise<EstablishmentBrowser>;
+export type BrowserOpener = (input: {
+  ownerUserId: string;
+  /**
+   * P4.1 - the route out the caller resolved for this login, when it resolved one. The proxy is a
+   * LAUNCH option (`newContext({ proxy })`), so it has to arrive here; undefined is the datacenter.
+   */
+  egress?: EgressResolution;
+}) => Promise<EstablishmentBrowser>;
 
 /**
  * The real opener: a FRESH context from the automation browser seam.
@@ -200,9 +208,13 @@ export type BrowserOpener = (input: { ownerUserId: string }) => Promise<Establis
  * re-established" can silently mean "the old cookies were still there and nothing was proven" — and
  * `storageState()` below would capture the owner's whole cross-site jar rather than this portal's
  * session. The seam's contract says so (automation/seams.ts) and a lifecycle suite pins it.
+ *
+ * IT IS THE HOSTED CHROMIUM, and it used to be reached with no route argument at all - i.e. always
+ * the datacenter, whatever the run had resolved. It now carries the caller's resolution, and the
+ * permission to reach it at all is `EnsureSessionInput.hostedTypist`.
  */
-const defaultOpenBrowser: BrowserOpener = async ({ ownerUserId }) => {
-  const context = await getLocalBrowserContext(ownerUserId);
+const defaultOpenBrowser: BrowserOpener = async ({ ownerUserId, egress }) => {
+  const context = await getLocalBrowserContext(ownerUserId, egress);
   const page = await context.newPage();
   return {
     page,
@@ -284,6 +296,23 @@ export interface EnsureSessionInput {
    * make it un-overridable once it arrives — see `decideReauthRoute`.
    */
   requiresAttendedAuth?: boolean;
+  /**
+   * THE HOSTED-TYPIST PERMIT (P4.1). PRESENT ⇒ the unattended typist may open THIS PROCESS's hosted
+   * browser for this origin, and `egress` is the route out its context is launched through. ABSENT
+   * ⇒ the typist route becomes a `needs-human` refusal and NO BROWSER IS OPENED AT ALL.
+   *
+   * ABSENT MEANS NO, and that direction is the whole point. Before this field, `ensureSession`
+   * would reach `establishWithTypist` for ANY origin with a replayable password and a standing
+   * grant - including an origin classified adversarial - open the hosted Chromium from the
+   * datacenter, and submit the password there. Posture was consulted for `requiresAttendedAuth` and
+   * for nothing else, so the one question that decides whether a browser may open was never asked.
+   *
+   * It is presence-is-permission rather than a boolean because a permit is something a caller has
+   * to CONSTRUCT: there is no value of this field that is accidentally true, and no way to supply a
+   * route without also supplying the permission it belongs to. The caller resolves it - posture is
+   * a fact about the origin, and locality is a fact about the run, and this module knows neither.
+   */
+  hostedTypist?: { egress?: EgressResolution };
 }
 
 /**
@@ -614,8 +643,35 @@ export async function ensureSession(
     };
   }
 
+  // ---- 4c. THE HOSTED-TYPIST PERMIT (P4.1) ---------------------------------
+  // The LAST question before a browser exists, and the one that used to be missing entirely: may
+  // the hosted Chromium be opened for THIS origin at all? A permit is the caller's statement that
+  // the origin's posture allows the hosted path and that the run resolved a route through it;
+  // without one this returns rather than opening anything, so an adversarial origin's password is
+  // never typed from a datacenter IP.
+  //
+  // `route: 'attended'` because the answer is a person at a browser on a machine of their own -
+  // which is exactly what `credentialEstablishmentMode` turns an `attended` route WITH a credential
+  // reference into (a ceremony). `attempted: false`: nothing was unwrapped and nothing was typed.
+  if (!input.hostedTypist) {
+    return {
+      status: 'needs-human',
+      route: 'attended',
+      reason:
+        `${host} may not be logged into from the hosted browser - establish this session from one ` +
+        'of your own machines',
+      attempted: false,
+      ...(chosen ? { itemId: chosen._id } : {}),
+    };
+  }
+
   // ---- 5. THE ONE ATTEMPT --------------------------------------------------
-  return establishWithTypist(input, d, { host, credentialRef: input.credentialRef, integrationKey });
+  return establishWithTypist(input, d, {
+    host,
+    credentialRef: input.credentialRef,
+    integrationKey,
+    ...(input.hostedTypist.egress ? { egress: input.hostedTypist.egress } : {}),
+  });
 }
 
 /**
@@ -689,7 +745,7 @@ function resolveLoginUrl(input: EnsureSessionInput, d: EnsureSessionDeps, host: 
 async function establishWithTypist(
   input: EnsureSessionInput,
   d: EnsureSessionDeps,
-  ctx: { host: string; credentialRef: string; integrationKey: string },
+  ctx: { host: string; credentialRef: string; integrationKey: string; egress?: EgressResolution },
 ): Promise<EnsureSessionResult> {
   const { actor, runId } = input;
   const { host, credentialRef } = ctx;
@@ -703,7 +759,10 @@ async function establishWithTypist(
   const traceId = input.traceId ?? runId;
   const recipe = d.recipes(loginUrl.hostname) ?? d.recipes(host);
 
-  const browser = await d.openBrowser({ ownerUserId: actor.userId });
+  const browser = await d.openBrowser({
+    ownerUserId: actor.userId,
+    ...(ctx.egress ? { egress: ctx.egress } : {}),
+  });
   try {
     await browser.page.goto(loginUrl.toString(), { waitUntil: 'domcontentloaded' });
 

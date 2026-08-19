@@ -41,6 +41,10 @@ function runInput(over: Partial<EnsureSessionInput> = {}): EnsureSessionInput {
     credentialRef: 'cofre:itm_password_1',
     loginUrl: LOGIN_URL,
     runId: 'run_1',
+    // The P4.1 hosted-typist permit, which defaults CLOSED. This suite is about the RE-AUTH table
+    // (attended x standing grant), so every case here grants the permit and lets the table decide;
+    // the permit's own refusal is driven in `session-establishment.test.ts`.
+    hostedTypist: {},
     ...over,
   };
 }

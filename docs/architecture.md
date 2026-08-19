@@ -240,10 +240,12 @@ posture overriding `StepDeclaration`'s `cloud` default.
 `bridge | in-process | blocked` for the four step types that can reach a browser (`navigate`,
 `wait`, `browser`, `verify`), from the posture, the step's declaration, whether a daemon is
 connected, and the org's fleet. The bridge is the default - a browser step's home is the owner's
-machine - and the hosted Chromium is a fallback a PERMISSIVE origin may take, in every environment;
-`config.localBrowserEnabled` is now only an operator kill switch, able to close the fallback and
-never to open it for an adversarial origin. `blocked` is a HALT (`awaiting_daemon`), never a
-datacenter fallback and never a substitute machine. The route out comes from
+machine - and the hosted Chromium is a fallback a PERMISSIVE origin may take, and an adversarial one
+may not, in every environment. `config.localBrowserEnabled` (default `!isProd`, unchanged) is now
+only an operator kill switch: it can CLOSE the fallback in any environment and it can never OPEN it
+for an adversarial origin, so posture is the gate and the environment is at most a second lock.
+`blocked` is a HALT (`awaiting_daemon`), never a datacenter fallback and never a substitute
+machine. The route out comes from
 `automation/egress-policy.ts` (`resolveEgress` against org-scoped candidates; `proxyOptionFor`
 rendered at the single launch seam in `server.ts`, because a proxy is a `newContext` launch option
 and cannot be applied afterwards), with the fleet reaching `automation/` through
@@ -251,14 +253,37 @@ and cannot be applied afterwards), with the fleet reaching `automation/` through
 EMPTY, and empty refuses. An ADVERSARIAL session prefers the pairing its ceremony happened on
 (`sessionMetadata.establishedBy.pairingId`, reported by `ensureSession` and turned into a preference
 by `credential-gate.ts`): that machine or wait, never a colleague's. A portable credential resolves
-to `kind: 'any'` and prefers nothing.
+to `kind: 'any'` and prefers nothing. A preference whose machine the org's fleet listing no longer
+contains has been RETIRED, and the refusal changes accordingly - it names the act that fixes it
+(establish the session again from a machine you still have) instead of waiting forever on hardware
+nobody owns, and it still does not fall through to a substitute. A posture inherited from a
+preceding step licenses ONE origin: a hosted session observed to have drifted onto another host
+carries no further steps.
 
 A scheduled run that ends in one of the two "waiting for the owner" statuses (`awaiting_daemon`,
-`needs_credentials`) reports `outcome: 'blocked'` from `startRunForTrigger`, which
-`schedules/supervisor.ts` maps to a `blocked` fire outcome that is NEUTRAL against the 20-strike
-`FAILURE_CEILING` - it neither increments nor resets - and which notifies the owner through the
-required `notifyBlocked` seam (`schedule_blocked` on the per-user notifications channel, carrying a
-code and no prose).
+`needs_credentials`) reports `outcome: 'blocked'` from `startRunForTrigger`, CARRYING WHICH as
+`code`, and `schedules/supervisor.ts` maps that to a `blocked` fire outcome. Only an ENVIRONMENT
+block is neutral against the 20-strike `FAILURE_CEILING` (`NEUTRAL_BLOCKED_CODES` =
+`awaiting_daemon`): opening a laptop fixes it with nobody touching the schedule, so twenty nights of
+it must not auto-pause a working schedule, and it therefore neither increments the counter nor
+resets it. A block on a human act (`needs_credentials`, `awaiting_consent`) keeps driving the
+ceiling, because nothing changes between fires until a person acts and an uncapped retry is itself
+the hazard - a rejected password resubmitted nightly against a portal with an unknown lock-out
+policy. Every block, of either kind, notifies the owner through the required `notifyBlocked` seam
+(`schedule_blocked` on the per-user notifications channel, carrying a code and no prose), and
+`web/components/schedules/run-status-badge.tsx` derives its words from that code rather than from
+the bare status.
+
+WHERE THE DECISION SITS IN THE RUN LOOP. Locality is resolved BEFORE the credential gate, and the
+order is a security property rather than a preference: the gate calls `ensureSession`, whose typist
+path opens a browser and submits a password into it, so nothing may open a browser ahead of the
+decision that says where the step belongs. A step locality refused never reaches the gate at all.
+When the gate does run it receives a HOSTED-BROWSER PERMIT (`CredentialGateInput.hostedBrowser`)
+that the gate forwards to `ensureSession` only if the origin's posture also allows the hosted path;
+`EnsureSessionInput.hostedTypist` is absent-means-no, so an unattended login into the hosted
+Chromium is impossible for an adversarial origin and the route it does use is the one the run
+resolved. `config.localBrowserEnabled` keeps its `!isProd` default: posture is the gate, and this
+slice narrows without widening anything on the way past.
 
 A run that needs a credential the Cofre does not hold halts in `needs_credentials`, a first-class
 `RunStatus` modelled on `awaiting_daemon` (halt and re-dispatch) rather than on `paused_for_user` (an

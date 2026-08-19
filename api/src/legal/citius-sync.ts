@@ -704,6 +704,14 @@ async function runOneCitiusSync(
     ...(input.username === undefined ? {} : { username: input.username }),
     ...(input.residentialAvailable === undefined ? {} : { residentialAvailable: input.residentialAvailable }),
     ...(input.datacenterAvailable === undefined ? {} : { datacenterAvailable: input.datacenterAvailable }),
+    // THE HOSTED-TYPIST PERMIT (P4.1), stated explicitly because `ensureSession` now defaults it
+    // CLOSED: with no permit the typist route becomes a `needs-human` refusal and no browser opens.
+    // This rail predates the locality decision and takes no part in it - it has no step
+    // declaration, no posture classification and no fleet resolution to consult - so the permit
+    // here preserves exactly the behaviour it shipped with, and NAMES the gap rather than letting
+    // this rail acquire the run loop's protection by accident. Recorded in docs/findings.md as
+    // `citius-sync-establishes-its-session-outside-the-locality-decision`.
+    hostedTypist: {},
   });
 
   if (session.status === 'needs-human') {

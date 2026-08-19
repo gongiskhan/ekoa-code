@@ -1091,6 +1091,13 @@ export interface TriggerRunOutcome {
    * disabled rather than waiting.
    */
   outcome: 'completed' | 'failed' | 'blocked';
+  /**
+   * WHICH block, verbatim: the run status that produced it. Load-bearing, not a label - the two
+   * blocked causes get OPPOSITE treatment on the schedule rail (`schedules/supervisor.ts`), and
+   * collapsing them to one word is what removed the cap on repeated unattended logins. Present only
+   * for `outcome: 'blocked'`.
+   */
+  code?: string;
   /** A permanent failure (e.g. the automation no longer exists) must NOT be retried by the delivery
    *  pipeline; a transient one re-enters the retry schedule. */
   permanent: boolean;
@@ -1103,14 +1110,19 @@ export interface TriggerRunOutcome {
  * Both are halts the engine takes DELIBERATELY and persists, and both are resolved by a person
  * doing something - starting their machine, establishing a credential - rather than by anything
  * retrying. Every other non-`completed` status stays a failure.
+ *
+ * They are NOT interchangeable downstream, which is why `code` carries which one it was: waiting
+ * for a machine resolves by itself the moment the laptop is opened, and waiting for a credential
+ * does not resolve by waiting at all.
  */
 const BLOCKED_RUN_STATUSES: ReadonlySet<string> = new Set(['awaiting_daemon', 'needs_credentials']);
 
 /**
  * Run an automation under a trigger's server-trusted owner and AWAIT its terminal status. A
  * non-`completed` terminal state is reported as a delivery failure EXCEPT the two that mean "this
- * is waiting for you" (`BLOCKED_RUN_STATUSES`), which report `blocked`; a missing automation is a
- * PERMANENT failure (never retried). The engine runs one attempt — retry lives in `events/`.
+ * is waiting for you" (`BLOCKED_RUN_STATUSES`), which report `blocked` plus the status as `code`; a
+ * missing automation is a PERMANENT failure (never retried). The engine runs one attempt - retry
+ * lives in `events/`.
  */
 export async function startRunForTrigger(input: TriggerRunInput): Promise<TriggerRunOutcome> {
   // Delivery-side cross-org guard (Codex G8, defense-in-depth alongside the trigger-creation check):
@@ -1148,7 +1160,12 @@ export async function startRunForTrigger(input: TriggerRunInput): Promise<Trigge
       : BLOCKED_RUN_STATUSES.has(result.status)
         ? 'blocked'
         : 'failed';
-    return { outcome, permanent: false, runId: result.runId };
+    return {
+      outcome,
+      ...(outcome === 'blocked' ? { code: result.status } : {}),
+      permanent: false,
+      runId: result.runId,
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // A missing automation is permanent (the delivery pipeline must not retry it).

@@ -44,6 +44,7 @@ import { resolveStepDeclaration } from './types.js';
 import { classifyOrigin, type OriginClassification } from './origin-posture.js';
 import { loadIntegrationActionDeclaration, type IntegrationActionDeclaration } from './seams.js';
 import { ensureSession, type EnsureSessionResult } from './session-establishment.js';
+import type { EgressResolution } from './egress-policy.js';
 import { issueLoginRelayPrompt } from '../cofre/index.js';
 import type { RunCredentialRequest } from '@ekoa/shared';
 
@@ -67,6 +68,18 @@ export interface CredentialGateInput {
   index: number;
   /** Pairing ids that can currently provide residential egress for this org (checkout input). */
   residentialAvailable?: readonly string[];
+  /**
+   * P4.1 - WHETHER A HOSTED BROWSER IS AVAILABLE TO THIS STEP AT ALL, and by which route out.
+   *
+   * Resolved by the run loop BEFORE this gate is called (`locality.ts`), because this gate can OPEN
+   * a browser and nothing may open one ahead of the decision that says where the step belongs.
+   * ABSENT MEANS NONE: the typist is then unreachable and a step that needs a login it cannot
+   * perform halts in `needs-credentials`, asking for a person.
+   *
+   * It is only ever HALF of the permission. The other half is the origin's POSTURE, applied below,
+   * and BOTH must hold before `ensureSession` is allowed to open anything.
+   */
+  hostedBrowser?: { egress?: EgressResolution };
 }
 
 /**
@@ -143,6 +156,22 @@ export async function evaluateCredentialGate(
   // applies to several candidate sessions).
   const credentialRef = declaration.credentialRefs[0];
 
+  // THE TYPIST'S BROWSER, GATED ON POSTURE (P4.1) - the check whose absence let this gate open the
+  // hosted Chromium against an adversarial origin and submit a password from a datacenter IP.
+  //
+  // TWO independent conditions, both closed by default, and the AND is the point:
+  //   - the run loop must have resolved a hosted browser for this step at all (`hostedBrowser`);
+  //   - the origin's posture must permit the hosted path to carry it (`cloudEgressAllowed`, which
+  //     `origin-posture.ts` can only ever set for a `permissive` declaration - an origin nobody
+  //     classified is adversarial and gets `false`).
+  //
+  // An adversarial origin therefore never reaches `establishWithTypist`: its login happens on the
+  // owner's machine, in a ceremony, or not at all. The gate does not decide which - it withholds
+  // the permit, and `ensureSession` turns that into `needs-human` without opening anything.
+  const hostedTypist = input.hostedBrowser && classification.cloudEgressAllowed
+    ? { ...(input.hostedBrowser.egress ? { egress: input.hostedBrowser.egress } : {}) }
+    : undefined;
+
   let verdict: EnsureSessionResult;
   try {
     verdict = await d.ensure({
@@ -152,6 +181,7 @@ export async function evaluateCredentialGate(
       runId: input.runId,
       ...(credentialRef ? { credentialRef } : {}),
       ...(input.residentialAvailable ? { residentialAvailable: input.residentialAvailable } : {}),
+      ...(hostedTypist ? { hostedTypist } : {}),
       requiresAttendedAuth: classification.requiresAttendedAuth,
     });
   } catch (err) {

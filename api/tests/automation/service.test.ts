@@ -601,6 +601,11 @@ describe('automation service surface (§3.8.18)', () => {
 
     expect(out.outcome).toBe('blocked');
     expect(out.permanent).toBe(false);
+    // WHICH block, verbatim, and not decoration: the schedule rail gives the two blocked causes
+    // OPPOSITE treatment against the failure ceiling, and the badge the owner reads takes its words
+    // from this code. A flat `blocked` made "your laptop is shut" and "your password was rejected"
+    // into the same event.
+    expect(out.code).toBe('awaiting_daemon');
     // The persisted run says the same thing in its own vocabulary — the two must not drift.
     const run = await automationRuns.get(out.runId!);
     expect((run as { status?: string }).status).toBe('awaiting_daemon');

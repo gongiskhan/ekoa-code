@@ -190,38 +190,50 @@ describe('ScheduleSupervisor', () => {
     expect(runs[0]!.detail?.code).toBe('awaiting_consent');
     const after = (await schedules.get(s._id)) as unknown as ScheduleDoc;
     expect(after.lastRun?.status).toBe('blocked');
-    // P4.1 FLIPS THIS PIN. It used to assert `1` — blocked counted toward the ceiling. It is now
-    // NEUTRAL: a fire that is waiting on its owner says nothing about whether the schedule works,
-    // and counting it meant twenty nights with the laptop shut auto-paused a working schedule.
-    expect(after.consecutiveFailures).toBe(0);
-    // ...and the owner is told, because nothing else will: neutral outcomes are silent by design.
+    // STILL COUNTS, as it always did. `awaiting_consent` is blocked on a HUMAN ACT, and no number
+    // of fires brings one closer, so the ceiling stays its cap. Only the ENVIRONMENT block
+    // (`awaiting_daemon`, below) is neutral - see `NEUTRAL_BLOCKED_CODES`.
+    expect(after.consecutiveFailures).toBe(1);
+    // ...and the owner is told, for every kind of block: it is the one outcome nothing else
+    // surfaces in time.
     expect(deps.blockedNotices).toEqual([
       { ownerUserId: 'usr1', scheduleId: s._id, runId: runs[0]!._id, code: 'awaiting_consent' },
     ]);
   });
 
-  it('a blocked fire does not RESET the failure counter either — it is neutral in both directions', async () => {
+  /**
+   * P4.1 - WHICH BLOCK IS NEUTRAL, and why it is not all of them.
+   *
+   * The brief that produced this slice said "blocked must be neutral against the ceiling", and taken
+   * literally that removed the only cap on repeating a block that never resolves by waiting. The
+   * distinction that survives review is not "blocked vs failed" but "does waiting fix it":
+   *
+   *   - `awaiting_daemon` - the owner's machine is not connected. Opening the laptop fixes it with
+   *     nobody touching the schedule, so twenty nights of it must not auto-pause a working schedule.
+   *   - `needs_credentials` / `awaiting_consent` - a human has to act. Nothing changes between fires
+   *     until they do, and an uncapped retry is the hazard itself: a portal password changes, the
+   *     nightly fire routes to the typist under a standing grant, submits, meets the wrong-password
+   *     signature, and repeats forever against a portal with an unknown lock-out policy.
+   */
+  it('a NEUTRAL block does not reset the failure counter either - it is neutral in both directions', async () => {
     const deps = makeDeps({
-      runIntegrationAction: async () => mapIntegrationOutcome({ success: false, code: 'awaiting_consent' }),
+      runAutomation: async () => mapAutomationOutcome({ outcome: 'blocked', code: 'awaiting_daemon', permanent: false }),
     });
     const sup = new ScheduleSupervisor(deps);
     // Resetting would be the opposite error to counting: a genuinely broken schedule could hide
     // behind an occasional blocked fire and never reach the ceiling at all.
-    const s = await seedSchedule({
-      consecutiveFailures: 7,
-      target: { kind: 'integration_action', integrationKey: 'ntfy', actionName: 'publish', args: {} },
-    });
+    const s = await seedSchedule({ consecutiveFailures: 7 });
     await sup.tick();
     await sup.stop();
     expect(((await schedules.get(s._id)) as unknown as ScheduleDoc).consecutiveFailures).toBe(7);
   });
 
-  it('N CONSECUTIVE BLOCKED FIRES NEVER AUTO-PAUSE, however many (the laptop-shut case)', async () => {
+  it('N CONSECUTIVE AWAITING-DAEMON FIRES NEVER AUTO-PAUSE, however many (the laptop-shut case)', async () => {
     const deps = makeDeps({
-      runAutomation: async () => mapAutomationOutcome({ outcome: 'blocked', permanent: false, runId: 'arun_b' }),
+      runAutomation: async () => mapAutomationOutcome({ outcome: 'blocked', code: 'awaiting_daemon', permanent: false, runId: 'arun_b' }),
     });
     const sup = new ScheduleSupervisor(deps);
-    // Start one strike below the ceiling: if blocked counted at all, the FIRST fire would pause it.
+    // Start one strike below the ceiling: if this block counted at all, the FIRST fire would pause.
     const s = await seedSchedule({ consecutiveFailures: FAILURE_CEILING - 1 });
     const fires = FAILURE_CEILING + 5;
     for (let i = 0; i < fires; i++) {
@@ -239,7 +251,41 @@ describe('ScheduleSupervisor', () => {
     expect(after.lastRun?.status).toBe('blocked');
     // Every one of them told the owner. Silence is the failure mode this replaces.
     expect(deps.blockedNotices.length).toBe(fires);
-    expect(deps.blockedNotices.every((n) => n.code === 'automation_blocked')).toBe(true);
+    expect(deps.blockedNotices.every((n) => n.code === 'awaiting_daemon')).toBe(true);
+  });
+
+  it('N CONSECUTIVE NEEDS-CREDENTIALS FIRES DO auto-pause - the cap on a rejected password', async () => {
+    const deps = makeDeps({
+      runAutomation: async () => mapAutomationOutcome({ outcome: 'blocked', code: 'needs_credentials', permanent: false, runId: 'arun_c' }),
+    });
+    const sup = new ScheduleSupervisor(deps);
+    const s = await seedSchedule({ consecutiveFailures: FAILURE_CEILING - 1 });
+    clock += 3_600_000;
+    await schedules.update(s._id, (cur) => ({ ...(cur as object), nextRunAt: new Date(clock).toISOString() }) as never);
+    await sup.tick();
+    await sup.stop();
+
+    const after = (await schedules.get(s._id)) as unknown as ScheduleDoc;
+    expect(after.consecutiveFailures).toBe(FAILURE_CEILING);
+    expect(after.enabled).toBe(false);
+    expect(after.autoPausedAt).toBeTruthy();
+    // Still a `blocked` run row and still a notice: auto-pausing is the cap, not a reclassification
+    // of what happened.
+    expect(after.lastRun?.status).toBe('blocked');
+    expect(deps.blockedNotices).toHaveLength(1);
+  });
+
+  it('a blocked outcome with NO code counts, because an unnamed block is not a known-safe one', async () => {
+    // The seam is structural, so a caller can omit `code`. The closed reading of "we do not know
+    // which block this was" is the one that keeps the cap.
+    const deps = makeDeps({
+      runAutomation: async () => mapAutomationOutcome({ outcome: 'blocked', permanent: false }),
+    });
+    const sup = new ScheduleSupervisor(deps);
+    const s = await seedSchedule({ consecutiveFailures: 3 });
+    await sup.tick();
+    await sup.stop();
+    expect(((await schedules.get(s._id)) as unknown as ScheduleDoc).consecutiveFailures).toBe(4);
   });
 
   it('an ok or failed fire notifies nobody — only blocked does', async () => {
@@ -270,9 +316,19 @@ describe('ScheduleSupervisor', () => {
     expect(((await schedules.get(s._id)) as unknown as ScheduleDoc).lastRun?.status).toBe('blocked');
   });
 
-  it('mapAutomationOutcome opens a blocked channel out of the automation path', () => {
+  it('mapAutomationOutcome opens a blocked channel out of the automation path, CARRYING WHICH', () => {
     // The collapse this replaces: every non-`completed` status became `failed`, so a run halted in
-    // `awaiting_daemon` was indistinguishable from one that threw.
+    // `awaiting_daemon` was indistinguishable from one that threw. The code travels verbatim
+    // because the two blocked causes get opposite treatment above, and because the badge the owner
+    // reads derives its words from it.
+    expect(mapAutomationOutcome({ outcome: 'blocked', code: 'awaiting_daemon', permanent: false, runId: 'r1' })).toEqual({
+      status: 'blocked',
+      code: 'awaiting_daemon',
+      automationRunId: 'r1',
+    });
+    expect(mapAutomationOutcome({ outcome: 'blocked', code: 'needs_credentials', permanent: false }).code)
+      .toBe('needs_credentials');
+    // No code from the seam ⇒ the flat label, which `NEUTRAL_BLOCKED_CODES` does not contain.
     expect(mapAutomationOutcome({ outcome: 'blocked', permanent: false, runId: 'r1' })).toEqual({
       status: 'blocked',
       code: 'automation_blocked',

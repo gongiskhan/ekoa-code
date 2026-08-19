@@ -40,6 +40,18 @@ where they touch the dashboard.
   through another org's machine, staged with real pairing + grant rows and asserted through both the
   injected seam and selection itself), and the bridge S1-S6 scenarios (`fake-daemon/`). `migration/`
   holds the protocol-parity replay suites.
+- **The P4 locality suites, and what each is for** (they overlap on purpose, and the overlap is the
+  point - a decision this slice makes wrong is an account lock, so each layer proves a different
+  thing about it). `automation/locality.test.ts` drives the PURE decision table with real arguments,
+  including the retired-ceremony-machine cases. `automation/engine-locality.test.ts` drives the REAL
+  engine and asserts on `contextRequests` - whether a hosted browser was reached at all and by which
+  route - because a run's final status cannot distinguish "ran hosted and then failed" from "never
+  ran hosted"; it also carries the credential-gate ORDERING cases, staged with a real Cofre password
+  item, a real standing grant and a real login recipe so the typist could genuinely have opened a
+  browser. `automation/credential-gate.test.ts` asserts on the ARGUMENT handed to `ensureSession`
+  (the posture half of the permit), and `automation/session-establishment.test.ts` on what the
+  absent permit does (`needs-human`, nothing opened). `automation/config.test.ts` pins the hosted
+  browser's kill switch in BOTH environments, including under `NODE_ENV=production`.
 - **`api/tests/e2e/`** - node full-app e2e drivers (`*.e2e.mjs`): served-app plane, legal suite, and
   the deferred `erp-*` tenant-fork drivers (awaiting CUTOVER).
 - **`api/tests/journeys/`** - the zero-dependency HTTP journey probe kit (`_lib.mjs`, `j*.mjs`) plus
@@ -60,6 +72,10 @@ where they touch the dashboard.
   Playwright page surface are injected interfaces, so the headed paths are exercised against fakes and
   only the real headed launch needs a display.
 - **`web/__tests__/`** - web unit tests (`components/`, `lib/`, store logic).
+  `components/run-status-badge.test.tsx` is the durable regression for copy that derives from a
+  CODE rather than a bare status: it pins that each `blocked` cause reads differently, that the
+  fallback for an unknown code is vague rather than specifically wrong, and that en/pt stay
+  key-for-key.
 - **`web/e2e/`** - Playwright dashboard specs (real-UI login).
 
 ## Suite ledger (`scripts/suite-ledger-run.mjs`, ledger `api/tests/SUITE_LEDGER.json`)

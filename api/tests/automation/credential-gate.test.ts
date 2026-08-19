@@ -26,9 +26,16 @@ function declared(over: Partial<Step> = {}): Step {
   return step({ declaration: { credentialRefs: ['cofre:itm_password_1'] }, ...over });
 }
 
-function gate(steps: Step[], index: number, deps: Parameters<typeof evaluateCredentialGate>[1] = {}) {
+function gate(
+  steps: Step[],
+  index: number,
+  deps: Parameters<typeof evaluateCredentialGate>[1] = {},
+  /** The P4.1 run-loop facts. An absent `hostedBrowser` is the CLOSED default: it is what the run
+   *  loop supplies when this process has no hosted browser to offer for the step at all. */
+  over: Partial<Parameters<typeof evaluateCredentialGate>[0]> = {},
+) {
   return evaluateCredentialGate(
-    { actor, runId: 'run_1', automationName: 'A run', steps, index },
+    { actor, runId: 'run_1', automationName: 'A run', steps, index, ...over },
     {
       loadActionDeclaration: async () => null,
       ensure: async () => ({ status: 'needs-human', route: 'attended', reason: 'nothing stored', attempted: false }),
@@ -292,5 +299,90 @@ describe('the ceremony pairing is a preference for adversarial origins only', ()
     );
     expect(verdict.kind).toBe('ready');
     expect(verdict).not.toHaveProperty('preferredPairingId');
+  });
+});
+
+/**
+ * P4.1 - THE TYPIST'S BROWSER IS GATED ON POSTURE, and this is the block that would have caught
+ * the defect the first cut of this slice shipped with.
+ *
+ * THE FAILURE. The gate fires on a declaration (`credentialRefs`), with no precondition of any
+ * kind, and it calls `ensureSession` - whose typist path OPENS THE HOSTED CHROMIUM and submits a
+ * password. Posture was consulted here for exactly one thing (`requiresAttendedAuth`) and never for
+ * whether a browser might be opened at all, so a step naming a Cofre item against a portal nobody
+ * had classified would: classify CLOSED (adversarial, not attended) => reach the typist => open
+ * hosted Chromium with no route argument, i.e. the datacenter => type the password into an
+ * adversarial origin. That is the precise event this whole slice exists to prevent.
+ *
+ * THE ASSERTION SHAPE. Every case below asserts on the ARGUMENT handed to `ensureSession`, not on
+ * the verdict: the verdict cannot distinguish "refused to open a browser" from "opened one and it
+ * failed", and the permit is exactly the thing that decides which happened.
+ */
+describe('the typist may only open a hosted browser posture permits', () => {
+  const permissive = { posture: 'permissive' as const, httpConfig: { baseUrl: 'https://portal.example' } };
+
+  /** Capture what the gate asked `ensureSession` for. */
+  function spyEnsure() {
+    const calls: Array<Record<string, unknown>> = [];
+    const ensure = (async (input: Record<string, unknown>) => {
+      calls.push(input);
+      return { status: 'needs-human', route: 'attended', reason: 'nothing stored', attempted: false };
+    }) as never;
+    return { ensure, calls };
+  }
+
+  const portalStep = () => declared({ type: 'navigate', url: 'https://portal.example/login' });
+
+  it('an UNDECLARED origin gets NO permit, even when the run loop offered a hosted browser', async () => {
+    const { ensure, calls } = spyEnsure();
+    await gate([portalStep()], 0, { ensure }, { hostedBrowser: {} });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).not.toHaveProperty('hostedTypist');
+  });
+
+  it('an ADVERSARIAL declaration gets no permit either - it is the same answer, stated', async () => {
+    const { ensure, calls } = spyEnsure();
+    await gate(
+      [declared({ type: 'integration', integrationKey: 'portal', integrationAction: 'fetch' })],
+      0,
+      { ensure, loadActionDeclaration: async () => ({ posture: 'adversarial', httpConfig: { baseUrl: 'https://portal.example' } }) },
+      { hostedBrowser: {} },
+    );
+    expect(calls[0]).not.toHaveProperty('hostedTypist');
+  });
+
+  it('a PERMISSIVE origin gets the permit, carrying the route the run loop resolved', async () => {
+    const { ensure, calls } = spyEnsure();
+    const egress = { outcome: 'machine' as const, pairingId: 'pair_home', proxyUrl: 'http://100.64.0.7:1080' };
+    await gate(
+      [declared({ type: 'integration', integrationKey: 'portal', integrationAction: 'fetch' })],
+      0,
+      { ensure, loadActionDeclaration: async () => permissive },
+      { hostedBrowser: { egress } },
+    );
+    expect(calls[0]!['hostedTypist']).toEqual({ egress });
+  });
+
+  it('...and NOT when the run loop offered no hosted browser at all', async () => {
+    // Both halves are required and neither is sufficient. This is the half posture cannot supply:
+    // a production deployment with the hosted browser off, or a step whose locality is the bridge.
+    const { ensure, calls } = spyEnsure();
+    await gate(
+      [declared({ type: 'integration', integrationKey: 'portal', integrationAction: 'fetch' })],
+      0,
+      { ensure, loadActionDeclaration: async () => permissive },
+    );
+    expect(calls[0]).not.toHaveProperty('hostedTypist');
+  });
+
+  it('a permissive origin with no resolved route still gets a permit, for the datacenter', async () => {
+    const { ensure, calls } = spyEnsure();
+    await gate(
+      [declared({ type: 'integration', integrationKey: 'portal', integrationAction: 'fetch' })],
+      0,
+      { ensure, loadActionDeclaration: async () => permissive },
+      { hostedBrowser: {} },
+    );
+    expect(calls[0]!['hostedTypist']).toEqual({});
   });
 });

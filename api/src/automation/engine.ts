@@ -506,10 +506,11 @@ async function runOrRehearse(
   // WHEN THERE IS NO DAEMON the fallback is decided PER ORIGIN POSTURE, in every environment
   // (`locality.ts`): a permissive origin may run in the hosted Chromium, an adversarial one never
   // does, and an origin nobody classified is adversarial. It used to be decided by
-  // `localBrowserEnabled` alone (default `!isProd`), which meant the deployment environment
-  // answered "may this site be automated from a datacenter IP" — outside production, for every
-  // target, silently yes. A step that posture will not carry halts in `awaiting_daemon`, which is
-  // the honest state for it: a machine of yours is needed.
+  // `localBrowserEnabled` ALONE, which meant the deployment environment answered "may this site be
+  // automated from a datacenter IP" - outside production, for every target, silently yes. That flag
+  // keeps its `!isProd` default and is now only an operator kill switch: it can close the fallback,
+  // never open it for an adversarial origin. A step that posture will not carry halts in
+  // `awaiting_daemon`, which is the honest state for it: a machine of yours is needed.
   const connection = getDaemonConnection(ctx.ownerUserId);
   // Captured browser session credential (integration-launched runs with
   // `passCredentials`): `inputs.credentials.storageState` carries the
@@ -552,10 +553,11 @@ async function runOrRehearse(
   let egressCandidates: readonly EgressCandidate[] | null = null;
   const getBrowser = (): BrowserSession | null => {
     if (!browser) {
-      // A blocked step never opens a session. The loop turns the verdict into a halt record before
-      // reaching here, so this is the belt to that braces: no path may create a browser for a step
-      // locality refused.
-      if (stepLocality?.kind === 'blocked') return null;
+      // NO `blocked` GUARD HERE, on purpose. A refused step never reaches `executeStep` at all -
+      // `localityRecord` short-circuits the `??` chain below, and every other `getBrowser` caller
+      // is a post-failure recovery path the awaiting-daemon halt already returned before. A branch
+      // that cannot be entered is a branch no test can pin, and an unpinnable guard reads as
+      // protection while providing none.
       if (connection && stepLocality?.kind !== 'in-process') {
         // Session injection is LOCAL-SESSION-ONLY today: the daemon owns its
         // own persistent profile and the bridge protocol has no cookie
@@ -588,6 +590,91 @@ async function runOrRehearse(
   // never touch it, so the user's saved spec is preserved either way until
   // we persist at the end.
   const workingSteps: Step[] = automation.steps.slice();
+
+  /**
+   * WHERE this step runs (P4.1). Pure joinery around `locality.ts`: gather the run's facts, ask,
+   * answer. Called from the loop BEFORE the credential gate, and again if the gate hands back a
+   * ceremony pairing the first call did not have.
+   */
+  const resolveLocalityForStep = async (index: number, step: Step): Promise<LocalityVerdict> => {
+    egressCandidates ??= await loadEgressCandidates(ctx.orgId);
+    const declaration = resolveStepDeclaration(step);
+    // The ACTION the origin declaration is ABOUT. `resolveStepOrigin` walks backwards to the
+    // nearest step that states a URL, so a browser step inherits the portal the run navigated to
+    // AND the action whose `httpConfig.baseUrl` produced that origin - which is exactly the caller
+    // contract `classifyOrigin` requires (the label applies only to the origin its action is
+    // about; the two match by construction here). Nothing is looked up by name.
+    const resolvedOrigin = await resolveStepOrigin(
+      workingSteps,
+      index,
+      actorFromCtx(ctx),
+      loadIntegrationActionDeclaration,
+    );
+    // An origin that cannot be resolved is not a licence: `classifyOrigin('')` is CLOSED, which is
+    // what an unknown destination has to be.
+    const classification = classifyOrigin(
+      resolvedOrigin ? `https://${resolvedOrigin.origin}` : '',
+      resolvedOrigin?.action ?? undefined,
+    );
+    const verdict = resolveLocality({
+      classification,
+      declaredTarget: declaration.target,
+      offlinePolicy: declaration.offlinePolicy,
+      daemonConnected: !!connection,
+      ...(connection?.pairingId ? { daemonPairingId: connection.pairingId } : {}),
+      ...(preferredPairingId ? { preferredPairingId } : {}),
+      candidates: egressCandidates,
+      actorOrg: ctx.orgId,
+      inProcessFallbackEnabled: loadAutomationConfig().localBrowserEnabled,
+    });
+
+    // THE DECLARATION LICENSES ONE ORIGIN, AND THE PAGE MUST STILL BE ON IT.
+    //
+    // Posture is declared on an ACTION and applies to the origin that action is about - that is
+    // `classifyOrigin`'s whole contract, and `resolveStepOrigin` honours it for the STEP LIST. It
+    // cannot honour it for the live page: a `browser` step acts, an act can navigate, and the next
+    // `wait`/`verify`/`browser` step inherits the same permissive label while the hosted Chromium
+    // now sits on somewhere else entirely - a bank portal reached by a click, an OAuth hop, a
+    // redirect. The label was never about that host, so it does not license it.
+    //
+    // Checked only for the hosted route, because that is the one where being wrong means a
+    // datacenter IP on a site that scores them; on a machine of the owner's there is no
+    // substitution to make. NAMED LIMITATION, not a claim of completeness: this stops the steps
+    // AFTER the drift, never the act that drifts (docs/findings.md).
+    if (verdict.kind === 'in-process' && browser?.hasObservation()) {
+      const live = hostOfUrlForPosture(browser.url());
+      if (live && live !== resolvedOrigin?.origin) {
+        return {
+          kind: 'blocked',
+          reason:
+            `this run's hosted browser is on ${live}, which is not the origin this step's posture ` +
+            'was declared for - it will not carry a step onto an undeclared site',
+        };
+      }
+    }
+    return verdict;
+  };
+
+  /** A locality verdict this loop must refuse, as the halt record the outer loop already knows. */
+  const refusalRecordFor = (step: Step, index: number, verdict: LocalityVerdict): StepRecord | undefined => {
+    if (verdict.kind === 'blocked') return localityBlockedRecord(step, index, verdict.reason);
+    // THE ROUTE SWITCH. The run already opened a hosted context on a different route out; the proxy
+    // is a LAUNCH option, so re-pointing it is not possible, and reusing the context anyway would
+    // send this step's traffic out of a door it did not resolve to - the silent substitution this
+    // whole slice exists to stop.
+    if (verdict.kind === 'in-process' && inProcessRoute && !sameRoute(inProcessRoute, verdict.egress)) {
+      return localityBlockedRecord(
+        step,
+        index,
+        'this step needs a different route out of the network than the one this run already opened',
+      );
+    }
+    // There is deliberately NO symmetric `bridge`-inherits-a-hosted-session branch. `connection` is
+    // read once per run, and `resolveLocality` only answers `bridge` when a daemon is connected and
+    // only answers `in-process` when none is - so within one run the two cannot both occur, and a
+    // branch that cannot be entered is one no test can pin.
+    return undefined;
+  };
 
   // Rehearsal accounting
   let fixerCallCount = 0;
@@ -716,91 +803,77 @@ async function runOrRehearse(
         ? { step: (workingSteps[lastRecord.index] ?? workingSteps[i - 1])!, record: lastRecord }
         : undefined;
 
+      // P4.1: WHERE this step runs - RESOLVED BEFORE THE CREDENTIAL GATE, and the order is the
+      // security property. The gate calls `ensureSession`, whose typist path OPENS A BROWSER and
+      // submits a password into it; running the gate first meant that browser could be opened, from
+      // the datacenter, against an origin locality was about to refuse outright. Nothing may open a
+      // browser ahead of the decision that says where the step belongs.
+      //
+      // Resolved per step (posture is a fact about the ORIGIN, and a run can touch more than one)
+      // and only for the step types that can reach a browser - an api_call or integration step has
+      // no locality to decide and must not be halted by one.
+      stepLocality = null;
+      let localityRecord: StepRecord | undefined;
+      if (STEP_TYPES_NEEDING_BROWSER.has(step.type)) {
+        stepLocality = await resolveLocalityForStep(i, step);
+        localityRecord = refusalRecordFor(step, i, stepLocality);
+      }
+
       // THE CREDENTIAL GATE (P3.1), for every integration and with no branch on any of them. It
       // fires only for a step whose declaration NAMES a Cofre reference, so a run that asks for no
       // credential is not gated at all and behaves exactly as it did before this existed. A halt
       // is expressed as a FAILED STEP RECORD with typed details, so it flows through the one
       // persist/emit/halt path the awaiting-daemon and consent halts already use rather than
       // opening a second exit from the loop.
-      const gate = await credentialGateRecord({
-        actor: actorFromCtx(ctx),
-        runId,
-        automationName: automation.name,
-        steps: workingSteps,
-        index: i,
-      }, step);
+      //
+      // SKIPPED ENTIRELY for a step locality already refused: that step is not going to run, so
+      // establishing a credential for it would be work nobody asked for done through a browser
+      // nobody may open.
+      // Annotated rather than inferred: `{}` is assignable to the gate's all-optional result today,
+      // so the union collapses silently - and would stop collapsing, as a confusing error at the
+      // reads below, the day the gate grows a required field.
+      const gate: Awaited<ReturnType<typeof credentialGateRecord>> = localityRecord
+        ? {}
+        : await credentialGateRecord({
+            actor: actorFromCtx(ctx),
+            runId,
+            automationName: automation.name,
+            steps: workingSteps,
+            index: i,
+            // THE HOSTED-BROWSER PERMIT. Half of the typist's permission; the other half is the
+            // origin's posture, applied inside the gate. Present only when this process has a
+            // hosted browser to offer at all, and carrying the route the step resolved to when it
+            // resolved one, so a login is never performed out of a different door than the work.
+            ...(loadAutomationConfig().localBrowserEnabled
+              ? {
+                  hostedBrowser: stepLocality?.kind === 'in-process'
+                    ? { egress: stepLocality.egress }
+                    : {},
+                }
+              : {}),
+          }, step);
       if (!gate.record && gate.storageState !== undefined && !browser) {
         sessionState = gate.storageState;
       }
       // P4.2: the pairing where this session's ceremony happened. It is a PREFERENCE, honoured for
       // adversarial origins only, and it is recorded on the session item rather than invented here
       // (`sessionMetadata.establishedBy.pairingId`, stamped by `bridge/attended.ts`).
-      if (gate.preferredPairingId) preferredPairingId = gate.preferredPairingId;
-
-      // P4.1: WHERE this step runs. Resolved per step (posture is a fact about the ORIGIN, and a
-      // run can touch more than one) and only for the step types that can reach a browser — an
-      // api_call or integration step has no locality to decide and must not be halted by one.
-      stepLocality = null;
-      let localityRecord: StepRecord | undefined;
-      if (STEP_TYPES_NEEDING_BROWSER.has(step.type)) {
-        egressCandidates ??= await loadEgressCandidates(ctx.orgId);
-        const declaration = resolveStepDeclaration(step);
-        // The ACTION the origin declaration is ABOUT. `resolveStepOrigin` walks backwards to the
-        // nearest step that states a URL, so a browser step inherits the portal the run navigated
-        // to AND the action whose `httpConfig.baseUrl` produced that origin — which is exactly the
-        // caller contract `classifyOrigin` requires (the label applies only to the origin its
-        // action is about; the two match by construction here). Nothing is looked up by name.
-        const resolvedOrigin = await resolveStepOrigin(
-          workingSteps,
-          i,
-          actorFromCtx(ctx),
-          loadIntegrationActionDeclaration,
-        );
-        // An origin that cannot be resolved is not a licence: `classifyOrigin('')` is CLOSED, which
-        // is what an unknown destination has to be.
-        const classification = classifyOrigin(
-          resolvedOrigin ? `https://${resolvedOrigin.origin}` : '',
-          resolvedOrigin?.action ?? undefined,
-        );
-        stepLocality = resolveLocality({
-          classification,
-          declaredTarget: declaration.target,
-          offlinePolicy: declaration.offlinePolicy,
-          daemonConnected: !!connection,
-          ...(connection?.pairingId ? { daemonPairingId: connection.pairingId } : {}),
-          ...(preferredPairingId ? { preferredPairingId } : {}),
-          candidates: egressCandidates,
-          actorOrg: ctx.orgId,
-          inProcessFallbackEnabled: loadAutomationConfig().localBrowserEnabled,
-        });
-        if (stepLocality.kind === 'blocked') {
-          localityRecord = localityBlockedRecord(step, i, stepLocality.reason);
-        } else if (
-          stepLocality.kind === 'in-process' &&
-          inProcessRoute &&
-          !sameRoute(inProcessRoute, stepLocality.egress)
-        ) {
-          // The run already opened a hosted context on a different route out. The proxy is a LAUNCH
-          // option, so re-pointing it is not possible; reusing the context anyway would send this
-          // step's traffic out of somewhere it did not resolve to, which is the silent substitution
-          // this whole slice exists to stop.
-          localityRecord = localityBlockedRecord(
-            step,
-            i,
-            'this step needs a different route out of the network than the one this run already opened',
-          );
-        } else if (stepLocality.kind === 'bridge' && browser && inProcessRoute) {
-          // Symmetrically: an adversarial step must not inherit a hosted session a permissive step
-          // opened earlier in the same run.
-          localityRecord = localityBlockedRecord(
-            step,
-            i,
-            'this step must run on one of your machines, and this run already opened a hosted browser',
-          );
+      //
+      // It arrives from the gate, i.e. AFTER locality was resolved, so the verdict is re-resolved
+      // when it is new. Re-resolving can only NARROW: without the preference the requirement is
+      // "any machine of yours", with it "that machine", and every extra refusal that produces is
+      // one this loop must honour before a browser opens. No browser can have opened in between -
+      // the gate only ever opens one for a PERMISSIVE origin, and a permissive origin never carries
+      // a preference (`credential-gate.ts` drops it).
+      if (gate.preferredPairingId && gate.preferredPairingId !== preferredPairingId) {
+        preferredPairingId = gate.preferredPairingId;
+        if (stepLocality) {
+          stepLocality = await resolveLocalityForStep(i, step);
+          localityRecord = refusalRecordFor(step, i, stepLocality);
         }
       }
 
-      const executed = gate.record ?? localityRecord ?? await executeStep({
+      const executed = localityRecord ?? gate.record ?? await executeStep({
         browser: getBrowser(),
         daemonConnected: !!connection,
         automation,
@@ -2376,8 +2449,9 @@ const STEP_TYPES_NEEDING_BROWSER: ReadonlySet<Step['type']> = new Set<Step['type
  * Deliberately not a new RunStatus. `awaiting_daemon` already means exactly this, is already
  * threaded through the SSE union, the reloading-client recovery set and the UI, and the schedule
  * rail is where "blocked" is the useful word: `startRunForTrigger` maps this status to
- * `outcome: 'blocked'`, which `recordOutcome` then treats as neutral against the failure ceiling.
- * A second run status meaning the same thing would have to be kept in step with the first forever.
+ * `outcome: 'blocked'` with `awaiting_daemon` as its code, and the supervisor treats THAT code -
+ * the environment one - as neutral against the failure ceiling. A second run status meaning the
+ * same thing would have to be kept in step with the first forever.
  */
 function localityBlockedRecord(step: Step, index: number, reason: string): StepRecord {
   const base: StepRecord = { stepId: step.id, index, status: 'running', tier: 'cache', durationMs: 0 };
@@ -2389,6 +2463,19 @@ function localityBlockedRecord(step: Step, index: number, reason: string): StepR
       details: { kind: 'awaiting_daemon', capability: 'browser', stepIndex: index },
     },
   });
+}
+
+/**
+ * The bare host of a live page URL, for the posture-drift check. Unparseable answers null, which
+ * that check reads as "nothing to compare" rather than as a mismatch: a browser that has not
+ * navigated anywhere yet (`about:blank`, an empty string) has not drifted off anything.
+ */
+function hostOfUrlForPosture(raw: string): string | null {
+  try {
+    return new URL(raw).hostname.toLowerCase() || null;
+  } catch {
+    return null;
+  }
 }
 
 /** Build the awaiting_daemon failure record the outer loop converts to a halt. */

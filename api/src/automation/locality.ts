@@ -27,7 +27,10 @@
  *                    route, and it does not borrow another machine.
  *
  * `blocked` is a halt, never a failure: nothing about it is retryable by a machine, and the
- * schedule rail carries it as `blocked` (neutral against the failure ceiling) rather than `failed`.
+ * schedule rail carries it as `blocked` rather than `failed`. Whether a given block is NEUTRAL
+ * against the failure ceiling is the schedule rail's own judgement and depends on the cause - a
+ * machine that is not connected is fixed by opening a laptop, a rejected credential is not fixed by
+ * repeating it (`schedules/supervisor.ts` `NEUTRAL_BLOCKED_CODES`).
  *
  * ================================ PREFERENTIAL BRIDGE (P4.2) ================================
  * A captured session was established from a particular vantage point, and the pairing where its
@@ -39,6 +42,12 @@
  * Portable credentials - API keys, OAuth tokens, CLI logins, a permissive origin's storageState -
  * carry NO preference. Their posture is permissive, which resolves to `kind: 'any'`: any route out
  * is fine, because nothing about them is bound to where they were made.
+ *
+ * A preference is not a life sentence. A pairing the org's fleet listing no longer contains has
+ * been RETIRED, and `preferenceMachineRetired` turns that into a refusal that names the act which
+ * fixes it - establish the session again from a machine you still have - rather than an eternal
+ * wait for hardware nobody owns. It does NOT silently fall through to another machine: a retired
+ * ceremony machine makes the session homeless, not portable.
  *
  * KNOWN LIMITATION, named rather than hidden (docs/findings.md
  * `daemon-seam-cannot-ask-for-a-specific-machine...`): the daemon seam answers "the newest live
@@ -85,7 +94,9 @@ export interface LocalityInput {
   daemonConnected: boolean;
   /**
    * The pairing where THIS SESSION's ceremony happened
-   * (`sessionMetadata.establishedBy.pairingId`). A preference for adversarial origins only.
+   * (`sessionMetadata.establishedBy.pairingId`). A preference for adversarial origins only, and one
+   * this module refuses DIFFERENTLY when the fleet listing says that machine is gone - see
+   * `preferenceMachineRetired`.
    */
   preferredPairingId?: string;
   /** The org's machines, as the registry sees them (advertised INTERSECT granted). */
@@ -129,6 +140,38 @@ export function egressRequirementFor(input: {
 }
 
 /**
+ * Has the ceremony machine been RETIRED - i.e. is this preference about a machine that no longer
+ * exists, rather than one that is merely switched off?
+ *
+ * WHY THE QUESTION IS WORTH ASKING. `preferredPairingId` is read off a stored session and is never
+ * revised. Retire the laptop that established it (`revokePairing`, an ordinary admin action) and
+ * the preference outlives the machine: every later fire resolves to `blocked` "waiting" for a
+ * machine that is gone, forever, and NOTHING the owner does clears it - not connecting the new
+ * machine, not re-pairing, not disabling and re-enabling. A halt with no way out is its own defect,
+ * and it is worse than the substitution the preference exists to prevent, because a substitution is
+ * at least visible.
+ *
+ * THE TEST. A NON-EMPTY fleet listing that does not contain the pairing is the registry stating the
+ * machine is gone: `egressCandidatesForOrg` lists every non-revoked pairing in the org, live or
+ * not, so "registered but asleep" and "revoked" are genuinely distinguishable here. An EMPTY
+ * listing is "this process does not know what this org has" - an unbound seam, a store that
+ * answered nothing - which is not a statement that anything was retired, so the preference stands.
+ * That is the closed direction: not-knowing may never change where a session is allowed to run.
+ *
+ * WHAT THE ANSWER IS *NOT* USED FOR. Dropping the preference and letting selection pick some other
+ * machine, which was the first shape of this fix and is wrong: substituting a colleague's household
+ * for the retired one is precisely the swap P4.2 forbids, and the machine being retired does not
+ * make it less of a swap. A retired ceremony machine means the SESSION has no home any more, and
+ * the honest answer is to say so and name the act that fixes it - establish this session again from
+ * a machine you still have, which mints an item carrying a pairing that exists.
+ */
+function preferenceMachineRetired(input: LocalityInput): boolean {
+  if (!input.preferredPairingId) return false;
+  if (input.candidates.length === 0) return false;
+  return !input.candidates.some((c) => c.pairingId === input.preferredPairingId);
+}
+
+/**
  * Decide where this step runs.
  *
  * The order is the argument. The bridge is tried FIRST because a browser step's home is the owner's
@@ -148,6 +191,32 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
     input.candidates,
     input.actorOrg,
   );
+  // WHO NAMED THE MACHINE decides how the refusal is worded. An `authorPin` is a literal the author
+  // typed into the automation, so echoing it back is the most useful thing a message can do. The
+  // ceremony PREFERENCE is an inference this module made from a stored session, and its pairing id
+  // is an opaque UUID nothing in the product ever shows a user - printing it names nothing and
+  // reads as a fault code, so those messages describe the machine and the way out instead.
+  const authorPin = input.declaredTarget.kind === 'pinned' ? input.declaredTarget.pairingId : undefined;
+
+  // ---- 0. A ceremony machine that no longer exists ------------------------------------------
+  // Checked FIRST, and before the bridge, because every answer below it would be a lie: "that
+  // machine is not connected" is wrong about a machine that was removed, and "run it here instead"
+  // is the substitution P4.2 exists to refuse. Only when the preference is what the requirement
+  // actually became - an author's explicit pin is the author's business, and a permissive origin
+  // resolves to `any` and never asks about a machine at all.
+  if (
+    !authorPin &&
+    requirement.kind === 'residential' &&
+    requirement.pairingId === input.preferredPairingId &&
+    preferenceMachineRetired(input)
+  ) {
+    return {
+      kind: 'blocked',
+      reason:
+        'the machine where this session was established has been removed from your account - ' +
+        'establish this session again, from a machine you still have',
+    };
+  }
 
   // ---- 1. The bridge ------------------------------------------------------------------------
   if (input.daemonConnected) {
@@ -161,7 +230,11 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
     }
     return {
       kind: 'blocked',
-      reason: `this step must run on machine ${pinned} (where its session was established); the connected machine is a different one`,
+      reason: authorPin
+        ? `this step is pinned to machine ${authorPin}; the machine currently connected is a different one`
+        : 'this step must run on the machine where its session was established, and a different ' +
+          'machine of yours is connected - start that machine, or establish this session again ' +
+          'from the one you want to use',
     };
   }
 
@@ -176,11 +249,14 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
     const pinned = requirement.kind === 'residential' ? requirement.pairingId : undefined;
     return {
       kind: 'blocked',
-      reason: pinned
-        ? `this origin is ${input.classification.posture}: the step runs only on machine ${pinned}, ` +
-          'where its session was established, and that machine is not connected'
-        : `this origin is ${input.classification.posture}, so its browser steps run only on one of your ` +
-          'machines, and none is connected',
+      reason: authorPin
+        ? `this origin is ${input.classification.posture}: the step is pinned to machine ${authorPin}, ` +
+          'and that machine is not connected'
+        : pinned
+          ? `this origin is ${input.classification.posture}: the step runs only on the machine where its ` +
+            'session was established, and that machine is not connected'
+          : `this origin is ${input.classification.posture}, so its browser steps run only on one of your ` +
+            'machines, and none is connected',
     };
   }
   if (!input.inProcessFallbackEnabled) {

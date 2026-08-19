@@ -1928,10 +1928,25 @@ export interface Translations {
       running: string;
       ok: string;
       failed: string;
+      /** The bare `blocked` fallback, for a cause `runBlocked` has no copy for. Deliberately
+       *  general: a wrong specific instruction is worse than an honest vague one. */
       blocked: string;
       pending: string;
       done: string;
       dismissed: string;
+    };
+    /**
+     * What a `blocked` fire is waiting for, keyed by `detail.code` (P4.1).
+     *
+     * `blocked` used to have one cause and one string. It now has three, they need three different
+     * things from the reader, and the badge derives its words from the CODE - which is what that
+     * component always claimed and never did. Keys are the codes the API emits: the integration
+     * write gate's `awaiting_consent`, and the two run statuses `startRunForTrigger` reports.
+     */
+    runBlocked: {
+      awaiting_consent: string;
+      awaiting_daemon: string;
+      needs_credentials: string;
     };
     emptyState: {
       title: string;

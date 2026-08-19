@@ -198,7 +198,12 @@ export default function SchedulesPage() {
             <div className="mt-1 text-xs text-amber-700">{t.autoPausedHint}</div>
           )}
         </div>
-        {schedule.lastRun && <RunStatusBadge status={schedule.lastRun.status} />}
+        {schedule.lastRun && (
+          <RunStatusBadge
+            status={schedule.lastRun.status}
+            {...(schedule.lastRun.code ? { code: schedule.lastRun.code } : {})}
+          />
+        )}
         {/* z-10 keeps the controls above the link's overlay, so their clicks stay their own. */}
         <div className="relative z-10 flex shrink-0 items-center gap-1">
           {mine ? (

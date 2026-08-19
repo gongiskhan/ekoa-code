@@ -59,6 +59,22 @@ export const FAILURE_CEILING = 20;
  *  passed without the schedule running", which is exactly what happened. */
 export const MISSED_RUN_CODE = 'missed';
 
+/**
+ * The blocked causes that are NEUTRAL against the failure ceiling (P4.1).
+ *
+ * The test is not "is it blocked" but "does waiting fix it". `awaiting_daemon` is a statement about
+ * the ENVIRONMENT: the owner's machine is not connected, and the moment they open the laptop the
+ * next fire succeeds with nobody having touched the schedule. Counting that punishes a working
+ * schedule for its owner's sleep.
+ *
+ * Nothing else qualifies. `awaiting_consent` and `needs_credentials` are blocked on a HUMAN ACT,
+ * and no number of retries brings one closer - they are exactly the cases where an unbounded retry
+ * is the hazard (a rejected password resubmitted nightly against a portal with an unknown lock-out
+ * policy), so they keep driving the ceiling and the schedule eventually auto-pauses. See
+ * `recordOutcome`.
+ */
+export const NEUTRAL_BLOCKED_CODES: ReadonlySet<string> = new Set(['awaiting_daemon']);
+
 export interface ScheduleFireOutcome {
   status: 'ok' | 'failed' | 'blocked';
   /** Machine-readable cause (executor code / service error code). */
@@ -347,11 +363,11 @@ export class ScheduleSupervisor {
       ...(outcome.automationRunId ? { automationRunId: outcome.automationRunId } : {}),
     });
     await this.recordOutcome(schedule._id, runId, outcome, false);
-    // P4.1 — A BLOCKED FIRE TELLS ITS OWNER. It is the one outcome nothing else will surface: `ok`
-    // needs no telling, `failed` drives the ceiling and eventually auto-pauses loudly, but blocked
-    // is neutral by design, so a schedule could sit waiting on a machine for weeks in silence. The
-    // alternative the rest of this slice exists to forbid is worse — running the work anyway from a
-    // datacenter IP against an origin that was declared bridge-only.
+    // P4.1 - A BLOCKED FIRE TELLS ITS OWNER, whichever kind of block it is. `ok` needs no telling
+    // and `failed` drives the ceiling and eventually auto-pauses loudly, but an ENVIRONMENT block is
+    // neutral by design (`NEUTRAL_BLOCKED_CODES`), so without this a schedule could sit waiting on a
+    // machine for weeks in silence. The alternative the rest of this slice exists to forbid is worse
+    // - running the work anyway from a datacenter IP against an origin declared bridge-only.
     if (outcome.status === 'blocked') {
       try {
         this.deps.notifyBlocked({
@@ -395,15 +411,24 @@ export class ScheduleSupervisor {
   /**
    * Denormalise the outcome onto the schedule + drive the failure ceiling.
    *
-   * BLOCKED IS NEUTRAL (P4.1): it neither resets the counter nor increments it. A blocked fire is
-   * the schedule waiting for its owner — a machine of theirs that is not connected, a credential
-   * only they can establish — and it says NOTHING about whether the schedule works.
+   * BLOCKED IS NEUTRAL ONLY WHEN THE BLOCK IS ABOUT THE ENVIRONMENT - `NEUTRAL_BLOCKED_CODES`, and
+   * the distinction is the whole of P4.1's honesty here.
    *
-   * Counting it (the previous behaviour, pinned by supervisor.test.ts) meant twenty nights with the
+   * `awaiting_daemon` (a machine of the owner's is not connected) neither resets the counter nor
+   * increments it. Counting it - the behaviour before this slice - meant twenty nights with the
    * laptop shut auto-paused a perfectly good schedule, and the owner would find it disabled rather
-   * than waiting. Resetting the counter would be the opposite error: a schedule that is genuinely
-   * broken could hide behind an occasional blocked fire and never reach the ceiling at all. Neither
-   * direction is a judgement this outcome is entitled to make, so it makes neither.
+   * than waiting. Resetting it would be the opposite error: a genuinely broken schedule could hide
+   * behind an occasional blocked fire and never reach the ceiling at all. Neither direction is a
+   * judgement that outcome is entitled to make, so it makes neither.
+   *
+   * EVERY OTHER BLOCK STILL COUNTS, and that is not a concession - it IS the cap. A block on a
+   * DECISION or a CREDENTIAL (`awaiting_consent`, `needs_credentials`) does not resolve by waiting:
+   * nothing changes between fires unless a human acts. Making those neutral too removed the only
+   * limit on repeating them, and the worst shape of that is concrete - a portal password changes,
+   * the nightly fire routes to the typist under a standing grant, submits, meets the wrong-password
+   * signature, halts `needs_credentials`, and then does it again every night forever against a
+   * portal with an unknown lock-out policy. The failure ceiling is the per-schedule cap on exactly
+   * that, it existed before this slice, and this is why it stays.
    */
   private async recordOutcome(
     scheduleId: string,
@@ -414,9 +439,9 @@ export class ScheduleSupervisor {
     const nowIso = this.deps.now();
     await updateScheduleSystem(scheduleId, (cur) => {
       const ok = outcome.status === 'ok';
-      const blocked = outcome.status === 'blocked';
-      const failures = ok ? 0 : blocked ? cur.consecutiveFailures : cur.consecutiveFailures + 1;
-      const autoPause = !ok && !blocked && failures >= FAILURE_CEILING && cur.enabled;
+      const neutral = outcome.status === 'blocked' && NEUTRAL_BLOCKED_CODES.has(outcome.code ?? '');
+      const failures = ok ? 0 : neutral ? cur.consecutiveFailures : cur.consecutiveFailures + 1;
+      const autoPause = !ok && !neutral && failures >= FAILURE_CEILING && cur.enabled;
       if (autoPause) {
         console.warn(
           `[schedule-supervisor] schedule ${scheduleId} disabled after ${failures} consecutive non-ok fires (last: ${outcome.code ?? outcome.status})`,
@@ -454,18 +479,25 @@ function msgOf(err: unknown): string {
  * startRunForTrigger's outcome → a fire outcome.
  *
  * P4.1: `blocked` is a THIRD outcome now, not a shade of `failed`. A run that halted waiting for
- * its owner's machine or credential is not a failure of the schedule, and `recordOutcome` treats it
- * as neutral — see the docblock there for why counting it was actively harmful.
+ * its owner's machine or credential is not a failure of the schedule.
+ *
+ * THE CODE TRAVELS VERBATIM, and it has to. `recordOutcome` treats only the ENVIRONMENT block as
+ * neutral against the ceiling, and the badge the owner sees derives its words from this code - both
+ * of which need to know WHICH block it was. A single flat `automation_blocked` (the first cut of
+ * this slice) is what made "your laptop is shut" and "your password was rejected" the same event,
+ * which cost the credential case its only retry cap and told the owner to go find an approval that
+ * does not exist. It falls back to the flat code only when the seam supplied none.
  */
 export function mapAutomationOutcome(o: {
   outcome: 'completed' | 'failed' | 'blocked';
+  code?: string;
   permanent: boolean;
   runId?: string;
 }): ScheduleFireOutcome {
   if (o.outcome === 'blocked') {
     return {
       status: 'blocked',
-      code: 'automation_blocked',
+      code: o.code ?? 'automation_blocked',
       ...(o.runId ? { automationRunId: o.runId } : {}),
     };
   }

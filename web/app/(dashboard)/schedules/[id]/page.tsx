@@ -344,7 +344,7 @@ function RunRow({ run, target }: { run: ScheduleRun; target: ScheduleTarget }) {
   return (
     <Card padding="sm" className="space-y-1.5" data-testid="schedule-run-row">
       <div className="flex flex-wrap items-center gap-2">
-        <RunStatusBadge status={run.status} />
+        <RunStatusBadge status={run.status} {...(run.detail?.code ? { code: run.detail.code } : {})} />
         <span className="text-xs text-neutral-500">
           {t.detail.plannedFor}: {formatStamp(run.plannedFor, language)}
         </span>

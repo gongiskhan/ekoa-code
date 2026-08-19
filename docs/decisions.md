@@ -1511,3 +1511,100 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   `schedule_blocked` event, and it carries a CODE and no message - the client derives its text from
   the code, never from engine prose. A notifier that throws is caught and logged: the durable record
   is the `blocked` run row, and a push failure must never fail a fire.
+
+- 2026-08-19 - P4 CORRECTIONS, AFTER AN ADVERSARIAL REVIEW OF THE THREE ENTRIES ABOVE. Seven of the
+  claims recorded for P4 were wrong, incomplete, or unpinned. This entry SUPERSEDES them rather than
+  editing them out: the journal's value is that a reader can see what was believed and when.
+
+  (1) LOCALITY IS DECIDED BEFORE THE CREDENTIAL GATE, AND THE UNATTENDED TYPIST IS GATED ON POSTURE.
+  The first cut ran `credentialGateRecord` FIRST and resolved locality after it. That was not an
+  ordering nit: the gate fires on nothing more than a step declaring `credentialRefs`, and its
+  `ensureSession` typist path opens the HOSTED Chromium - through `defaultOpenBrowser`, which
+  reached the browser seam with NO route argument, i.e. the datacenter - and submits a password. So
+  a step naming a Cofre item against a portal nobody had classified would type a real credential
+  into an adversarial origin from a datacenter IP, before the code that exists to forbid exactly
+  that had run. Posture was consulted in `credential-gate.ts` for `requiresAttendedAuth` and for
+  nothing else; the question "may a browser open at all" was never asked.
+  THE FIX IS TWO INDEPENDENT LOCKS, both closed by default, and neither sufficient alone.
+  ORDER: locality resolves first, and a refused step never reaches the gate. When the gate DOES run
+  it is handed `CredentialGateInput.hostedBrowser` - "this process has a hosted browser for this
+  step, by this route" - which is absent when the operator kill switch is off.
+  POSTURE: the gate forwards that permit to `ensureSession` as `hostedTypist` ONLY when
+  `classification.cloudEgressAllowed`, which `origin-posture.ts`'s frozen constructor can only ever
+  set for a `permissive` declaration. `EnsureSessionInput.hostedTypist` is PRESENCE-IS-PERMISSION
+  and absent-means-no: with no permit the typist route becomes a `needs-human` refusal with
+  `attempted: false`, before anything is unwrapped, navigated to or typed. It is an object rather
+  than a boolean because a permit must be CONSTRUCTED - there is no value of the field that is
+  accidentally true, and no way to supply a route without the permission it belongs to.
+  AND THE ROUTE TRAVELS: `BrowserOpener` now takes the resolution, so a permitted login leaves by
+  the door the run resolved instead of always the datacenter.
+  THE CITIUS RAIL IS THE ONE EXPLICIT EXCEPTION, named rather than grandfathered: it calls
+  `ensureSession` directly, takes no part in the locality decision, and passes `hostedTypist: {}`
+  with a comment and a findings entry
+  (`citius-sync-establishes-its-session-outside-the-locality-decision`). Its behaviour is exactly
+  what it shipped with; what changed is that it now says so.
+
+  (2) `localBrowserEnabled` KEEPS ITS `!isProd` DEFAULT. The first cut flipped it to `true`
+  everywhere on the reasoning that posture is the gate now, so this is "only a kill switch". True as
+  far as it goes, and still an OPENING relative to the shipped system: hosted Chromium would go from
+  categorically unreachable in production to reachable for every origin some declaration calls
+  permissive, on a slice whose entire purpose is to narrow where a browser may run. A slice that
+  narrows must not widen anything on the way past. Turning it on in production is now a deliberate
+  operator act, pinned in both environments by `tests/automation/config.test.ts`.
+
+  (3) "BLOCKED IS NEUTRAL AGAINST THE CEILING" WAS TOO BROAD, AND AS WRITTEN IT REMOVED THE ONLY CAP
+  ON REPEATING A REJECTED CREDENTIAL. The rule was written as an absolute, and an absolute is what
+  made the hole. Concretely: a nightly schedule's portal password changes; each fire routes to the typist
+  under a standing grant, submits, meets `TypistUnknownPattern` - which the code's own comment calls
+  the wrong-password signature - and halts `needs_credentials`. Neutral, that repeats every night
+  forever against a portal with an unknown lock-out policy. `allowReestablish` caps attempts per
+  RUN, not per schedule, and there is no cooldown anywhere in `session-establishment.ts` or
+  `cofre/`. Before P4 the twentieth fire hit `FAILURE_CEILING` and paused.
+  THE DISTINCTION THAT SURVIVES is not "blocked vs failed" but DOES WAITING FIX IT.
+  `awaiting_daemon` is a fact about the ENVIRONMENT - opening a laptop fixes it with nobody touching
+  the schedule - so it stays neutral, in both directions (counting auto-pauses a working schedule;
+  resetting lets a broken one hide behind an occasional block). `needs_credentials` and
+  `awaiting_consent` are blocked on a HUMAN ACT: nothing changes between fires until a person acts,
+  so they keep driving the ceiling, and the ceiling IS the per-schedule cap. `NEUTRAL_BLOCKED_CODES`
+  is the one place that list lives, `TriggerRunOutcome.code` carries which block it was, and an
+  unnamed block counts - not knowing is not a known-safe answer. `awaiting_consent`'s original pin
+  (`consecutiveFailures === 1`) is restored rather than flipped.
+
+  (4) THE BLOCKED BADGE DERIVES FROM THE CODE, WHICH IS WHAT ITS DOCBLOCK ALREADY CLAIMED.
+  `RunStatusBadge` rendered `schedules.runStatus[status]` and ignored `detail.code`. That was
+  survivable while `blocked` had one cause (`awaiting_consent`) and its one string, "Awaiting
+  approval", was true. P4 gave it two more, and a user whose laptop is shut read "Awaiting approval"
+  and went looking for an approval that does not exist - the schedules surface has no approval
+  control at all. `schedules.runBlocked` now keys copy by code in en and pt together, the bare
+  `blocked` string is a deliberately vague fallback ("Waiting on you" / "À sua espera") because a
+  wrong specific instruction is worse than an honest general one, and both call sites pass the code.
+
+  (5) TWO DEAD BRANCHES REMOVED, ONE GUARD PINNED. The mid-run route-switch refusal had NO test:
+  replacing both its conditions with `else if (false)` left `tests/automation` and `tests/security`
+  fully green, on the guard that stops a step launched for the datacenter reusing a context launched
+  through a machine's residential proxy. It is now driven through the real engine with a working
+  context. Its symmetric `bridge`-inherits-a-hosted-session branch was UNREACHABLE - `connection` is
+  read once per run, `resolveLocality` answers `bridge` only when a daemon is connected and
+  `in-process` only when none is - and is deleted rather than left as protection that provides none.
+  So is `getBrowser`'s `blocked` guard: a refused step short-circuits before `executeStep`, and
+  every other `getBrowser` caller sits after an `awaiting_daemon` halt that already returned.
+
+  (6) A RETIRED CEREMONY MACHINE IS A REFUSAL WITH A WAY OUT, NOT A LIFE SENTENCE.
+  `preferredPairingId` is read off a stored session and never revised, so retiring the laptop that
+  established it left every later fire blocked on hardware nobody owns, naming an opaque pairing
+  UUID no surface in this product ever shows a user. `preferenceMachineRetired` distinguishes GONE
+  from ASLEEP (the fleet listing carries every non-revoked pairing, live or not) and answers with
+  the act that fixes it - establish this session again, from a machine you still have. It does NOT
+  drop the preference and let selection pick another machine: that was the first shape of this fix
+  and it is precisely the substitution P4.2 forbids. An EMPTY listing is ignorance, not a
+  retirement, and leaves the preference standing - not knowing may never move a session. Refusals
+  now print a pairing id only when the AUTHOR wrote one (`target: pinned`).
+
+  (7) A POSTURE INHERITED FROM A PRECEDING STEP LICENSES ONE ORIGIN. `resolveStepOrigin` walks back
+  to the nearest URL-bearing step, and only an `integration` step yields a non-null action - so a
+  browser step can inherit `permissive` from an integration action and then be driven anywhere. The
+  step list cannot answer where the LIVE page is; the session's own observation can. A hosted
+  session whose observed origin is not the one the declaration was about carries no further steps.
+  NAMED LIMITATION rather than a claim of completeness: this stops the steps after the drift, never
+  the act that drifts (docs/findings.md
+  `posture-drift-check-cannot-stop-the-act-that-navigates`).
