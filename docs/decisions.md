@@ -1166,3 +1166,84 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   `api/tests/security/bridge-ingress-redaction.test.ts`, including an end-to-end case that drives a
   real `tool.result` with an observation object over a real socket and asserts on what the awaiting
   `invokeTool` caller resolves with.
+- 2026-08-19 - THE DAEMON'S BROWSER LEASE IS SCOPED TO A RUN, AND A RUN ENDS TWO WAYS: AN EXPLICIT
+  `release` VERB, AND AN IDLE BACKSTOP THAT EXISTS FOR SECURITY RATHER THAN HYGIENE.
+  THE DEFECT, STATED PLAINLY. Cortex dispatches ONE `tool.invoke` PER ACTION -
+  `DaemonBrowserSession.dispatch` is reached from every `act()`, `assert()` and `observe()`, so a
+  five-action step is five frames. `runBrowserStep` acquired a `ProfileLease` per FRAME and released
+  it in a `finally`; `ProfileLease.page()` holds `runPage` in the LEASE closure, so each acquire
+  called `context.newPage()`, and `release()` closed that page and called `clearSession()` ->
+  `context.clearCookies()` over the whole jar UNCONDITIONALLY. A navigate landed, the lease released,
+  the page closed, the jar was wiped, and the next click ran on a fresh `about:blank` with no
+  cookies. Every browser step after the first acted on a blank page: a multi-step flow - the entire
+  point of a browser capability - could not work.
+  WHY THE UNIT LANE MISSED IT, WHICH IS THE MORE USEFUL LESSON. `test/runtime/tool-executor.test.ts`
+  drives one action at a time against injected fakes, and the DISPATCH was right in every one of
+  them. The bug was not in any single frame's behaviour; it was in the span BETWEEN two frames,
+  which a one-action-at-a-time suite cannot express. The new assertions are therefore all of the
+  form "do X, then do Y, and observe what survived" - see `test/browser/run-lease.test.ts` and the
+  run-lease/release blocks in the executor suite.
+  THE ROOT CAUSE WAS A MISSING SIGNAL. `BrowserSession.dispose?()` was OPTIONAL and
+  `DaemonBrowserSession` did not implement it, under a comment claiming the daemon session "manages
+  pages daemon-side and needs no teardown". That comment was the bug: with no run-end signal on the
+  wire, the end of each INVOKE was the only place the daemon had to hang teardown on, and it hung it
+  there. The fix is the signal, not a bigger cache.
+  THE WIRE CHANGE (Rule 7, additive). `LocalBrowserAction` gains one member, `{action:'release'}`. It
+  is a LIFECYCLE verb and NOT a member of Cortex's `PlaywrightAction`, deliberately: keeping it out
+  of the resolver's vocabulary is what makes it impossible for the planner, the action cache or the
+  vision tier to resolve an ordinary step INTO a run teardown. Only `dispose()` emits it. It rides
+  the ordinary browser envelope, so it passes gate 1 and gate 2 like every other step and is
+  ledgered like every other step - it is still a remote instruction to do something on somebody's
+  machine. An older daemon refuses it at its zod boundary (fail-closed, and that daemon still has
+  the old per-invoke teardown); an older Cortex never sends one. Pinned by
+  `shared/src/local-execution.test.ts` and `api/tests/automation/browser-session-dispose.test.ts`.
+  WHY AN IDLE BACKSTOP IS NOT OPTIONAL, AND WHY TWO MINUTES. An explicit release only arrives if
+  Cortex is alive to send it. If it dies, is killed, or its socket drops mid-run, an explicit-only
+  design leaves an AUTHENTICATED Cofre session resident in a jar that the next automation on that
+  profile inherits, and a headed browser window open on somebody's desktop, indefinitely. That is a
+  containment failure, not untidiness, so the backstop is a security control. Its window is chosen
+  from both ends: it must sit ABOVE the largest legitimate gap between two invokes of one run -
+  hosted think time, a cache miss going out to the vision resolver, then the verifier, then possibly
+  the rehearsal fixer, several model round trips - and as far BELOW that as it can, because for the
+  whole window a live session sits unattended. Two minutes is the smallest value that clears a
+  vision escalation, and it is exactly Cortex's own per-invocation timeout: past that point Cortex
+  has already given up on the step, so a longer window buys nothing and only lengthens the exposure.
+  The timer is armed AFTER each step completes and a BUSY run is never reaped (the timer re-arms
+  instead), so the window bounds idleness rather than the duration of a slow step.
+  A REAPED RUN IS REFUSED, NOT SILENTLY RESTARTED. The tempting behaviour for a late invoke is to
+  acquire a fresh lease. That would recreate the original defect under a new cause - a blank page and
+  an empty jar, reported to Cortex as a step that ran. Ended runs are tombstoned in a bounded FIFO
+  (200) and a step naming one fails by name.
+  THE COST, NAMED. A second RUN on the same profile now queues for the duration of the first rather
+  than interleaving with it. That is the correct reading of one browser, one jar, one Chromium
+  singleton - the interleaving it replaces was not concurrency, it was two runs corrupting each
+  other's page - and the backstop bounds the wait. There is no queue timeout; a run blocked behind a
+  long one waits, and that is recorded in `docs/findings.md` rather than papered over.
+
+- 2026-08-19 - THREE PROFILE LIFECYCLE FIXES THAT SHIPPED WITH THE RUN-SCOPED LEASE.
+  1. THE STALE-LOCK RECOVERY WAS DEAD CODE AGAINST THE BROWSER IT WAS WRITTEN FOR. It skipped any
+  marker for which `existsSync` returned false. But real Chrome does not write `SingletonLock` as a
+  file: it writes a SYMLINK whose target is `<hostname>-<pid>`, a name that never exists on disk.
+  `existsSync` FOLLOWS the link, so it returned false for precisely the dangling lock a crashed
+  Chrome leaves - the one case the recovery exists for - and every later launch died on it. Now
+  `lstatSync`, which stats the link itself. The sweep still never touches a lock while this process
+  holds a context for that profile. That guard is belt-and-braces and is currently unreachable
+  through the public API: a mutation removing it alone leaves the suite green, and that is stated in
+  the code comment rather than left for a reviewer to discover. It stays because the function is
+  destructive and the next call site added to it should not have to rediscover the invariant.
+  2. IDLE-CLOSE DROPPED THE MAP ENTRY BEFORE THE CLOSE RESOLVED. `held.delete(key)` ran, then
+  `context.close()` was fired and not awaited, so for the whole duration of Chromium's shutdown the
+  map said "no context for this profile". An acquire landing in that window swept the singleton
+  markers of a browser that was still using them and launched straight into the collision. The entry
+  now stays, marked `closing`, and `ensureContext` awaits that promise before it sweeps and
+  relaunches.
+  3. SHUTDOWN WAS NOT FINAL. `acquire` checked the `closed` flag at its top and then awaited the
+  per-profile chain - which, with run-scoped leases, can be a whole run long - and `ensureContext`
+  never re-checked. A waiter that woke after `closeAll` therefore launched a fresh HEADED browser
+  into a daemon that was in the middle of shutting down. The check now lives in `ensureContext`, so
+  a waiter that wakes after close is refused rather than served. `closeAll` additionally releases
+  live runs BEFORE closing their contexts: on a PERSISTENT profile the cookies are on disk, so
+  closing a context out from under a held lease would leave the injected session behind after the
+  daemon exits.
+  All three are pinned by `test/browser/run-lease.test.ts`, and each was verified to turn that suite
+  RED when reverted in the source.

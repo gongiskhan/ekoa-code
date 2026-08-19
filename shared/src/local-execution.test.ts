@@ -20,33 +20,35 @@ import {
  * RULE 7. Everything here is ADDITIVE: new exports, plus one new OPTIONAL field on an existing
  * member of the frame union. The "old parsers still parse" assertions below are the proof.
  */
-describe('LocalBrowserAction - the vocabulary Cortex sends and the daemon runs', () => {
-  // Exactly the PlaywrightAction kinds api/src/automation/types.ts declares, in the FLATTENED
-  // form toDaemonInput produces. A kind missing here is a step that dies at the daemon boundary.
-  const ACTIONS: Array<Record<string, unknown>> = [
-    { action: 'navigate', url: 'https://example.test/a' },
-    { action: 'click', locator: { strategy: 'role', role: 'button', name: 'Entrar' } },
-    { action: 'dblclick', locator: { strategy: 'testid', value: 'row-3' } },
-    { action: 'fill', locator: { strategy: 'label', value: 'Email' }, value: 'a@b.test' },
-    { action: 'press', key: 'Enter' },
-    { action: 'press', key: 'Enter', locator: { strategy: 'css', selector: '#q' } },
-    { action: 'select', locator: { strategy: 'label', value: 'País' }, value: 'PT' },
-    { action: 'check', locator: { strategy: 'label', value: 'Aceito' } },
-    { action: 'uncheck', locator: { strategy: 'label', value: 'Aceito' } },
-    { action: 'hover', locator: { strategy: 'text', value: 'Menu' } },
-    { action: 'wait', durationMs: 500 },
-    { action: 'wait_for', locator: { strategy: 'testid', value: 'grid' }, state: 'visible' },
-    { action: 'scroll', direction: 'down' },
-    { action: 'scroll', direction: 'up', pixels: 300, locator: { strategy: 'css', selector: 'main' } },
-    { action: 'screenshot' },
-    { action: 'noop', reason: 'already satisfied' },
-    { action: 'expect_visible', locator: { strategy: 'role', role: 'heading' } },
-    { action: 'expect_hidden', locator: { strategy: 'testid', value: 'spinner' } },
-    { action: 'expect_text', locator: { strategy: 'testid', value: 'total' }, contains: '12' },
-    { action: 'expect_url', pattern: '/inbox' },
-    { action: 'expect_title', contains: 'Ekoa' },
-  ];
+// Exactly the PlaywrightAction kinds api/src/automation/types.ts declares, in the FLATTENED
+// form toDaemonInput produces. A kind missing here is a step that dies at the daemon boundary.
+// `release` is deliberately absent - it is a LIFECYCLE verb no resolver can emit (its own describe
+// block below asserts that absence rather than leaving it to be noticed).
+const ACTIONS: Array<Record<string, unknown>> = [
+  { action: 'navigate', url: 'https://example.test/a' },
+  { action: 'click', locator: { strategy: 'role', role: 'button', name: 'Entrar' } },
+  { action: 'dblclick', locator: { strategy: 'testid', value: 'row-3' } },
+  { action: 'fill', locator: { strategy: 'label', value: 'Email' }, value: 'a@b.test' },
+  { action: 'press', key: 'Enter' },
+  { action: 'press', key: 'Enter', locator: { strategy: 'css', selector: '#q' } },
+  { action: 'select', locator: { strategy: 'label', value: 'País' }, value: 'PT' },
+  { action: 'check', locator: { strategy: 'label', value: 'Aceito' } },
+  { action: 'uncheck', locator: { strategy: 'label', value: 'Aceito' } },
+  { action: 'hover', locator: { strategy: 'text', value: 'Menu' } },
+  { action: 'wait', durationMs: 500 },
+  { action: 'wait_for', locator: { strategy: 'testid', value: 'grid' }, state: 'visible' },
+  { action: 'scroll', direction: 'down' },
+  { action: 'scroll', direction: 'up', pixels: 300, locator: { strategy: 'css', selector: 'main' } },
+  { action: 'screenshot' },
+  { action: 'noop', reason: 'already satisfied' },
+  { action: 'expect_visible', locator: { strategy: 'role', role: 'heading' } },
+  { action: 'expect_hidden', locator: { strategy: 'testid', value: 'spinner' } },
+  { action: 'expect_text', locator: { strategy: 'testid', value: 'total' }, contains: '12' },
+  { action: 'expect_url', pattern: '/inbox' },
+  { action: 'expect_title', contains: 'Ekoa' },
+];
 
+describe('LocalBrowserAction - the vocabulary Cortex sends and the daemon runs', () => {
   it.each(ACTIONS.map((a) => [String(a.action), a] as const))('parses %s', (_name, action) => {
     const r = LocalBrowserAction.safeParse(action);
     expect(r.success, JSON.stringify(r.success ? {} : r.error.issues)).toBe(true);
@@ -78,6 +80,54 @@ describe('LocalBrowserAction - the vocabulary Cortex sends and the daemon runs',
 
   it('REFUSES a navigate with no url (the daemon must not guess a destination)', () => {
     expect(LocalBrowserAction.safeParse({ action: 'navigate' }).success).toBe(false);
+  });
+});
+
+/**
+ * CONTRACT - the run-end signal that makes the run-scoped lease possible.
+ *
+ * The daemon keeps ONE page and ONE cookie jar per runId across every invoke of that run, so
+ * something on the wire has to say the run is over: that is where the page is dropped and the
+ * injected Cofre session is wiped out of a jar the next run will share. Before this verb there was
+ * NO run-end signal at all - `BrowserSession.dispose?()` was optional and `DaemonBrowserSession`
+ * did not implement it - which forced the daemon to tear down after every single invoke, and since
+ * Cortex dispatches one invoke per act/assert/observe, every browser step after the first ran on a
+ * fresh blank page with an empty jar.
+ */
+describe('LocalBrowserAction.release - the run-end lifecycle verb', () => {
+  it('parses, and carries nothing but the verb (no locator, no page state)', () => {
+    const r = LocalBrowserAction.safeParse({ action: 'release' });
+    expect(r.success, JSON.stringify(r.success ? {} : r.error.issues)).toBe(true);
+    if (r.success) expect(r.data).toEqual({ action: 'release' });
+  });
+
+  it('is NOT one of the kinds a resolver can emit - a step can never end its own run', () => {
+    // `release` is absent from ACTIONS on purpose. That table mirrors api/src/automation/types.ts
+    // `PlaywrightAction`/`PlaywrightAssertion`, and adding it there would let the planner, the
+    // action cache or the vision tier resolve an ordinary step INTO a run teardown.
+    expect(ACTIONS.some((a) => a.action === 'release')).toBe(false);
+  });
+
+  it('RULE 7 - the union GREW: every pre-existing member still parses unchanged', () => {
+    for (const action of ACTIONS) {
+      expect(LocalBrowserAction.safeParse(action).success, String(action.action)).toBe(true);
+    }
+  });
+
+  it('rides the ordinary browser envelope - same capability, same gates, same ledger row', () => {
+    const r = LocalToolInvokeInput.safeParse({
+      capability: 'browser',
+      input: { owner: 'u1', action: { action: 'release' } },
+      runId: 'r1',
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('needs the runId - the release names WHICH run ended, and the envelope makes it mandatory', () => {
+    expect(
+      LocalToolInvokeInput.safeParse({ capability: 'browser', input: { owner: 'u1', action: { action: 'release' } } })
+        .success,
+    ).toBe(false);
   });
 });
 

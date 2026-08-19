@@ -103,9 +103,20 @@ export interface BrowserSession {
   /** Trimmed accessibility outline from the latest observation, if any. */
   accessibilitySnapshot(): string | undefined;
   /**
-   * Release per-run resources at run end. Optional: the daemon session manages
-   * pages daemon-side and needs no teardown; the in-process session closes its
-   * page here so pages don't accumulate.
+   * Release per-run resources at run end. BOTH implementations need it.
+   *
+   * This used to be documented as "the daemon session manages pages daemon-side
+   * and needs no teardown", and `DaemonBrowserSession` accordingly did not
+   * implement it - which meant there was no run-end signal on the bridge at all.
+   * The daemon's only remaining place to hang teardown was therefore the END OF
+   * EACH INVOKE, and since this class sends one invoke per `act`/`assert`/
+   * `observe`, the daemon closed the page and cleared the whole cookie jar
+   * between every pair of steps: every browser step after the first ran on a
+   * fresh `about:blank`, signed out. A multi-step flow could not work.
+   *
+   * So the daemon now holds one page and one jar per `runId`, and this is the
+   * signal that ends it. It stays OPTIONAL on the interface only because a test
+   * double need not supply one.
    */
   dispose?(): Promise<void>;
 }
@@ -205,6 +216,37 @@ export class DaemonBrowserSession implements BrowserSession {
   accessibilitySnapshot(): string | undefined {
     const s = this.last.accessibilitySnapshot;
     return typeof s === 'string' && s.length > 0 ? s : undefined;
+  }
+
+  /**
+   * END OF RUN - the signal that lets the daemon hold one page and one cookie
+   * jar for the whole run instead of tearing down after every single step.
+   *
+   * It goes out as the `release` browser verb on the ordinary step envelope, so
+   * it passes the same capability and tier-2 gates every other step does and is
+   * ledgered on the machine like every other step. It carries the `runId`,
+   * which is what the daemon keys the lease by.
+   *
+   * NEVER THROWS. The engine calls this from its run `finally`, so a throw here
+   * would replace the run's real outcome with a teardown error. A machine that
+   * has already gone away simply never gets the frame, and the daemon's own
+   * idle backstop reaps the lease - which is exactly why that backstop exists
+   * rather than being left to this call.
+   *
+   * It deliberately does NOT go through `dispatch`: a release carries no
+   * observation, and feeding an empty one into `ingest` would leave the session
+   * claiming page state for a page that no longer exists.
+   */
+  async dispose(): Promise<void> {
+    try {
+      await this.conn.runStep({
+        capability: 'browser',
+        input: { owner: this.ownerUserId, action: { action: 'release' } },
+        runId: this.runId,
+      });
+    } catch {
+      /* the machine is gone; the daemon's idle backstop ends the run's lease */
+    }
   }
 
   // --- internals ------------------------------------------------------------

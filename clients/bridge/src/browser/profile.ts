@@ -28,8 +28,44 @@
  * home via the pidfile (verified, `cli/commands/serve.ts`) - so the only contender for a
  * `userDataDir` is this process, and an in-process mutex is sufficient. A crash still leaves a
  * stale lock behind, so acquire clears one when no live context is held.
+ *
+ * THE LEASE IS SCOPED TO A RUN, NOT TO A STEP. This is the whole point and it was wrong before.
+ * Cortex dispatches ONE `tool.invoke` PER ACTION - `DaemonBrowserSession.dispatch` is reached from
+ * every `act()`, `assert()` and `observe()` - and the executor used to acquire a lease per FRAME
+ * and release it in a `finally`. Release closes the run's page and clears the whole cookie jar, so
+ * a navigate landed, the page closed, the jar was wiped, and the next click ran on a fresh
+ * `about:blank` with no cookies: EVERY browser step after the first acted on a blank page. A
+ * multi-step flow - which is the entire point of a browser capability - could not work.
+ *
+ * So the lease is now keyed by `runId` (`withRunLease`): one page and one jar alive across every
+ * invoke of one run, and the teardown hangs off the END OF THE RUN. Two things end a run, and both
+ * have to exist:
+ *
+ *   1. EXPLICIT. Cortex sends the `release` browser verb from `DaemonBrowserSession.dispose()`,
+ *      which the engine calls in its run `finally`. This is the normal path and it is prompt.
+ *   2. IDLE BACKSTOP (`RUN_IDLE_MS`). If Cortex dies, is killed, or its socket drops mid-run, the
+ *      explicit release never arrives - and an idle-free design would then leave a HEADED browser
+ *      window open on somebody's desktop and, worse, an AUTHENTICATED Cofre session resident in a
+ *      jar that the next run of any automation on this profile inherits. The backstop is a security
+ *      control before it is hygiene: it is the upper bound on how long an injected session can sit
+ *      in the jar with nobody driving it.
+ *
+ * WHY TWO MINUTES. The window has to sit above the largest legitimate gap between two consecutive
+ * invokes of one run and as far below that as it can. The gap is hosted-side think time: a step's
+ * cache miss goes out to the vision resolver, then the verifier, then possibly the rehearsal fixer -
+ * several model round trips - while Cortex's own per-invocation timeout is two minutes (the daemon
+ * runtime's own comment names it). Anything under about a minute would reap live runs during a slow
+ * vision escalation; anything much over two minutes is just a longer time for an authenticated jar
+ * to sit unattended, and buys nothing, because a Cortex that has not spoken for two minutes has
+ * already blown its own invocation budget. The timer is armed AFTER each step completes, never
+ * during one, so a slow step is never reaped out from under itself.
+ *
+ * A REAPED RUN IS REFUSED, NOT SILENTLY RESTARTED. If a late invoke arrived for a run the backstop
+ * already reaped, acquiring a fresh lease for it would recreate the exact bug this file exists to
+ * fix - a blank page and an empty jar, reported as success. The runId is tombstoned instead and the
+ * step fails by name.
  */
-import { chmodSync, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { chmodSync, lstatSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import type {
   PersistentLaunchOptions,
@@ -50,8 +86,20 @@ const LAUNCH_TIMEOUT_MS = 60_000;
 
 /** How long an idle profile context stays open before it is closed. Long enough that a run every
  *  few minutes keeps a warm profile; short enough that an abandoned daemon is not holding a
- *  visible browser window open forever. */
+ *  visible browser window open forever. Measured from the moment NO run holds the profile. */
 const IDLE_CLOSE_MS = 10 * 60_000;
+
+/**
+ * How long a RUN may hold its lease with no step arriving before the daemon reaps it. See the file
+ * header for the derivation: above one hosted vision escalation, at Cortex's own per-invocation
+ * timeout, and no higher - because for this whole window an injected Cofre session is resident in
+ * the jar with nobody driving it.
+ */
+const RUN_IDLE_MS = 2 * 60_000;
+
+/** How many reaped runIds are remembered so a late invoke is refused by name rather than served a
+ *  blank page. Bounded: it is a tombstone list, not a run history. */
+const MAX_ENDED_RUNS = 200;
 
 /**
  * The one init script. It removes the tell Playwright itself adds; it does not attempt to emulate
@@ -152,15 +200,39 @@ export interface ProfileManagerDeps {
   /** User-visible progress in Portuguese; a headed window opens in front of somebody. */
   log?: (message: string) => void;
   now?: () => number;
-  /** Idle-close window; 0 disables the timer (tests). */
+  /** Idle-close window for an UNHELD context; 0 disables the timer (tests). */
   idleCloseMs?: number;
+  /**
+   * Idle backstop for a RUN's lease; 0 disables it (tests that drive the lifecycle by hand).
+   * Distinct from `idleCloseMs`: that one bounds a warm context nobody holds, this one bounds an
+   * authenticated session a run left resident. Default `RUN_IDLE_MS`.
+   */
+  runIdleMs?: number;
 }
 
 interface HeldProfile {
   context: ProfileContext;
   userDataDir: string;
-  /** The tail of the per-profile mutex chain. A new acquire awaits it and installs its own. */
-  tail: Promise<void>;
+  idleTimer?: ReturnType<typeof setTimeout>;
+  /**
+   * Set the moment the idle backstop STARTS closing this context, and cleared only when the close
+   * has resolved. `ensureContext` awaits it before it sweeps singleton markers and relaunches:
+   * dropping the map entry first (which is what this replaces) let the next acquire delete the
+   * SingletonLock of a browser that was still shutting down and then launch into the collision.
+   */
+  closing?: Promise<void>;
+}
+
+/** One run's hold on a profile: the lease itself plus the bookkeeping the idle backstop needs. */
+interface RunHold {
+  /** The profile key this run took. A run that somehow targets a different profile releases the
+   *  first before taking the second, rather than silently holding two. */
+  profileKey: string;
+  /** Resolves to the run's lease. Held as the PROMISE so a release that arrives mid-acquire can
+   *  wait for the acquire it is cancelling instead of racing it. */
+  lease: Promise<ProfileLease>;
+  /** Steps currently executing against this lease. The backstop never reaps a busy run. */
+  busy: number;
   idleTimer?: ReturnType<typeof setTimeout>;
 }
 
@@ -172,6 +244,14 @@ export class ProfileManager {
   /** Per-profileId serialisation chain - INDEPENDENT of `held` so a queued acquire survives a
    *  context that was idle-closed between the two. */
   private readonly chains = new Map<string, Promise<void>>();
+  /** runId -> the lease that run holds. THE run-scoped lease: one entry per live run. */
+  private readonly runs = new Map<string, RunHold>();
+  /**
+   * runIds whose lease is gone, and why. A step arriving for one of these is REFUSED: quietly
+   * handing it a fresh lease would restore the blank-page-every-step bug under a different cause.
+   * Bounded FIFO - a Map iterates in insertion order, so the oldest key is the one to evict.
+   */
+  private readonly endedRuns = new Map<string, 'idle' | 'released'>();
   private closed = false;
 
   constructor(private readonly deps: ProfileManagerDeps) {}
@@ -179,6 +259,54 @@ export class ProfileManager {
   /** `<home>/profiles/<profileId>`, created 0700. Exposed so tests can assert WHERE it lands. */
   userDataDirFor(profileId: string): string {
     return join(this.deps.home, 'profiles', sanitizeProfileId(profileId));
+  }
+
+  /**
+   * Run ONE step against the run's lease, taking the lease on the first step of the run and KEEPING
+   * it - the page, its cookies and its seeded localStorage - for every later step of the same run.
+   * This is the API the executor uses; `acquire` below is the primitive underneath it.
+   *
+   * `session` is a THUNK because it is only consulted when the lease is actually taken. Resolving
+   * the Cofre session again on every step would re-read credential material for a jar that already
+   * carries it, and would also be a lie about lifetime: the session is injected ONCE per run.
+   */
+  async withRunLease<T>(
+    input: { runId: string; profileId: string; session?: () => ProfileSession | null },
+    fn: (lease: ProfileLease) => Promise<T>,
+  ): Promise<T> {
+    const hold = await this.holdForRun(input);
+    hold.busy += 1;
+    try {
+      return await fn(await hold.lease);
+    } finally {
+      hold.busy -= 1;
+      // Arm the backstop from the END of the step: a slow step must never be reaped mid-flight,
+      // and the window is meant to bound IDLE time, not total time.
+      this.armRunIdle(input.runId, hold);
+    }
+  }
+
+  /**
+   * END OF RUN. Drops the run's page and CLEARS the injected session out of the shared jar; the
+   * profile context stays warm for the next run. Idempotent, and safe to call for a run that was
+   * already reaped - Cortex's `dispose()` runs in a `finally` and must never throw out of it.
+   */
+  async releaseRun(runId: string, reason: 'idle' | 'released' = 'released'): Promise<void> {
+    const hold = this.runs.get(runId);
+    // Tombstone FIRST, and with the real reason, so a step racing the teardown is refused with the
+    // message that names what actually happened. Tombstoned even when there is nothing to release:
+    // the run is over either way, and a later step must be refused rather than handed a blank page.
+    this.markRunEnded(runId, reason);
+    if (!hold) return;
+    this.runs.delete(runId);
+    if (hold.idleTimer) clearTimeout(hold.idleTimer);
+    const lease = await hold.lease.catch(() => null);
+    await lease?.release().catch(() => undefined);
+  }
+
+  /** runIds currently holding a lease. For the status surface and tests. */
+  openRuns(): string[] {
+    return [...this.runs.keys()];
   }
 
   /**
@@ -272,14 +400,24 @@ export class ProfileManager {
     return lease;
   }
 
-  /** Close every open profile context (daemon shutdown). */
+  /**
+   * Close every open profile context (daemon shutdown). SHUTDOWN IS FINAL: `closed` is set first
+   * and `ensureContext` refuses on it, so a queued acquire that wakes AFTER this point is refused
+   * rather than served a brand-new headed browser the daemon is in the middle of shutting down.
+   */
   async closeAll(): Promise<void> {
     this.closed = true;
+    // Release live runs FIRST. Closing the context underneath a lease would drop the jar without
+    // clearing it, which on a persistent profile means the injected session survives on DISK.
+    for (const runId of [...this.runs.keys()]) {
+      await this.releaseRun(runId).catch(() => undefined);
+    }
     const contexts = [...this.held.values()];
     this.held.clear();
     for (const h of contexts) {
       if (h.idleTimer) clearTimeout(h.idleTimer);
-      await h.context.close().catch(() => undefined);
+      // A context the backstop is already closing is awaited rather than closed twice.
+      await (h.closing ?? h.context.close().catch(() => undefined));
     }
   }
 
@@ -290,14 +428,112 @@ export class ProfileManager {
 
   // --- internals ------------------------------------------------------------
 
+  /**
+   * The run's hold, taken on its first step. A run that already holds one gets it back untouched -
+   * same page, same cookies - which is the whole point of the run scope.
+   */
+  private async holdForRun(input: {
+    runId: string;
+    profileId: string;
+    session?: () => ProfileSession | null;
+  }): Promise<RunHold> {
+    if (this.closed) throw new ProfileError('o gestor de perfis já foi encerrado');
+    const key = sanitizeProfileId(input.profileId);
+
+    const existing = this.runs.get(input.runId);
+    if (existing) {
+      if (existing.profileKey === key) return existing;
+      // A run that changes profile mid-flight. Give the first one back (which clears its session)
+      // before taking the second, rather than holding two profiles for one run.
+      await this.releaseRun(input.runId);
+      this.endedRuns.delete(input.runId);
+    }
+
+    const ended = this.endedRuns.get(input.runId);
+    if (ended) {
+      // Serving this would mean a fresh page and an empty jar reported as a working step - exactly
+      // the failure the run-scoped lease exists to remove. Fail by name instead.
+      throw new ProfileError(
+        ended === 'idle'
+          ? 'a sessão de navegador desta execução expirou por inactividade e foi encerrada nesta máquina'
+          : 'a sessão de navegador desta execução já foi encerrada',
+      );
+    }
+
+    const lease = this.acquire(key, input.session?.() ?? null);
+    const hold: RunHold = { profileKey: key, lease, busy: 0 };
+    this.runs.set(input.runId, hold);
+    // A failed acquire must not leave a poisoned hold behind: the next step should be free to try
+    // again (a launch can fail transiently), and awaiting a rejected promise twice is not a retry.
+    lease.catch(() => {
+      if (this.runs.get(input.runId) === hold) this.runs.delete(input.runId);
+    });
+    await lease;
+    return hold;
+  }
+
+  /**
+   * The idle backstop. Reaps a run whose lease has sat unused for `runIdleMs` - the case where
+   * Cortex died and the explicit `release` will never arrive. A BUSY run is never reaped; the timer
+   * simply re-arms, because the window bounds idleness, not the length of a step.
+   */
+  private armRunIdle(runId: string, hold: RunHold): void {
+    // The run may have been released while this step was running (`withRunLease` arms from its
+    // `finally`). Arming a timer on a hold nobody owns leaves a timer with nothing to reap.
+    if (this.runs.get(runId) !== hold) return;
+    const idleMs = this.deps.runIdleMs ?? RUN_IDLE_MS;
+    if (hold.idleTimer) {
+      clearTimeout(hold.idleTimer);
+      delete hold.idleTimer;
+    }
+    if (idleMs <= 0) return;
+    const timer = setTimeout(() => {
+      if (this.runs.get(runId) !== hold) return; // already released explicitly
+      if (hold.busy > 0) {
+        this.armRunIdle(runId, hold);
+        return;
+      }
+      this.deps.log?.('A sessão de navegador de uma execução expirou por inactividade e foi encerrada.');
+      void this.releaseRun(runId, 'idle').catch(() => undefined);
+    }, idleMs);
+    timer.unref?.();
+    hold.idleTimer = timer;
+  }
+
+  /** Remember that a run ended, bounded. Insertion order is the eviction order. */
+  private markRunEnded(runId: string, reason: 'idle' | 'released'): void {
+    this.endedRuns.delete(runId);
+    this.endedRuns.set(runId, reason);
+    while (this.endedRuns.size > MAX_ENDED_RUNS) {
+      const oldest = this.endedRuns.keys().next().value;
+      if (oldest === undefined) break;
+      this.endedRuns.delete(oldest);
+    }
+  }
+
   private async ensureContext(key: string): Promise<ProfileContext> {
+    // Re-checked HERE and not only at the top of `acquire`: an acquire queued behind another run
+    // can wait arbitrarily long on the per-profile chain, and `closeAll` can land in that gap. The
+    // check at acquire-time alone let a waiter wake after shutdown and LAUNCH a headed browser the
+    // daemon was tearing down.
+    if (this.closed) throw new ProfileError('o gestor de perfis já foi encerrado');
+
     const existing = this.held.get(key);
     if (existing) {
-      if (existing.idleTimer) {
-        clearTimeout(existing.idleTimer);
-        delete existing.idleTimer;
+      if (!existing.closing) {
+        if (existing.idleTimer) {
+          clearTimeout(existing.idleTimer);
+          delete existing.idleTimer;
+        }
+        return existing.context;
       }
-      return existing.context;
+      // The idle backstop is closing this context right now. WAIT IT OUT before sweeping the
+      // singleton markers and relaunching: sweeping while Chromium is still shutting down deletes
+      // the lock of a live browser and the relaunch collides with the process that still holds the
+      // userDataDir.
+      await existing.closing;
+      if (this.held.get(key) === existing) this.held.delete(key);
+      if (this.closed) throw new ProfileError('o gestor de perfis já foi encerrado');
     }
 
     const userDataDir = this.userDataDirFor(key);
@@ -309,7 +545,7 @@ export class ProfileManager {
     } catch {
       /* a filesystem without POSIX modes (a Windows volume); the directory is still private to the user */
     }
-    this.clearStaleSingletonLock(userDataDir);
+    this.clearStaleSingletonLock(key, userDataDir);
 
     const launch = this.deps.launch ?? defaultPersistentLaunch;
     const base: PersistentLaunchOptions = {
@@ -337,19 +573,41 @@ export class ProfileManager {
     }
 
     await context.addInitScript(WEBDRIVER_INIT_SCRIPT).catch(() => undefined);
-    this.held.set(key, { context, userDataDir, tail: Promise.resolve() });
+    this.held.set(key, { context, userDataDir });
     return context;
   }
 
   /**
-   * A crash leaves Chromium's singleton markers behind and every later launch fails on them. They
-   * are only ever cleared when THIS process holds no live context for the profile - otherwise we
-   * would be deleting the lock of a browser that is genuinely running.
+   * A crash leaves Chromium's singleton markers behind and every later launch fails on them.
+   *
+   * `lstat`, NOT `existsSync`. This is the difference between a recovery that works and dead code.
+   * Real Chrome does not write `SingletonLock` as a file: it writes a SYMLINK whose target is
+   * `<hostname>-<pid>`, a name that never exists on disk. `existsSync` FOLLOWS the link, so for the
+   * dangling lock a crashed Chrome actually leaves it returns FALSE, the loop skipped it, and the
+   * next launch died on the very marker this function exists to clear. `lstatSync` stats the link
+   * itself. (The bundled chromium behaves differently enough that the unit lane, which never
+   * launches a browser, could not have caught it - the test below builds the dangling link by hand.)
+   *
+   * NEVER a live lock. Deleting the SingletonLock of a running browser corrupts the profile under a
+   * run in flight, so the sweep only happens when THIS process holds no context for the profile.
+   * That is enforced TWICE, and honestly: the real enforcement is the caller - `ensureContext`
+   * returns the warm context long before it reaches here, and reaches here after an idle close only
+   * once it has awaited that close and dropped the entry. The `held` check below is belt-and-braces
+   * for a destructive function, and it is currently UNREACHABLE through the public API (a mutation
+   * removing it alone leaves the suite green; a mutation removing the caller's short-circuit turns
+   * it red). It stays because the next call site added to this function should not have to
+   * rediscover the invariant. The cross-process case is bounded elsewhere: `serve.ts` refuses a
+   * second daemon on the same home via the pidfile.
    */
-  private clearStaleSingletonLock(userDataDir: string): void {
+  private clearStaleSingletonLock(key: string, userDataDir: string): void {
+    if (this.held.has(key)) return;
     for (const marker of SINGLETON_MARKERS) {
       const p = join(userDataDir, marker);
-      if (!existsSync(p)) continue;
+      try {
+        lstatSync(p);
+      } catch {
+        continue; // genuinely absent (not merely a link whose target is)
+      }
       try {
         rmSync(p, { force: true, recursive: false });
       } catch {
@@ -382,6 +640,13 @@ export class ProfileManager {
     }
   }
 
+  /**
+   * Close a profile context nobody holds. The entry stays in `held`, marked `closing`, UNTIL the
+   * close resolves - it used to be deleted first, which made the map say "no context here" while
+   * Chromium was still shutting down. The next acquire then swept the singleton markers of a
+   * browser that was still using them and launched straight into the collision. `ensureContext`
+   * now awaits `closing` and only then relaunches.
+   */
   private armIdleClose(key: string): void {
     const idleMs = this.deps.idleCloseMs ?? IDLE_CLOSE_MS;
     if (idleMs <= 0) return;
@@ -390,9 +655,13 @@ export class ProfileManager {
     if (held.idleTimer) clearTimeout(held.idleTimer);
     const timer = setTimeout(() => {
       const current = this.held.get(key);
-      if (!current) return;
-      this.held.delete(key);
-      void current.context.close().catch(() => undefined);
+      if (!current || current !== held || current.closing) return;
+      const closing = current.context.close().catch(() => undefined);
+      current.closing = closing;
+      void closing.then(() => {
+        // Only drop the entry if it is still the one that was closed.
+        if (this.held.get(key) === current) this.held.delete(key);
+      });
     }, idleMs);
     timer.unref?.();
     held.idleTimer = timer;

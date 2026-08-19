@@ -64,6 +64,14 @@ export function resolveCapabilities(extra: string[] | undefined, egressEndpoint:
 const TIER2_CAPABILITIES: readonly BridgeCapability[] = ['local.bash', 'desktop.automation'];
 
 /**
+ * How long shutdown waits for the browser teardown. Long enough for a real Chromium to clear its
+ * jar and close (seconds, not milliseconds); short enough that a wedged browser cannot hold the
+ * daemon hostage. Past it the operator is told a window may still be open, which is a better
+ * outcome than a daemon that will not die.
+ */
+const SHUTDOWN_TEARDOWN_MS = 10_000;
+
+/**
  * Whether this machine's operator opted into running steps locally at all.
  *
  * ADR-002 requires a per-session tier-2 enablement that is OFF by default and turned on by an
@@ -295,14 +303,55 @@ export async function serve(args: string[], ctx: CliContext): Promise<number> {
       // overwrites held secrets is a shutdown that can be interrupted with the secrets still
       // resident. Then the headed windows, which would otherwise outlive the daemon that owns them.
       runtime.zeroizeSecrets();
-      void profiles.closeAll();
       void surface?.close();
       removeDaemonPid(home);
-      ctx.io.out(pt.serveStopped);
-      resolve(EXIT.OK);
+      // AWAITED, not fire-and-forget - see `teardownBrowsers`.
+      void teardownBrowsers(profiles, () => ctx.io.err(`${pt.errPrefix} ${pt.serveTeardownTimedOut}`)).then(() => {
+        ctx.io.out(pt.serveStopped);
+        resolve(EXIT.OK);
+      });
     };
     process.once('SIGINT', shutdown);
     process.once('SIGTERM', shutdown);
     void socket.connect();
   });
+}
+
+/**
+ * Close the browsers, AWAITED and BOUNDED, and never throw.
+ *
+ * WHY AWAITED. `ProfileManager.closeAll` releases live RUN leases before it closes their contexts,
+ * and that release is what clears the injected Cofre session out of the jar. The profile is
+ * PERSISTENT - its cookies are a file on disk - so a shutdown that resolves before the wipe
+ * finishes can let the process exit with a live session still written under the profile directory,
+ * where the NEXT run inherits it. This used to be `void profiles.closeAll()`, which was harmless
+ * only while every lease was released at the end of its own invoke; with run-scoped leases a run in
+ * flight at SIGINT is exactly the case that has something to wipe.
+ *
+ * WHY BOUNDED. A wedged browser must not hold the daemon hostage. Past the deadline shutdown
+ * continues and the operator is TOLD a window may still be open, which is a better outcome than a
+ * daemon that will not die - and better than a silent `void`, which is what this replaces.
+ *
+ * Extracted as a named function, rather than inlined in the signal handler, so it can be tested
+ * without raising a real SIGINT.
+ */
+export async function teardownBrowsers(
+  profiles: { closeAll(): Promise<void> },
+  onTimeout: () => void,
+  deadlineMs: number = SHUTDOWN_TEARDOWN_MS,
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => resolve('timeout'), deadlineMs);
+    timer.unref?.();
+  });
+  try {
+    const outcome = await Promise.race([
+      profiles.closeAll().then(() => 'closed' as const).catch(() => 'closed' as const),
+      deadline,
+    ]);
+    if (outcome === 'timeout') onTimeout();
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

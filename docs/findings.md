@@ -4056,3 +4056,96 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   the parsed tree with the ORIGINAL separators when nothing was actually masked; the broad one is to
   make the name leg return the input unchanged when it made no substitution. Neither belongs in a
   security fix, and both need a test that pins byte-identical passthrough for untouched output.
+- **`no-queue-timeout-for-a-second-run-on-one-browser-profile`** (OPEN 2026-08-19, LOW, throughput -
+  introduced by the run-scoped browser lease, deliberately). `ProfileManager.acquire` serialises per
+  `profileId`, and with the lease now held for a whole RUN rather than a single `tool.invoke`, a
+  second run targeting the same profile waits for the first to finish instead of interleaving with
+  it. That is the correct semantics - one browser, one cookie jar, one Chromium singleton, and the
+  interleaving it replaces was two runs corrupting each other's page - but the wait is UNBOUNDED
+  except by the run-idle backstop (2 min after the first run's last step). A first run that keeps
+  stepping for an hour blocks the second for an hour, and the second run has no way to say "I gave
+  up": it simply sits in `acquire` until its own hosted invocation timeout fires, at which point
+  Cortex reports "the machine did not answer in time" - which is true but names the wrong cause.
+  Disposition: NOT fixed here. The right fix is a bounded wait in `withRunLease` that fails the step
+  with a named "another run is using this profile" error, and it needs a decision about the bound
+  (whether it should exceed Cortex's invocation timeout so the honest message wins the race, or sit
+  under it) plus a wire-visible error the run UI can render. Out of scope for the lease fix, and
+  today it is reachable only for two concurrent automations sharing one integration profile.
+
+- **`daemon-run-lease-has-no-live-headed-chrome-verification`** (OPEN 2026-08-19, MEDIUM, coverage -
+  a standing gap, not a regression). Every assertion about the run-scoped lease, the `release` verb,
+  the idle backstop, the dangling-symlink `SingletonLock` recovery and the close-before-relaunch
+  ordering runs against the INJECTED launcher and structural page/context fakes. That is the same
+  discipline the profile suite already documents - the real launch is HEADED and cannot run on a box
+  with no display, and this box has none - so the following remain unverified against a real browser:
+  (a) that Chrome's actual `SingletonLock` on this platform is the dangling symlink the recovery now
+  handles (the test builds one by hand from the documented shape, it does not observe one);
+  (b) that a real `BrowserContext` survives being held across a multi-minute run without Playwright
+  reaping the page; (c) that `clearCookies()` on a real PERSISTENT context removes the on-disk jar
+  rather than only the in-memory one - which is what the run-end session guarantee rests on;
+  (d) end-to-end, that a real navigate-then-click on a real site now lands on the same page. Closing
+  this needs the live-verification pass on a machine with a display, per the playbook in
+  `docs/testing.md`; it is not closable from CI and is not claimed to be.
+
+- **`suite-ledger-unit-census-red-on-main-59-registered-64-on-disk`** (OPEN 2026-08-19, MEDIUM, gate -
+  PRE-EXISTING, not introduced here, and deliberately not fixed here). `npm run gate:ledger` fails
+  its census: `frontend unit files on disk: 64 (ledger: 59)`. The spec census (83/83) and driver
+  census (29/29) are clean; only the frontend-unit band has drifted. Five `web/__tests__/` files were
+  added without the ledger entry the census requires, which is exactly the omission the census exists
+  to catch, so the gate is doing its job. Attribution: this branch touches neither `web/` nor
+  `api/tests/SUITE_LEDGER.json`, so the count is byte-identical to main; the unregistered names in
+  the DUE list (`schedules-store`, `schedules-recurrence-text`, `chat-runtime`,
+  `chat-panel-composer`, `chat-error-retry`, `chat-stripes-featured`, `lib/file-picker`,
+  `lib/artifact-app-url`, `components/sync-outcome-panel`, ...) belong to the web/chat/schedules
+  streams. Disposition: NOT fixed from this branch. Registering them means choosing a gate band per
+  spec, which is a judgement the owning stream has to make, and editing `SUITE_LEDGER.json` while
+  those streams are in flight would collide with them. It needs to be closed by whoever owns those
+  specs, before the per-PR lane can be green.
+
+- **`engine-finally-comment-still-says-the-daemon-session-dispose-is-a-no-op`** (OPEN 2026-08-19,
+  LOW, stale comment - correctness of the code is unaffected). `api/src/automation/engine.ts` (the
+  run `finally`, around the `await (browser as BrowserSession | null)?.dispose?.()` call) still
+  reads "The daemon session is a no-op (the daemon owns the page lifecycle)". That was true and is
+  now false: `DaemonBrowserSession.dispose()` sends the `release` verb that ends the daemon's
+  run-scoped lease, and it is the ONLY prompt run-end signal there is. The call site needs no code
+  change - the optional-chaining call already reaches the new implementation - so this is purely a
+  comment that now misdescribes what happens and would mislead the next reader into thinking the
+  bridge has no teardown. NOT fixed here: `api/src/automation/engine.ts` is outside this branch's
+  write scope and is in flight in another stream; whoever next touches that `finally` should correct
+  the two lines.
+
+- **`daemon-pidfile-is-released-before-the-browsers-have-finished-closing`** (OPEN 2026-08-19, LOW,
+  race - PRE-EXISTING, unchanged by this branch). `serve`'s shutdown calls `removeDaemonPid(home)`
+  before the browser teardown has completed. The pidfile is the CROSS-PROCESS lock on the profile
+  directory - `profile.ts`'s header rests its "an in-process mutex is sufficient" argument on it -
+  so for the duration of the teardown there is a window in which a second `serve` on the same home
+  is allowed to start and can launch Chromium against a `userDataDir` the dying daemon has not
+  released, which is the SingletonLock collision the lock exists to prevent. The window was always
+  there (the teardown used to be a fire-and-forget `void profiles.closeAll()`, so the pidfile came
+  off while the browsers were still closing either way) and this branch does not widen it: the
+  teardown is now awaited, but `removeDaemonPid` still runs before it, exactly as before. Fix: move
+  `removeDaemonPid` after `teardownBrowsers` resolves, so the profile lock is held until the profile
+  is actually free. NOT done here because the ordering lives inside `serve()`'s signal-handler
+  closure and cannot be asserted without either driving a real SIGINT or extracting the whole
+  shutdown sequence into a named unit - and shipping the reorder without a test that can fail is
+  worse than shipping the window that has been there all along.
+
+- **`api-suite-exits-1-on-chokidar-EMFILE-while-every-test-passes`** (OPEN 2026-08-19, HIGH, gate -
+  PRE-EXISTING and flaky, not introduced here). `npm test` fails at the `@ekoa/api` workspace with
+  `npm error code 1` while reporting `374 passed | 2 skipped` and ZERO failed tests. The exit code
+  comes from vitest's UNHANDLED-ERROR channel: a burst of
+  `Error: EMFILE: too many open files, watch '/tmp/ekoa-fam-sbx-*/user-*/id_*/manifest.json'`,
+  raised by the chokidar watcher `api/src/apps/app-registry.ts` `startWatcher` opens per registered
+  app (`manifest.json` + the dist dir). It surfaces through `tests/contract/artifact-family.test.ts`,
+  which registers many apps; that test passes 32/32 when run ALONE, so the exhaustion is the whole
+  374-file suite's parallel workers sharing this box's inotify budget
+  (`fs.inotify.max_user_instances = 128`), not one test misbehaving.
+  ATTRIBUTION, measured rather than assumed: the error COUNT is unstable across identical runs (20,
+  then 19, then 126), and a full api run with this branch's only new api test file REMOVED still
+  exits 1 with 126 errors and 252 EMFILE lines - i.e. it is worse without the change than with it.
+  This branch touches no file in `api/src/apps/`. Two candidate fixes, neither attempted here: raise
+  `fs.inotify.max_user_instances` on the runner (masks it), or have the app registry not hold a
+  persistent watcher per app in a test process - the watcher exists for dev-serve rebuilds and has
+  no purpose under a contract suite, so gating `startWatcher` on the dev-serve path is the real fix.
+  Until then `npm test` cannot be green on this box, and every agent reporting a green run should be
+  read as "all tests passed, the process still exited 1".

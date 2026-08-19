@@ -29,11 +29,16 @@ let ledgerDir: string;
 let ledger: EgressLedger;
 let sent: BridgeFrame[];
 let pages: FakePage[];
-/** Applied to every page the fake context opens. A lease opens a FRESH page per run, so a
- *  per-page mutation made during one run cannot reach the next one - the defaults can. */
+/** Applied to every page the fake context opens. The lease opens ONE page per RUN and keeps it for
+ *  every step of that run, so a mid-run change of page behaviour is made on the live page
+ *  (`pages[0]`); these defaults only decide what the NEXT run's page starts as. */
 let pageDefaults: { visible: boolean; screenshotFails: boolean };
 /** Makes the fake page return an oversized accessibility outline (the H-1 cap assertion). */
 let hugeA11y: boolean;
+/** The profile manager `buildRuntime` wired, so the run-lease assertions can see its state. */
+let profiles: ProfileManager;
+/** The one cookie jar every fake context shares, so a wipe is visible to the assertions. */
+let jar: { cleared: number; cookiesAdded: number[] };
 
 interface FakePage extends ProfilePage {
   actions: string[];
@@ -41,6 +46,8 @@ interface FakePage extends ProfilePage {
   visible: boolean;
   text: string;
   screenshotFails: boolean;
+  /** Honest, because the run-lease assertions turn on WHEN a page closes. */
+  closed: boolean;
 }
 
 function fakeLocator(page: FakePage, label: string): ProfileLocator {
@@ -76,6 +83,7 @@ function makePage(): FakePage {
     visible: pageDefaults.visible,
     text: 'total 12 euros',
     screenshotFails: pageDefaults.screenshotFails,
+    closed: false,
     url: () => page.currentUrl,
     title: async () => 'Portal',
     goto: async (u: string) => {
@@ -106,8 +114,8 @@ function makePage(): FakePage {
     getByAltText: (v: string) => fakeLocator(page, `alt:${v}`),
     getByTitle: (v: string) => fakeLocator(page, `title:${v}`),
     locator: (s: string) => fakeLocator(page, `css:${s}`),
-    isClosed: () => false,
-    close: async () => undefined,
+    isClosed: () => page.closed,
+    close: async () => void (page.closed = true),
   } as unknown as FakePage;
   return page;
 }
@@ -120,16 +128,29 @@ function fakeContext(): ProfileContext {
       return p;
     },
     pages: () => pages,
-    addCookies: async () => undefined,
-    clearCookies: async () => undefined,
+    addCookies: async (c) => void jar.cookiesAdded.push(c.length),
+    clearCookies: async () => void (jar.cleared += 1),
     addInitScript: async () => undefined,
     close: async () => undefined,
   };
 }
 
-function buildRuntime(opts: { capabilities?: BridgeCapability[]; enabled?: boolean } = {}): DaemonRuntime {
+function buildRuntime(
+  opts: {
+    capabilities?: BridgeCapability[];
+    enabled?: boolean;
+    runIdleMs?: number;
+    sessionStateFor?: (runId: string) => unknown;
+  } = {},
+): DaemonRuntime {
   const enablement = new AutomationEnablement();
   if (opts.enabled !== false) enablement.enable(SESSION);
+  profiles = new ProfileManager({
+    home,
+    idleCloseMs: 0,
+    runIdleMs: opts.runIdleMs ?? 0,
+    launch: async () => fakeContext(),
+  });
   return new DaemonRuntime({
     pairingId: PAIRING,
     org: ORG,
@@ -145,9 +166,10 @@ function buildRuntime(opts: { capabilities?: BridgeCapability[]; enabled?: boole
     getCredential: () => 'tok',
     capabilities: opts.capabilities ?? ['local.filesystem', 'local.bash', 'desktop.automation'],
     enablement,
-    profiles: new ProfileManager({ home, idleCloseMs: 0, launch: async () => fakeContext() }),
+    profiles,
     toolSession: SESSION,
     profileIdFor: () => 'test-profile',
+    ...(opts.sessionStateFor ? { sessionStateFor: opts.sessionStateFor } : {}),
   });
 }
 
@@ -180,6 +202,7 @@ beforeEach(() => {
   pages = [];
   pageDefaults = { visible: true, screenshotFails: false };
   hugeA11y = false;
+  jar = { cleared: 0, cookiesAdded: [] };
 });
 
 afterEach(() => {
@@ -302,9 +325,10 @@ describe('THE OBSERVATION ENVELOPE - exactly what DaemonBrowserSession.ingest re
 
   it('OMITS screenshotB64 rather than sending an empty string when the capture fails twice', async () => {
     const runtime = buildRuntime();
-    // Prime a page, break its screenshot, then act again on the same warm profile.
+    // Prime a page, break ITS screenshot, then act again in the same run. The break is applied to
+    // the live page rather than to the defaults because the run keeps one page across its steps.
     await invoke(runtime, { invocationId: 'i0', capability: 'desktop.automation', input: browserStep({ action: 'screenshot' }) });
-    pageDefaults.screenshotFails = true;
+    pages[0]!.screenshotFails = true;
     sent = [];
     const res = await invoke(runtime, { invocationId: 'i1', capability: 'desktop.automation', input: browserStep({ action: 'screenshot' }) });
     expect(res.screenshotB64).toBeUndefined();
@@ -337,7 +361,7 @@ describe('THE OBSERVATION ENVELOPE - exactly what DaemonBrowserSession.ingest re
     // A wait_for against a hidden element throws in the runner.
     const first = await invoke(runtime, { invocationId: 'i0', capability: 'desktop.automation', input: browserStep({ action: 'screenshot' }) });
     expect(first.ok).toBe(true);
-    pageDefaults.visible = false;
+    pages[0]!.visible = false;
     sent = [];
     const res = await invoke(runtime, {
       invocationId: 'i1',
@@ -554,6 +578,177 @@ describe('BASH - the cwd path jail (the gap this closes)', () => {
     expect(res.ok).toBe(true);
     // The metacharacters came back as literal text: nothing was interpreted.
     expect((res.output as { stdout: string }).stdout).toContain('$(touch');
+  });
+});
+
+/**
+ * THE MULTI-STEP FLOW, driven through the real frame handler.
+ *
+ * These are the assertions the per-action unit tests structurally could not make. Every other suite
+ * in this file sends ONE invoke; the defect lived entirely in what happens between two of them.
+ * Cortex dispatches one `tool.invoke` per act/assert/observe, and the executor used to acquire a
+ * lease per FRAME and release it in a `finally` - closing the page and clearing the whole cookie
+ * jar - so a navigate landed and then every step after it ran on a fresh about:blank, signed out.
+ */
+describe('THE RUN-SCOPED LEASE - a run is a sequence of steps, not a sequence of runs', () => {
+  it('lands a navigate and then acts on THAT page, not on a fresh about:blank', async () => {
+    const runtime = buildRuntime();
+    await invoke(runtime, {
+      invocationId: 'i1',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'navigate', url: 'https://portal.test/inbox' }),
+    });
+    sent = [];
+    const second = await invoke(runtime, {
+      invocationId: 'i2',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'click', locator: { strategy: 'testid', value: 'linha' } }),
+    });
+
+    expect(second.ok).toBe(true);
+    // ONE page for the whole run, still on the URL the navigate reached.
+    expect(pages).toHaveLength(1);
+    expect((second.output as { url: string }).url).toBe('https://portal.test/inbox');
+    // `waitFor` is the locator ladder probing the primary before clicking it.
+    expect(pages[0]!.actions).toEqual([
+      'goto:https://portal.test/inbox',
+      'waitFor:tid:linha:visible',
+      'click:tid:linha',
+    ]);
+  });
+
+  it('does NOT wipe the cookie jar between steps of one run', async () => {
+    const runtime = buildRuntime({
+      sessionStateFor: () => ({ cookies: [{ name: 'sid', value: 'v', domain: 'portal.test' }] }),
+    });
+    for (const [i, action] of [
+      { action: 'navigate', url: 'https://portal.test/inbox' },
+      { action: 'click', locator: { strategy: 'testid', value: 'a' } },
+      { action: 'screenshot' },
+    ].entries()) {
+      sent = [];
+      const res = await invoke(runtime, { invocationId: `i${i}`, capability: 'desktop.automation', input: browserStep(action) });
+      expect(res.ok, JSON.stringify(action)).toBe(true);
+    }
+    // Injected once, at the start of the run; never cleared while the run is still going.
+    expect(jar.cookiesAdded).toEqual([1]);
+    expect(jar.cleared).toBe(0);
+  });
+
+  it('gives a DIFFERENT runId its own page - the scope is the run, not the daemon', async () => {
+    const runtime = buildRuntime();
+    await invoke(runtime, {
+      invocationId: 'i1',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'navigate', url: 'https://portal.test/inbox' }, 'r1'),
+    });
+    sent = [];
+    await invoke(runtime, { invocationId: 'i2', capability: 'desktop.automation', input: browserStep({ action: 'release' }, 'r1') });
+    sent = [];
+    const other = await invoke(runtime, {
+      invocationId: 'i3',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'screenshot' }, 'r2'),
+    });
+    expect(pages).toHaveLength(2);
+    expect((other.output as { url: string }).url).toBe('about:blank');
+  });
+});
+
+describe('THE RELEASE VERB - the run-end signal DaemonBrowserSession.dispose sends', () => {
+  it('ends the run: the page closes and the jar is WIPED', async () => {
+    const runtime = buildRuntime({
+      sessionStateFor: () => ({ cookies: [{ name: 'sid', value: 'v', domain: 'portal.test' }] }),
+    });
+    await invoke(runtime, {
+      invocationId: 'i1',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'navigate', url: 'https://portal.test/inbox' }),
+    });
+    expect(jar.cleared).toBe(0);
+    expect(profiles.openRuns()).toEqual(['r1']);
+
+    sent = [];
+    const res = await invoke(runtime, { invocationId: 'i2', capability: 'desktop.automation', input: browserStep({ action: 'release' }) });
+
+    expect(res.ok).toBe(true);
+    expect(jar.cleared).toBe(1);
+    expect(profiles.openRuns()).toEqual([]);
+  });
+
+  it('carries no observation and takes no screenshot - there is no page left to photograph', async () => {
+    const runtime = buildRuntime();
+    await invoke(runtime, { invocationId: 'i1', capability: 'desktop.automation', input: browserStep({ action: 'screenshot' }) });
+    sent = [];
+    const res = await invoke(runtime, { invocationId: 'i2', capability: 'desktop.automation', input: browserStep({ action: 'release' }) });
+    expect(res.output).toBeUndefined();
+    expect(res.screenshotB64).toBeUndefined();
+  });
+
+  it('is LEDGERED - it is still a remote instruction to act on this machine', async () => {
+    const runtime = buildRuntime();
+    await invoke(runtime, { invocationId: 'i1', capability: 'desktop.automation', input: browserStep({ action: 'release' }) });
+    expect(automationRows().at(-1)).toMatchObject({ tool: 'browser', detail: 'release', outcome: 'ran' });
+  });
+
+  it('passes the SAME gates as any other step - an unadvertised machine refuses it', async () => {
+    const runtime = buildRuntime({ capabilities: ['local.filesystem'] });
+    const res = await invoke(runtime, { invocationId: 'i1', capability: 'desktop.automation', input: browserStep({ action: 'release' }) });
+    expect(res.ok).toBe(false);
+    expect(automationRows().at(-1)).toMatchObject({ outcome: 'denied', reason: 'capability not advertised' });
+  });
+
+  it('opens NO browser for a run that never took one (dispose after a run with no browser step)', async () => {
+    const runtime = buildRuntime();
+    const res = await invoke(runtime, { invocationId: 'i1', capability: 'desktop.automation', input: browserStep({ action: 'release' }) });
+    expect(res.ok).toBe(true);
+    expect(pages).toHaveLength(0);
+  });
+
+  it('REFUSES a step that arrives after the run ended, by name', async () => {
+    // Serving it would silently hand the step a brand-new blank page and an empty jar, and report
+    // it to Cortex as a step that ran - which is the original defect wearing a different hat.
+    const runtime = buildRuntime();
+    await invoke(runtime, {
+      invocationId: 'i1',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'navigate', url: 'https://portal.test/inbox' }),
+    });
+    sent = [];
+    await invoke(runtime, { invocationId: 'i2', capability: 'desktop.automation', input: browserStep({ action: 'release' }) });
+    sent = [];
+    const late = await invoke(runtime, {
+      invocationId: 'i3',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'click', locator: { strategy: 'testid', value: 'a' } }),
+    });
+    expect(late.ok).toBe(false);
+    expect(late.error).toContain('encerrada');
+    expect(pages).toHaveLength(1); // no second page was ever opened
+    expect(automationRows().at(-1)).toMatchObject({ outcome: 'error' });
+  });
+});
+
+describe('THE IDLE BACKSTOP through the executor - a Cortex that dies leaves nothing resident', () => {
+  it('wipes the jar without ever receiving a release', async () => {
+    const runtime = buildRuntime({
+      runIdleMs: 20,
+      sessionStateFor: () => ({ cookies: [{ name: 'sid', value: 'v', domain: 'portal.test' }] }),
+    });
+    await invoke(runtime, {
+      invocationId: 'i1',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'navigate', url: 'https://portal.test/inbox' }),
+    });
+    expect(jar.cleared).toBe(0);
+
+    // Nothing else is sent. This is the socket dropping mid-run.
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline && profiles.openRuns().length > 0) await new Promise((r) => setTimeout(r, 5));
+
+    expect(profiles.openRuns()).toEqual([]);
+    expect(jar.cleared).toBe(1);
+    expect(pages[0]!.closed).toBe(true);
   });
 });
 

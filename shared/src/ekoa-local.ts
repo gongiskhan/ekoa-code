@@ -364,7 +364,9 @@ export type LocalBrowserLocator = z.infer<typeof LocalBrowserLocator>;
  *
  * The vocabulary is the WHOLE of `PlaywrightAction` + `PlaywrightAssertion`, including the six
  * verbs (`dblclick`/`select`/`check`/`uncheck`/`wait_for`/`scroll`) the daemon previously could
- * not run - `browser-session.ts` called reconciling that gap a follow-up, and this is it.
+ * not run - `browser-session.ts` called reconciling that gap a follow-up, and this is it - PLUS
+ * one verb that is deliberately NOT in either Cortex union: `release`, the run-end lifecycle
+ * signal (see its own comment below).
  */
 export const LocalBrowserAction = z.discriminatedUnion('action', [
   z.object({ action: z.literal('navigate'), url: z.string() }),
@@ -390,6 +392,26 @@ export const LocalBrowserAction = z.discriminatedUnion('action', [
   }),
   z.object({ action: z.literal('screenshot') }),
   z.object({ action: z.literal('noop'), reason: z.string() }),
+  /**
+   * END OF RUN - a LIFECYCLE verb, not a page action, and the only run-end signal on the wire.
+   *
+   * The daemon holds ONE page and ONE cookie jar per `runId` across every invoke of that run
+   * (`browser/profile.ts`, the run-scoped lease). Without a signal saying the run is over there is
+   * nothing to hang the teardown on, and the teardown is where the injected Cofre session is wiped
+   * out of a jar the next run will share. `DaemonBrowserSession.dispose()` sends exactly one of
+   * these from the engine's run `finally`; the daemon also reaps an idle run on its own, because a
+   * Cortex that dies mid-run must not leave an authenticated jar and a headed window behind.
+   *
+   * It is deliberately NOT a member of Cortex's `PlaywrightAction`: no resolver, planner or vision
+   * tier can ever emit it, so a step can never accidentally end its own run. `runBrowserStep`
+   * intercepts it before a page is touched, which is why it carries no locator and produces no
+   * observation.
+   *
+   * RULE 7: a new member of a discriminated union is additive. A daemon that predates it refuses
+   * the frame at its zod boundary (fail-closed, and the run just keeps the pre-existing per-invoke
+   * teardown); a Cortex that predates it simply never sends one.
+   */
+  z.object({ action: z.literal('release') }),
   // Assertions - the daemon runs them and reports the verdict on `assertionPassed`.
   z.object({ action: z.literal('expect_visible'), locator: LocalBrowserLocator }),
   z.object({ action: z.literal('expect_hidden'), locator: LocalBrowserLocator }),

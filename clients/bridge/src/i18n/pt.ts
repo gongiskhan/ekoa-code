@@ -97,6 +97,10 @@ export const pt = {
   serveBindingUpdated: 'Credenciais de assinatura atualizadas a partir do Cortex.',
   serveStopping: 'A encerrar o daemon...',
   serveStopped: 'Daemon encerrado.',
+  // Said out loud rather than swallowed: the teardown is what wipes an injected session out of a
+  // profile whose cookies live on disk, so an operator needs to know it did not finish.
+  serveTeardownTimedOut:
+    'O navegador não fechou a tempo; pode ter ficado uma janela aberta. Verifique e feche-a manualmente.',
   serveSurface: (port: number): string => `Interface local disponível em http://127.0.0.1:${port} (apenas nesta máquina).`,
   serveSurfaceFailed: (port: number, message: string): string =>
     `A interface local não arrancou na porta ${port} (${message}). O painel web não conseguirá ligar-se; o daemon continua a servir delegações.`,

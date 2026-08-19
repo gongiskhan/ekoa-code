@@ -40,7 +40,6 @@ import {
   observePage,
   parseSessionState,
   runBrowserAction,
-  type ProfileLease,
   ProfileManager,
 } from '../browser/index.js';
 import type { GrantTable } from '../session/index.js';
@@ -155,65 +154,89 @@ async function runBrowserStep(
   }
   const { owner, action } = parsed.data;
 
+  // ---- END OF RUN -------------------------------------------------------------
+  // The one signal that drops the run's page and WIPES the injected session out of the jar. It is
+  // handled before anything touches a browser - and before a profile is even resolved, because the
+  // lease is keyed by runId alone: there is no page to act on and no observation to report, and a
+  // release that had to open a page in order to end a run would be absurd. It still passes both
+  // gates above, and it is still ledgered, because it is still a remote instruction to do something
+  // on this machine.
+  if (action.action === 'release') {
+    await deps.profiles.releaseRun(envelope.runId).catch(() => undefined);
+    ledgerAutomation(ctx, 'browser', 'release', 'ran');
+    return { ok: true };
+  }
+
   const profileId = deps.profileIdFor
     ? deps.profileIdFor({ capability: 'browser', runId: envelope.runId, owner })
     : owner;
-  const sessionState = deps.sessionStateFor?.(envelope.runId);
 
-  let lease: ProfileLease;
   try {
-    // ACQUIRE SERIALISES. A second run for the same profile queues here rather than racing the
-    // Chromium SingletonLock - see browser/profile.ts for why racing it cannot be won.
-    lease = await deps.profiles.acquire(profileId, parseSessionState(sessionState));
+    // ONE LEASE FOR THE WHOLE RUN. Cortex sends one invoke per act/assert/observe, so a lease taken
+    // and released per FRAME closed the page and cleared the jar between every pair of steps - each
+    // step after the first ran on a fresh about:blank, signed out. `withRunLease` keys the lease by
+    // runId: the first step takes it, every later step of the same run gets the same page back, and
+    // the teardown happens at the `release` above or at the daemon's idle backstop.
+    //
+    // ACQUIRE STILL SERIALISES per profile, so a second RUN on the same profile now queues for the
+    // duration of the first run rather than interleaving with it - which is the correct reading of
+    // one browser, one jar. The backstop bounds that wait.
+    return await deps.profiles.withRunLease(
+      {
+        runId: envelope.runId,
+        profileId,
+        // A THUNK: the Cofre session is resolved only when the lease is actually taken, i.e. on the
+        // first step of the run. Re-resolving it per step would re-read credential material for a
+        // jar that already carries it.
+        session: () => parseSessionState(deps.sessionStateFor?.(envelope.runId)),
+      },
+      async (lease) => {
+        const page = await lease.page();
+        let assertionPassed: boolean | undefined;
+        let failure: string | undefined;
+        try {
+          assertionPassed = await runBrowserAction(page, action);
+          if (action.action === 'navigate') {
+            // The session's localStorage half can only be seeded once an origin is loaded - a
+            // persistent context takes no storageState. Cookies already landed at acquire.
+            await lease.seedStorageForCurrentOrigin(page);
+          }
+        } catch (err) {
+          failure = describeStepFailure(action, err, safeUrl(page.url.bind(page)));
+        }
+
+        // OBSERVE EVEN ON FAILURE. The hosted vision fallback resolves the NEXT attempt from the
+        // page as it actually is; handing it nothing because the action threw is what turns one
+        // failed step into a stalled run.
+        const observation = await observePage(page);
+        const data: LocalBrowserObservation = {
+          ...observation.data,
+          ...(assertionPassed !== undefined ? { assertionPassed } : {}),
+        };
+
+        ledgerAutomation(
+          ctx,
+          'browser',
+          action.action,
+          failure ? 'error' : 'ran',
+          undefined,
+          failure ?? undefined,
+        );
+
+        return {
+          ok: failure === undefined && assertionPassed !== false,
+          output: data,
+          ...(failure !== undefined ? { error: failure } : {}),
+          ...(observation.screenshotB64 ? { screenshotB64: observation.screenshotB64 } : {}),
+        };
+      },
+    );
   } catch (err) {
+    // A launch that failed, a manager already shut down, or a run the idle backstop reaped. All
+    // three are reported by name rather than degraded into a step that "ran" on nothing.
     const reason = err instanceof Error ? err.message : String(err);
     ledgerAutomation(ctx, 'browser', action.action, 'error', undefined, reason);
     return { ok: false, error: reason };
-  }
-
-  try {
-    const page = await lease.page();
-    let assertionPassed: boolean | undefined;
-    let failure: string | undefined;
-    try {
-      assertionPassed = await runBrowserAction(page, action);
-      if (action.action === 'navigate') {
-        // The session's localStorage half can only be seeded once an origin is loaded - a
-        // persistent context takes no storageState. Cookies already landed at acquire.
-        await lease.seedStorageForCurrentOrigin(page);
-      }
-    } catch (err) {
-      failure = describeStepFailure(action, err, safeUrl(page.url.bind(page)));
-    }
-
-    // OBSERVE EVEN ON FAILURE. The hosted vision fallback resolves the NEXT attempt from the page
-    // as it actually is; handing it nothing because the action threw is what turns one failed step
-    // into a stalled run.
-    const observation = await observePage(page);
-    const data: LocalBrowserObservation = {
-      ...observation.data,
-      ...(assertionPassed !== undefined ? { assertionPassed } : {}),
-    };
-
-    ledgerAutomation(
-      ctx,
-      'browser',
-      action.action,
-      failure ? 'error' : 'ran',
-      undefined,
-      failure ?? undefined,
-    );
-
-    return {
-      ok: failure === undefined && assertionPassed !== false,
-      output: data,
-      ...(failure !== undefined ? { error: failure } : {}),
-      ...(observation.screenshotB64 ? { screenshotB64: observation.screenshotB64 } : {}),
-    };
-  } finally {
-    // ALWAYS release: the lease holds the profile mutex AND the injected session. A leaked lease
-    // deadlocks every later run on that profile and leaves a live session in a shared jar.
-    await lease.release().catch(() => undefined);
   }
 }
 
