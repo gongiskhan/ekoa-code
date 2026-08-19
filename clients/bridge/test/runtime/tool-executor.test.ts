@@ -405,7 +405,28 @@ describe('BASH - the cwd path jail (the gap this closes)', () => {
       input: bashStep({ argv: ['pwd'], cwd: '/etc', grantRef: 'nao-existe' }),
     });
     expect(res.ok).toBe(false);
-    expect(res.error).toContain('grant');
+    // Asserted on the LEDGER reason, not the user-facing prose: the prose is PT-PT product copy and
+    // may be reworded, while the reason is the machine fact this test exists to pin. The previous
+    // assertion (`error` contains 'grant') passed only because bashArgv happened to say the English
+    // word, which made it survive rewording of the very refusal it guarded.
+    expect(automationRows().at(-1)).toMatchObject({ outcome: 'denied', reason: 'unresolvable grantRef' });
+  });
+
+  it('REFUSES an unresolvable grantRef even with NO cwd - naming a grant you do not hold cannot be better than naming none', async () => {
+    // THE HOLE THIS SUITE MISSED. Every other case here passes a `cwd`, so the refusal came from
+    // bashArgv (cwd present + no root). With no cwd there was nothing for it to refuse, the
+    // undefined grantRoot was dropped by the options spread, and the child ran in the DAEMON'S OWN
+    // process cwd - unjailed, on the exact path the jail exists to bound.
+    const runtime = buildRuntime();
+    const res = await invoke(runtime, {
+      invocationId: 'i1',
+      capability: 'local.bash',
+      input: bashStep({ argv: ['pwd'], grantRef: 'nao-existe' }),
+    });
+    expect(res.ok).toBe(false);
+    expect(automationRows().at(-1)).toMatchObject({ outcome: 'denied', reason: 'unresolvable grantRef' });
+    // And nothing ran: no stdout came back from a child that should never have been spawned.
+    expect(res.output).toBeUndefined();
   });
 
   it('REFUSES a grantRef held for ANOTHER session (S2 - a forged ref is not a grant)', async () => {
@@ -437,7 +458,7 @@ describe('BASH - the cwd path jail (the gap this closes)', () => {
       input: bashStep({ argv: ['pwd'], cwd: '.', grantRef: GRANT }),
     });
     expect(res.ok).toBe(false);
-    expect(res.error).toContain('grant');
+    expect(automationRows().at(-1)).toMatchObject({ outcome: 'denied', reason: 'unresolvable grantRef' });
   });
 
   it('a step with NO grant runs in the daemon work root, not the daemon PROCESS cwd', async () => {
@@ -518,7 +539,9 @@ describe('BASH - the cwd path jail (the gap this closes)', () => {
       input: bashStep({ argv: ['pwd'], cwd: '.', grantRef: 'forged' }),
     });
     expect(res.ok).toBe(false);
-    expect(res.error).toContain('grant');
+    expect(automationRows().at(-1)).toMatchObject({ outcome: 'denied', reason: 'unresolvable grantRef' });
+    // The point of the test: it did not silently become the work root that exists right here.
+    expect(res.output).toBeUndefined();
   });
 
   it('runs with NO SHELL - an argument can never become shell syntax', async () => {

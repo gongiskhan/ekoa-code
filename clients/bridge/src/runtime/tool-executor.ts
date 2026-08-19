@@ -234,14 +234,33 @@ async function runBashStep(
   }
   const step = parsed.data;
 
-  // The root that bounds the cwd. A named grantRef must belong to THIS session (S2) - a forged or
-  // foreign ref resolves to nothing and is NOT quietly widened to the default root. An unnamed step
-  // falls back to the session's single grant when it has exactly one, and to the daemon's own work
-  // root otherwise, so containment holds for every bash step rather than only the declared ones.
-  const grantRoot =
-    step.grantRef !== undefined
-      ? deps.grants.grantFor(step.grantRef, deps.session)?.root
-      : (resolveGrantRoot(deps.grants, deps.session) ?? deps.defaultWorkRoot);
+  // The root that bounds the cwd. A named grantRef must belong to THIS session (S2); a forged or
+  // foreign ref REFUSES the step. It must not resolve to `undefined` and fall through, because the
+  // options spread below omits an undefined grantRoot entirely - which drops the jail rather than
+  // narrowing it, and hands the child the daemon's own process cwd. Naming a grant you do not hold
+  // has to be worse than naming none, never better. An unnamed step falls back to the session's
+  // single grant when it has exactly one, and to the daemon's own work root otherwise, so every
+  // bash step is bounded rather than only the declared ones.
+  let grantRoot: string;
+  if (step.grantRef !== undefined) {
+    const named = deps.grants.grantFor(step.grantRef, deps.session)?.root;
+    if (named === undefined) {
+      ledgerAutomation(ctx, 'bash', 'invalid', 'denied', undefined, 'unresolvable grantRef');
+      return { ok: false, error: 'a permissão de acesso indicada não existe nesta sessão' };
+    }
+    grantRoot = named;
+  } else {
+    // `defaultWorkRoot` is optional on the deps, so this can still come back empty - and an empty
+    // root is the same fail-open as an unresolvable ref, by a quieter route. Refuse instead: a
+    // daemon wired without a work root has nowhere safe to put a child process, and running it in
+    // whatever directory the daemon happens to sit in is not an answer.
+    const fallback = resolveGrantRoot(deps.grants, deps.session) ?? deps.defaultWorkRoot;
+    if (fallback === undefined) {
+      ledgerAutomation(ctx, 'bash', 'invalid', 'denied', undefined, 'no grant root available');
+      return { ok: false, error: 'esta máquina não tem uma pasta de trabalho autorizada' };
+    }
+    grantRoot = fallback;
+  }
 
   try {
     // The secret hold is consumed HERE and nowhere else, and its `finally` zeroizes whatever
@@ -249,7 +268,7 @@ async function runBashStep(
     const result = await deps.secrets.withChildEnv(invocationId, (injected) =>
       bashArgv(ctx, step.argv, {
         ...(step.cwd !== undefined ? { cwd: step.cwd } : {}),
-        ...(grantRoot !== undefined ? { grantRoot } : {}),
+        grantRoot,
         ...(step.timeoutMs !== undefined ? { timeoutMs: step.timeoutMs } : {}),
         ...(step.stdin !== undefined ? { stdin: step.stdin } : {}),
         env: injected,
