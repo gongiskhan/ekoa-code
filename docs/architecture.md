@@ -244,8 +244,14 @@ machine - and the hosted Chromium is a fallback a PERMISSIVE origin may take, an
 may not, in every environment. `config.localBrowserEnabled` (default `!isProd`, unchanged) is now
 only an operator kill switch: it can CLOSE the fallback in any environment and it can never OPEN it
 for an adversarial origin, so posture is the gate and the environment is at most a second lock.
-`blocked` is a HALT (`awaiting_daemon`), never a datacenter fallback and never a substitute
-machine. The route out comes from
+`blocked` is a HALT, never a datacenter fallback and never a substitute machine, and it declares WHO
+can clear it: the verdict carries a REQUIRED `clearedBy: 'machine' | 'human'`. `machine` is the
+environment (a shut laptop, a fleet with no residential line right now) and halts in
+`awaiting_daemon`, which the schedule rail treats as neutral against the failure ceiling. `human`
+means waiting can never clear it, and halts in `needs_credentials` - which drives the ceiling and
+auto-pauses loudly instead of re-firing against a state that will not change. Required rather than
+optional, so a new refusal cannot inherit "neutral, retry forever" by saying nothing. The route out
+comes from
 `automation/egress-policy.ts` (`resolveEgress` against org-scoped candidates; `proxyOptionFor`
 rendered at the single launch seam in `server.ts`, because a proxy is a `newContext` launch option
 and cannot be applied afterwards), with the fleet reaching `automation/` through
@@ -254,9 +260,12 @@ EMPTY, and empty refuses. An ADVERSARIAL session prefers the pairing its ceremon
 (`sessionMetadata.establishedBy.pairingId`, reported by `ensureSession` and turned into a preference
 by `credential-gate.ts`): that machine or wait, never a colleague's. A portable credential resolves
 to `kind: 'any'` and prefers nothing. A preference whose machine the org's fleet listing no longer
-contains has been RETIRED, and the refusal changes accordingly - it names the act that fixes it
-(establish the session again from a machine you still have) instead of waiting forever on hardware
-nobody owns, and it still does not fall through to a substitute. A posture inherited from a
+contains has been RETIRED, and the refusal changes accordingly - it is `clearedBy: 'human'`, so it
+halts TERMINALLY and names the act that fixes it (establish the session again from a machine you
+still have) instead of waiting forever, uncounted, on hardware nobody owns; it still does not fall
+through to a substitute. The ceremony request it raises carries no `preferredPairingId`, because
+that field means "repeat the ceremony on the machine the portal already knows" and that machine is
+precisely the one that is gone. A posture inherited from a
 preceding step licenses ONE origin: a hosted session observed to have drifted onto another host
 carries no further steps.
 
@@ -281,9 +290,12 @@ decision that says where the step belongs. A step locality refused never reaches
 When the gate does run it receives a HOSTED-BROWSER PERMIT (`CredentialGateInput.hostedBrowser`)
 that the gate forwards to `ensureSession` only if the origin's posture also allows the hosted path;
 `EnsureSessionInput.hostedTypist` is absent-means-no, so an unattended login into the hosted
-Chromium is impossible for an adversarial origin and the route it does use is the one the run
-resolved. `config.localBrowserEnabled` keeps its `!isProd` default: posture is the gate, and this
-slice narrows without widening anything on the way past.
+Chromium is impossible for an adversarial origin. The permit is offered ONLY when
+`config.localBrowserEnabled` says this process has a hosted browser at all - which is what keeps a
+password from being typed into one in production - and it CARRIES THE ROUTE the step resolved to
+for either verdict that has one (`bridge` as well as `in-process`), so a login never leaves by a
+different door than the work it belongs to. `config.localBrowserEnabled` keeps its `!isProd`
+default: posture is the gate, and this slice narrows without widening anything on the way past.
 
 A run that needs a credential the Cofre does not hold halts in `needs_credentials`, a first-class
 `RunStatus` modelled on `awaiting_daemon` (halt and re-dispatch) rather than on `paused_for_user` (an

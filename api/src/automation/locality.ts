@@ -79,7 +79,29 @@ export type LocalityVerdict =
   /** The hosted Chromium. `egress` becomes the launch proxy option (`proxyOptionFor`). */
   | { kind: 'in-process'; egress: EgressResolution }
   /** Neither is permissible. HALT - never a datacenter fallback, never a substitute machine. */
-  | { kind: 'blocked'; reason: string };
+  | {
+      kind: 'blocked';
+      reason: string;
+      /**
+       * WHO CLEARS THIS BLOCK, and therefore whether REPEATING the run can ever help.
+       *
+       *   - `machine` - the environment is what is missing (a laptop is shut, a fleet has no
+       *     residential machine right now). Opening the laptop clears it with nobody touching the
+       *     schedule, so the fire is NEUTRAL against the failure ceiling
+       *     (`schedules/supervisor.ts` `NEUTRAL_BLOCKED_CODES`) and the run halts in
+       *     `awaiting_daemon`.
+       *   - `human` - waiting CANNOT clear it, because the condition is not about a machine being
+       *     off. The run halts in `needs_credentials`, which drives the ceiling and eventually
+       *     auto-pauses the schedule loudly, instead of re-firing nightly against a state that
+       *     will never change on its own.
+       *
+       * REQUIRED, not optional, and that is the point. An optional field would let a new blocked
+       * branch inherit "neutral, retry forever" by saying nothing - which is exactly how the
+       * retired-ceremony-machine refusal below became an unbounded retry against a machine that no
+       * longer exists. Every refusal now has to answer the question out loud.
+       */
+      clearedBy: 'machine' | 'human';
+    };
 
 export interface LocalityInput {
   /** The posture of the origin this step is ABOUT (`classifyOrigin`, resolved at use). */
@@ -212,6 +234,13 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
   ) {
     return {
       kind: 'blocked',
+      // WAITING NEVER FIXES THIS ONE, and that is what separates it from every other refusal here.
+      // The other blocks are about a machine being OFF; this one is about a machine being GONE. No
+      // laptop can be opened to clear it, so carrying it as the neutral environment halt meant a
+      // schedule re-firing nightly, forever, against a condition that cannot resolve - the failure
+      // ceiling never counting a single one of them. A person re-establishing the session is the
+      // only thing that ends it, so it halts as the state that means exactly that.
+      clearedBy: 'human',
       reason:
         'the machine where this session was established has been removed from your account - ' +
         'establish this session again, from a machine you still have',
@@ -230,6 +259,9 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
     }
     return {
       kind: 'blocked',
+      // The named machine EXISTS (it survived the retirement check above) and is merely not the one
+      // dialled in. Starting it clears this with nobody touching the schedule, so it is neutral.
+      clearedBy: 'machine',
       reason: authorPin
         ? `this step is pinned to machine ${authorPin}; the machine currently connected is a different one`
         : 'this step must run on the machine where its session was established, and a different ' +
@@ -249,6 +281,9 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
     const pinned = requirement.kind === 'residential' ? requirement.pairingId : undefined;
     return {
       kind: 'blocked',
+      // Every branch here is "no machine of yours is connected" - the environment, which the owner
+      // fixes by opening a laptop rather than by establishing anything.
+      clearedBy: 'machine',
       reason: authorPin
         ? `this origin is ${input.classification.posture}: the step is pinned to machine ${authorPin}, ` +
           'and that machine is not connected'
@@ -260,7 +295,11 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
     };
   }
   if (!input.inProcessFallbackEnabled) {
-    return { kind: 'blocked', reason: 'no machine is connected and the in-process browser fallback is disabled' };
+    return {
+      kind: 'blocked',
+      clearedBy: 'machine',
+      reason: 'no machine is connected and the in-process browser fallback is disabled',
+    };
   }
 
   // ---- 3. ...and the route out it gets -------------------------------------------------------
@@ -273,10 +312,13 @@ export function resolveLocality(input: LocalityInput): LocalityVerdict {
       // is permissive, so this is a declared choice rather than a silent substitution.
       return { kind: 'in-process', egress: resolution };
     case 'queue':
-      return { kind: 'blocked', reason: `waiting for a machine: ${resolution.reason}` };
+      // Literally "waiting for a machine": the run stops and re-fires once one is back.
+      return { kind: 'blocked', clearedBy: 'machine', reason: `waiting for a machine: ${resolution.reason}` };
     case 'refused':
     default:
-      return { kind: 'blocked', reason: resolution.reason };
+      // The fleet cannot meet the declared requirement RIGHT NOW - a machine advertising
+      // residential egress is missing, not retired. Registering or waking one clears it.
+      return { kind: 'blocked', clearedBy: 'machine', reason: resolution.reason };
   }
 }
 

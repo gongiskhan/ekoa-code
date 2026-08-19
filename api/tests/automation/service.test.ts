@@ -611,6 +611,48 @@ describe('automation service surface (§3.8.18)', () => {
     expect((run as { status?: string }).status).toBe('awaiting_daemon');
   });
 
+  /**
+   * THE SECOND BLOCKED CAUSE, and the one that was in `BLOCKED_RUN_STATUSES` with nothing asserting
+   * it. Removing `needs_credentials` from that set left every service test green while turning
+   * "your password is missing" back into an ordinary `failed` - which is a delivery-pipeline RETRY
+   * (`permanent: false`) of a run that cannot progress until a human visits the Cofre, and on the
+   * schedule rail it is the wrong word in the owner's badge.
+   *
+   * The daemon is connected deliberately: it makes LOCALITY answer `bridge`, so the step is not
+   * refused before the credential gate and the halt under test is genuinely the credential one.
+   */
+  it('a run waiting for a CREDENTIAL is blocked too, and says which block it was', async () => {
+    setDaemonConnectionResolver(() => ({
+      runStep: async () => ({
+        ok: true,
+        observation: {
+          screenshotB64: '',
+          data: { url: 'https://portal.example.com/', title: 'P', domShapeSketch: 'tags:|roles:|landmarks:0', viewport: { w: 1280, h: 800 } },
+        },
+      }),
+    }));
+    await automations.insert({
+      _id: 'cred_auto', id: 'cred_auto', name: 'Needs a credential', description: '', ownerUserId: 'u1', orgId: 'o1',
+      steps: [{
+        id: 'n1',
+        description: 'open the portal',
+        type: 'navigate',
+        url: 'https://portal.example.com/login',
+        // The step NAMES a Cofre reference, which is the only thing that arms the gate. Nothing
+        // holds that item, so the gate can only ask for a person.
+        declaration: { credentialRefs: ['cofre:itm_absent'] },
+      }],
+      createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
+    } as never);
+    const out = await svc.startRunForTrigger({ automationId: 'cred_auto', ownerUserId: 'u1', orgId: 'o1', triggeredBy: 'schedule' });
+
+    expect(out.outcome).toBe('blocked');
+    expect(out.code).toBe('needs_credentials');
+    expect(out.permanent).toBe(false);
+    const run = await automationRuns.get(out.runId!);
+    expect((run as { status?: string }).status).toBe('needs_credentials');
+  });
+
   it('an ordinary step failure is still FAILED — blocked did not swallow the failure channel', async () => {
     await automations.insert({
       _id: 'failing_auto', id: 'failing_auto', name: 'Failing', description: '', ownerUserId: 'u1', orgId: 'o1',

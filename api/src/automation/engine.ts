@@ -28,12 +28,17 @@ import { randomUUID } from 'node:crypto';
 import { RunCredentialRequest, type Actor } from '@ekoa/shared';
 import { loadAutomationConfig } from './config.js';
 import {
+  cofrePortalDeepLink,
   evaluateCredentialGate,
   resolveStepOrigin,
   type CredentialGateInput,
   type CredentialGateVerdict,
 } from './credential-gate.js';
 import { registerCredentialWaiter } from './credential-waiters.js';
+// The login relay prompt, so a locality refusal only a person can clear can say WHERE to log in.
+// PURE (`cofre/relay.ts` composes and returns; it registers nothing), which is what makes it safe
+// to call on a refusal path that must not have side effects of its own.
+import { issueLoginRelayPrompt } from '../cofre/index.js';
 import { classifyOrigin } from './origin-posture.js';
 import {
   resolveLocality,
@@ -549,6 +554,14 @@ async function runOrRehearse(
    * fixer's screenshot, the human-action classifier — ask for whatever session already exists).
    */
   let stepLocality: LocalityVerdict | null = null;
+  /**
+   * The ORIGIN the locality verdict above was resolved for, kept beside it because a `human`-cleared
+   * refusal has to name the site the person must re-establish a session against
+   * (`RunCredentialRequest.origin` is required, and inventing one would aim a human at the wrong
+   * portal). Null when no origin could be resolved, which `refusalRecordFor` reads as "cannot ask
+   * for a ceremony" and answers with a plain terminal failure rather than a halt naming nowhere.
+   */
+  let stepOrigin: string | null = null;
   /** The org's machines, read ONCE per run rather than per step. */
   let egressCandidates: readonly EgressCandidate[] | null = null;
   const getBrowser = (): BrowserSession | null => {
@@ -612,6 +625,7 @@ async function runOrRehearse(
     );
     // An origin that cannot be resolved is not a licence: `classifyOrigin('')` is CLOSED, which is
     // what an unknown destination has to be.
+    stepOrigin = resolvedOrigin?.origin ?? null;
     const classification = classifyOrigin(
       resolvedOrigin ? `https://${resolvedOrigin.origin}` : '',
       resolvedOrigin?.action ?? undefined,
@@ -646,6 +660,9 @@ async function runOrRehearse(
       if (live && live !== resolvedOrigin?.origin) {
         return {
           kind: 'blocked',
+          // The drift is a fact about THIS run's live session, and the next fire starts from a
+          // fresh one. Neutral, as it has always been.
+          clearedBy: 'machine',
           reason:
             `this run's hosted browser is on ${live}, which is not the origin this step's posture ` +
             'was declared for - it will not carry a step onto an undeclared site',
@@ -657,7 +674,23 @@ async function runOrRehearse(
 
   /** A locality verdict this loop must refuse, as the halt record the outer loop already knows. */
   const refusalRecordFor = (step: Step, index: number, verdict: LocalityVerdict): StepRecord | undefined => {
-    if (verdict.kind === 'blocked') return localityBlockedRecord(step, index, verdict.reason);
+    if (verdict.kind === 'blocked') {
+      // A block WAITING CANNOT CLEAR must not be carried as the environment halt. `awaiting_daemon`
+      // is neutral against the failure ceiling by design - the laptop opens and the next fire works
+      // - and a condition no laptop can fix inherits that neutrality as an UNBOUNDED retry against
+      // a state that never changes (docs/findings.md, the retired ceremony machine). So it halts as
+      // the state that means "a person must do something", which drives the ceiling and auto-pauses
+      // the schedule loudly instead.
+      if (verdict.clearedBy === 'human') {
+        return stepOrigin
+          ? localityNeedsCeremonyRecord(step, index, verdict.reason, stepOrigin, automation.name)
+          // No origin to name, so there is no honest ceremony to ask for. Still TERMINAL: an
+          // ordinary non-recoverable failure drives the ceiling exactly as the halt above does, and
+          // falling back to `awaiting_daemon` here would reopen the very hole this branch closes.
+          : localityTerminalFailureRecord(step, index, verdict.reason);
+      }
+      return localityBlockedRecord(step, index, verdict.reason);
+    }
     // THE ROUTE SWITCH. The run already opened a hosted context on a different route out; the proxy
     // is a LAUNCH option, so re-pointing it is not possible, and reusing the context anyway would
     // send this step's traffic out of a door it did not resolve to - the silent substitution this
@@ -844,9 +877,21 @@ async function runOrRehearse(
             // origin's posture, applied inside the gate. Present only when this process has a
             // hosted browser to offer at all, and carrying the route the step resolved to when it
             // resolved one, so a login is never performed out of a different door than the work.
+            //
+            // "WHEN IT RESOLVED ONE" MEANS EITHER VERDICT THAT CARRIES AN EGRESS, and it used to
+            // mean `in-process` alone - which silently dropped the route on every `bridge` step and
+            // contradicted this comment. It mattered: a PERMISSIVE origin whose step is pinned (or
+            // declares `egress.residential`) resolves to `bridge` with a MACHINE route, the work
+            // then runs on that machine's line, and the typist's login went out of the datacenter
+            // instead. Same portal, same session, two different doors - the substitution this whole
+            // slice exists to stop, performed by the one act that types a password.
+            //
+            // A `blocked` verdict carries no egress and never reaches here anyway (`localityRecord`
+            // is set, and this whole call is skipped); the narrowing is what makes that visible to
+            // the type checker rather than to a reader.
             ...(loadAutomationConfig().localBrowserEnabled
               ? {
-                  hostedBrowser: stepLocality?.kind === 'in-process'
+                  hostedBrowser: stepLocality && stepLocality.kind !== 'blocked'
                     ? { egress: stepLocality.egress }
                     : {},
                 }
@@ -2462,6 +2507,72 @@ function localityBlockedRecord(step: Step, index: number, reason: string): StepR
       recoverable: false,
       details: { kind: 'awaiting_daemon', capability: 'browser', stepIndex: index },
     },
+  });
+}
+
+/**
+ * A locality refusal only a PERSON can clear, as the halt that already means exactly that.
+ *
+ * WHY `needs_credentials` AND NOT A NEW STATUS. The act that clears it is establishing this
+ * origin's session again - the same act, at the same portal, through the same `/cofre` deep link
+ * the credential gate already sends people to. A new run status would need its own SSE member, its
+ * own recovery set, its own badge copy and its own ceiling rule, all of them duplicating one that
+ * exists and is already correct: `needs_credentials` is in `BLOCKED_RUN_STATUSES` (so the schedule
+ * rail reports `blocked`, not `failed`) and deliberately NOT in `NEUTRAL_BLOCKED_CODES` (so it
+ * drives the failure ceiling and auto-pauses rather than re-firing forever).
+ *
+ * `mode: 'ceremony'` because that is what is being asked for: a person at a headed browser, on a
+ * machine they still own. `issueLoginRelayPrompt` is pure - it composes the prompt, it does not
+ * register anything - so building it here costs nothing and lets the portal say WHERE to log in.
+ *
+ * THE MESSAGE NAMES A MACHINE IN WORDS, NEVER A PAIRING UUID. A pairing id is an opaque identifier
+ * this product never shows a user; printing one reads as a fault code and names nothing they can
+ * act on. The reason string comes from `locality.ts`, which composes it from the ACT that fixes it.
+ */
+function localityNeedsCeremonyRecord(
+  step: Step,
+  index: number,
+  reason: string,
+  origin: string,
+  automationName: string,
+): StepRecord {
+  const base: StepRecord = { stepId: step.id, index, status: 'running', tier: 'cache', durationMs: 0 };
+  const request: RunCredentialRequest = {
+    stepIndex: index,
+    origin,
+    integrationKey: step.integrationKey ?? 'browser',
+    portalDeepLink: cofrePortalDeepLink(origin),
+    mode: 'ceremony',
+    reason: reason.slice(0, 500),
+    ceremony: issueLoginRelayPrompt({
+      automationName,
+      siteOrigin: origin,
+      reason: reason.slice(0, 500),
+    }),
+  };
+  return finishRecord(base, 'failed', Date.now(), {
+    tier: 'cache',
+    error: {
+      message: reason,
+      recoverable: false,
+      details: { kind: 'needs_credentials', request },
+    },
+  });
+}
+
+/**
+ * The same refusal when no origin could be resolved to name in a ceremony request.
+ *
+ * A plain non-recoverable failure, which is TERMINAL on the schedule rail (it drives the failure
+ * ceiling and eventually auto-pauses) - the property that matters. What it is not is
+ * `awaiting_daemon`: falling back to the neutral halt because a field was missing would restore the
+ * unbounded retry for the one case that has the least information to act on.
+ */
+function localityTerminalFailureRecord(step: Step, index: number, reason: string): StepRecord {
+  const base: StepRecord = { stepId: step.id, index, status: 'running', tier: 'cache', durationMs: 0 };
+  return finishRecord(base, 'failed', Date.now(), {
+    tier: 'cache',
+    error: { message: reason, recoverable: false },
   });
 }
 

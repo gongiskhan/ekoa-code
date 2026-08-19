@@ -232,3 +232,34 @@ describe('a mutation that was refused', () => {
     expect(push).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * P4.1 - THE DETAIL HISTORY PASSES THE CODE TOO.
+ *
+ * Sibling of the list-page pin, and it needs its own: the two surfaces render `RunStatusBadge`
+ * from two different files, so dropping the `code` prop in EITHER regresses that surface alone
+ * while the other stays correct. A user reading a run's history is the person most likely to be
+ * looking for what to do next, and the generic fallback is precisely where that answer is missing.
+ */
+describe('a blocked run in the history says WHICH block it was', () => {
+  it('renders the code-specific words, not the generic blocked fallback', async () => {
+    mocked.schedules.listRuns.mockResolvedValue({
+      items: [run({ status: 'blocked', detail: { code: 'needs_credentials' } })],
+    });
+    renderPage();
+
+    const badge = await screen.findByTestId('schedule-run-status-blocked');
+    expect(badge).toHaveTextContent('Falta uma credencial');
+    expect(badge).not.toHaveTextContent('À sua espera');
+    expect(badge).not.toHaveTextContent('Aguarda aprovação');
+  });
+
+  it('...and the machine block gets its own words rather than a shared string', async () => {
+    mocked.schedules.listRuns.mockResolvedValue({
+      items: [run({ status: 'blocked', detail: { code: 'awaiting_daemon' } })],
+    });
+    renderPage();
+
+    expect(await screen.findByTestId('schedule-run-status-blocked')).toHaveTextContent('Aguarda o seu computador');
+  });
+});

@@ -52,6 +52,21 @@ where they touch the dashboard.
   (the posture half of the permit), and `automation/session-establishment.test.ts` on what the
   absent permit does (`needs-human`, nothing opened). `automation/config.test.ts` pins the hosted
   browser's kill switch in BOTH environments, including under `NODE_ENV=production`.
+- **The P4 wiring pins, and why each exists as its own case.** Every safety property this slice
+  established was, at one point, deletable with every suite still green - so each is now pinned by a
+  case that was CONFIRMED BY MUTATION (break the source, watch it redden, restore). The ceremony
+  preference is wired in two independently-deletable halves and gets two cases built to separate
+  them: the half-A case gates an `integration` step, which has no locality of its own so no
+  re-resolution can fire, and observes the preference on the NEXT step; the half-B case gates the
+  browser step itself. Deleting half B reddens the half-B case alone. A third case connects the
+  ceremony machine and expects the run to COMPLETE, so neither is satisfiable by an engine that
+  simply refuses everything. `automation/locality.test.ts` additionally censuses `clearedBy` across
+  every refusal the module can produce - the retirement is the only `human` one - and
+  `automation/service.test.ts` pins BOTH blocked codes reaching `startRunForTrigger`, not just
+  `awaiting_daemon`. On the web side the badge's own spec is not enough: the two PAGES that render
+  it are pinned separately (`components/schedules-page.test.tsx`,
+  `components/schedule-detail-page.test.tsx`), on the WORDS a person reads, because dropping the
+  `code` prop leaves a component that is correct, tested and permanently on its generic fallback.
 - **`api/tests/e2e/`** - node full-app e2e drivers (`*.e2e.mjs`): served-app plane, legal suite, and
   the deferred `erp-*` tenant-fork drivers (awaiting CUTOVER).
 - **`api/tests/journeys/`** - the zero-dependency HTTP journey probe kit (`_lib.mjs`, `j*.mjs`) plus

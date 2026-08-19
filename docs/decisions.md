@@ -1608,3 +1608,81 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   NAMED LIMITATION rather than a claim of completeness: this stops the steps after the drift, never
   the act that drifts (docs/findings.md
   `posture-drift-check-cannot-stop-the-act-that-navigates`).
+
+- 2026-08-19 - P4 ROUND THREE: THE SAFETY WIRING IS PINNED, AND TWO REFUSALS WERE WRONG.
+  Round two closed P4's blockers - the credential gate stopped opening a hosted browser against an
+  adversarial origin, and the failure ceiling kept its cap. It did not PIN any of it. An adversarial
+  verifier mutated each new safety property in turn and the suites stayed green, which means a
+  refactor could have silently undone exactly what the slice existed to establish. This round makes
+  each one fail when broken, and fixes the two places where the code and its own comment disagreed.
+
+  **Every claim below was verified by mutation, not by reading.** For each: write the test, mutate the
+  source, watch it go red, restore, confirm `git diff` clean.
+
+  (1) THE CEREMONY PREFERENCE IS TWO HALVES, AND EITHER CAN BE DELETED ALONE. `preferredPairingId` is
+  forwarded into `resolveLocality` (half A) and applied by re-resolving the verdict after the
+  credential gate discovers it (half B). Deleting either left every suite green. They are now pinned
+  SEPARATELY, and the separation is structural rather than incidental: the half-A case gates an
+  `integration` step, which has no locality of its own, so no re-resolution can occur and the
+  preference must survive into the NEXT step's resolution; the half-B case gates the browser step
+  itself, where re-resolving is the only thing that can apply what the gate found. Deleting half B
+  fails the half-B case alone and leaves the half-A case green - the independence the pins exist for.
+  A third case connects the ceremony machine and expects the run to COMPLETE, so neither pin can be
+  satisfied by an engine that simply refuses every gated adversarial step.
+
+  (2) THE HOSTED-BROWSER PERMIT IS THE PRODUCTION POSTURE RULE, AND IT WAS UNPINNED. Replacing
+  `loadAutomationConfig().localBrowserEnabled ? {...} : {}` with an unconditional permit left every
+  suite green - on the ONE condition that keeps a password from being typed into a hosted Chromium in
+  production, where the flag is off. Pinned with the hosted browser switched off and a PERMISSIVE
+  origin that would otherwise reach the typist: nothing is opened, and the run asks for a person. Its
+  sibling case runs the same fixture with the switch on and asserts the typist IS reached, so the
+  refusal is the switch and not the fixture.
+
+  (3) THE PERMIT DROPPED THE RUN'S RESOLVED ROUTE ON EVERY `bridge` STEP - a real defect, and the code
+  contradicted the comment on its own line ("carrying the route the step resolved to when it resolved
+  one"). THE COMMENT WAS RIGHT. Both `bridge` and `in-process` verdicts carry an `EgressResolution`;
+  only `in-process` was forwarded. It mattered for a PERMISSIVE origin whose step is pinned or
+  declares `egress.residential`: the verdict is `bridge` with a MACHINE route, the work runs on that
+  machine's line, and the typist's login went out of the datacenter instead. Same portal, same
+  session, two different doors - performed by the one act that types a password. The permit now
+  carries the egress for either verdict; `blocked` carries none and never reaches the call anyway
+  (`localityRecord` is set and the gate is skipped), so the narrowing states that to the type checker
+  rather than to a reader.
+
+  (4) A RETIRED CEREMONY MACHINE RETRIED FOREVER AGAINST A CONDITION THAT CANNOT RESOLVE. Round two
+  gave the retirement its own refusal with a way out. It did not change WHICH HALT carries it, and
+  `awaiting_daemon` is NEUTRAL against the failure ceiling by design - the laptop opens, the next fire
+  works, so counting it would punish a working schedule for its owner's sleep. That reasoning is about
+  a machine being OFF. It is false about a machine being GONE, and the retirement inherited the
+  neutrality anyway: a schedule re-firing nightly, forever, with the ceiling never counting one
+  attempt. This is the same shape as the credential-rejection case round two fixed, with a different
+  cause.
+
+  `LocalityVerdict`'s blocked member now carries a REQUIRED `clearedBy: 'machine' | 'human'`. Required
+  is the decision: an optional field would let a new refusal inherit "neutral, retry forever" by
+  saying nothing, which is precisely how this defect arose. `human` halts the run in
+  `needs_credentials` - the state that already means "a person must act", is already in
+  `BLOCKED_RUN_STATUSES`, is already absent from `NEUTRAL_BLOCKED_CODES`, and already deep-links to
+  the Cofre. A new run status would duplicate all four and have to be kept in step with them forever.
+  The request is built with `mode: 'ceremony'` and NO `preferredPairingId`: that field means "repeat
+  the ceremony on the machine the portal already knows", and that machine is the one that is gone.
+  When no origin resolved there is nothing honest to name, so the refusal becomes a plain
+  non-recoverable failure - still terminal, still driving the ceiling - rather than falling back to
+  `awaiting_daemon` and reopening the hole.
+
+  A census suite pins that the retirement is the ONLY `human` answer and that every environment
+  refusal stays `machine`, because making them all terminal would auto-pause schedules for owners
+  whose only sin is a shut laptop.
+
+  (5) THE BADGE'S CODE HAD TO REACH IT FROM THE PAGE. `RunStatusBadge` learned to pick its words from
+  `code` and its own spec pins that it does; nothing pinned the two PAGES passing one. Dropping the
+  prop leaves a component that is correct, tested, and permanently on its generic fallback - every
+  blocked fire of every cause labelled "Aguarda aprovação" again, sending a user whose laptop is shut
+  to look for an approval that does not exist. Both surfaces render the badge from different files and
+  are pinned separately; each mutation fails only its own surface. The assertions are about the WORDS
+  a person reads, not about props, because the wrong specific instruction is the harm.
+
+  **Scope held.** The mid-run route-switch refusal answers `clearedBy: 'machine'`, preserving its
+  existing treatment: it is not in this brief, and changing its ceiling behaviour would be a
+  behaviour change nobody asked for. It is recorded as a finding instead
+  (`route-switch-refusal-is-neutral-but-repeats-identically`).

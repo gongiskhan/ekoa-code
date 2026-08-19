@@ -6,6 +6,40 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`route-switch-refusal-is-neutral-but-repeats-identically`** (OPEN 2026-08-19, LOW, a named limit
+  of the `clearedBy` split, not a regression). `LocalityVerdict`'s blocked member now answers WHO
+  clears it, so a refusal waiting cannot fix halts terminally instead of re-firing forever. The
+  mid-run ROUTE SWITCH refusal (`refusalRecordFor`, "this step needs a different route out of the
+  network than the one this run already opened") answers `machine`, which keeps it NEUTRAL against
+  the failure ceiling - and a route switch is a property of the STEP LIST, so the next fire resolves
+  identically and blocks at the same index. It therefore repeats without bound, exactly as the
+  retired ceremony machine used to.
+
+  **Deliberately not changed here.** It is not in this slice's brief, and it is not the same defect:
+  the retirement is cleared by a person re-establishing a session, which `needs_credentials` names
+  precisely; a route switch is cleared by the automation's AUTHOR editing the step declarations, and
+  neither existing halt says that. Giving it an honest terminal state means a third `clearedBy`
+  value with its own ceiling rule and its own badge copy - a contract decision that deserves its own
+  slice rather than being a tail of this one. The blast radius is bounded: it needs a run whose
+  hosted context is already open for one route and a later step declaring another, which requires a
+  permissive origin AND an explicit residential/pinned declaration on a later step.
+
+- **`retired-ceremony-halt-cannot-name-the-machine-in-the-fleet's-own-words`** (OPEN 2026-08-19,
+  LOW, an honest limit of the message). The retirement halt says "the machine where this session was
+  established has been removed from your account - establish this session again, from a machine you
+  still have", which names the machine by ROLE and deliberately never prints the pairing UUID (an
+  opaque identifier no surface in this product shows a user; the message and the persisted
+  `credentialRequest.reason` are both asserted not to contain it).
+
+  **What it cannot do is name it by LABEL**, because there is none to read. `PairingRow`
+  (`bridge/registry.ts`) carries `pairingId`, `org`, `ownerUserId`, capabilities and an egress
+  endpoint - no device name - and the retired pairing is by definition absent from the fleet listing
+  the engine consults, so even a label field would need a separate lookup of a revoked row.
+  `locality.ts` is also PURE by construction (no store, no seam, no env), which is what makes its
+  whole decision table drivable from a test, so the lookup could not live there. Closing this means
+  a device name on the pairing record plus a seam the engine can ask - worth doing when the fleet
+  surface grows one, not worth a store read on a refusal path today.
+
 - **`suite-ledger-unit-census-drifted-red-again`** (2026-08-19, OPEN, LOW, gate rot - found by
   running `npm run gate:ledger` on this branch and checking whether the red was mine; it is not).
   `npm run gate:ledger` **exits 1** on `[FAIL] unit census mismatch: disk 64 != ledger 59 (drift or

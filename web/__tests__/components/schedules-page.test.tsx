@@ -266,3 +266,58 @@ describe('reaching a schedule', () => {
     expect(link).toHaveFocus();
   });
 });
+
+/**
+ * P4.1 - THE BADGE'S CODE REACHES IT FROM THE PAGE.
+ *
+ * `RunStatusBadge` learned to pick its words from `code`, and its own spec pins that it does. What
+ * nothing pinned was the PAGE PASSING ONE: delete the `code` prop here and the component is
+ * perfectly correct, perfectly tested, and permanently on its fallback - every blocked fire, of
+ * every cause, labelled with the one generic string again. That is the exact defect this slice
+ * fixed, and it can regress silently in a file the badge's own suite never loads.
+ *
+ * The assertion is deliberately about the WORDS a person reads, not about props: the wrong specific
+ * instruction ("Aguarda aprovação" for a shut laptop - there is no approval to give, and they would
+ * go looking for one) is the harm, and it is the only thing worth asserting.
+ */
+describe('a blocked fire in the list says WHICH block it was', () => {
+  it('renders the code-specific words, not the generic blocked fallback', async () => {
+    mocked.schedules.list.mockResolvedValue({
+      items: [schedule({
+        lastRun: { runId: 'r1', status: 'blocked', at: '2026-01-01T09:00:00.000Z', code: 'awaiting_daemon' },
+      })],
+    });
+    renderPage();
+
+    const badge = await screen.findByTestId('schedule-run-status-blocked');
+    expect(badge).toHaveTextContent('Aguarda o seu computador');
+    // The two ways this regresses: the generic fallback (the `code` prop was dropped), and the
+    // pre-P4.1 copy that told a user whose laptop is shut to go and approve something.
+    expect(badge).not.toHaveTextContent('À sua espera');
+    expect(badge).not.toHaveTextContent('Aguarda aprovação');
+  });
+
+  it('...and the other cause gets its own words, so this is the code and not a fixed string', async () => {
+    mocked.schedules.list.mockResolvedValue({
+      items: [schedule({
+        lastRun: { runId: 'r2', status: 'blocked', at: '2026-01-01T09:00:00.000Z', code: 'needs_credentials' },
+      })],
+    });
+    renderPage();
+
+    const badge = await screen.findByTestId('schedule-run-status-blocked');
+    expect(badge).toHaveTextContent('Falta uma credencial');
+  });
+
+  /** A blocked fire with no code at all still renders - the honest general fallback, which is what
+   *  a cause nobody has written copy for is supposed to get. */
+  it('falls back honestly when the fire carries no code', async () => {
+    mocked.schedules.list.mockResolvedValue({
+      items: [schedule({ lastRun: { runId: 'r3', status: 'blocked', at: '2026-01-01T09:00:00.000Z' } })],
+    });
+    renderPage();
+
+    const badge = await screen.findByTestId('schedule-run-status-blocked');
+    expect(badge).toHaveTextContent('À sua espera');
+  });
+});

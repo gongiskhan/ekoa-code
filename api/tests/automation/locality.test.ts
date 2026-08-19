@@ -294,3 +294,93 @@ describe('sameRoute — a context launched for one route is not reused for anoth
   it('two different machines are different routes', () => expect(sameRoute(m1, m2)).toBe(false));
   it('the same machine is the same route', () => expect(sameRoute(m1, { ...m1 })).toBe(true));
 });
+
+/**
+ * P4.2 - WHO CLEARS THE BLOCK, on every refusal this module can produce.
+ *
+ * WHY THIS SUITE EXISTS. `blocked` used to carry a reason and nothing else, so every refusal was
+ * routed to the same halt - `awaiting_daemon`, which the schedule rail treats as NEUTRAL against
+ * the failure ceiling because opening a laptop clears it. That is true of a machine being OFF and
+ * false of a machine being GONE, and the retired-ceremony-machine refusal inherited the neutrality
+ * anyway: a schedule re-firing nightly, forever, against a condition nothing could resolve, with
+ * the ceiling never counting one attempt.
+ *
+ * `clearedBy` is REQUIRED on the verdict, so a new refusal cannot inherit "retry forever" by saying
+ * nothing. This suite is the census that keeps the answers honest: the retirement case is the ONLY
+ * `human` one, and every environment refusal stays `machine` - because making them all terminal
+ * would auto-pause schedules for owners whose only sin is a shut laptop.
+ */
+describe('every locality refusal says who can clear it', () => {
+  const RETIRED = 'pair_ceremony_gone';
+
+  it('a RETIRED ceremony machine is cleared by a person, never by waiting', () => {
+    const v = resolveLocality(input({
+      preferredPairingId: RETIRED,
+      // A NON-EMPTY listing without the pairing is the registry stating the machine is gone.
+      candidates: [machine({ pairingId: 'pair_other' })],
+      daemonConnected: true,
+      daemonPairingId: 'pair_other',
+    }));
+    expect(v.kind).toBe('blocked');
+    expect(v.kind === 'blocked' && v.clearedBy).toBe('human');
+    // The act that fixes it, in words - and never the opaque pairing id, which names nothing a
+    // person can act on and reads as a fault code.
+    expect(v.kind === 'blocked' && v.reason).toMatch(/establish this session again/);
+    expect(v.kind === 'blocked' && v.reason).not.toContain(RETIRED);
+  });
+
+  it('a ceremony machine that is merely ASLEEP is cleared by the machine', () => {
+    // Same preference, but the fleet still lists it: registered and switched off, not retired.
+    const v = resolveLocality(input({
+      preferredPairingId: RETIRED,
+      candidates: [machine({ pairingId: RETIRED, live: false }), machine({ pairingId: 'pair_other' })],
+      daemonConnected: true,
+      daemonPairingId: 'pair_other',
+    }));
+    expect(v.kind).toBe('blocked');
+    expect(v.kind === 'blocked' && v.clearedBy).toBe('machine');
+  });
+
+  it('an EMPTY fleet listing is not a statement that anything was retired', () => {
+    // "This process does not know what this org has" - an unbound seam, a store that answered
+    // nothing. Not-knowing may never turn a preference into a terminal halt.
+    const v = resolveLocality(input({
+      preferredPairingId: RETIRED,
+      candidates: [],
+      daemonConnected: true,
+      daemonPairingId: 'pair_other',
+    }));
+    expect(v.kind).toBe('blocked');
+    expect(v.kind === 'blocked' && v.clearedBy).toBe('machine');
+  });
+
+  it('every ENVIRONMENT refusal stays neutral - a shut laptop must not auto-pause a schedule', () => {
+    const environmentRefusals = [
+      // Adversarial origin, nothing connected.
+      input({ candidates: [] }),
+      // The env kill switch, with a permissive origin that would otherwise run hosted.
+      input({ classification: PERMISSIVE, inProcessFallbackEnabled: false }),
+      // An author's explicit pin, to a machine that is not the one connected.
+      input({
+        declaredTarget: { kind: 'pinned', pairingId: 'pair_pinned' } as StepTarget,
+        daemonConnected: true,
+        daemonPairingId: 'pair_other',
+        candidates: [machine({ pairingId: 'pair_pinned' }), machine({ pairingId: 'pair_other' })],
+      }),
+      // A residential requirement the fleet cannot meet right now.
+      input({ classification: PERMISSIVE, declaredTarget: { kind: 'any', capability: 'egress.residential' }, candidates: [] }),
+      // ...and the same, with the run asking to queue rather than fail.
+      input({
+        classification: PERMISSIVE,
+        declaredTarget: { kind: 'any', capability: 'egress.residential' },
+        offlinePolicy: 'queue',
+        candidates: [],
+      }),
+    ];
+    for (const [i, args] of environmentRefusals.entries()) {
+      const v = resolveLocality(args);
+      expect(v.kind, `case ${i}`).toBe('blocked');
+      expect(v.kind === 'blocked' && v.clearedBy, `case ${i}`).toBe('machine');
+    }
+  });
+});
