@@ -367,3 +367,53 @@ describe('schedules contract', () => {
     expect(body.run.status).toBe('running');
   });
 });
+
+/**
+ * THE OWNER SAYING "GO" CLEARS THE NEUTRAL COOLDOWN, not only the failure ceiling.
+ *
+ * A neutral block (`awaiting_daemon`) earns a cooldown during which the supervisor advances the
+ * pointer without firing - that is what bounds an exemption from the ceiling. A re-enable is the
+ * owner stating that the environment changed, so making them wait out a backoff earned by the
+ * state they just fixed would read as the schedule ignoring them. The fields are supervisor
+ * internals and deliberately not on the wire (`toWireSchedule` projects explicitly), so the
+ * assertion reads the store.
+ */
+describe('re-enabling a schedule clears the neutral cooldown', () => {
+  it('a PATCH enabled:true resets the streak, the cooldown and the ceiling together', async () => {
+    const t = await tokenFor('usr');
+    await schedulesStore.insert({
+      _id: 'sch-cooling',
+      orgId: 'orgA',
+      ownerUserId: 'usr',
+      name: 'Arrefecida',
+      target: { kind: 'manual' },
+      spec: { kind: 'recurring', rule: { every: 'minute', interval: 1, timezone: 'Europe/Lisbon' } },
+      enabled: false,
+      nextRunAt: null,
+      consecutiveFailures: 4,
+      consecutiveNeutralBlocks: 6,
+      neutralBackoffUntil: '2099-01-01T00:00:00.000Z',
+      lastNeutralNotifiedAt: '2026-08-17T09:00:00.000Z',
+      autoPausedAt: '2026-08-17T09:00:00.000Z',
+      createdAt: '2026-08-17T07:00:00.000Z',
+      updatedAt: '2026-08-17T09:00:00.000Z',
+    } as never);
+
+    const patched = await authed('/api/v1/schedules/sch-cooling', t, { method: 'PATCH', body: JSON.stringify({ enabled: true }) });
+    expect(patched.status).toBe(200);
+    expect(Schedule.safeParse(await patched.json()).success).toBe(true);
+
+    const row = (await schedulesStore.get('sch-cooling')) as unknown as {
+      enabled: boolean; consecutiveFailures: number; consecutiveNeutralBlocks?: number;
+      neutralBackoffUntil?: string | null; autoPausedAt?: string; nextRunAt: string | null;
+    };
+    expect(row.enabled).toBe(true);
+    expect(row.consecutiveFailures).toBe(0);
+    expect(row.consecutiveNeutralBlocks).toBe(0);
+    expect(row.neutralBackoffUntil).toBeNull();
+    expect(row.autoPausedAt).toBeUndefined();
+    // A far-future cooldown left in place would have kept the next fire from happening at all,
+    // which is the failure this clears: the pointer is live again.
+    expect(row.nextRunAt).not.toBeNull();
+  });
+});
