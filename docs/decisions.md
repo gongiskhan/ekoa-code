@@ -1083,3 +1083,86 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   this is a new capability shipped contained, not an existing one narrowed. Pinned by
   `test/runtime/tool-executor.test.ts` (escape refused, forged ref refused, foreign-session ref
   refused, no-grant step lands in the work root and NOT in `process.cwd()`).
+
+- 2026-08-19 - THE CAPABILITY GRANT IS READ BEFORE THE CREDENTIAL IS DECRYPTED, NOT AFTER IT HAS
+  BEEN SHIPPED.
+  THE DEFECT. `createDaemonStepConnection.runStep` ran `authoriseDelivery` -> `deliverSecrets` ->
+  `deps.invoke`, and the ONLY per-machine authorisation in that path was `isCapabilityGranted`
+  inside `invokeTool` - i.e. last. So every step carrying `envRefs` redeemed the single-use nonce,
+  unwrapped a Cofre item through `unwrap()`, armed the ingress filter, put the PLAINTEXT on the
+  machine's socket and wrote a Registo "use" row, and was refused only afterwards. Grants are
+  default-deny (I-3) and `grantCapability` still has no production caller, so this was the ONLY
+  behaviour, not an edge case: reproduced before the fix with a real Cofre item and a real socket -
+  a `secret.deliver` frame carrying the plaintext, `lastUsedAt` written, then
+  `ToolInvocationRefused`. The daemon holds that value in RAM for the delivery TTL. Revocation had
+  the same shape: revoking does not close the socket, and the refusal surfaced as `recoverable`, so
+  the engine retried and re-delivered on every attempt.
+  THE FIX. `DaemonStepDeps` gains `isCapabilityGranted(orgId, pairingId, capability)`, consulted as
+  the first statement of `runStep`, before the invocation id is even minted. The composition root
+  passes `bridge/capability-grants.ts`'s function itself rather than a root-local predicate, so
+  there is one authorisation question with one implementation. It is RE-READ per step and never
+  cached, preserving the mid-run revocation property `tool-invocation.ts` documents. The refusal is
+  an envelope with `retryable: false`, because `local-command.ts` reads
+  `recoverable: env.error?.retryable !== false` and a retried authorisation failure can only be
+  refused again - the retry loop was what turned one leak into one per attempt.
+  THE CHECK IN `invokeTool` STAYS. It is not a duplicate to tidy away: it guards every other caller
+  of the invocation coordinator, and the seam's guards the disclosure that happens before that call
+  is reached. Removing either leaves a path with no check on it. Pinned by
+  `api/tests/security/daemon-seam-wiring.test.ts` (real grants store, real delivery pair, real
+  `invokeTool`, real Cofre item: no grant means no frame of any kind, no unwrap, no Registo row) and
+  by `api/tests/bridge/daemon-step-seam.test.ts`, whose `invoke` double now REFUSES an ungranted
+  capability the way the real one does - it returned `ok: true` unconditionally, which is exactly
+  why a seam that checked the grant last looked identical to one that checked it first.
+  ALSO CORRECTED: `server.ts` claimed the resolver "hands back a connection only when the ORG has
+  granted that machine the capability". It never did and could not - the resolver is handed an
+  owner, not a step, so it cannot know which capability to ask about. The comment now describes the
+  per-step check that actually exists.
+
+- 2026-08-19 - THE DELIVERY TTL GETS A TRIGGER, AND EXPIRY IS ENFORCED BY COMPARISON RATHER THAN BY
+  A TIMER HAVING FIRED.
+  WHAT THE PENDING MAP ACTUALLY HOLDS, because both the optimistic and the alarming readings are
+  wrong: NOT a credential (`deliverSecrets` redeems the entry BEFORE it unwraps anything, so no
+  value ever enters the map) but a live, single-use PERMISSION to unwrap a Cofre item and put its
+  value on one machine's socket. `PENDING_TTL_MS` exists to bound that permission and did not:
+  `sweep()` was reachable only from `authoriseDelivery`, so an orphan expired if and only if another
+  delivery was authorised afterwards - on a quiet fleet, never - and `deliverSecrets` never compared
+  `createdAt` to anything, so a days-old authorisation redeemed exactly like a fresh one. Orphans
+  are not contrived: the pairing-mismatch refusal threw BEFORE the redeem, leaving its authorisation
+  live forever on every attempt.
+  THE FIX, THREE PARTS, EACH FOR A DIFFERENT REASON. (1) `deliverSecrets` sweeps before its lookup,
+  so a stale authorisation is unredeemable whether or not a timer got to it - a control that depends
+  on a timer's punctuality is not a control. (2) A single UNREF'd timeout, armed for the oldest
+  entry's expiry and re-armed on every mutation, bounds the lifetime with no dependence on traffic;
+  unref'd because a five-minute handle that kept Node alive would turn one idle authorisation into a
+  hung shutdown, and armed only while the map is non-empty so an idle process schedules nothing.
+  (3) `dropPendingDeliveriesForPairing`, called from the bridge server's `close` handler beside
+  `releasePairingSecrets`, because a delivery targets a LIVE SOCKET in this process and once the
+  socket is gone the authorisation can only be redeemed into a refusal. The timer alone would let a
+  machine that stays connected keep its orphans for the full TTL; the socket hook alone would never
+  fire for one that stays up. The redeem is also hoisted above the pairing-mismatch check, so a
+  refused redirect consumes its authorisation rather than leaving one behind on every attempt.
+  Pinned by `api/tests/security/bridge-secret-delivery.test.ts`, including a REAL socket whose close
+  drops the pending entry - the call site, not just the function.
+
+- 2026-08-19 - BRIDGE INGRESS REDACTION WALKS THE `tool.result` OBSERVATION, WHICH IS AN OBJECT AND
+  WAS THEREFORE SKIPPED ENTIRELY.
+  THE DEFECT. `redactInboundFrame` scrubbed `tool.result.output` only when
+  `typeof frame.output === 'string'`. Every payload P1 made reachable is an OBJECT:
+  `LocalBashObservation` is `{stdout, stderr, exitCode, timedOut, truncated}` and
+  `LocalBrowserObservation` is `{url, title, heading, domShapeSketch, accessibilitySnapshot,
+  viewport, assertionPassed}`. Those are the fields `local-command.ts` and
+  `DaemonBrowserSession.ingest` read off `observation.data` and put into the persisted step record
+  and the SSE stream - so the likeliest place of all for a delivered credential to reappear, a bash
+  step's stdout, was the one place the hosted filter did not look. The module's own docblock and the
+  P1 diagram annotation both described this filter as the mirror of the daemon's egress redactor; it
+  was not, and only the daemon's half was actually covering the observation.
+  THE FIX. `output` goes through the existing depth-bounded `redactUnknown` walk - the same one
+  `provider_request.body` already used - which covers the string case unchanged and leaves
+  non-string leaves (`exitCode`, `viewport`) as themselves. `screenshotB64` is a sibling FIELD, not
+  part of `output`, so it stays untouched per the frame contract: it is an image, not text.
+  BOTH REDACTORS STAY. The daemon's egress redactor is the one that keeps a value off the network
+  and out of a proxy log; this hosted one is the belt to those braces and the only one that still
+  applies to a daemon that is older, misconfigured or compromised. Pinned by
+  `api/tests/security/bridge-ingress-redaction.test.ts`, including an end-to-end case that drives a
+  real `tool.result` with an observation object over a real socket and asserts on what the awaiting
+  `invokeTool` caller resolves with.

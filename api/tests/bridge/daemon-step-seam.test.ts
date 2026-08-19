@@ -24,15 +24,39 @@ import {
  *    never invoked from production code, and `local-command.ts` sent `env: undefined`. The order
  *    matters and is asserted below: authorise, then deliver, then invoke, all under ONE
  *    invocationId, so the daemon holds the credential keyed by the invocation that consumes it.
+ * 4. THE CAPABILITY GRANT WAS CHECKED LAST. The only per-machine authorisation lived inside
+ *    `invokeTool`, i.e. AFTER `deliverSecrets` had redeemed the nonce, unwrapped a Cofre item,
+ *    armed the ingress filter, put the PLAINTEXT on the wire and written a Registo "use" row. So an
+ *    ungranted machine received a decrypted credential and was only then refused. It is checked
+ *    first now, and the order is asserted in every case below.
+ *
+ * WHY THE `invoke` DOUBLE REFUSES. It used to return `ok: true` unconditionally, which is exactly
+ * why defect 4 was invisible here: a seam that checked the grant only inside `invoke` produced the
+ * same green run as one that checked it before decrypting anything. The double now mirrors the real
+ * `invokeTool` - it re-reads the same grant set and throws when the capability is not granted - so
+ * the only way to keep these cases green is to refuse BEFORE the delivery block.
  */
-function deps(overrides: Partial<DaemonStepDeps> = {}): DaemonStepDeps & {
+function deps(
+  overrides: Partial<DaemonStepDeps> = {},
+  granted: Set<string> = new Set<string>(['desktop.automation', 'local.bash']),
+): DaemonStepDeps & {
   calls: Array<{ capability: BridgeCapability; invocationId: string; payload: unknown }>;
   order: string[];
+  granted: Set<string>;
 } {
   const calls: Array<{ capability: BridgeCapability; invocationId: string; payload: unknown }> = [];
   const order: string[] = [];
   const base: DaemonStepDeps = {
+    isCapabilityGranted: async (_orgId, _pairingId, capability) => {
+      order.push(`grant?:${capability}`);
+      return granted.has(capability);
+    },
     invoke: async (input) => {
+      // Mirrors `invokeTool`: the grant is re-read here too and an ungranted capability THROWS
+      // rather than dispatching. Belt to the seam's braces - never the only check.
+      if (!granted.has(input.capability)) {
+        throw new Error(`${input.capability} is not granted for machine ${input.pairingId} in this org`);
+      }
       order.push('invoke');
       calls.push({ capability: input.capability, invocationId: input.invocationId!, payload: input.payload });
       return { ok: true, output: { url: 'https://x.test' }, screenshotB64: 'aGk=' };
@@ -48,7 +72,7 @@ function deps(overrides: Partial<DaemonStepDeps> = {}): DaemonStepDeps & {
     },
     ...overrides,
   };
-  return { ...base, calls, order };
+  return { ...base, calls, order, granted };
 }
 
 const conn = { pairingId: 'pair-1', org: 'org-1' };
@@ -106,7 +130,7 @@ describe('secret delivery - authorise, deliver, invoke, one invocationId', () =>
     const d = deps();
     const c = createDaemonStepConnection(conn, d);
     await c.runStep({ capability: 'bash', input: { argv: ['echo'] }, runId: 'r1' });
-    expect(d.order).toEqual(['invoke']);
+    expect(d.order).toEqual(['grant?:local.bash', 'invoke']);
   });
 
   it('authorises, delivers, THEN invokes - all under the same invocationId', async () => {
@@ -119,7 +143,7 @@ describe('secret delivery - authorise, deliver, invoke, one invocationId', () =>
       secretEnv: { DB_TOKEN: 'cofre:itm_abc' },
       actor,
     });
-    expect(d.order).toEqual(['authorise:inv-1', 'deliver:inv-1', 'invoke']);
+    expect(d.order).toEqual(['grant?:local.bash', 'authorise:inv-1', 'deliver:inv-1', 'invoke']);
     expect(d.calls[0]!.invocationId).toBe('inv-1');
   });
 
@@ -138,7 +162,7 @@ describe('secret delivery - authorise, deliver, invoke, one invocationId', () =>
       actor,
     });
     expect(env.ok).toBe(false);
-    expect(d.order).toEqual(['authorise:inv-1']);
+    expect(d.order).toEqual(['grant?:local.bash', 'authorise:inv-1']);
     expect(d.calls).toHaveLength(0);
   });
 
@@ -164,5 +188,96 @@ describe('secret delivery - authorise, deliver, invoke, one invocationId', () =>
     expect(replay.ok).toBe(false);
     expect(replay.error?.message).toContain('already has a delivery authorised');
     expect(d.calls).toHaveLength(1); // only the FIRST invocation ever went out
+  });
+});
+
+/**
+ * THE ORDER THE WHOLE MODULE TURNS ON: the org's per-machine grant is read BEFORE anything is
+ * decrypted.
+ *
+ * `deliverSecrets` is not a dispatch, it is a DISCLOSURE: it redeems the nonce, unwraps a Cofre
+ * item through `unwrap()`, arms the ingress filter, puts the plaintext on the socket and writes a
+ * Registo "use" row. Every one of those is irreversible. Running them and then asking whether the
+ * org authorised this machine is asking after the credential is already on someone's laptop, held
+ * there for the delivery TTL. The seam suite's sibling (`security/daemon-seam-wiring.test.ts`)
+ * states the property for dispatch - "a refusal after dispatch would already have asked a user's
+ * computer to run something" - and delivering a decrypted credential is strictly more than that.
+ */
+describe('the capability grant is the FIRST thing consulted, before any decrypt', () => {
+  const actor = { userId: 'u1', orgId: 'org-1' } as never;
+  const noGrants = () => new Set<string>();
+
+  it('an UNGRANTED machine: nothing is authorised, nothing is delivered, nothing is dispatched', async () => {
+    const d = deps({}, noGrants());
+    const c = createDaemonStepConnection(conn, d);
+    const env = await c.runStep({
+      capability: 'bash',
+      input: { argv: ['env'] },
+      runId: 'r1',
+      secretEnv: { DB_TOKEN: 'cofre:itm_abc' },
+      actor,
+    });
+
+    expect(env.ok).toBe(false);
+    // The decisive assertion: the grant question is the ONLY thing that happened. No authorise, no
+    // deliver - so no nonce redeemed, no unwrap, no plaintext frame, no Registo row.
+    expect(d.order).toEqual(['grant?:local.bash']);
+    expect(d.calls).toHaveLength(0);
+  });
+
+  it('a refusal is NOT retryable - a retried step would re-deliver the credential every time', async () => {
+    // `local-command.ts` reads `recoverable: env.error?.retryable !== false`, so leaving it unset
+    // marks an authorisation refusal as a transient failure and the engine retries it. Each retry
+    // used to be another decrypt-and-ship.
+    const d = deps({}, noGrants());
+    const c = createDaemonStepConnection(conn, d);
+    const env = await c.runStep({ capability: 'bash', input: { argv: ['ls'] }, runId: 'r1' });
+    expect(env.error?.retryable).toBe(false);
+  });
+
+  it('an ungranted BROWSER step is refused under desktop.automation, not local.filesystem', async () => {
+    const d = deps({}, noGrants());
+    const c = createDaemonStepConnection(conn, d);
+    const env = await c.runStep({ capability: 'browser', input: {}, runId: 'r1' });
+    expect(env.ok).toBe(false);
+    expect(d.order).toEqual(['grant?:desktop.automation']);
+  });
+
+  it('a grant for the OTHER capability does not authorise this one', async () => {
+    const d = deps({}, new Set(['desktop.automation']));
+    const c = createDaemonStepConnection(conn, d);
+    const env = await c.runStep({
+      capability: 'bash',
+      input: { argv: ['env'] },
+      runId: 'r1',
+      secretEnv: { DB_TOKEN: 'cofre:itm_abc' },
+      actor,
+    });
+    expect(env.ok).toBe(false);
+    expect(d.order).toEqual(['grant?:local.bash']);
+  });
+
+  it('THE MID-RUN CASE: revoking between steps stops the SECOND delivery, not just the dispatch', async () => {
+    // Re-read per step, never cached. `tool-invocation.ts` documents this for dispatch; the same
+    // must hold for the credential, or a de-authorised machine keeps receiving decrypted
+    // credentials for the rest of the run.
+    const d = deps();
+    const c = createDaemonStepConnection(conn, d);
+    const req = {
+      capability: 'bash' as const,
+      input: { argv: ['env'] },
+      runId: 'r1',
+      secretEnv: { DB_TOKEN: 'cofre:itm_abc' },
+      actor,
+    };
+    expect((await c.runStep(req)).ok).toBe(true);
+    expect(d.order).toContain('deliver:inv-1');
+
+    d.granted.delete('local.bash'); // the admin revokes mid-run
+    d.order.length = 0;
+    const second = await c.runStep(req);
+
+    expect(second.ok).toBe(false);
+    expect(d.order).toEqual(['grant?:local.bash']);
   });
 });

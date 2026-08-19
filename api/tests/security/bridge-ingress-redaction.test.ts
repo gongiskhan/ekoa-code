@@ -9,6 +9,8 @@ import { mintBridgeToken } from '../../src/bridge/token.js';
 import { attachBridgeServer, type BridgeServerHandle } from '../../src/bridge/server.js';
 import { delegateToLocal } from '../../src/bridge/delegation.js';
 import { drainBridgeAudit } from '../../src/bridge/audit.js';
+import { grantCapability } from '../../src/bridge/capability-grants.js';
+import { invokeTool } from '../../src/bridge/tool-invocation.js';
 import type { BridgeFrame } from '@ekoa/shared';
 import {
   redactInboundFrame,
@@ -72,6 +74,81 @@ describe('a delivered secret cannot come back through a frame', () => {
     const f = out as Extract<BridgeFrame, { type: 'tool.result' }>;
     expect(String(f.output)).not.toContain(SECRET);
     expect(String(f.error)).not.toContain(SECRET);
+  });
+
+  /**
+   * THE SHAPE P1 MADE REACHABLE, and the one the filter walked straight past.
+   *
+   * `tool.result.output` is `z.unknown()`. It was scrubbed only `typeof frame.output === 'string'`,
+   * and P1's payloads are OBJECTS: `LocalBashObservation` is `{stdout, stderr, exitCode, ...}` and
+   * `LocalBrowserObservation` is `{url, title, heading, accessibilitySnapshot, ...}`. Both are read
+   * off `observation.data` by `local-command.ts` and `DaemonBrowserSession.ingest` and land in the
+   * persisted step record and the SSE stream. So the single most likely place a delivered
+   * credential comes back - a bash step's stdout - was the one place the hosted filter did not
+   * look. The daemon's own egress redactor is the other half of this and stays; this is the belt to
+   * those braces, and a belt with a hole in it is not one.
+   */
+  it('THE BASH SHAPE: a credential echoed in stdout/stderr of an OBJECT output is masked', () => {
+    registerDeliveredSecrets(PAIRING, [SECRET]);
+    const out = redactInboundFrame(PAIRING, {
+      type: 'tool.result',
+      invocationId: 'i1',
+      ok: true,
+      output: { stdout: `DB_TOKEN=${SECRET}\n`, stderr: `curl: falhou com ${SECRET}`, exitCode: 0, timedOut: false },
+    } as BridgeFrame);
+    const o = (out as Extract<BridgeFrame, { type: 'tool.result' }>).output as Record<string, unknown>;
+    expect(String(o.stdout)).not.toContain(SECRET);
+    expect(String(o.stderr)).not.toContain(SECRET);
+    // Structural, non-string fields survive as themselves - a redactor that stringified exitCode
+    // would break the executor reading it.
+    expect(o.exitCode).toBe(0);
+    expect(o.timedOut).toBe(false);
+  });
+
+  it('THE BROWSER SHAPE: an observation object is masked too', () => {
+    registerDeliveredSecrets(PAIRING, [SECRET]);
+    const out = redactInboundFrame(PAIRING, {
+      type: 'tool.result',
+      invocationId: 'i1',
+      ok: true,
+      output: {
+        url: `https://portal.test/callback?token=${SECRET}`,
+        title: 'Sessão',
+        heading: `bem-vindo ${SECRET}`,
+        accessibilitySnapshot: `textbox "chave" value="${SECRET}"`,
+        viewport: { w: 1280, h: 720 },
+      },
+    } as BridgeFrame);
+    const o = (out as Extract<BridgeFrame, { type: 'tool.result' }>).output as Record<string, unknown>;
+    expect(JSON.stringify(o)).not.toContain(SECRET);
+    expect(o.title).toBe('Sessão');
+    expect(o.viewport).toEqual({ w: 1280, h: 720 });
+  });
+
+  it('nested output survives the walk - a wrapper object is not a way out of the filter', () => {
+    registerDeliveredSecrets(PAIRING, [SECRET]);
+    const out = redactInboundFrame(PAIRING, {
+      type: 'tool.result',
+      invocationId: 'i1',
+      ok: false,
+      output: { steps: [{ log: [`linha 1`, `linha 2 ${SECRET}`] }] },
+    } as BridgeFrame);
+    expect(JSON.stringify((out as Extract<BridgeFrame, { type: 'tool.result' }>).output)).not.toContain(SECRET);
+  });
+
+  it('the screenshot rides through untouched - it is an image, not text', () => {
+    registerDeliveredSecrets(PAIRING, [SECRET]);
+    const png = 'iVBORw0KGgoAAAANSUhEUg==';
+    const out = redactInboundFrame(PAIRING, {
+      type: 'tool.result',
+      invocationId: 'i1',
+      ok: true,
+      output: { stdout: SECRET, stderr: '', exitCode: 0 },
+      screenshotB64: png,
+    } as BridgeFrame);
+    const f = out as Extract<BridgeFrame, { type: 'tool.result' }>;
+    expect(f.screenshotB64).toBe(png);
+    expect(f.invocationId).toBe('i1'); // and the join key is not rewritten either
   });
 
   it('redacts DEEP inside a provider_request body — the one headed for the model', () => {
@@ -268,6 +345,53 @@ describe('the filter is WIRED into the socket, not merely available', () => {
     expect(result.status).toBe('ok');
     expect(result.answer).not.toContain(SECRET);
     expect(result.answer).toContain('a ligação falhou');
+    ws.close();
+  });
+
+  it('a bash step echoing the credential in its OBSERVATION never reaches the awaiting step', async () => {
+    // The P1 path, end to end over a real socket: `tool.invoke` out, a `tool.result` back whose
+    // `output` is the observation OBJECT the executor reads `stdout` off. What `invokeTool`
+    // resolves with is what lands in the persisted step record.
+    const owner = 'owner-h4b';
+    const pairing = 'pair-h4b';
+    setActivation(owner, { active: true, billingLocked: false });
+    await grantCapability({ orgId: 'org-1', pairingId: pairing, capability: 'local.bash', grantedByUserId: 'admin' });
+    const { token } = mintBridgeToken({ sub: owner }, pairing);
+
+    const ws = new WsClient(`ws://127.0.0.1:${port}/api/v1/bridge/connect/${pairing}`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    ws.on('error', () => undefined);
+    await new Promise<void>((r) => ws.on('open', () => r()));
+
+    registerDeliveredSecrets(pairing, [SECRET]);
+
+    ws.on('message', (data) => {
+      const frame = JSON.parse(typeof data === 'string' ? data : (data as Buffer).toString());
+      if (frame.type !== 'tool.invoke') return;
+      ws.send(
+        JSON.stringify({
+          type: 'tool.result',
+          invocationId: frame.invocationId,
+          ok: true,
+          output: { stdout: `DB_TOKEN=${SECRET}\n`, stderr: '', exitCode: 0 },
+        }),
+      );
+    });
+
+    const res = await invokeTool({
+      pairingId: pairing,
+      orgId: 'org-1',
+      capability: 'local.bash',
+      payload: { argv: ['env'] },
+      timeoutMs: 5000,
+    });
+
+    expect(res.ok).toBe(true);
+    const observed = res.output as { stdout: string; exitCode: number };
+    expect(observed.stdout).not.toContain(SECRET);
+    expect(observed.stdout).toContain('DB_TOKEN='); // the surrounding output still explains itself
+    expect(observed.exitCode).toBe(0);
     ws.close();
   });
 });

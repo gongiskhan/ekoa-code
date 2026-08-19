@@ -41,6 +41,7 @@ import {
 import { spendConnectNonce } from './connect-nonce.js';
 import { acceptSessionPush, AttendedError } from './attended.js';
 import { redactInboundFrame, releasePairingSecrets } from './ingress-redaction.js';
+import { dropPendingDeliveriesForPairing } from './secret-delivery.js';
 import { resolveToolResult, failInvocationsForPairing } from './tool-invocation.js';
 import { resolveDelegationResult, resolveDenial, failDelegationsForPairing } from './delegation.js';
 import { createProviderHandler, type ProviderHandler } from './provider.js';
@@ -234,6 +235,10 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
       removeLiveConnection(ctx.pairingId, ws);
       // H-4: the machine can no longer echo anything, so stop holding its delivered values.
       releasePairingSecrets(ctx.pairingId);
+      // J-3: and it can no longer RECEIVE anything either, so an authorisation still waiting to be
+      // redeemed for it is dead weight - a single-use permission to unwrap a Cofre item onto a
+      // socket that no longer exists. Dropped here rather than left to wait out its TTL.
+      dropPendingDeliveriesForPairing(ctx.pairingId);
       // A closed / revoked socket fails every in-flight delegation cleanly (§18.3.5, S4) — and
       // every in-flight tool invocation with it, or an automation step would hang on a machine
       // that is already gone.

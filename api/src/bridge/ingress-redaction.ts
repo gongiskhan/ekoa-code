@@ -19,8 +19,10 @@
  *
  * WHAT IS FILTERED, AND WHAT DELIBERATELY IS NOT. Every free-text field a frame carries that can
  * reach persistence, the SSE stream or the model: a delegation result's `answer`, a denial's
- * `reason`, a tool result's output, a provider request's body. NOT the structural fields (taskId,
- * correlationId, byte counts) — substituting inside an id would corrupt a join key to protect a
+ * `reason`, a tool result's output - WALKED TO ITS LEAVES, because a step observation is an object
+ * (`{stdout, stderr, exitCode}`, `{url, title, accessibilitySnapshot}`) and not a string - and a
+ * provider request's body. NOT the structural fields (taskId, correlationId, byte counts):
+ * substituting inside an id would corrupt a join key to protect a
  * string that cannot contain a secret. The `path` on a ledger row is left ALONE too: it is never
  * persisted hosted-side (§18.2 / FC-407, and J-6's audit has no path field), so redacting it would
  * be work done on a value already headed for the bin.
@@ -92,9 +94,21 @@ export function redactInboundFrame(pairingId: string, frame: BridgeFrame): Bridg
     case 'denial':
       return { ...frame, reason: scrub(frame.reason) };
     case 'tool.result':
+      // `output` IS THE STEP OBSERVATION, and it is almost never a string. It was scrubbed only
+      // when `typeof output === 'string'`, which left the whole of P1's execution plane outside the
+      // filter: `LocalBashObservation` is `{stdout, stderr, exitCode, ...}` and
+      // `LocalBrowserObservation` is `{url, title, heading, accessibilitySnapshot, ...}`. Those are
+      // the fields `local-command.ts` and `DaemonBrowserSession.ingest` read off `observation.data`
+      // and put into the persisted step record and the SSE stream - so the likeliest place of all
+      // for a delivered credential to come back, a bash step's stdout, was the one place this did
+      // not look. Walking the value covers the string case unchanged and every structural shape
+      // besides, leaving non-string leaves (exitCode, viewport) as themselves.
+      //
+      // `screenshotB64` is a sibling FIELD, not part of `output`, so it rides through untouched -
+      // deliberately, per the frame contract: it is an image, not text.
       return {
         ...frame,
-        ...(typeof frame.output === 'string' ? { output: scrub(frame.output) } : {}),
+        ...(frame.output !== undefined ? { output: redactUnknown(frame.output, scrub) } : {}),
         ...(frame.error !== undefined ? { error: scrub(frame.error) } : {}),
       };
     case 'provider_request':

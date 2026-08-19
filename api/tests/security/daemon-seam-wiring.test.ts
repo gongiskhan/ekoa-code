@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import type { BridgeFrame } from '@ekoa/shared';
+import type { Actor, BridgeFrame } from '@ekoa/shared';
 import type { WebSocket } from 'ws';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { orgs, bridgeCapabilityGrants } from '../../src/data/stores.js';
-import { grantCapability, revokeCapability } from '../../src/bridge/capability-grants.js';
+import { grantCapability, revokeCapability, isCapabilityGranted } from '../../src/bridge/capability-grants.js';
 import * as registry from '../../src/bridge/registry.js';
 import { attachLiveConnection, __resetLiveConnectionsForTests } from '../../src/bridge/registry.js';
 import {
@@ -15,6 +15,16 @@ import {
   __resetInvocationsForTests,
   __pendingInvocationCount,
 } from '../../src/bridge/tool-invocation.js';
+import { createDaemonStepConnection } from '../../src/bridge/daemon-step-seam.js';
+import {
+  authoriseDelivery,
+  deliverSecrets,
+  newInvocationId,
+  __resetDeliveriesForTests,
+  __pendingDeliveryCount,
+} from '../../src/bridge/secret-delivery.js';
+import { __resetIngressRedactionForTests } from '../../src/bridge/ingress-redaction.js';
+import { mintCofreItem, issueGrant } from '../../src/cofre/index.js';
 
 /**
  * SECURITY SUITE — the daemon seam is wired, and wiring it grants nothing (Cofre J-1 wiring).
@@ -50,11 +60,16 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  const { cofreItems, cofreGrants } = await import('../../src/cofre/store.js');
   await orgs.deleteMany({});
   await bridgeCapabilityGrants.deleteMany({});
+  await cofreItems.raw.deleteMany({});
+  await cofreGrants.raw.deleteMany({});
   await orgs.insert({ _id: ORG, name: 'Org A' } as never);
   __resetLiveConnectionsForTests();
   __resetInvocationsForTests();
+  __resetDeliveriesForTests();
+  __resetIngressRedactionForTests();
   vi.restoreAllMocks();
 });
 
@@ -172,5 +187,130 @@ describe('an invocation always settles — a run never hangs on a machine', () =
     // The daemon answers after the timeout. Must be a no-op, not a second settle.
     expect(() => resolveToolResult(captured, { ok: true })).not.toThrow();
     expect(__pendingInvocationCount()).toBe(0);
+  });
+});
+
+/**
+ * THE SAME PROPERTY, FOR THE CREDENTIAL - through the REAL seam the composition root wires.
+ *
+ * The cases above prove `invokeTool` refuses before a frame is sent. They say nothing about what
+ * `bridge/daemon-step-seam.ts` does BEFORE it calls `invokeTool`, and that turned out to be
+ * everything that matters: `authoriseDelivery` -> `deliverSecrets` ran first, so an ungranted
+ * machine got the nonce redeemed, the Cofre item unwrapped through `unwrap()`, the plaintext put on
+ * its socket and a Registo "use" row written - and was refused only afterwards. The daemon then held
+ * that plaintext in RAM for the delivery TTL. "Nothing reached the machine" has to mean the
+ * credential too.
+ *
+ * So this block wires the seam with the REAL collaborators (`isCapabilityGranted`, the real
+ * delivery pair, the real `invokeTool`), against a REAL Cofre item, and asserts on the frames that
+ * actually reach the wire.
+ */
+describe('an ungranted machine never receives a DECRYPTED CREDENTIAL either', () => {
+  const actor: Actor = { userId: OWNER, orgId: ORG, role: 'user' } as Actor;
+  const SECRET = 'cofre-value-P1-SEAM-7731';
+
+  /** Exactly the four dependencies `server.ts` supplies at the composition root. */
+  function seam() {
+    return createDaemonStepConnection(
+      { pairingId: PAIRING, org: ORG },
+      {
+        isCapabilityGranted,
+        invoke: (input) => invokeTool(input),
+        newInvocationId,
+        authoriseDelivery,
+        deliverSecrets: (a, i) => deliverSecrets(a, i),
+      },
+    );
+  }
+
+  async function grantedItem() {
+    const item = await mintCofreItem(actor, {
+      type: 'api_key',
+      label: 'DB token',
+      value: SECRET,
+      boundOrigins: ['db.internal.example'],
+    });
+    await issueGrant(actor, item._id, '1_day');
+    return item;
+  }
+
+  async function itemRow(id: string) {
+    const { cofreItems } = await import('../../src/cofre/store.js');
+    return (await cofreItems.raw.get(id)) as { lastUsedAt?: string } | null;
+  }
+
+  /** Capture the wire and answer any `tool.invoke` as a daemon would. */
+  function liveWire(): BridgeFrame[] {
+    connect();
+    return wire((frame) => {
+      if (frame.type === 'tool.invoke') resolveToolResult(frame.invocationId, { ok: true, output: { exitCode: 0 } });
+    });
+  }
+
+  const step = (item: string) => ({
+    capability: 'bash' as const,
+    input: { argv: ['env'] },
+    runId: 'r1',
+    secretEnv: { DB_TOKEN: `cofre:${item}` },
+    actor,
+  });
+
+  it('THE LEAK: no grant means no secret.deliver frame, no unwrap, no Registo row', async () => {
+    const item = await grantedItem();
+    const sent = liveWire(); // NO capability grant issued for this machine
+
+    const env = await seam().runStep(step(item._id));
+
+    expect(env.ok).toBe(false);
+    // Not one frame of any kind. `secret.deliver` is the only frame in the union that carries
+    // credential material, so its absence is the proof the plaintext never left this process.
+    expect(sent).toHaveLength(0);
+    // And nothing was staged for a later redemption either.
+    expect(__pendingDeliveryCount()).toBe(0);
+    // The Registo said the credential was USED. It never was - the step was refused.
+    expect((await itemRow(item._id))?.lastUsedAt).toBeUndefined();
+  });
+
+  it('with the grant, the credential IS delivered - and under the invoking id', async () => {
+    const item = await grantedItem();
+    await grantCapability({ orgId: ORG, pairingId: PAIRING, capability: 'local.bash', grantedByUserId: 'admin' });
+    const sent = liveWire();
+
+    const env = await seam().runStep(step(item._id));
+
+    expect(env.ok).toBe(true);
+    expect(sent.map((f) => f.type)).toEqual(['secret.deliver', 'tool.invoke']);
+    const deliver = sent[0] as Extract<BridgeFrame, { type: 'secret.deliver' }>;
+    const invoke = sent[1] as Extract<BridgeFrame, { type: 'tool.invoke' }>;
+    expect(deliver.env.DB_TOKEN).toBe(SECRET);
+    expect(deliver.invocationId).toBe(invoke.invocationId);
+    expect((await itemRow(item._id))?.lastUsedAt).toBeTruthy();
+  });
+
+  it('REVOCATION closes the credential path, not just the dispatch path', async () => {
+    // Revoking does not close the socket, so the only thing standing between a de-authorised
+    // machine and the next credential is this check being re-read per step.
+    const item = await grantedItem();
+    await grantCapability({ orgId: ORG, pairingId: PAIRING, capability: 'local.bash', grantedByUserId: 'admin' });
+    const sent = liveWire();
+    const c = seam();
+    expect((await c.runStep(step(item._id))).ok).toBe(true);
+    expect(sent).toHaveLength(2);
+
+    await revokeCapability(ORG, PAIRING, 'local.bash');
+    const after = await c.runStep(step(item._id));
+
+    expect(after.ok).toBe(false);
+    expect(sent).toHaveLength(2); // nothing more went out
+    expect(__pendingDeliveryCount()).toBe(0);
+  });
+
+  it('a grant in ANOTHER org does not release this org\'s credential', async () => {
+    const item = await grantedItem();
+    await grantCapability({ orgId: 'orgB', pairingId: PAIRING, capability: 'local.bash', grantedByUserId: 'other' });
+    const sent = liveWire();
+
+    expect((await seam().runStep(step(item._id))).ok).toBe(false);
+    expect(sent).toHaveLength(0);
   });
 });

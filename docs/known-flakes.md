@@ -113,3 +113,29 @@ about); it now uses `??=`. The crawl-singleton bleed is NOT fixed: the real reme
 `beforeEach`, the way every other in-memory seam already does.
 NOTE when triaging: a red contract file in a combined run is not evidence of a regression until it
 has been re-run ALONE. Two of the three "failures" chased during that work were this.
+
+## api vitest exits 1 with every test passing: chokidar EMFILE when suites run CONCURRENTLY (2026-08-19)
+Root `npm test` on the P1 cortex-seam branch reported `Test Files 373 passed`, `Tests 4699 passed`
+and then exited 1 on `Errors 22 errors` - 22 unhandled `EMFILE: too many open files, watch
+'/tmp/ekoa-fam-sbx-*/...'` rejections from chokidar, all attributed to
+`tests/contract/artifact-family.test.ts`. The file passes ALONE (exit 0, 32/32) immediately
+afterwards, and nothing in that branch touches `api/src/apps/`.
+ROOT CAUSE, and it is not a file-descriptor limit despite the name: `fs.watch` on Linux consumes an
+INOTIFY INSTANCE, and `fs.inotify.max_user_instances` is 128 machine-wide (`ulimit -n` was
+1048576, so the fd limit was never in play). `AppRegistry.startWatcher` creates ONE chokidar watcher
+per registered app - correctly closed on unregister/stop - and the family suite registers dozens.
+Four vitest suites were running at once on this machine (this worktree plus three sibling agents'),
+which is enough to exhaust 128 instances between them.
+PROVEN PRE-EXISTING, not inferred: the same suite was re-run with the branch's whole diff STASHED,
+on pristine main, under the same contention - `373 passed`, `4679 passed`, exit 1, `108 errors`,
+this time spread across FIVE files (`tests/apps/base-loader`, `build-mechanics`, `featured`,
+`featured-demote`, `tests/contract/build-failure`). A different file set each run is itself the
+signature: a code defect does not migrate between suites run to run.
+TRIAGE: an all-green api run that exits non-zero is an unhandled-rejection count, not a failure
+count - read the `Errors N errors` line. If those errors are EMFILE/watch, check
+`pgrep -af vitest | wc -l` before suspecting the diff.
+NOT FIXED, and named rather than absorbed: the real remedies are one shared watcher across apps (or
+a watch-free registry under `NODE_ENV=test`), and they belong to whoever owns `api/src/apps/`, with
+a test that registers N apps and asserts the inotify instance count does not scale with N. Raising
+`fs.inotify.max_user_instances` on the machine hides it rather than fixing it, but it does unblock a
+parallel agent session.

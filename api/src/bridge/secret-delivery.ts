@@ -6,6 +6,12 @@
  * material, and it exists because a `local_command` step runs on the USER'S machine, so the value
  * has to get there. J-4 resolved the environment; this delivers it.
  *
+ * THE AUTHORISATION QUESTION IS ASKED BEFORE THIS MODULE IS CALLED, NOT INSIDE IT. Whether the org
+ * granted this capability on this machine (I-3) is `daemon-step-seam.ts`'s first statement, because
+ * everything here is irreversible: the nonce is redeemed, the item is unwrapped, the plaintext goes
+ * on the wire and a Registo "use" row is written. This module's own controls are single-use and
+ * pairing-binding; it has never been, and must not become, the place tenancy is decided.
+ *
  * SINGLE-USE IS ENFORCED ON BOTH SIDES, DELIBERATELY. The daemon is contractually required to hold
  * the payload in RAM, inject at execution time and zeroize — but "the other end promises to" is not
  * a control this side can verify, and a compromised or simply older daemon makes that promise
@@ -30,9 +36,15 @@ import type { SecretRegistry } from '../security/redaction.js';
 import { sendToPairing } from './registry.js';
 import { registerDeliveredSecrets } from './ingress-redaction.js';
 
-/** How long an unredeemed delivery stays pending before it is swept (ms). A delivery that has not
- *  been sent within this window is a run that never got going; keeping it wastes nothing but it
- *  must not accumulate. */
+/**
+ * How long an authorisation stays redeemable before it is swept (ms).
+ *
+ * WHAT IS ACTUALLY HELD HERE, because it is easy to assume worse and easy to assume better. NOT a
+ * credential: `deliverSecrets` redeems the entry BEFORE it unwraps anything, so no value ever
+ * enters this map. What is held is a live, single-use PERMISSION to unwrap a Cofre item and put its
+ * value on one machine's socket - and an unbounded permission is what this constant exists to
+ * prevent.
+ */
 const PENDING_TTL_MS = 5 * 60_000;
 
 interface PendingDelivery {
@@ -46,10 +58,69 @@ interface PendingDelivery {
  *  rides on (FIXED-8): a delivery targets a socket in THIS process. */
 const pending = new Map<string, PendingDelivery>();
 
+/**
+ * The one scheduled sweep, armed for the OLDEST entry's expiry.
+ *
+ * THE TTL HAD NO TRIGGER. `sweep()` was reachable only from `authoriseDelivery`, so an orphaned
+ * authorisation expired if and only if another delivery happened to be authorised afterwards - on a
+ * quiet fleet, never - and `deliverSecrets` never compared `createdAt` to anything, so a days-old
+ * authorisation redeemed exactly like a fresh one. Orphans are not contrived: the pairing-mismatch
+ * refusal below throws BEFORE the redeem, and any failure between authorising and delivering leaves
+ * one behind.
+ *
+ * A TIMER RATHER THAN ONLY A SOCKET EVENT, and both rather than either. The socket hook
+ * (`dropPendingDeliveriesForPairing`) is exact and immediate, but it fires only when a machine
+ * actually disconnects - one that stays connected for days would keep its orphans for days. The
+ * timer bounds the lifetime with no dependence on traffic or on anything else happening at all. It
+ * is UNREF'd, because a five-minute handle that kept Node alive would turn one idle authorisation
+ * into a hung shutdown, and it is armed only while the map is non-empty, so an idle process
+ * schedules nothing.
+ *
+ * The redemption path sweeps as well, so expiry is enforced by COMPARISON and not by a timer having
+ * fired punctually. A control that depends on a timer's punctuality is not a control.
+ */
+let sweepTimer: ReturnType<typeof setTimeout> | null = null;
+
+function cancelSweep(): void {
+  if (sweepTimer === null) return;
+  clearTimeout(sweepTimer);
+  sweepTimer = null;
+}
+
+/** Arm the sweep for the oldest entry's expiry, or cancel it when nothing is pending. */
+function rescheduleSweep(now: number): void {
+  cancelSweep();
+  let oldest = Number.POSITIVE_INFINITY;
+  for (const d of pending.values()) if (d.createdAt < oldest) oldest = d.createdAt;
+  if (!Number.isFinite(oldest)) return;
+  const timer = setTimeout(() => {
+    sweepTimer = null;
+    sweep(Date.now());
+  }, Math.max(0, oldest + PENDING_TTL_MS - now));
+  if (typeof timer === 'object' && 'unref' in timer) timer.unref();
+  sweepTimer = timer;
+}
+
 function sweep(now: number): void {
   for (const [id, d] of pending) {
     if (now - d.createdAt > PENDING_TTL_MS) pending.delete(id);
   }
+  rescheduleSweep(now);
+}
+
+/**
+ * Drop every pending authorisation for a machine - its socket is gone. The bridge server calls this
+ * from the same `close` handler that releases the ingress registry and fails in-flight invocations.
+ *
+ * A delivery targets a LIVE SOCKET in this process, so once the socket is gone the authorisation
+ * can only ever be redeemed into a refusal. Dropping it immediately is the honest bookkeeping, and
+ * it stops a disconnected machine's orphans from waiting out the whole TTL.
+ */
+export function dropPendingDeliveriesForPairing(pairingId: string, now = Date.now()): void {
+  for (const [id, d] of pending) {
+    if (d.pairingId === pairingId) pending.delete(id);
+  }
+  rescheduleSweep(now);
 }
 
 export class SecretDeliveryError extends Error {
@@ -73,6 +144,7 @@ export function authoriseDelivery(invocationId: string, pairingId: string, now =
   }
   const nonce = randomBytes(24).toString('base64url');
   pending.set(invocationId, { invocationId, nonce, pairingId, createdAt: now });
+  rescheduleSweep(now);
   return nonce;
 }
 
@@ -99,19 +171,26 @@ export async function deliverSecrets(
   input: { invocationId: string; pairingId: string; mapping: EnvInjectionMap; processLabel?: string },
   now = Date.now(),
 ): Promise<DeliveryOutcome> {
+  // Expire by COMPARISON, before the lookup. The scheduled sweep is a cleanup, not the control:
+  // a stale authorisation must be unredeemable whether or not a timer got to it first.
+  sweep(now);
+
   const held = pending.get(input.invocationId);
   if (!held) {
     throw new SecretDeliveryError(
       `no delivery authorised for invocation ${input.invocationId} (already redeemed, expired, or never authorised)`,
     );
   }
+  // Redeem FIRST - see the docblock. One shot, whatever happens next, INCLUDING the pairing
+  // mismatch below: a refusal that left the authorisation live handed a caller who can influence
+  // the pairing id an unlimited number of attempts, and left an orphan behind on every one.
+  pending.delete(input.invocationId);
+  rescheduleSweep(now);
   if (held.pairingId !== input.pairingId) {
     // The authorisation named a machine. Delivering to a different one would let a caller that can
     // influence the pairing id redirect a credential to another of the org's machines.
     throw new SecretDeliveryError(`delivery for invocation ${input.invocationId} is bound to another pairing`);
   }
-  // Redeem FIRST — see the docblock. One shot, whatever happens next.
-  pending.delete(input.invocationId);
 
   const { env, secrets, itemIds } = await resolveEnvInjection(actor, input.mapping, {
     processLabel: input.processLabel ?? 'local_command',
@@ -143,9 +222,15 @@ export function newInvocationId(): string {
 /** Test/boot helper. */
 export function __resetDeliveriesForTests(): void {
   pending.clear();
+  cancelSweep();
 }
 
 /** Test helper: pending (authorised, unredeemed) delivery count. */
 export function __pendingDeliveryCount(): number {
   return pending.size;
+}
+
+/** Test helper: the armed sweep handle, so a suite can assert it is unref'd rather than trust it. */
+export function __pendingSweepTimerForTests(): ReturnType<typeof setTimeout> | null {
+  return sweepTimer;
 }

@@ -32,6 +32,26 @@ export interface DaemonStepToolResult {
 }
 
 export interface DaemonStepDeps {
+  /**
+   * Has the ORG granted this capability on THIS machine (I-3, default deny)?
+   *
+   * THE FIRST QUESTION ASKED, AND THE REASON THIS DEPENDENCY EXISTS. The only per-machine
+   * authorisation used to live inside `invoke` (`invokeTool` refuses an ungranted capability before
+   * sending a frame), which made it the LAST thing consulted here - after `deliverSecrets` had
+   * redeemed the nonce, unwrapped a Cofre item through `unwrap()`, armed the ingress filter, put
+   * the plaintext on the machine's socket and written a Registo "use" row. Every one of those is
+   * irreversible, and the daemon then held the value in RAM for the delivery TTL. An ungranted
+   * machine got the credential and was refused afterwards.
+   *
+   * It stays inside `invokeTool` as well. That is not a duplicate to be tidied away: that check
+   * guards every OTHER caller of the invocation coordinator, and this one guards the disclosure
+   * that happens before it is ever reached. Removing either leaves a path with no check on it.
+   *
+   * RE-READ EVERY STEP, NEVER CACHED, for the reason `tool-invocation.ts` gives: a grant revoked
+   * mid-run must stop the NEXT step. Revocation does not close the socket, so this check is the
+   * only thing between a de-authorised machine and the next credential.
+   */
+  isCapabilityGranted(orgId: string, pairingId: string, capability: BridgeCapability): Promise<boolean>;
   invoke(input: {
     pairingId: string;
     orgId: string;
@@ -96,12 +116,24 @@ export function createDaemonStepConnection(
     async runStep(req: DaemonStepRequest, opts?: unknown): Promise<DaemonStepResultEnvelope> {
       void opts; // streamed progress arrives as its own frames; not part of the invoke contract
       const capability = capabilityForStep(req.capability);
+
+      // ORDER: GRANT -> authorise -> deliver -> invoke, all under ONE invocationId.
+      //
+      // THE GRANT COMES FIRST because everything after it is irreversible disclosure, not dispatch.
+      // `deliverSecrets` redeems a single-use nonce, unwraps a Cofre item, arms the ingress filter,
+      // puts the PLAINTEXT on a user's socket and records a Registo "use" - and the machine then
+      // holds that value in RAM for the delivery TTL. Asking afterwards whether the org authorised
+      // this machine asks after the credential is already on someone's laptop. The sibling suite
+      // states the property for dispatch ("a refusal after dispatch would already have asked a
+      // user's computer to run something"); delivering a decrypted credential is strictly more.
+      if (!(await deps.isCapabilityGranted(conn.org, conn.pairingId, capability))) {
+        return refused(`esta máquina não está autorizada para ${capability} nesta organização`);
+      }
+
       const invocationId = deps.newInvocationId();
 
-      // ORDER: authorise -> deliver -> invoke, all under ONE invocationId.
-      //
-      // Authorise first because it is the single-use check: a replay is refused before any
-      // credential is unwrapped, so a replayed step cannot even cause a decrypt. Deliver before
+      // Authorise before delivering because it is the single-use check: a replay is refused before
+      // any credential is unwrapped, so a replayed step cannot even cause a decrypt. Deliver before
       // invoke because the daemon must already HOLD the value when the step that consumes it
       // arrives - the reverse order has a window in which the child spawns without its
       // environment. And a failed delivery means the step does NOT run: a child that believes it
@@ -155,4 +187,16 @@ export function createDaemonStepConnection(
 
 function failed(message: string): DaemonStepResultEnvelope {
   return { ok: false, error: { message }, observation: { data: {} } };
+}
+
+/**
+ * An AUTHORISATION refusal, which is not the same thing as a failure.
+ *
+ * `retryable: false` is load-bearing rather than decorative: `local-command.ts` records
+ * `recoverable: env.error?.retryable !== false`, so an unflagged refusal is a recoverable step and
+ * the engine retries it - and every retry used to be another decrypt-and-ship to the same
+ * unauthorised machine. Retrying a grant that does not exist can only produce the same refusal.
+ */
+function refused(message: string): DaemonStepResultEnvelope {
+  return { ok: false, error: { message, retryable: false }, observation: { data: {} } };
 }

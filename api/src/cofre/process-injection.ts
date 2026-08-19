@@ -17,9 +17,10 @@
  * It was not reachable end-to-end at the time (`setDaemonConnectionResolver` was still on its
  * honest default at `server.ts`), so deleting it cost nothing then and would have been impossible
  * later. It is deleted, not extended, in the same change that adds this. THAT WINDOW HAS SINCE
- * CLOSED: `server.ts` wires the resolver to the live bridge registry, and each invocation is
- * grant-checked in `invokeTool` (I-3, default deny). Read the sentence above as history — not as a
- * claim that the path this primitive guards is still inert.
+ * CLOSED: `server.ts` wires the resolver to the live bridge registry, and each step is grant-checked
+ * against the org's per-machine grant (I-3, default deny) BEFORE this function is ever called -
+ * `bridge/daemon-step-seam.ts` asks first, and `invokeTool` asks again behind it. Read the sentence
+ * above as history - not as a claim that the path this primitive guards is still inert.
  *
  * THE SHAPE. A step declares `credentialRefs` plus a NAME MAPPING from env variable to reference.
  * Cortex resolves each reference through `unwrap({kind:'process'})` — so the grant, the tenancy and

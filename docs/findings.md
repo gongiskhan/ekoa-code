@@ -4024,3 +4024,35 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   bumping api's to v6, and neither is a move. The real fix is one range across both workspaces,
   chosen against a Node-20 runtime, with the extraction path pinned by a test that actually reads a
   PDF on the pinned Node version.
+
+- **`capability-grants-have-no-production-caller-so-every-daemon-step-is-refused`** (OPEN 2026-08-19,
+  HIGH, product-blocking - found while fixing the credential-before-grant ordering in
+  `bridge/daemon-step-seam.ts`). `bridge/capability-grants.ts` is default-deny (I-3) by design, and
+  `grantCapability`, `revokeCapability`, `grantedCapabilities` and `usableCapabilities` have ZERO
+  callers outside `api/tests/` - no route, no service, no admin surface, nothing in `web/`. Verified
+  by grep across `api/src`, `web/` and `shared/src`. The consequence is total rather than partial:
+  with the grant now read before delivery, EVERY daemon-executed step - browser and bash, with or
+  without `envRefs` - is refused, because no org can express a grant. Before this change the same
+  fact was masked, in the worst way: an `envRefs`-bearing step decrypted a Cofre item and shipped
+  the plaintext to the machine before hitting the same refusal, so the path looked partly alive.
+  NOT FIXED HERE, deliberately: an admin surface for granting a capability on a machine is a
+  product decision (who may grant, per-org vs per-owner, what the UI says, whether granting is
+  audited through `bridge/audit.ts`) and inventing one inside a security fix would ship an
+  authorisation surface nobody reviewed. What this change does guarantee is that the failure is now
+  a clean refusal with `retryable: false` rather than a credential disclosure followed by a refusal.
+  The fix is a versioned, audited grant/revoke endpoint plus the machine-detail UI that calls it,
+  with an isolation suite of the class of `api/tests/security/capability-grants.test.ts` proving a
+  grant made in one tenant is unreadable in another.
+
+- **`bridge-ingress-name-leg-reformats-json-stdout`** (OPEN 2026-08-19, LOW, cosmetic - noted while
+  extending ingress redaction to the `tool.result` observation object). `redactStream`'s
+  name-pattern leg (`redactBodyByName`) re-serialises any string that parses as JSON with
+  `JSON.stringify(..., null, 2)`. That behaviour predates this change and already applied to
+  `delegation_result.answer` and to a string-valued `tool.result.output`; extending the walk to the
+  observation object means a bash step whose stdout is compact JSON now has that stdout
+  pretty-printed in the persisted step record. NOT a correctness or security problem - the bytes
+  are equivalent JSON and nothing joins on them - but it is a visible difference in recorded output
+  and it is recorded here rather than discovered later as a mystery. The narrow fix is to re-emit
+  the parsed tree with the ORIGINAL separators when nothing was actually masked; the broad one is to
+  make the name leg return the input unchanged when it made no substitution. Neither belongs in a
+  security fix, and both need a test that pins byte-identical passthrough for untouched output.

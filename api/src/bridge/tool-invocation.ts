@@ -16,6 +16,12 @@
  * declared and refuses if the target machine is not granted it. That check belongs here rather than
  * only at placement because placement chooses a machine once, while invocation happens per step —
  * and a capability grant revoked mid-run must take effect on the next step, not at the next run.
+ *
+ * IT IS NOT THE FIRST CHECK, AND MUST NOT BE THE ONLY ONE. `bridge/daemon-step-seam.ts` asks the
+ * same question before it delivers a credential, because by the time control reaches here a
+ * `secret.deliver` frame carrying plaintext would already have gone out - refusing at this point
+ * refuses a DISPATCH, not a DISCLOSURE. This check stays for every OTHER caller of the coordinator;
+ * the two are complementary, not a duplicate to tidy away.
  */
 import { randomUUID } from 'node:crypto';
 import type { BridgeCapability } from '@ekoa/shared';

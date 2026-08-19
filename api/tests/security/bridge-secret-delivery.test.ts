@@ -7,10 +7,12 @@ import * as registry from '../../src/bridge/registry.js';
 import {
   authoriseDelivery,
   deliverSecrets,
+  dropPendingDeliveriesForPairing,
   newInvocationId,
   SecretDeliveryError,
   __resetDeliveriesForTests,
   __pendingDeliveryCount,
+  __pendingSweepTimerForTests,
 } from '../../src/bridge/secret-delivery.js';
 
 /**
@@ -204,5 +206,131 @@ describe('failure is a refusal, never a silent partial', () => {
       deliverSecrets(actor, { invocationId, pairingId: PAIRING, mapping: { DB_TOKEN: SECRET } }),
     ).rejects.toThrow();
     expect(sent).toHaveLength(0);
+  });
+});
+
+/**
+ * THE AUTHORISATION EXPIRES ON ITS OWN.
+ *
+ * A pending entry is not a credential - `deliverSecrets` redeems it before it unwraps anything, so
+ * nothing in this map is ever plaintext. It is something else worth bounding: a live, single-use
+ * permission to unwrap a Cofre item and put its value on a machine's socket. `PENDING_TTL_MS`
+ * exists to bound it, and it did not: `sweep()` was reachable only from `authoriseDelivery`, so an
+ * orphaned authorisation expired only if ANOTHER delivery happened to be authorised afterwards. On
+ * a quiet fleet that is never, and `deliverSecrets` never looked at `createdAt` at all - so a
+ * days-old authorisation redeemed exactly like a fresh one.
+ *
+ * An orphan is reachable without contriving anything: the redirect refusal below throws BEFORE the
+ * redeem, and every failure between authorising and delivering leaves one behind.
+ */
+describe('an orphaned authorisation expires without a second delivery', () => {
+  it('THE SWEEP HAS A TRIGGER: an unredeemed authorisation is dropped on its own timer', async () => {
+    vi.useFakeTimers();
+    try {
+      __resetDeliveriesForTests();
+      authoriseDelivery(newInvocationId(), PAIRING);
+      expect(__pendingDeliveryCount()).toBe(1);
+
+      // No second `authoriseDelivery`, no delivery, no socket event. Just time passing.
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 1_000);
+
+      expect(__pendingDeliveryCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('an EXPIRED authorisation cannot be redeemed - no unwrap, no frame', async () => {
+    const item = await grantedItem();
+    const sent = captureWire();
+    const invocationId = newInvocationId();
+    const t0 = 1_000_000;
+    authoriseDelivery(invocationId, PAIRING, t0);
+
+    await expect(
+      deliverSecrets(
+        actor,
+        { invocationId, pairingId: PAIRING, mapping: { DB_TOKEN: `cofre:${item._id}` } },
+        t0 + 5 * 60_000 + 1,
+      ),
+    ).rejects.toBeInstanceOf(SecretDeliveryError);
+    expect(sent).toHaveLength(0);
+    expect(__pendingDeliveryCount()).toBe(0);
+  });
+
+  it('a REDIRECT refusal leaves nothing behind - it used to leave the authorisation live forever', async () => {
+    const item = await grantedItem();
+    captureWire();
+    const invocationId = newInvocationId();
+    authoriseDelivery(invocationId, PAIRING);
+    await expect(
+      deliverSecrets(actor, { invocationId, pairingId: 'another-machine', mapping: { DB_TOKEN: `cofre:${item._id}` } }),
+    ).rejects.toBeInstanceOf(SecretDeliveryError);
+
+    expect(__pendingDeliveryCount()).toBe(0);
+  });
+
+  it("a dropped socket drops that machine's authorisations, and only that machine's", () => {
+    const mine = newInvocationId();
+    const other = newInvocationId();
+    authoriseDelivery(mine, PAIRING);
+    authoriseDelivery(other, 'another-machine');
+    expect(__pendingDeliveryCount()).toBe(2);
+
+    dropPendingDeliveriesForPairing(PAIRING);
+
+    expect(__pendingDeliveryCount()).toBe(1);
+  });
+
+  it('THE DROP IS WIRED INTO THE SOCKET, not merely available', async () => {
+    // The cases above prove `dropPendingDeliveriesForPairing` works. They say nothing about the
+    // bridge server calling it - and a cleanup nobody calls is the exact failure mode the ingress
+    // filter's own suite exists to prevent. So this drives a REAL socket and closes it.
+    const { createServer } = await import('node:http');
+    const { WebSocket: WsClient } = await import('ws');
+    const { setActivation } = await import('../../src/data/activation.js');
+    const { __resetConfigForTests, loadConfig } = await import('../../src/config.js');
+    const { mintBridgeToken } = await import('../../src/bridge/token.js');
+    const { attachBridgeServer } = await import('../../src/bridge/server.js');
+    const { drainBridgeAudit } = await import('../../src/bridge/audit.js');
+
+    process.env.JWT_SECRET = 'test-jwt-secret';
+    __resetConfigForTests();
+    loadConfig();
+    const server = createServer();
+    const handle = attachBridgeServer(server, { resolveUserOrg: async () => 'orgA' });
+    await new Promise<void>((r) => server.listen(0, () => r()));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const owner = 'owner-j3-wire';
+      const pairing = 'pair-j3-wire';
+      setActivation(owner, { active: true, billingLocked: false });
+      const { token } = mintBridgeToken({ sub: owner }, pairing);
+      const ws = new WsClient(`ws://127.0.0.1:${port}/api/v1/bridge/connect/${pairing}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      ws.on('error', () => undefined);
+      await new Promise<void>((r) => ws.on('open', () => r()));
+
+      authoriseDelivery(newInvocationId(), pairing);
+      expect(__pendingDeliveryCount()).toBe(1);
+
+      ws.close();
+      for (let i = 0; i < 200 && __pendingDeliveryCount() > 0; i++) await new Promise((r) => setTimeout(r, 5));
+      expect(__pendingDeliveryCount()).toBe(0);
+    } finally {
+      await handle.close();
+      await new Promise<void>((r) => server.close(() => r()));
+      await drainBridgeAudit();
+    }
+  });
+
+  it('the sweep timer never holds the process open', () => {
+    // An unref\'d timer is the only kind this module may schedule: a five-minute handle that keeps
+    // Node alive would turn an idle authorisation into a hung shutdown.
+    authoriseDelivery(newInvocationId(), PAIRING);
+    const timer = __pendingSweepTimerForTests();
+    expect(timer).not.toBeNull();
+    expect(timer && typeof timer === 'object' && 'hasRef' in timer ? timer.hasRef() : false).toBe(false);
   });
 });

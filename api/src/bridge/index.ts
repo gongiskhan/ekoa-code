@@ -63,6 +63,12 @@ export {
 // Cofre J-1 wiring: the awaitable half of the tool.invoke / tool.result frame pair.
 export { invokeTool, ToolInvocationRefused, type ToolResult } from './tool-invocation.js';
 
+// I-3 per-tenant-per-machine grants. Exported because the daemon step seam consults this BEFORE it
+// delivers a credential, and the composition root is what hands it over. Passing the function
+// itself rather than a predicate written at the root keeps one authorisation question with one
+// implementation - a root-local wrapper is where a second, drifting copy of it would start.
+export { isCapabilityGranted } from './capability-grants.js';
+
 // P1.2/P1.3 - the automation-step seam (one place a resolved step becomes a `tool.invoke`) and the
 // I9 delivery half it calls. `secret-delivery.ts` was built, tested and had no production caller;
 // exporting it here is what makes the composition root able to be one.

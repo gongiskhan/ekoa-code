@@ -47,7 +47,7 @@ import { sseManager } from './events/sse-manager.js';
 import { startDelivery, stopDelivery } from './events/delivery.js';
 import { attachCanvasServer } from './streaming/index.js';
 import { attachVoiceServer } from './voice/index.js';
-import { attachBridgeServer, bufferLedgerRow, delegateToLocal, rowsForSession, getConnectionByOwner, invokeTool, bridgeConnectionCount, createDaemonStepConnection, authoriseDelivery, deliverSecrets, newInvocationId } from './bridge/index.js';
+import { attachBridgeServer, bufferLedgerRow, delegateToLocal, rowsForSession, getConnectionByOwner, invokeTool, bridgeConnectionCount, createDaemonStepConnection, authoriseDelivery, deliverSecrets, newInvocationId, isCapabilityGranted } from './bridge/index.js';
 import { maskedCountsForCorrelations } from './services/platform-crud.js';
 import { bridgeTokenRouter } from './routes/bridge.js';
 import { servedDataRouter } from './apps/served-data.js';
@@ -680,19 +680,28 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   //   J-7  the write flag is no longer the model's to assert, and command shapes bind to the exact
   //        command rather than a wildcard class
   //
-  // What is deliberately NOT granted here: the resolver hands back a connection only when the ORG
-  // has granted that machine the capability (I-3, re-read per invocation), so wiring the seam does
-  // not by itself authorise anything. A fleet with no capability grants stays exactly as inert as
-  // it was before this line existed — the difference is that granting one now works.
+  // What is deliberately NOT granted here: the resolver hands back a connection for any live
+  // socket, and the connection then refuses every step the ORG has not granted that machine (I-3,
+  // re-read per step), so wiring the seam does not by itself authorise anything. A fleet with no
+  // capability grants stays exactly as inert as it was before this line existed - the difference is
+  // that granting one now works.
+  //
+  // This comment used to say the RESOLVER only returns a connection when the capability is granted.
+  // It never did, and could not: the resolver is handed an owner, not a step, so it does not know
+  // which capability to ask about. The check is per STEP, inside the connection, and it is the
+  // FIRST thing `runStep` does - before the credential delivery, which is the ordering that was
+  // wrong (`isCapabilityGranted` below is what fixes it, and `invokeTool` re-checks behind it).
   //
   // The step dispatch itself lives in `bridge/daemon-step-seam.ts` - extracted so it can be
-  // imported and asserted on, which is how three defects that were invisible here got closed: a
+  // imported and asserted on, which is how four defects that were invisible here got closed: a
   // browser step dispatched under `local.filesystem` (it is `desktop.automation`), the per-step
-  // screenshot dropped on the floor, and a secret-delivery pair with no production caller.
+  // screenshot dropped on the floor, a secret-delivery pair with no production caller, and a
+  // credential decrypted and shipped to a machine the org had never authorised.
   setDaemonConnectionResolver((ownerUserId: string) => {
     const conn = getConnectionByOwner(ownerUserId);
     if (!conn) return null;
     return createDaemonStepConnection(conn, {
+      isCapabilityGranted,
       invoke: (input) => invokeTool(input),
       newInvocationId,
       authoriseDelivery,
