@@ -180,9 +180,15 @@ export function resolveEgress(
     return { outcome: 'machine', pairingId: chosen.pairingId, proxyUrl: chosen.egressEndpoint };
   }
 
+  // "AVAILABLE FOR", not "advertising". Advertising is the one thing this function cannot see: the
+  // candidates it is given already carry the INTERSECTION of what each machine advertises and what
+  // the org granted for it - and, since the endpoint binding, only an address the org authorised.
+  // A machine can therefore be advertising residential egress loudly and still be absent from this
+  // list, so naming advertisement named a cause that may not be the one, which is the class of
+  // wrong-specific-instruction this module spent a slice removing from `clearedBy`.
   const reason = req.pairingId
     ? `the pinned machine ${req.pairingId} is not available with residential egress`
-    : 'no machine in this org is advertising residential egress';
+    : 'no machine in this org is available for residential egress';
 
   switch (declaration.offlinePolicy) {
     case 'queue':

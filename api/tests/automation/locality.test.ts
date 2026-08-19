@@ -769,9 +769,9 @@ describe('every locality refusal says which act can clear it', () => {
         'start-a-machine',
       ],
       ['no machine is connected and the in-process browser fallback is disabled', 'start-a-machine'],
-      ['waiting for a machine: no machine in this org is advertising residential egress', 'start-a-machine'],
+      ['waiting for a machine: no machine in this org is available for residential egress', 'start-a-machine'],
       ['waiting for a machine: the pinned machine <pairing> is not available with residential egress', 'start-a-machine'],
-      ['no machine in this org is advertising residential egress', 'start-a-machine'],
+      ['no machine in this org is available for residential egress', 'start-a-machine'],
       ['the pinned machine <pairing> is not available with residential egress', 'start-a-machine'],
     ];
 
