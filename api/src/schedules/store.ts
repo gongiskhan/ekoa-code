@@ -29,6 +29,21 @@ export interface ScheduleDoc extends Doc {
   nextRunAt: string | null;
   lastRun?: ScheduleLastRun;
   consecutiveFailures: number;
+  /**
+   * Consecutive fires that ended in a NEUTRAL block (`supervisor.ts` `NEUTRAL_BLOCKED_CODES`).
+   * Separate from `consecutiveFailures` precisely because a neutral block is not a failure: it
+   * drives the COOLDOWN below and never the ceiling. Reset by any non-neutral outcome, and by an
+   * owner re-enabling the schedule.
+   */
+  consecutiveNeutralBlocks?: number;
+  /**
+   * While this instant is in the future the supervisor advances the pointer WITHOUT firing: no run
+   * row, no automation run, no notification. A neutral halt is one that waiting fixes, so the way
+   * to bound its cost is to wait LONGER rather than to count it (`neutralBackoffMs`).
+   */
+  neutralBackoffUntil?: string | null;
+  /** When the owner was last told about a CONTINUING neutral block, for the re-notify floor. */
+  lastNeutralNotifiedAt?: string;
   autoPausedAt?: string;
   createdAt: string;
   updatedAt: string;

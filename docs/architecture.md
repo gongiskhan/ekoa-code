@@ -322,6 +322,20 @@ policy. Every block, of either kind, notifies the owner through the required `no
 (`schedule_blocked` on the per-user notifications channel, carrying a code and no prose), and
 `web/components/schedules/run-status-badge.tsx` derives its words from that code rather than from
 the bare status.
+NEUTRAL IS NOT FREE, AND THE EXEMPTION BRINGS ITS OWN BOUND. Removing a block from the ceiling
+removes the only cap on REPEATING it, so a neutral fire earns a COOLDOWN
+(`neutralBackoffMs`: doubling from one minute to a 15-minute cap, recorded as
+`neutralBackoffUntil` with `consecutiveNeutralBlocks`) during which `claimAndFire` advances the
+pointer WITHOUT claiming - no schedule-run row, no automation run, no notification - and the
+schedule stays enabled and self-heals on the far side. Without it a per-minute schedule pointed at
+a bridge-only automation with no daemon wrote ~2880 durable rows and 1440 notifications a day,
+for ever, in two stores that have no retention. The notification carries the same bound: the first
+block of a streak tells the owner at once, a continuing one at most daily
+(`lastNeutralNotifiedAt`), because a push at the fire rate is the unbounded thing one channel over.
+The cap is deliberately below any hand-authored cadence, so an hourly or nightly schedule never
+notices it; a NON-neutral block is not cooled at all, because slowing it would delay the auto-pause
+that is how its owner finds out. An owner re-enabling the schedule clears the streak and the
+cooldown along with the ceiling.
 
 WHERE THE DECISION SITS IN THE RUN LOOP. Locality is resolved BEFORE the credential gate, and the
 order is a security property rather than a preference: the gate calls `ensureSession`, whose typist

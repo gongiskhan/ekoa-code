@@ -75,6 +75,45 @@ export const MISSED_RUN_CODE = 'missed';
  */
 export const NEUTRAL_BLOCKED_CODES: ReadonlySet<string> = new Set(['awaiting_daemon']);
 
+/**
+ * NEUTRAL IS NOT THE SAME AS FREE. The cooldown that bounds a neutral block's cost.
+ *
+ * Exempting `awaiting_daemon` from the ceiling removed the only cap on REPEATING it, and nothing
+ * else bounded what a repetition costs. A per-minute schedule pointed at a bridge-only automation
+ * with no daemon connected fired 1440 times a day, for ever: 1440 schedule-run rows plus 1440
+ * automation-run rows, neither store having retention, and 1440 `schedule_blocked` notifications -
+ * so the compensating measure that tells the owner was itself the unbounded thing. On main the
+ * ceiling paused it after 20 fires. That pause was wrong (a shut laptop must not disable a working
+ * schedule) and the answer to it must not be "unbounded" - it is "back off".
+ *
+ * So a neutral streak COOLS the schedule instead of pausing it: the pointer is advanced past the
+ * cooldown without claiming an occurrence, so those fires leave no row, no run and no notification.
+ * The schedule stays ENABLED and self-heals - the first fire after the cooldown either succeeds (the
+ * streak resets) or blocks again (the streak grows). The cost of the halt becomes latency, which is
+ * the honest price of waiting, instead of an unbounded write rate.
+ *
+ * THE CAP IS 15 MINUTES, deliberately below any cadence a person schedules by hand: an hourly or
+ * nightly schedule never notices this exists, because its own next occurrence is always further out
+ * than the cooldown. It only bites schedules that fire faster than they can possibly be unblocked -
+ * which is exactly the unbounded case. Worst case for a per-minute schedule becomes ~96 rows a day
+ * instead of 1440, and it resumes within 15 minutes of the laptop opening.
+ */
+const NEUTRAL_BACKOFF_BASE_MS = 60_000;
+const NEUTRAL_BACKOFF_MAX_MS = 15 * 60_000;
+/**
+ * How often a CONTINUING neutral block may re-tell the owner. The first block of a streak notifies
+ * immediately; after that, at most once a day. Without this the notification rate is the FIRE rate,
+ * which is the thing being bounded - and a push repeated every minute is not a louder signal, it is
+ * a channel the owner mutes.
+ */
+const NEUTRAL_RENOTIFY_MS = 24 * 60 * 60_000;
+
+/** The cooldown a streak of `n` consecutive neutral blocks earns. */
+export function neutralBackoffMs(n: number): number {
+  if (n < 1) return 0;
+  return Math.min(NEUTRAL_BACKOFF_BASE_MS * 2 ** (n - 1), NEUTRAL_BACKOFF_MAX_MS);
+}
+
 export interface ScheduleFireOutcome {
   status: 'ok' | 'failed' | 'blocked';
   /** Machine-readable cause (executor code / service error code). */
@@ -249,6 +288,18 @@ export class ScheduleSupervisor {
       return;
     }
 
+    // 1b. COOLING after a neutral block. The last fire halted on something only waiting fixes
+    //     (`NEUTRAL_BLOCKED_CODES`), so firing again now costs a run row, an automation run and a
+    //     notification to say the identical thing. Advance the pointer past the cooldown and claim
+    //     nothing: the occurrence leaves NO trace, which is the point - neutrality is what stops
+    //     the ceiling pausing a working schedule, and this is what stops it being unbounded.
+    //     The schedule stays enabled and resumes by itself at the far side.
+    const coolingUntil = schedule.neutralBackoffUntil ? Date.parse(schedule.neutralBackoffUntil) : 0;
+    if (Number.isFinite(coolingUntil) && coolingUntil > judged.nowMs) {
+      await this.advance(schedule._id, plannedFor, coolingUntil);
+      return;
+    }
+
     // 2. Claim the occurrence (the insert IS the at-most-once guard). A stopped supervisor
     //    claims NOTHING new: the deterministic id makes a claim permanent, so one taken and
     //    then abandoned would leave a `running` row nothing ever retries.
@@ -362,13 +413,19 @@ export class ScheduleSupervisor {
         : {}),
       ...(outcome.automationRunId ? { automationRunId: outcome.automationRunId } : {}),
     });
-    await this.recordOutcome(schedule._id, runId, outcome, false);
+    const { notify } = await this.recordOutcome(schedule._id, runId, outcome, false);
     // P4.1 - A BLOCKED FIRE TELLS ITS OWNER, whichever kind of block it is. `ok` needs no telling
     // and `failed` drives the ceiling and eventually auto-pauses loudly, but an ENVIRONMENT block is
     // neutral by design (`NEUTRAL_BLOCKED_CODES`), so without this a schedule could sit waiting on a
     // machine for weeks in silence. The alternative the rest of this slice exists to forbid is worse
     // - running the work anyway from a datacenter IP against an origin declared bridge-only.
-    if (outcome.status === 'blocked') {
+    //
+    // BOUNDED for the neutral kind (`notify`, decided in `recordOutcome`): the first block of a
+    // streak tells the owner at once, and a CONTINUING one at most daily. A push repeated at the
+    // fire rate is not a louder signal - it is the unbounded thing the cooldown exists to stop, one
+    // channel over. Non-neutral blocks are unchanged: they drive the ceiling and auto-pause, so they
+    // are already capped.
+    if (outcome.status === 'blocked' && notify) {
       try {
         this.deps.notifyBlocked({
           ownerUserId: schedule.ownerUserId,
@@ -429,14 +486,25 @@ export class ScheduleSupervisor {
    * signature, halts `needs_credentials`, and then does it again every night forever against a
    * portal with an unknown lock-out policy. The failure ceiling is the per-schedule cap on exactly
    * that, it existed before this slice, and this is why it stays.
+   *
+   * AND NEUTRAL IS NOT FREE. Exempting a block from the ceiling removes the only cap on REPEATING
+   * it, so the exemption has to bring its own bound or it is just an unbounded loop wearing a
+   * better name. A neutral fire therefore earns a COOLDOWN (`neutralBackoffMs`, doubling to a
+   * 15-minute cap) during which `claimAndFire` advances the pointer without claiming: no run row,
+   * no automation run, no notification, and the schedule still enabled and still self-healing. The
+   * returned `notify` carries the other half - the first block of a streak tells the owner at once,
+   * a continuing one at most daily - because a push at the fire rate is the same unbounded thing
+   * one channel over.
    */
   private async recordOutcome(
     scheduleId: string,
     runId: string,
     outcome: ScheduleFireOutcome,
     manualTask: boolean,
-  ): Promise<void> {
+  ): Promise<{ notify: boolean }> {
     const nowIso = this.deps.now();
+    const nowMs = Date.parse(nowIso);
+    let notify = outcome.status === 'blocked';
     await updateScheduleSystem(scheduleId, (cur) => {
       const ok = outcome.status === 'ok';
       const neutral = outcome.status === 'blocked' && NEUTRAL_BLOCKED_CODES.has(outcome.code ?? '');
@@ -447,21 +515,34 @@ export class ScheduleSupervisor {
           `[schedule-supervisor] schedule ${scheduleId} disabled after ${failures} consecutive non-ok fires (last: ${outcome.code ?? outcome.status})`,
         );
       }
+      // A manual task is complete at claim and reports nothing about the environment, so it neither
+      // starts a cooldown nor clears one.
+      if (manualTask) return { ...cur, lastRun: { runId, status: 'pending' as const, at: nowIso, ...(outcome.code ? { code: outcome.code } : {}) }, updatedAt: nowIso };
+
+      const streak = neutral ? (cur.consecutiveNeutralBlocks ?? 0) + 1 : 0;
+      const lastToldMs = cur.lastNeutralNotifiedAt ? Date.parse(cur.lastNeutralNotifiedAt) : NaN;
+      if (neutral) {
+        notify = streak === 1 || !Number.isFinite(lastToldMs) || nowMs - lastToldMs >= NEUTRAL_RENOTIFY_MS;
+      }
       return {
         ...cur,
         lastRun: {
           runId,
-          status: manualTask ? 'pending' : outcome.status,
+          status: outcome.status,
           at: nowIso,
           ...(outcome.code ? { code: outcome.code } : {}),
         },
-        consecutiveFailures: manualTask ? cur.consecutiveFailures : failures,
+        consecutiveFailures: failures,
+        consecutiveNeutralBlocks: streak,
+        neutralBackoffUntil: neutral ? new Date(nowMs + neutralBackoffMs(streak)).toISOString() : null,
+        ...(neutral && notify ? { lastNeutralNotifiedAt: nowIso } : {}),
         ...(autoPause ? { enabled: false, nextRunAt: null, autoPausedAt: nowIso } : {}),
         updatedAt: nowIso,
       };
     }).catch((err) => {
       console.warn(`[schedule-supervisor] record ${scheduleId} failed: ${msgOf(err)}`);
     });
+    return { notify };
   }
 }
 

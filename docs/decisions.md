@@ -2018,3 +2018,28 @@ Entries below predating 2026-07-11 reference spec paths that now resolve only in
   same category of comfort as the suites that installed their own seam. The egress half needs no
   seam: the test asserts the resolver answers `[]` for an org with no machines, which is the exact
   statement the unbound `null` default cannot make.
+
+- 2026-08-19 - P4 round eight: AN EXEMPTION FROM THE CEILING MUST BRING ITS OWN BOUND.
+  Round one took `awaiting_daemon` out of `FAILURE_CEILING` and that was right - a shut laptop must
+  not disable a working schedule. What it did not carry was the recognition that the ceiling WAS the
+  only cap on repeating a block: a per-minute schedule pointed at a bridge-only automation with no
+  daemon then wrote ~2880 durable rows and 1440 `schedule_blocked` notifications a day, for ever, in
+  two stores with no retention - and the notification, which exists to compensate for the silence
+  neutrality buys, was itself the unbounded thing.
+  **THE DECISION**: bound the COST, not the validity. A neutral streak earns a cooldown
+  (`neutralBackoffMs`, doubling from a minute to a 15-minute cap) during which the supervisor
+  advances the pointer without claiming, so those occurrences leave no trace at all; the schedule
+  stays ENABLED and resumes by itself. Three alternatives were considered and rejected. A SECOND,
+  HIGHER CEILING for neutral blocks reintroduces exactly the auto-pause round one removed, just
+  later. DROPPING THE NOTIFICATION restores the silence it was added to fix. WRITING NO RUN ROW for a
+  blocked fire hides the halt from the surface that shows it. The cooldown pays in LATENCY - capped
+  at 15 minutes, deliberately below any hand-authored cadence, so hourly and nightly schedules never
+  observe it - which is the honest price of a wait that is genuinely correct.
+  A NON-neutral block is not cooled: it is already capped by the ceiling, and slowing it would delay
+  the auto-pause that is how its owner learns anything is wrong. The re-notify floor (24h after the
+  streak's first block) is the same decision applied to the push channel.
+  RECORDED AS OPEN alongside it: neither `scheduleRuns` nor the automation run store has retention
+  at all (docs/findings.md `neither-schedule-runs-nor-automation-runs-have-retention`). This slice
+  bounds the RATE a blocked schedule writes at, which was the acute problem; a healthy per-minute
+  schedule still grows both stores without limit, and that belongs to whichever slice owns
+  operational data lifecycle.

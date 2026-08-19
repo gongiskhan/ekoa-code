@@ -213,9 +213,14 @@ export async function patchSchedule(
       nextRunAt,
       updatedAt: new Date(deps.now()).toISOString(),
     };
-    // A human re-enable clears the failure ceiling and the auto-pause stamp ("I fixed it").
+    // A human re-enable clears the failure ceiling and the auto-pause stamp ("I fixed it") - and,
+    // for the same reason, the NEUTRAL cooldown: the owner saying "go" is a statement that the
+    // environment changed, and making them wait out a backoff earned by the state they just fixed
+    // would read as the schedule ignoring them.
     if (body.enabled === true) {
       out.consecutiveFailures = 0;
+      out.consecutiveNeutralBlocks = 0;
+      out.neutralBackoffUntil = null;
       delete out.autoPausedAt;
     }
     return out;

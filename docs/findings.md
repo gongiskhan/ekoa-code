@@ -4857,3 +4857,33 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   carefully". The endpoint binding above is deliberately built so that the surface, when written,
   must name the address; the surface itself is out of this branch's scope and belongs with the fleet
   page that would show `advertisedCapabilitiesForOrg`.
+
+- **`a-neutral-block-removed-the-only-cap-on-repeating-it`** (FIXED 2026-08-19, MEDIUM, cost +
+  correctness - introduced by this branch's P4.1 neutrality work). Exempting `awaiting_daemon` from
+  the 20-strike `FAILURE_CEILING` was right (a shut laptop must not disable a working schedule) and
+  it removed the only limit on repetition, with nothing put in its place. A per-minute schedule
+  pointed at a bridge-only automation with no daemon connected fired 1440 times a day, for ever:
+  ~1440 `scheduleRuns` rows plus ~1440 automation-run rows - neither store has retention - and 1440
+  `schedule_blocked` notifications, so the compensating measure that tells the owner was itself the
+  unbounded thing. On main the ceiling stopped it after 20 fires.
+  FIX: a neutral streak COOLS the schedule rather than pausing it. `neutralBackoffMs` doubles from
+  one minute to a 15-minute cap; `claimAndFire` advances the pointer past `neutralBackoffUntil`
+  without claiming, so those occurrences leave no row, no run and no notification, and the schedule
+  stays ENABLED and resumes by itself on the far side (streak resets on any non-neutral outcome, and
+  on an owner re-enable). The notification takes the same bound: first block of a streak immediately,
+  a continuing one at most daily (`lastNeutralNotifiedAt`). Worst case for a per-minute schedule
+  falls from ~2880 rows + 1440 pushes a day to ~96 rows + 2 pushes; the cost of the halt becomes
+  latency, capped at 15 minutes, which is the honest price of waiting. The cap sits deliberately
+  below any hand-authored cadence, so hourly and nightly schedules are unaffected, and a NON-neutral
+  block is not cooled at all - slowing it would delay the auto-pause that is how its owner finds out.
+  Pinned by four cases in `api/tests/schedules/supervisor.test.ts`; mutation-verified (removing the
+  deferral, removing the re-notify floor, and cooling a non-neutral block each redden).
+
+- **`neither-schedule-runs-nor-automation-runs-have-retention`** (OPEN 2026-08-19, MEDIUM, cost -
+  pre-existing, surfaced while bounding the finding above). `scheduleRuns` and the automation run
+  store both grow monotonically: `deleteSchedule` drops a schedule's runs and nothing else ever
+  removes a row. The cooldown above bounds the RATE at which a blocked schedule writes them, which
+  was the acute problem, but a healthy per-minute schedule still writes 1440 rows a day indefinitely.
+  A retention policy (age or per-schedule count, with the run detail preserved on the schedule's
+  `lastRun` either way) belongs with whichever slice owns operational data lifecycle; it is out of
+  scope here and recorded rather than left implicit.

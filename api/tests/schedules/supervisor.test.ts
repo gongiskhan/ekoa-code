@@ -24,6 +24,7 @@ import {
   ScheduleSupervisor,
   FAILURE_CEILING,
   MISSED_RUN_CODE,
+  neutralBackoffMs,
   mapIntegrationOutcome,
   mapAutomationOutcome,
   type ScheduleSupervisorDeps,
@@ -249,9 +250,14 @@ describe('ScheduleSupervisor', () => {
     expect(after.autoPausedAt).toBeUndefined();
     expect(after.consecutiveFailures).toBe(FAILURE_CEILING - 1);
     expect(after.lastRun?.status).toBe('blocked');
-    // Every one of them told the owner. Silence is the failure mode this replaces.
-    expect(deps.blockedNotices.length).toBe(fires);
+    // The owner IS told - silence is the failure mode the notice replaces - but not once per fire.
+    // These 25 fires span 25 HOURS of fake clock, so the streak's first block tells them and the
+    // 24-hour re-notify floor lets exactly one more through. Telling them 25 times is not a louder
+    // signal; it is the unbounded thing `neutralBackoffUntil` exists to stop, one channel over.
+    expect(deps.blockedNotices.length).toBe(2);
     expect(deps.blockedNotices.every((n) => n.code === 'awaiting_daemon')).toBe(true);
+    // The streak is counted, and separately from the ceiling it is deliberately not driving.
+    expect(after.consecutiveNeutralBlocks).toBe(fires);
   });
 
   it('N CONSECUTIVE NEEDS-CREDENTIALS FIRES DO auto-pause - the cap on a rejected password', async () => {
@@ -517,5 +523,148 @@ describe('ScheduleSupervisor', () => {
     const rows = (await scheduleRuns.find({})) as unknown as ScheduleRunDoc[];
     expect(rows.filter((r) => r.status === 'running')).toEqual([]);
     expect(rows.find((r) => r.scheduleId === slow._id)?.status).toBe('ok');
+  });
+});
+
+/**
+ * NEUTRALITY IS NOT FREE - the cap the exemption owed (P4 round eight).
+ *
+ * Exempting `awaiting_daemon` from the failure ceiling removed the only limit on REPEATING it, and
+ * nothing replaced it. A per-minute schedule pointed at a bridge-only automation with no daemon
+ * connected fired 1440 times a day for ever: ~1440 schedule-run rows plus ~1440 automation-run rows
+ * (neither store has retention) and 1440 `schedule_blocked` notifications - so the compensating
+ * measure that tells the owner was itself the unbounded thing. On main the ceiling paused it after
+ * 20 fires; that pause was WRONG, and the answer to a wrong pause is not "no bound at all".
+ *
+ * The bound is a COOLDOWN rather than a count, because a neutral halt is by definition one that
+ * waiting fixes: the schedule stays enabled, the fires inside the cooldown leave NO trace, and the
+ * first fire on the far side either succeeds (streak resets) or blocks again (streak grows, capped
+ * at 15 minutes - deliberately below any hand-authored cadence, so an hourly or nightly schedule
+ * never notices this exists).
+ */
+describe('a neutral block is bounded by a cooldown, not by the ceiling', () => {
+  /** Deps whose automation ALWAYS halts on a missing daemon, still counting the calls it makes. */
+  function daemonless() {
+    const calls: string[] = [];
+    const deps = makeDeps({
+      runAutomation: async (s) => {
+        calls.push(s._id);
+        return mapAutomationOutcome({ outcome: 'blocked', code: 'awaiting_daemon', permanent: false, runId: 'arun_n' });
+      },
+    });
+    return { deps, calls };
+  }
+
+  it('doubles to a 15-minute cap and never further', () => {
+    expect(neutralBackoffMs(0)).toBe(0);
+    expect(neutralBackoffMs(1)).toBe(60_000);
+    expect(neutralBackoffMs(2)).toBe(120_000);
+    expect(neutralBackoffMs(5)).toBe(900_000);
+    expect(neutralBackoffMs(50)).toBe(900_000);
+  });
+
+  it('A PER-MINUTE SCHEDULE WITH NO DAEMON STOPS WRITING A ROW A MINUTE', async () => {
+    const { deps, calls } = daemonless();
+    const sup = new ScheduleSupervisor(deps);
+    const s = await seedSchedule({ spec: { kind: 'recurring', rule: { every: 'minute', interval: 1, timezone: 'Europe/Lisbon' } } });
+
+    // Two hours of ticks at the schedule's own cadence. Unbounded, this is 120 fires, 120 durable
+    // rows and 120 notifications; bounded, the cooldown doubles 1-2-4-8-15-15... and the pointer is
+    // advanced past each one without claiming anything.
+    for (let i = 0; i < 120; i++) {
+      clock += 60_000;
+      await sup.tick();
+      await sup.stop();
+    }
+
+    const rows = (await scheduleRuns.find({ scheduleId: s._id })) as unknown as ScheduleRunDoc[];
+    expect(rows.length).toBeLessThanOrEqual(12);
+    expect(rows.length).toBeGreaterThan(1); // it is a cooldown, not a stop
+    expect(calls.length).toBe(rows.length); // no run row without a run, and none without a row
+    expect(deps.blockedNotices.length).toBe(1); // the streak's first block; the floor holds the rest
+    // Still ENABLED and still counting nothing against the ceiling: the laptop is shut, not broken.
+    const after = (await schedules.get(s._id)) as unknown as ScheduleDoc;
+    expect(after.enabled).toBe(true);
+    expect(after.autoPausedAt).toBeUndefined();
+    expect(after.consecutiveFailures).toBe(0);
+  });
+
+  it('a fire inside the cooldown leaves NO trace at all - no row, no run, no notice', async () => {
+    const { deps, calls } = daemonless();
+    const sup = new ScheduleSupervisor(deps);
+    const s = await seedSchedule({ spec: { kind: 'recurring', rule: { every: 'minute', interval: 1, timezone: 'Europe/Lisbon' } } });
+    await sup.tick();
+    await sup.stop();
+    const afterFirst = (await schedules.get(s._id)) as unknown as ScheduleDoc;
+    expect(afterFirst.consecutiveNeutralBlocks).toBe(1);
+    expect(Date.parse(afterFirst.neutralBackoffUntil!)).toBe(clock + 60_000);
+    const rowsAfterFirst = (await scheduleRuns.find({ scheduleId: s._id })) as unknown as ScheduleRunDoc[];
+
+    clock += 30_000; // still inside the cooldown
+    await sup.tick();
+    await sup.stop();
+    expect((await scheduleRuns.find({ scheduleId: s._id })).length).toBe(rowsAfterFirst.length);
+    expect(calls.length).toBe(1);
+    expect(deps.blockedNotices.length).toBe(1);
+    // The pointer was still advanced - to the first occurrence at or after the cooldown ends - so
+    // the schedule is not stuck on a stale instant and does not walk one cadence step per tick.
+    const cooled = (await schedules.get(s._id)) as unknown as ScheduleDoc;
+    expect(Date.parse(cooled.nextRunAt!)).toBeGreaterThanOrEqual(Date.parse(afterFirst.neutralBackoffUntil!));
+  });
+
+  it('the laptop opening resumes the schedule and clears the streak', async () => {
+    let connected = false;
+    const deps = makeDeps({
+      runAutomation: async () =>
+        connected
+          ? mapAutomationOutcome({ outcome: 'completed', permanent: false, runId: 'arun_ok' })
+          : mapAutomationOutcome({ outcome: 'blocked', code: 'awaiting_daemon', permanent: false, runId: 'arun_n' }),
+    });
+    const sup = new ScheduleSupervisor(deps);
+    const s = await seedSchedule({ spec: { kind: 'recurring', rule: { every: 'minute', interval: 1, timezone: 'Europe/Lisbon' } } });
+    for (let i = 0; i < 5; i++) {
+      clock += 60_000;
+      await sup.tick();
+      await sup.stop();
+    }
+    expect(((await schedules.get(s._id)) as unknown as ScheduleDoc).consecutiveNeutralBlocks).toBeGreaterThan(1);
+
+    // The laptop opens. The schedule keeps ticking at its own cadence and resumes by itself at the
+    // far side of the cooldown - within its cap, not within one tick, which is the price of the bound.
+    connected = true;
+    for (let i = 0; i < 20 && (((await schedules.get(s._id)) as unknown as ScheduleDoc).lastRun?.status !== 'ok'); i++) {
+      clock += 60_000;
+      await sup.tick();
+      await sup.stop();
+    }
+    const after = (await schedules.get(s._id)) as unknown as ScheduleDoc;
+    expect(after.lastRun?.status).toBe('ok');
+    expect(after.consecutiveNeutralBlocks).toBe(0);
+    expect(after.neutralBackoffUntil).toBeNull();
+  });
+
+  it('a NON-neutral block is unaffected: it still fires every occurrence and still auto-pauses', async () => {
+    // The cooldown is earned by the environment saying "wait". A block on a HUMAN ACT is already
+    // capped - by the ceiling - and must not be quietly slowed as well, because slowing it would
+    // delay the auto-pause that is how the owner finds out.
+    const calls: string[] = [];
+    const deps = makeDeps({
+      runAutomation: async (s) => {
+        calls.push(s._id);
+        return mapAutomationOutcome({ outcome: 'blocked', code: 'needs_credentials', permanent: false, runId: 'arun_c' });
+      },
+    });
+    const sup = new ScheduleSupervisor(deps);
+    const s = await seedSchedule({ spec: { kind: 'recurring', rule: { every: 'minute', interval: 1, timezone: 'Europe/Lisbon' } } });
+    for (let i = 0; i < 3; i++) {
+      clock += 60_000;
+      await sup.tick();
+      await sup.stop();
+    }
+    expect(calls.length).toBe(3);
+    expect(deps.blockedNotices.length).toBe(3);
+    const after = (await schedules.get(s._id)) as unknown as ScheduleDoc;
+    expect(after.consecutiveFailures).toBe(3);
+    expect(after.neutralBackoffUntil ?? null).toBeNull();
   });
 });
