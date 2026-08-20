@@ -42,12 +42,15 @@ import { AchieveIntegrationGoalResponse, ErrorEnvelope } from '@ekoa/shared';
  *     `argsSchema`, so "it was in `args`" and "it was interpolated" are different claims.
  *  3. THE WRITE GATE IS UNMOVED. A `mutates` action still answers the identical 403 +
  *     `awaiting_consent` envelope, whichever rung filled its arguments.
- *  3b. A RUNG NEVER SUBTRACTS AN ANSWER, on the real wire. A rejected argument plan is DISCARDED
- *     and the request still goes out - carrying the CALLER's targeting value, never the model's -
- *     including on a write a human has standing-approved through the production approval doors.
- *     And an upstream 500 comes back verbatim through a planned composition, rather than being
- *     re-told as "the action returned no list". Both were the pre-fix behaviour, and restoring
- *     either in the source reds this file.
+ *  3b. A RUNG NEVER SUBTRACTS AN ANSWER, on the real wire, and this file now covers ALL FIVE ways
+ *     it used to. A rejected argument plan is DISCARDED and the request still goes out - carrying
+ *     the CALLER's targeting value, never the model's - including on a write a human has
+ *     standing-approved through the production approval doors. An upstream 500 comes back verbatim
+ *     through a planned composition. A rejected COMPOSE plan no longer cancels the read. And a
+ *     collection name the tenant does not hold no longer discards a 200 THAT HAD ALREADY COME BACK
+ *     - the last two are the ones this round fixed, and they were the worst, because the request
+ *     had gone out and been answered before the refusal was decided. Every one of these was the
+ *     pre-fix behaviour, and restoring any of them in the source reds this file.
  *  4. THE WIRE SHAPES. Every 2xx safeParses against `AchieveIntegrationGoalResponse` - including
  *     the new `composed` outcome and its `composition` block - and every non-2xx against the
  *     shared error envelope.
@@ -211,10 +214,18 @@ async function seedDefinition(actions: IntegrationAction[]): Promise<void> {
 }
 
 /**
- * The tenant's `clients` collection, seeded through the PRODUCTION WRITERS: an artifact row of the
- * shape `createArtifact` writes, and rows through `CollectionsEngine.create` under the SAME
- * `sharedScope(artifactId, ownerUserId)` the composition root reads them back with. A fixture
- * written any other way would prove the join works on a shape production cannot emit.
+ * The tenant's `clients` collection, seeded through the PRODUCTION WRITER.
+ *
+ * Rows go in through `CollectionsEngine.create` under `sharedScope(appId, ownerUserId)` - which is
+ * verbatim what `apps/served-data.ts` binds when a running app writes its own data, the ONLY way
+ * these rows are ever created in production. A fixture written any other way would prove the join
+ * works on a shape production cannot emit.
+ *
+ * THE READER USES A DIFFERENT FUNCTION AND THAT IS NOT A MISMATCH, so it is stated rather than
+ * left to be rediscovered: the compose rung's binding is `ownerSharedScope(actor.userId)`
+ * (D-S5-1), and both functions return `scopeKey: 'usr.<ownerUserId>'` while `Scope.appId` is never
+ * part of any query in `CollectionsEngine`. Writer and reader address the same key by construction;
+ * that they name it differently is exactly the store's own owner-not-app unit showing through.
  */
 async function seedClients(orgId = 'orgA', userId = 'ownerA', artifactId = ART): Promise<void> {
   await artifacts.insert({
@@ -430,14 +441,52 @@ describe('CANONICAL, through the real app: "todos os processos de clientes com m
     expect(step?.detail).toContain('did not succeed');
   });
 
-  it('a collection name the tenant does not hold is refused by name', async () => {
+  /**
+   * THE WORST SHAPE THE LADDER EVER HAD, on the real wire: the request WENT OUT, it came back 200,
+   * and then a later stage refused and the 200 was discarded. Spending the side effect and throwing
+   * away the result is worse than refusing up front, because the caller's work was done and they
+   * were handed nothing for it.
+   */
+  it('a collection name the tenant does not hold does not cancel the read the product already made', async () => {
     await seedDefinition([processos]);
     await seedClients();
     plans.compose = composeBlock({ ...COMPOSE_PLAN, collection: 'clientes' });
 
     const body = await okBody(await achieve(await tokenFor('ownerA'), CANONICAL_GOAL));
-    expect(body.outcome).toBe('refused');
-    expect(body.code).toBe('compose_unknown_collection');
+
+    // Before the fix: `refused` / `compose_unknown_collection`, with the 200 below thrown away.
+    expect(body.outcome).toBe('executed');
+    expect(body.code).toBeUndefined();
+    // THE LOAD-BEARING ASSERTION: the upstream WAS called, and what it answered reached the caller.
+    expect(upstream.calls).toHaveLength(1);
+    const result = body.result as { success: boolean; data?: { processos?: unknown[] } };
+    expect(result.success).toBe(true);
+    expect(result.data?.processos).toHaveLength(PROCESS_ROWS.length);
+    // Nothing was narrowed, so no narrowing block claims it was.
+    expect(body.items).toBeUndefined();
+    expect(body.composition).toBeUndefined();
+    const step = (body.ladder as Array<{ rung: string; verdict: string; detail?: string }>).find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('refused');
+    expect(step?.detail).toContain('clientes');
+  });
+
+  it('a compose plan the guardrails REJECT does not cancel the read either', async () => {
+    await seedDefinition([processos]);
+    await seedClients();
+    // No `where` and no `join`: `verifyComposePlan`'s shape check rejects the plan outright.
+    plans.compose = composeBlock({ compose: true, collection: 'clients' });
+
+    const body = await okBody(await achieve(await tokenFor('ownerA'), CANONICAL_GOAL));
+
+    // Before the fix: `refused` / `compose_refused`, and `upstream.calls` was EMPTY - a read that
+    // executed long before this slice existed, ended by something a model wrote.
+    expect(body.outcome).toBe('executed');
+    expect(upstream.calls).toHaveLength(1);
+    expect((body.result as { success: boolean }).success).toBe(true);
+    const step = (body.ladder as Array<{ rung: string; verdict: string; violations?: string[] }>).find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('refused');
+    expect(step?.violations?.join(' ')).toContain('"where" is missing');
+    expect(step?.violations?.join(' ')).toContain('"join" is missing');
   });
 });
 

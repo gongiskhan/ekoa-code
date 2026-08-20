@@ -4292,3 +4292,152 @@ DIAGRAM CHECK (FIXED-12): both appended, append-only, `rawText` and `originalTex
 instead of refusing, and the compose rung's failure passthrough. `docs/diagrams/05-data-model.excalidraw`
 - the two new `AchieveComposition` counters and the ladder step's `violations`; still no store change
 (no new collection, no new scope key), the shape that moved is the WIRE's.
+
+---
+
+## 2026-08-20 - D-S5-3: the compose rung stops subtracting an answer, and the docs stop asserting it already had
+
+Round four on `feat/s4-s5-reuse-ladder`. Two majors. The first is the defect round three NAMED, fixed
+one rung up, and left standing on the rung where it was worst; the second is what let that happen.
+
+**MAJOR 1. THE COMPOSE RUNG SUBTRACTED AN ANSWER ON THREE PATHS - AND TWO OF THEM DID IT AFTER THE
+REMOTE CALL HAD ALREADY BEEN MADE AND HAD SUCCEEDED.**
+
+```
+execute -> 200, rows in hand -> read the caller's collection -> unknown_collection
+    -> return refused('compose_unknown_collection')     the 200 is discarded
+execute -> 200, rows in hand -> rowsOf(data) is `unshaped`
+    -> return refused('compose_unshaped_result')        the 200 is discarded
+plan verdict fails, BEFORE the execute
+    -> return refused('compose_refused')                the call never runs at all
+```
+
+The first two are worse than refusing up front, and the difference is not rhetorical: the product
+performed the caller's work against a third party's system, got a good answer back, and then handed
+over a refusal - spending the side effect and discarding the result. The third does not spend the
+side effect, but it still ends a call that EXECUTED before this slice existed, so the defence the
+source carried for it ("refusing costs the caller a call they have not yet made") was false. The
+caller had made the call; only the request had not gone out.
+
+FIXED, and the shape is the fix rather than three patched branches. `planComposition`'s return type
+lost its `refused` member entirely - a model's answer can no longer be expressed as an end to the
+call - and the post-stage moved into `applyComposition`, which returns the composed rows or NULL and
+cannot construct a refusal. `runMatchedAction` now has EXACTLY ONE `return` for an admitted call that
+was not composed, and it always carries `out.value`. "The answer survives" is therefore a property of
+the function's shape, not of four branches each remembering to preserve it.
+
+`compose_refused`, `compose_unknown_collection` and `compose_unshaped_result` are REMOVED from
+`AchieveRefusalCode`, joining `parametrize_refused` (D-S4-2) and `composed_write_refused` +
+`compose_ambiguous_collection` (D-S5-1). The union is back to exactly the THIRTEEN author-arm codes
+that pre-date the ladder. **THE LADDER INTRODUCES NO REFUSAL CODE AT ALL**, and that count - not a
+sentence - is the invariant, because a count is something a test can assert and a sentence is not
+(`achieve-reuse-ladder.test.ts`, "the ladder introduces NO refusal code"). `code` is a free string on
+the wire and the enum was never published, so nothing breaks; OpenAPI and the cortex-cli types never
+carried it, re-generated to prove it.
+
+**MAJOR 2. THREE DOCS AND BOTH DIAGRAMS ASSERTED AN INVARIANT THE CODE CONTRADICTED, AND THE FINDINGS
+LEDGER MARKED IT CLOSED.** A closed finding that is not closed is worse than an open one, because
+nobody looks again. Named exactly, with what was wrong in each:
+
+1. `docs/architecture.md`, ladder-invariant paragraph: "The only refusals the ladder introduces are
+   the `compose_*` codes, every one of them decided BEFORE anything runs, about a call the caller has
+   not yet made." Two of the three were decided after a SUCCESSFUL execute. Rewritten as the count.
+2. `docs/decisions.md` D-S4-2: the identical sentence, indented under the rule it was breaking.
+   Superseded by this entry (the journal is append-only).
+3. `docs/security.md`: "a name that does not resolve there answers `compose_unknown_collection`" -
+   true of the code and a description of the subtraction. Rewritten; the no-oracle property it was
+   really claiming is now an ASSERTION (the two response bodies compared for equality) rather than a
+   statement about two error strings.
+4. `docs/diagrams/02-module-map.excalidraw` note (c): the rule stated as enforced "on every rung, for
+   good", with an UNCHANGED, RE-CHECKED list that did not include the compose exits. Note (d) appended.
+5. `docs/diagrams/05-data-model.excalidraw` note (c): "AchieveRefusalCode is now exactly four ladder
+   codes" followed by a list of THREE - an arithmetic error sitting on top of the false claim about
+   when they fire. Note (d) appended.
+6. `docs/findings.md`, `the-reuse-ladder-made-a-working-call-worse`, marked **FIXED** with "one rule
+   broken twice". The rule was broken FIVE times; round three closed two of them and the entry
+   claimed the rule. Rewritten to say what round three actually closed and what it did not, so the
+   ledger records a premature close rather than hiding it.
+7. `api/src/integrations/integration-achieve.ts`, `runMatchedAction`'s own header: "Nothing on this
+   ladder may take away an answer the product already gave." It did, three lines further down.
+   Rewritten as a claim about the body's shape, which is checkable.
+
+**THE MUTATION SWEEP, ROUND FOUR: 54 MUTANTS IN THE FIRST PASS, 31 MORE IN THE CONFIRMATION PASS,
+SIX REAL UNFAILABLE ASSERTIONS.** Every mutant applied to the
+SOURCE, run against all four slice suites, restored, and verified byte-identical (the runner exits
+non-zero on a restore mismatch); one anchor was stale, and that mutant was corrected and re-run in
+the confirmation pass rather than counted as a result. The first pass returned EIGHT survivors;
+the confirmation pass over the fixed code (31 mutants, including one written for every fix this
+round makes) returned one more that the first pass had simply not written a mutant for. SIX
+survivors in total were real unfailable assertions and are closed by tests; THREE are dismissals, in
+writing, per the ledger rule. The count is SIX, not the four the brief expected, and it is stated
+rather than rounded down.
+
+1. `COMPOSE_MAX_ITEMS` was NEVER PINNED. Every assertion about it was written in terms of the
+   constant, so 200 could become any number and the estate stayed green. This is precisely the defect
+   round three closed for `COMPOSE_MAX_COLLECTION_ROWS` - the SIBLING constant, twenty lines away -
+   and did not close here. Closed by a literal pin.
+2. THE "COMPOSE STAGE REACHES NO STORE" STATIC GUARD COULD NOT FAIL. It searched for
+   `collections-engine.js').CollectionsEngine`, a CommonJS `require(...)` shape an ESM file cannot
+   produce, while the hazard it exists to catch - `import { CollectionsEngine } from
+   '../data/collections-engine.js'` - passed it. Proved by adding that exact import: all four suites
+   stayed green. The guard now reads the module's IMPORT LIST and requires it to be exactly
+   `['collectionName']`, plus a dynamic-import probe.
+3. `argSlotsOf`'s QUERY-PARAMETER slot had no case. D1 names path AND query; the header slot got its
+   own test in round three, the path slot has several, and the query slot had none where the slot was
+   observable - the only fixture carrying a query template is a READ, and on a read `mayBeModelFilled`
+   answers true whatever the slot says. Not a live escape (the allowlist refuses `unused` as firmly
+   as `targeting`), but D1's stated rule going unasserted and the prompt's slot table saying the
+   wrong thing. Closed with a write-plus-query fixture.
+4. `contains` COULD BE `startsWith` AND NOTHING NOTICED. Every probe in
+   `store-query-predicate.test.ts` compared a PREFIX (`'PT'` against `'PT-100'`), so the two operators
+   selected the same rows. `contains` is one of the nine comparisons every shipped recipe may already
+   use, and this file exists precisely to prove the extraction changed no semantics. Closed with a
+   mid-string match.
+5. `String(field ?? '')` COULD LOSE ITS `?? ''`. The only assertion touching the field-absent row uses
+   `value: ''`, which every string operator satisfies either way. Without the coercion an ABSENT field
+   becomes the literal text `undefined`, so a recipe filtering `starts_with 'und'` would start
+   selecting rows that hold no such field. Closed on all three string operators.
+6. `ends_with` COULD BE `includes`, AND THE FIRST PASS DID NOT ASK. This one is a lesson about the
+   sweep rather than about the suite: the first pass wrote no `ends_with` mutant at all, so its
+   absence of a result read as coverage. The confirmation pass wrote one and it survived - the fix
+   for (4) had added an `ends_with '-100'` case, and a suffix is also a substring. Closed by asserting
+   the negative direction (`ends_with '-1'` and `ends_with 'PT'` both select nothing) for the suffix
+   operator and the prefix operator alike.
+
+   DISMISSED, IN WRITING, NOT CLOSED BY A TEST:
+   - the caller-args spread order in `runMatchedAction` is a TRUE equivalent mutant (`declared_args`
+     refuses any overlap, so the objects are always disjoint). Re-confirmed; unchanged from D-S5-1.
+   - THE NO-EXISTENCE-ORACLE EQUALITY IS A REGRESSION GUARD, NOT A KILLABLE ASSERTION, and pretending
+     otherwise would be the fake substitution this process exists to prevent. The isolation suite
+     compares the WHOLE response body for a collection name another org holds against the body for a
+     name nobody holds and they are equal - but no mutation of `applyComposition` can break that,
+     because the module cannot reach another tenant's scope and so has no fact about one to leak. A
+     mutant that fabricated a difference out of `actor.orgId` survived, correctly: it did not vary
+     with the thing it claimed to disclose. What IS killable is the SHAPE that makes the oracle
+     impossible, so that is what is asserted - `AppCollectionRead`'s not-found answer is a bare tag,
+     and giving it a payload (a `candidates`, a count of other holders) reds the source guard.
+   - `renderTemplate`'s `?? '{{name}}'` fallback is DEAD CODE, and that is why the mutant survives:
+     `vars` is pre-filled from exactly the set of names `namesIn` finds in the same three templates
+     that are then rendered, so the fallback branch is unreachable at every call site. Recorded in
+     the source rather than covered by a contrived test.
+   - `verifyComposePlan`'s shape check for a MISSING `collection` changes no verdict, because
+     `collection_name` refuses `undefined` too. What the two statements differ in is the CHECK LIST,
+     and that IS a rule this repo already asserts one module over ("nothing below `shape` is judged
+     on a malformed plan"), so it is closed by asserting the check list rather than dismissed.
+
+**THE CANONICAL TEST, STATED PLAINLY FOR THE FOURTH TIME, AND ANSWERING THE QUESTION AS ASKED.** The
+canonical compose test rests on A LOCAL FIXTURE, not on `get-ongoing-processes` existing in the code.
+`grep -rn ongoing` over `api/`, `shared/`, `web/`, `docs/` and `clients/` returns only this repo's own
+test, decision and finding text about the action's ABSENCE - there is no such action anywhere, in any
+definition, package or seed. The fixture is `processos` (an automation-backed read whose name the
+Portuguese goal covers), and the name `get-ongoing-processes` appears in the suite exactly once, as
+an assertion that `matchActionForGoal(CANONICAL_GOAL, [get-ongoing-processes])` is `{kind: 'none'}`.
+So: the Citius path is NOT proven by this slice, and the second half of the finding - that the name
+is unreachable from the goal even once the action exists - is a property of the lexical matcher that
+survives creating it.
+
+DIAGRAM CHECK (FIXED-12): both appended, append-only, `rawText` AND `originalText` carried, spliced
+into the existing files without re-serialising them so the diff is exactly the appended element.
+`docs/diagrams/02-module-map.excalidraw` note (d) - the three removed refusal edges, the single exit,
+and what note (c) claimed. `docs/diagrams/05-data-model.excalidraw` note (d) - the wire loses three
+codes and the store is untouched for the fourth time.

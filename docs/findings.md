@@ -242,23 +242,108 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   S9. WHAT IS NOT: the Citius path itself is NOT claimed as proven by this slice, and a real session
   is still the only thing that can prove it.
 
-- **`the-reuse-ladder-made-a-working-call-worse`** (**FIXED 2026-08-20**, S4/S5 verification round
-  three, was MAJOR x2; see `docs/decisions.md` D-S4-2 / D-S5-2a). One rule broken twice: a ladder
-  may add cheaper ways to answer, and may never take away an answer the product already gave under a
-  standing human approval.
-  (a) PARAMETRIZE SUBTRACTED ANSWERS. A model plan that failed `verifyPlannedArgs` refused the whole
-  call (`parametrize_refused`) - so a call that had been executing with the caller's own arguments
-  stopped executing because a model wrote a bad one. It is the same defect round two fixed for the
-  compose rung and left standing here. FIXED: the plan is discarded (`verdict.args` is null, so not
-  one model value survives), the request goes out as the caller shaped it, and the rung is reported
-  `refused` WITH its `violations` on the ladder beside the answer. `parametrize_refused` is removed
-  from the refusal union - nothing emits it, and a code that cannot occur is a lie.
-  (b) COMPOSE SWALLOWED THE UPSTREAM FAILURE. A failed execute carries no `data`, so `rowsOf` read
-  `unshaped` and the caller was told "the action returned no list to compose over" instead of the
-  remote's own 500 - a less accurate story, naming the wrong system. FIXED: `!success` returns on the
-  `executed` arm verbatim, BEFORE the collection is read, with compose recorded `skipped`.
-  PROVEN BY MUTATION: restoring each pre-fix behaviour reds `achieve-reuse-ladder.test.ts` and
-  `contract/integrations-reuse-ladder.test.ts` (three tests, module + wire).
+- **`the-reuse-ladder-made-a-working-call-worse`** (**FIXED 2026-08-20**, over FOUR rounds and not
+  one; was MAJOR x5. See `docs/decisions.md` D-S5-1, D-S4-2 / D-S5-2a, and D-S5-3). One rule broken
+  five times: a ladder may add cheaper ways to answer, and may never take away an answer the product
+  already has.
+  **THIS ENTRY WAS MARKED FIXED AFTER ROUND THREE AND WAS NOT FIXED.** That is recorded here rather
+  than quietly corrected, because a closed finding nobody looks at again is worse than an open one.
+  Round three closed (a) and (b) and then claimed the RULE - and the rule was still broken on the
+  three paths in (c), on the very rung the entry was about. Each claim below is now backed by a test
+  that reds when the pre-fix behaviour is restored in the source.
+  (a) PARAMETRIZE SUBTRACTED ANSWERS (round three). A model plan that failed `verifyPlannedArgs`
+  refused the whole call (`parametrize_refused`) - so a call that had been executing with the
+  caller's own arguments stopped executing because a model wrote a bad one. FIXED: the plan is
+  discarded (`verdict.args` is null, so not one model value survives), the request goes out as the
+  caller shaped it, and the rung is reported `refused` WITH its `violations` on the ladder beside the
+  answer. `parametrize_refused` removed from the refusal union.
+  (b) COMPOSE SWALLOWED THE UPSTREAM FAILURE (round three). A failed execute carries no `data`, so
+  `rowsOf` read `unshaped` and the caller was told "the action returned no list to compose over"
+  instead of the remote's own 500 - a less accurate story, naming the wrong system. FIXED: `!success`
+  returns on the `executed` arm verbatim, before the collection is read, compose recorded `skipped`.
+  (c) THE COMPOSE RUNG STILL SUBTRACTED, ON THREE MORE PATHS, AND TWO OF THEM DID IT **AFTER THE
+  REMOTE CALL HAD ALREADY BEEN MADE AND HAD SUCCEEDED** (round four, D-S5-3). An unknown collection
+  (`compose_unknown_collection`) and an unshaped result (`compose_unshaped_result`) are both decided
+  DOWNSTREAM of the execute: the product performed the caller's work against a third party, got a
+  good 200 back, and then handed over a refusal - spending the side effect and discarding the result,
+  which is worse than refusing up front. A rejected compose plan (`compose_refused`) was decided
+  before the execute, but it still ended a call that executed before this slice existed, and the
+  source's own defence of it ("refusing costs the caller a call they have not yet made") was untrue:
+  the caller HAD made the call. FIXED STRUCTURALLY rather than by patching three branches -
+  `planComposition`'s return type lost its refusal member (a model's answer can no longer be
+  expressed as an end to the call), the post-stage became `applyComposition` returning rows-or-NULL,
+  and `runMatchedAction` now has exactly ONE exit for an admitted call that was not composed, always
+  carrying `out.value`. All three codes are removed, so the ladder introduces NO refusal code at all
+  - a count a test asserts, rather than a sentence three documents repeated.
+  PROVEN BY MUTATION, each mutant restored byte-identical: restoring any of the five pre-fix
+  behaviours reds `api/tests/integrations/achieve-reuse-ladder.test.ts` and/or
+  `api/tests/contract/integrations-reuse-ladder.test.ts`.
+
+- **`three-docs-and-both-diagrams-asserted-the-ladder-invariant-the-code-broke`** (**FIXED
+  2026-08-20**, S4/S5 round four, was MAJOR; see `docs/decisions.md` D-S5-3). The documentation half
+  of the finding above, recorded separately because it is a distinct failure mode: **the prose was
+  the only thing asserting the invariant, and prose cannot be mutated.** `architecture.md` said "the
+  only refusals the ladder introduces are the `compose_*` codes, every one of them decided BEFORE
+  anything runs"; `decisions.md` D-S4-2 said the same sentence, indented under the rule it was
+  breaking; `security.md` described `compose_unknown_collection` as the answer for an unresolvable
+  name; `02-module-map` note (c) declared the rule enforced "on every rung, for good"; `05-data-model`
+  note (c) said "exactly four ladder codes" and then listed THREE. Six statements, one true claim
+  between them. FIXED: every one rewritten or superseded (the journal is append-only, so D-S4-2 is
+  superseded rather than edited), and the invariant re-expressed as the COUNT of members in
+  `AchieveRefusalCode` - which `achieve-reuse-ladder.test.ts` asserts against the source, and which
+  reds if any of the removed codes is reintroduced.
+
+- **`six-more-assertions-in-the-reuse-ladder-suite-could-not-fail`** (**FIXED 2026-08-20**, S4/S5
+  round four, LOW severity, process finding). A 54-mutant source-side sweep over the four slice
+  suites (each mutant applied to the SOURCE, run, restored, verified byte-identical) returned EIGHT
+  survivors; a 31-mutant confirmation pass over the fixed code returned one more the first pass had
+  not written a mutant for. SIX were real, and the count is stated as six rather than rounded to the
+  four the review round expected:
+  (a) `COMPOSE_MAX_ITEMS` was never pinned to a literal. Every assertion about it was written in
+  terms of the constant, so 200 could drift to any value and the estate stayed green - exactly the
+  defect round three closed for `COMPOSE_MAX_COLLECTION_ROWS`, the sibling constant twenty lines
+  away. Closed by a literal pin.
+  (b) The "the compose stage reaches no store of its own" STATIC GUARD could not fail: it searched
+  for `collections-engine.js').CollectionsEngine`, a CommonJS `require(...)` shape an ESM file cannot
+  produce, while the real hazard - `import { CollectionsEngine } from '../data/collections-engine.js'`
+  - passed it. Proved by adding that exact import: all four suites stayed green. The guard now reads
+  the module's IMPORT LIST and requires it to be exactly `['collectionName']`, with a dynamic-import
+  probe beside it.
+  (c) `argSlotsOf`'s QUERY-PARAMETER slot had no case. D1 names path AND query; the header slot got
+  its own test in round three and the path slot has several, but the only fixture carrying a query
+  template is a READ, where `mayBeModelFilled` answers true whatever the slot says. Not a live escape
+  (the allowlist refuses `unused` as firmly as `targeting`), but D1's stated rule unasserted and the
+  prompt's slot table telling a model the wrong thing. Closed with a write-plus-query fixture.
+  (d) `contains` could be `startsWith` and nothing noticed: every probe in
+  `store-query-predicate.test.ts` compared a PREFIX (`'PT'` against `'PT-100'`). `contains` is one of
+  the nine comparisons every shipped recipe may already use, and that file exists precisely to prove
+  the extraction changed no semantics. Closed with a mid-string match.
+  (e) `String(field ?? '')` could lose its `?? ''`: the only assertion touching the field-absent row
+  uses `value: ''`, which every string operator satisfies either way. Without the coercion an ABSENT
+  field becomes the literal text `undefined`, so a recipe filtering `starts_with 'und'` would start
+  selecting rows holding no such field. Closed on all three string operators.
+  (f) `ends_with` could be `includes`, and THE FIRST PASS DID NOT ASK - a lesson about the sweep
+  rather than about the suite. No `ends_with` mutant was written, so its absence of a result read as
+  coverage; the confirmation pass wrote one and it survived, because the fix for (d) had added an
+  `ends_with '-100'` case and a suffix is also a substring. Closed by asserting the negative
+  direction for the suffix and prefix operators alike.
+  DISMISSALS, in writing: the caller-args spread order is the true equivalent mutant already
+  recorded in D-S5-1 (re-confirmed); `renderTemplate`'s `?? '{{name}}'` fallback is DEAD CODE at
+  every call site (`vars` is pre-filled from exactly the names found in the three templates that are
+  then rendered), recorded in the source instead of covered by a contrived test; and
+  `verifyComposePlan`'s missing-`collection` shape check changes no verdict because `collection_name`
+  refuses `undefined` too - but the CHECK LIST distinguishes them, and "nothing below `shape` is
+  judged on a malformed plan" is a rule the parametrize suite already asserts, so that one is closed
+  by a test rather than dismissed.
+  AND ONE MORE, recorded because pretending otherwise would be the fake substitution this process
+  exists to prevent: the isolation suite's no-existence-oracle EQUALITY (the whole response body for
+  a name another org holds compared against the body for a name nobody holds) is a REGRESSION GUARD,
+  not a killable assertion. No mutation of `applyComposition` can break it, because the module cannot
+  reach another tenant's scope and therefore has no fact about one to leak - a mutant that fabricated
+  a difference out of `actor.orgId` survived, correctly, since it did not vary with the thing it
+  claimed to disclose. What IS killable is the shape that makes the oracle impossible, and that is
+  what is now asserted: `AppCollectionRead`'s not-found answer is a bare tag, and giving it a payload
+  reds the source guard in `achieve-reuse-ladder.test.ts`.
 
 - **`compose-max-collection-rows-truncated-the-join-silently-and-unpinned`** (**FIXED 2026-08-20**,
   S4/S5 round three, was MAJOR; see `docs/decisions.md` D-S5-2b). Two defects in one constant.

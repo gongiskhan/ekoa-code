@@ -774,11 +774,21 @@ export type AuthoredActionVerification = z.infer<typeof AuthoredActionVerificati
  * for nothing extra) and the call behaved exactly as it did before the ladder existed. A refused
  * rung ran, got an answer, and the deterministic suite rejected it.
  *
- * A REFUSED RUNG IS NOT A REFUSED CALL, and that is why the verdict travels BESIDE an answer rather
- * than instead of one. When `parametrize` refuses, the model's arguments are discarded and the
- * request goes out carrying exactly what the CALLER sent - which is the answer this product already
- * gave before the rung existed. A rung that can only ADD an answer must never be able to SUBTRACT
- * one; `violations` says what the discarded plan got wrong.
+ * A REFUSED RUNG IS NOT A REFUSED CALL, on either rung, and that is why the verdict travels BESIDE
+ * an answer rather than instead of one:
+ *
+ *   - when `parametrize` refuses, the model's arguments are discarded and the request goes out
+ *     carrying exactly what the CALLER sent;
+ *   - when `compose` refuses - a plan the guardrails rejected, a collection name the caller does not
+ *     hold, an answer with no single list in it - the action's OWN result comes back on the
+ *     `executed` outcome, unnarrowed. There is no refusal code for any of them, and there never
+ *     will be: two of the three used to be decided AFTER the request had gone out and answered 200,
+ *     so the product did the caller's work and then discarded what it got (`docs/decisions.md`
+ *     D-S5-3).
+ *
+ * A rung that can only ADD an answer must never be able to SUBTRACT one, and the check on that
+ * claim is a count: `AchieveRefusalCode` carries exactly the author-arm codes that pre-date the
+ * ladder. `violations` says what the discarded plan got wrong.
  */
 export const AchieveRung = z.enum(['reuse', 'parametrize', 'compose', 'mint']);
 export type AchieveRung = z.infer<typeof AchieveRung>;
@@ -847,6 +857,11 @@ export type AchieveComposition = z.infer<typeof AchieveComposition>;
  *                `code`. Distinct from a 404 (not addressable) and from a 403 write-gate refusal
  *                (which is the same `awaiting_consent` envelope the execute endpoint returns, so a
  *                client handles the gate in ONE place rather than two).
+ *                NO RUNG OF THE LADDER PRODUCES THIS OUTCOME. Every `code` it can carry names a
+ *                reason the call could not have run in the first place - no action fits the goal,
+ *                nothing may be authored against this credential, the store would not take the
+ *                write. When a rung's own work fails, the answer is `executed` (or `composed`) with
+ *                the rung recorded on `ladder`; see `AchieveLadderStep`.
  *
  * RULE 7: `composed` and the four optional fields below are ADDITIVE. Every field an older client
  * reads is produced exactly as it was, on exactly the outcomes it was produced on before.

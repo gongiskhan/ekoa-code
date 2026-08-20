@@ -919,22 +919,37 @@ is inherited on the same terms every other rail meets it.
   row. READS ONLY, and the gate is at the ENTRY: an action that can write never enters the rung, so
   no model turn is paid for and - decisively - no answer a model gives can turn a call that was
   executing under a standing approval into a refusal.
-  The rung is a POST-STAGE, NOT AN ERROR BOUNDARY: an execute that did not succeed comes back on the
-  `executed` arm verbatim - the remote's status, code and message, exactly as `POST …/execute` would
-  have returned them - and the composition is simply not applied.
+  The rung is a POST-STAGE, NOT AN ERROR BOUNDARY, and it has no failure mode that costs the caller
+  their answer. A failed execute, a collection name the caller does not hold, an action answer with
+  no single list in it, a plan the deterministic suite rejects: every one of them returns the
+  `executed` arm unchanged - the remote's own status, code, message and data, exactly as
+  `POST …/execute` would have returned them - with the `compose` step on the ladder saying the
+  composition did not apply and why.
   TWO CAPS, BOTH REPORTED. `COMPOSE_MAX_ITEMS` (200) caps what is EMITTED
   (`composition.truncated`); `COMPOSE_MAX_COLLECTION_ROWS` (5000) caps how much of the collection
   the join KEY SET is built from, which caps the QUESTION rather than the answer - a subset served
   as the whole is a wrong answer, not a partial one, so `composition.collectionScanned` and
   `composition.collectionTruncated` travel on every composed result, on the ladder detail and on the
-  audit row.
+  audit row. Both bounds are pinned to a literal in the suite, because a bound expressed only
+  through its own constant is a bound that can drift to any value and stay green.
 
 THE LADDER INVARIANT, which those two paragraphs are instances of: **a rung may only ever ADD an
 answer, never SUBTRACT one.** `achieve` must not refuse a call that executed before the ladder
-existed on the strength of anything a model said - so a rejected argument plan is discarded rather
-than fatal, a write never enters the compose rung at all, and a failed execute is handed back
-untouched. The only refusals the ladder introduces are the `compose_*` codes, every one of them
-decided BEFORE anything runs, about a call the caller has not yet made.
+existed on the strength of anything a model said, and the honest statement of that is a COUNT rather
+than a promise: **the ladder introduces no refusal code at all.** `AchieveRefusalCode` is exactly the
+thirteen author-arm codes that pre-date it, every one of which refuses a call that could not have run
+in the first place. A rejected argument plan is discarded and the request goes out as the caller
+shaped it; a write never enters the compose rung; and every way the compose post-stage can fail to
+apply hands back the executed answer with the rung recorded `refused` beside it.
+
+That count is what three earlier rounds of prose did not achieve. `compose_refused`,
+`compose_unknown_collection` and `compose_unshaped_result` all existed while this section claimed
+every ladder refusal was "decided BEFORE anything runs" - and the last two were decided AFTER the
+remote call had been made and had SUCCEEDED, so the product performed the caller's work, got a good
+answer, and discarded it because a later stage could not run. Spending the side effect and throwing
+away the result is worse than refusing up front. All three are gone (D-S5-3), and `runMatchedAction`
+now has exactly ONE exit for an admitted call that was not composed, which always carries the
+executor's result - so the property is structural rather than four branches each remembering it.
 
 The predicate itself is ONE implementation, `data/simple-query.ts` (tier 2), shared with the recipe
 DSL's `store.query` - `integrations/` may not import `automation/`, and two copies of nine comparison

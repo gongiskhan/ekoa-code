@@ -209,18 +209,11 @@ export interface AchieveContext extends CapabilityContext {
  *   `persist_failed`        the verified action could not be written (a concurrent write, a store
  *                           gate). Never silent — an unpersisted action is not an authored one.
  *
- * ADDED BY THE REUSE LADDER (additive - the wire carries `code` as a free string, so a client that
- * has never heard of these still reads them as refusals):
- *
- *   `compose_refused`       a composition arrived and did not pass `verifyComposePlan`. Refusing is
- *                           right HERE and only here: the plan is judged BEFORE anything runs, so
- *                           refusing costs the caller a call they have not yet made. Nothing that
- *                           already worked is taken away by it.
- *   `compose_unknown_collection`   the named collection is not one this caller holds.
- *   `compose_unshaped_result`      the action's answer carries no single list to compose over.
- *
- * THERE IS NO "COMPOSED WRITE" REFUSAL AND NO "PARAMETRIZE REFUSED", and both absences are the same
- * rule: A RUNG THAT CAN ONLY ADD AN ANSWER MUST NEVER BE ABLE TO SUBTRACT ONE.
+ * THE REUSE LADDER ADDS NOT ONE CODE TO THIS LIST, and the COUNT is the invariant rather than a
+ * restatement of it: A RUNG THAT CAN ONLY ADD AN ANSWER MUST NEVER BE ABLE TO SUBTRACT ONE. Every
+ * code above refuses a call that could not have run in the first place - no action fits the goal,
+ * nothing may be authored against this credential, the store would not take the write. Not one of
+ * them is a rung's verdict on a call that would otherwise have answered.
  *
  *   - the compose rung is not ENTERED for an action that can write, so a write cannot be refused by
  *     it. An earlier shape asked a model first and refused afterwards, which took a call that ran
@@ -229,8 +222,20 @@ export interface AchieveContext extends CapabilityContext {
  *     caller's own arguments. An earlier shape refused the whole call, which is the same defect one
  *     rung up: a request that executed before this slice - the caller's arguments, the caller's
  *     action, a human's standing approval - stopped executing because a model wrote a bad argument.
- *     The verdict is reported (`ladder`, verdict `refused`, with its `violations`) beside the answer
- *     the product would have given anyway; it never replaces it.
+ *   - THE COMPOSE RUNG NOW DOES THE SAME, on every path where its work cannot be done.
+ *     `compose_refused`, `compose_unknown_collection` and `compose_unshaped_result` are GONE, and
+ *     the last two were the worst members of this family the slice ever produced: they were decided
+ *     AFTER the remote call had already been made AND HAD SUCCEEDED. The product performed the
+ *     caller's work, got a good answer back, and then threw that answer away because a later stage
+ *     could not run - spending the side effect and discarding the result, which is worse than
+ *     refusing up front. `compose_refused` did not spend the side effect, but it still ended a call
+ *     that EXECUTED before this slice existed, and the defence this comment used to carry for it
+ *     ("refusing costs the caller a call they have not yet made") was simply untrue: the caller HAS
+ *     made the call; only the request had not gone out yet.
+ *
+ * In all three cases the EXECUTED arm's answer is now returned UNCHANGED and the `compose` ladder
+ * step says the composition did not apply, and why. The verdict travels BESIDE the answer, never
+ * instead of it - which is exactly what the parametrize rung above already did.
  */
 export type AchieveRefusalCode =
   | 'ambiguous_goal'
@@ -245,10 +250,7 @@ export type AchieveRefusalCode =
   | 'billing_blocked'
   | 'authoring_failed'
   | 'verification_failed'
-  | 'persist_failed'
-  | 'compose_refused'
-  | 'compose_unknown_collection'
-  | 'compose_unshaped_result';
+  | 'persist_failed';
 
 /**
  * THE LADDER, as a value. `achieve` is now four rungs (reuse -> parametrize -> compose -> mint) and
@@ -723,7 +725,7 @@ export async function achieveIntegrationGoal(
  *   2. COMPOSE decides whether the answer needs a join, and ONLY for an action that cannot write.
  *      Its output changes nothing about the request - it decides what happens to the ROWS
  *      afterwards - but it is planned BEFORE the execute so that a plan which cannot be honoured
- *      costs nothing to discover and so that no refusal is ever a comment on a call already made.
+ *      costs no model turn to discover.
  *   3. EXECUTE, once, through `executeIntegrationCapabilityAction`. C2's write gate sits inside it,
  *      before any credential is read, exactly as on every other rail. Neither rung reaches past it,
  *      neither rung re-implements it, and a `mutates` action still answers `awaiting_consent` here
@@ -733,11 +735,20 @@ export async function achieveIntegrationGoal(
  * refused allowance, a model outage, a goal with nothing extra in it - each of those SKIPS a rung
  * and leaves the call behaving exactly as it did before the ladder existed.
  *
- * AND SO DOES A REJECTED PLAN. A rung whose deterministic suite threw the model's answer away is
- * recorded `refused` and then degrades like any other: parametrize discards the arguments and the
- * request goes out as the CALLER shaped it. Nothing on this ladder may take away an answer the
- * product already gave under a standing human approval - not the compose gate (which is why a write
- * never enters the rung at all), and not a bad argument plan.
+ * AND SO DOES A REJECTED PLAN, ON BOTH RUNGS. This is the sentence three previous rounds asserted
+ * and the code did not honour, so it is now stated as a claim about the SHAPE of the body below
+ * rather than as an aspiration: **there is exactly one `return` here for an admitted call that was
+ * not composed, and it always carries `out.value`.**
+ *
+ *   - parametrize discards the model's arguments and the request goes out as the CALLER shaped it;
+ *   - compose discards the model's plan and the action answers unnarrowed;
+ *   - and every way the compose POST-STAGE can fail to apply - a failed execute, a collection name
+ *     the caller does not hold, an answer with no single list in it - falls through to that same
+ *     exit rather than to a refusal. Two of those three used to refuse AFTER the request had gone
+ *     out and come back 200, which spent the side effect and then discarded the result.
+ *
+ * The discarded rung is recorded `refused` on the ladder, with its `violations`, BESIDE the answer
+ * it did not prevent. Nothing on this ladder may take away an answer the product already has.
  */
 async function runMatchedAction(
   ctx: AchieveContext,
@@ -866,87 +877,43 @@ async function runMatchedAction(
   }
 
   // --- RUNG 3: COMPOSE (planned before anything runs) ---------------------------------------
+  // `planComposition` cannot refuse. Its worst answer is "no plan", recorded on the ladder.
   const composePlan = await planComposition(ctx, goal, action, ladder);
-  if (composePlan.kind === 'refused') return composePlan.outcome;
 
   // --- RUNG 1: REUSE - the ONE gated execute, whatever the rungs above decided ---------------
   const out = await executeIntegrationCapabilityAction(ctx, integrationKey, action.actionName, args);
   if (!out.ok) return out;
 
   if (composePlan.kind === 'plan') {
-    // THE COMPOSITION IS A POST-STAGE, NOT AN ERROR BOUNDARY.
-    //
-    // An execute that did not succeed is an ANSWER ABOUT THE REMOTE SYSTEM - a 500 with its status,
-    // its code and the provider's own message - and `POST …/execute` has always returned it whole.
-    // Wrapping it changed that story: with no `data`, `rowsOf` reads `unshaped` and the caller was
-    // told "the action returned no list to compose over" (or, if their collection name was also
-    // wrong, `compose_unknown_collection`) - a different, less accurate account of what went wrong
-    // than the same call gave before this rung existed, and one that names the WRONG SYSTEM as the
-    // one that failed.
-    //
-    // So the failure passes through untouched, on the `executed` arm, exactly as it would have if
-    // no composition had ever been planned. The route maps it as it always did: `unknown_action` to
-    // 404, `awaiting_consent` to the 403 envelope, everything else to the result body.
-    if (!out.value.success) {
-      ladder.push({
-        rung: 'compose',
-        verdict: 'skipped',
-        detail: `"${action.actionName}" did not succeed, so its own answer is returned unchanged rather than narrowed`,
-      });
-      // The REUSE rung is what answered - the same step the plain executed arm records. Without it
-      // a client reading the ladder finds no rung `taken` at all beside an `executed` outcome, and
-      // "which rung answered" is the one question the ladder exists to answer.
-      ladder.push({ rung: 'reuse', verdict: 'taken' });
+    const composed = await applyComposition(ctx, integrationKey, action, composePlan.plan, out.value, ladder);
+    if (composed) {
       return {
         ok: true,
         value: {
-          outcome: 'executed',
+          outcome: 'composed',
           actionName: action.actionName,
-          result: out.value,
+          items: composed.items,
+          composition: composed.summary,
           ladder,
+          // Reported here for the same reason it is reported on `executed`: an answer that was BOTH
+          // model-parametrized and model-narrowed is the one an auditor most needs to see whole.
           ...(filledArgs.length > 0 ? { filledArgs } : {}),
         },
       };
     }
-    const collection = await (ctx.appCollections as AppCollections).read(ctx.actor, composePlan.plan.collection);
-    if (collection.kind === 'unknown_collection') {
-      return refused(
-        'compose_unknown_collection',
-        `you hold no "${composePlan.plan.collection}" collection to narrow this by`,
-        { ladder: [...ladder, { rung: 'compose', verdict: 'refused' }] },
-      );
-    }
-    const rows = rowsOf(out.value.data);
-    if (rows.kind === 'unshaped') {
-      return refused('compose_unshaped_result', rows.detail, { ladder: [...ladder, { rung: 'compose', verdict: 'refused' }] });
-    }
-    const composed = composeRows({ plan: composePlan.plan, actionRows: rows.rows, collectionRows: collection.rows });
-    ladder.push({
-      rung: 'compose',
-      verdict: 'taken',
-      detail: `${composed.summary.matched} of ${composed.summary.scanned} rows kept`
-        // The caller is told in words as well as in the summary: an answer narrowed against a
-        // PREFIX of the collection is a subset of the answer they asked for.
-        + (composed.summary.collectionTruncated
-          ? `, matched against the first ${composed.summary.collectionScanned} rows of "${composed.summary.collection}" only`
-          : ''),
-    });
-    await auditComposed(ctx, integrationKey, action.actionName, composed.summary);
-    return {
-      ok: true,
-      value: {
-        outcome: 'composed',
-        actionName: action.actionName,
-        items: composed.items,
-        composition: composed.summary,
-        ladder,
-        // Reported here for the same reason it is reported on `executed`: an answer that was BOTH
-        // model-parametrized and model-narrowed is the one an auditor most needs to see whole.
-        ...(filledArgs.length > 0 ? { filledArgs } : {}),
-      },
-    };
+    // The composition did not apply. `applyComposition` has recorded WHY on the ladder, and the
+    // answer the product is already holding falls through to the one exit below, unchanged.
   }
 
+  // THE ONE EXIT FOR AN ADMITTED CALL THAT WAS NOT COMPOSED, and it always carries `out.value`.
+  // That is deliberate structure rather than tidiness: while the compose branches each returned for
+  // themselves, three of them returned a REFUSAL and the executor's answer was dropped on the floor
+  // - twice AFTER the request had gone out and come back 200. With one exit there is no branch left
+  // that could forget, and "the answer survives" is a property of the shape of this function.
+  //
+  // The REUSE rung is what answered, and it says so: without this step a client reading the ladder
+  // finds no rung `taken` at all beside an `executed` outcome, and "which rung answered" is the one
+  // question the ladder exists to answer.
   ladder.push({ rung: 'reuse', verdict: 'taken' });
   return {
     ok: true,
@@ -961,6 +928,86 @@ async function runMatchedAction(
 }
 
 /**
+ * THE COMPOSITION POST-STAGE. Returns the narrowed answer, or NULL when it could not be built -
+ * NEVER a refusal, and it cannot construct one: the type says so.
+ *
+ * THIS IS WHERE THE LADDER USED TO SUBTRACT AN ANSWER, on three paths, and two of them did it after
+ * the request had gone out and come back 200:
+ *
+ *   - a FAILED execute carries no `data` (`action-executor.ts` returns `{ success: false, status,
+ *     code, error, details }` for a non-2xx), so `rowsOf` read `unshaped` and the caller was told
+ *     "the action returned no list to compose over" instead of the remote's own 500 - a less
+ *     accurate story that named the WRONG SYSTEM as the one that failed;
+ *   - an UNKNOWN COLLECTION returned `compose_unknown_collection`, discarding a successful result
+ *     the product had already paid for and already had in hand;
+ *   - an UNSHAPED RESULT returned `compose_unshaped_result`, discarding the same.
+ *
+ * A composition is an ADDITION to an answer. When the addition cannot be made, what is left is the
+ * answer - not nothing. So each of these records the rung on the ladder and returns null, and the
+ * caller returns the executed arm verbatim. The route maps it exactly as it always did:
+ * `unknown_action` to 404, `awaiting_consent` to the 403 envelope, everything else to the body.
+ *
+ * NO AUDIT ROW IS WRITTEN unless a join really happened, which is the truth of what occurred: the
+ * `capability_achieve_compose` row exists to record that a SECOND data source was read to narrow
+ * somebody's answer, and on these paths none was.
+ */
+async function applyComposition(
+  ctx: AchieveContext,
+  integrationKey: string,
+  action: IntegrationAction,
+  plan: NonNullable<ReturnType<typeof verifyComposePlan>['plan']>,
+  result: ExecuteIntegrationActionResult,
+  ladder: AchieveLadderStep[],
+): Promise<{ items: Record<string, unknown>[]; summary: ComposeSummary } | null> {
+  if (!result.success) {
+    ladder.push({
+      rung: 'compose',
+      verdict: 'skipped',
+      detail: `"${action.actionName}" did not succeed, so its own answer is returned unchanged rather than narrowed`,
+    });
+    return null;
+  }
+  const collection = await (ctx.appCollections as AppCollections).read(ctx.actor, plan.collection);
+  if (collection.kind === 'unknown_collection') {
+    // NO EXISTENCE ORACLE, and the reason is structural rather than careful wording: this function
+    // has read exactly one scope - the caller's own - so it holds NO fact about another tenant to
+    // disclose, whatever it says. The isolation suite compares the whole response for a name another
+    // org holds against the response for a name nobody holds and requires them equal, which is a
+    // REGRESSION guard on that structure (no mutation here can break it) rather than a test of this
+    // string. What keeps the structure true is `AppCollectionRead`: its not-found answer is a bare
+    // tag with nowhere for such a fact to travel, and the module suite pins that shape.
+    ladder.push({
+      rung: 'compose',
+      verdict: 'refused',
+      detail: `you hold no "${plan.collection}" collection to narrow this by, so "${action.actionName}" answers unnarrowed`,
+    });
+    return null;
+  }
+  const rows = rowsOf(result.data);
+  if (rows.kind === 'unshaped') {
+    ladder.push({
+      rung: 'compose',
+      verdict: 'refused',
+      detail: `${rows.detail}, so "${action.actionName}" answers unnarrowed`,
+    });
+    return null;
+  }
+  const composed = composeRows({ plan, actionRows: rows.rows, collectionRows: collection.rows });
+  ladder.push({
+    rung: 'compose',
+    verdict: 'taken',
+    detail: `${composed.summary.matched} of ${composed.summary.scanned} rows kept`
+      // The caller is told in words as well as in the summary: an answer narrowed against a
+      // PREFIX of the collection is a subset of the answer they asked for.
+      + (composed.summary.collectionTruncated
+        ? `, matched against the first ${composed.summary.collectionScanned} rows of "${composed.summary.collection}" only`
+        : ''),
+  });
+  await auditComposed(ctx, integrationKey, action.actionName, composed.summary);
+  return composed;
+}
+
+/**
  * PLAN THE JOIN, or decline to. Returns before anything has executed.
  *
  * READS ONLY, AND THE GATE IS FIRST. v1 composes over reads; an action that can write leaves this
@@ -970,7 +1017,12 @@ async function runMatchedAction(
  * wordy goal could be refused outright on the strength of a plan a model volunteered - so a call
  * that had been executing for months under a standing human approval started depending on a
  * model's judgement to run at all. A rung that only ever ADDS an answer must never SUBTRACT one,
- * and the only way to guarantee that is to not enter it.
+ * and for a WRITE the only way to guarantee that is to not enter the rung at all.
+ *
+ * FOR A READ, THE GUARANTEE IS THE RETURN TYPE. This function used to be able to answer `refused`
+ * when the deterministic suite rejected the model's plan, which ended the whole call - the same
+ * subtraction, one step earlier in the body, on the rung the entry gate had just been moved to
+ * protect. It cannot now: the type below has two members and neither of them is a refusal.
  *
  * `mutates === false` as a LITERAL is `action-consent.ts`'s fail-closed reading: an absent or
  * malformed `mutates` is a write, and a write is not composed over.
@@ -987,9 +1039,12 @@ async function planComposition(
   action: IntegrationAction,
   ladder: AchieveLadderStep[],
 ): Promise<
+  // TWO ANSWERS, and the absence of a third is the point: THERE IS NO REFUSAL IN THIS TYPE. This
+  // function used to be able to return one, and a caller reading the signature could not tell that
+  // asking a model a question might end the whole call. Now it cannot: whatever a model says, the
+  // worst outcome expressible here is "no plan", and the call proceeds to the rung below.
   | { kind: 'none' }
   | { kind: 'plan'; plan: NonNullable<ReturnType<typeof verifyComposePlan>['plan']> }
-  | { kind: 'refused'; outcome: CapabilityOutcome<AchieveResult> }
 > {
   if (action.mutates !== false) {
     ladder.push({
@@ -1036,18 +1091,26 @@ async function planComposition(
 
   const verdict = verifyComposePlan({ planned: turn.draft });
   if (!verdict.passed) {
-    const violations = [
-      ...turn.violations,
-      ...verdict.checks.filter((c) => !c.ok).map((c) => c.detail ?? `${c.name} failed`),
-    ];
-    return {
-      kind: 'refused',
-      outcome: refused(
-        'compose_refused',
-        'the way this goal would have been narrowed did not pass the guardrails and nothing ran',
-        { violations, ladder: [...ladder, { rung: 'compose', verdict: 'refused' }] },
-      ),
-    };
+    // THE PLAN IS THROWN AWAY, THE CALL IS NOT - the parametrize rung's rule, one rung down, and it
+    // took a round to be carried here. This used to `return refused('compose_refused', …)` and
+    // NOTHING RAN: an `achieve` on a trusted READ that had been executing since long before this
+    // slice stopped executing because a model wrote a malformed join. The old defence for it was
+    // that the refusal "costs the caller a call they have not yet made"; the caller had made the
+    // call, and what they got back for it was nothing.
+    //
+    // Nothing unsafe survives the discard: `verdict.plan` is null on a failed verdict, so no
+    // model-named collection, field or comparison reaches the stage, and the request that goes out
+    // below is byte-for-byte the request the caller asked for.
+    ladder.push({
+      rung: 'compose',
+      verdict: 'refused',
+      detail: 'the way this goal would have been narrowed did not pass the guardrails and was discarded; the action answers unnarrowed',
+      violations: [
+        ...turn.violations,
+        ...verdict.checks.filter((c) => !c.ok).map((c) => c.detail ?? `${c.name} failed`),
+      ],
+    });
+    return { kind: 'none' };
   }
   if (!verdict.plan) {
     ladder.push({ rung: 'compose', verdict: 'skipped', detail: 'no collection narrows this goal' });

@@ -43,8 +43,10 @@ where they touch the dashboard.
   CALLER'S OWN, never another org's and never a same-org colleague's - org-visible artifact or not,
   because shared rows are keyed `usr.<owner>` with no app dimension and artifact visibility is not
   entitlement to its owner's data; proven a gate by deleting `appId: scope.scopeKey`, the single
-  query-binding point), and the bridge S1-S6 scenarios (`fake-daemon/`). `migration/`
-  holds the protocol-parity replay suites.
+  query-binding point; and the no-existence-oracle claim is an ASSERTION rather than a reading - the
+  whole response body for a collection name another org holds is compared byte-for-byte against the
+  body for a name nobody holds anywhere), and the bridge S1-S6 scenarios (`fake-daemon/`).
+  `migration/` holds the protocol-parity replay suites.
 - **The P4 locality suites, and what each is for** (they overlap on purpose, and the overlap is the
   point - a decision this slice makes wrong is an account lock, so each layer proves a different
   thing about it). `automation/locality.test.ts` drives the PURE decision table with real arguments,

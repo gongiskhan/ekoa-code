@@ -77,7 +77,15 @@ describe('store.query and the compose rung evaluate the SAME predicate', () => {
     { field: 'ausente', value: 'x' },
   ];
 
-  it('every op agrees with matchesSimpleQuery, on every probe', async () => {
+  /**
+   * AN EQUIVALENCE TEST CANNOT PIN A SEMANTIC, and saying so is better than letting the file's
+   * first test look like it does. `evalQuery` now CALLS `matchesSimpleQuery`, so both sides of the
+   * comparison below move together: change `lt` to `<=` in the predicate and this still passes.
+   * What it does catch - and the only thing it claims to - is DRIFT: an `evalQuery` that stopped
+   * delegating and grew a second switch of its own. The semantics themselves are pinned by the
+   * literal-valued test underneath it, and that test is where a mutation of the predicate reds.
+   */
+  it('every op agrees with matchesSimpleQuery, on every probe (a drift check, not a semantic pin)', async () => {
     for (const op of SIMPLE_QUERY_OPS) {
       for (const probe of probes) {
         const where = { field: probe.field, op, value: probe.value };
@@ -102,6 +110,37 @@ describe('store.query and the compose rung evaluate the SAME predicate', () => {
     // The boundary is not off by one.
     expect(await queried({ field: 'idade', op: 'lt', value: 40 })).toEqual(['a']);
     expect(await queried({ field: 'idade', op: 'lte', value: 40 })).toEqual(['a', 'c']);
+  });
+
+  /**
+   * TWO MORE EDGES THAT NO ASSERTION IN THIS FILE COULD REACH, found by mutating the extracted
+   * predicate rather than by reading it. Both were SURVIVING MUTANTS: the whole estate stayed green.
+   *
+   *   1. `contains` -> `startsWith`. Every probe above compares a PREFIX (`'PT'` against
+   *      `'PT-100'`), so the two operators select the same rows and the distinction is invisible.
+   *      `contains` is one of the nine comparisons every shipped recipe may already use.
+   *   2. `String(field ?? '')` -> `String(field)`. Row `d` has no `idade`, and the only assertion
+   *      that touches it uses `value: ''`, which every string operator satisfies either way -
+   *      `''.startsWith('')` and `'undefined'.startsWith('')` are both true. Dropping the `?? ''`
+   *      turns an ABSENT field into the literal text `undefined`, so a recipe filtering
+   *      `starts_with 'und'` would start matching rows that hold no such field at all.
+   */
+  it('the string ops are not prefix ops, and an ABSENT field is "" rather than the word "undefined"', async () => {
+    // 1. A match in the MIDDLE of the value: `contains` keeps it, a prefix operator would not.
+    expect(await queried({ field: 'ref', op: 'contains', value: 'T-1' })).toEqual(['a']);
+    expect(await queried({ field: 'ref', op: 'starts_with', value: 'T-1' })).toEqual([]);
+    // …and the mirror for the SUFFIX operator, which needs both directions for the same reason
+    // `starts_with` does: `'-100'` alone cannot tell `endsWith` from `includes`.
+    expect(await queried({ field: 'ref', op: 'ends_with', value: '-100' })).toEqual(['a']);
+    expect(await queried({ field: 'ref', op: 'ends_with', value: '-1' })).toEqual([]);
+    expect(await queried({ field: 'ref', op: 'starts_with', value: 'PT' })).toEqual(['a', 'c', 'd']);
+    expect(await queried({ field: 'ref', op: 'ends_with', value: 'PT' })).toEqual([]);
+
+    // 2. Row `d` holds no `idade`. Coerced to '', it matches none of these; coerced to the string
+    // `'undefined'`, it would match all three - which is the row a recipe never meant to select.
+    expect(await queried({ field: 'idade', op: 'starts_with', value: 'und' })).toEqual([]);
+    expect(await queried({ field: 'idade', op: 'contains', value: 'undefin' })).toEqual([]);
+    expect(await queried({ field: 'idade', op: 'ends_with', value: 'fined' })).toEqual([]);
   });
 
   it('the recipe-only half stays in the recipe: a captured template ref is resolved first', async () => {

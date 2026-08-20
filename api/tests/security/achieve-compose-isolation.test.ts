@@ -37,8 +37,12 @@ import { AchieveIntegrationGoalResponse } from '@ekoa/shared';
  *   1. THE NAMES A MODEL MAY CHOOSE FROM ARE THIS TENANT'S. A collection that exists only in
  *      another org must not appear in the prompt at all - a leak of "org B runs a `payroll` app"
  *      is a leak before a single row moves.
- *   2. NAMING ANOTHER ORG'S COLLECTION READS NOTHING. The same name that resolves for its owner
- *      is `compose_unknown_collection` for a peer org, byte-identical with a name nobody holds.
+ *   2. NAMING ANOTHER ORG'S COLLECTION READS NOTHING, and says the same thing a name nobody holds
+ *      anywhere says. The composition simply does not apply, so the caller keeps the answer their
+ *      OWN action produced (the ladder invariant: a rung may only ever ADD an answer) - and the two
+ *      responses are asserted BYTE-IDENTICAL, which is what makes "no existence oracle" a property
+ *      rather than a coincidence of wording. This used to be a `compose_unknown_collection`
+ *      refusal, decided after the caller's own read had already succeeded.
  *   3. A SHARED COLLECTION NAME DOES NOT SHARE ROWS. Both orgs hold `clients`; the join must be
  *      built from the caller's rows only, and the assertion is a process row that would ONLY
  *      survive if the OTHER org's client had been read.
@@ -139,6 +143,11 @@ async function okBody(res: Response): Promise<Record<string, unknown>> {
   return body;
 }
 
+/** The compose rung's own verdict on this answer. `refused` here means the JOIN did not happen -
+ *  it never means the CALL was refused, which is the whole point of the ladder invariant. */
+const composeStep = (body: Record<string, unknown>) =>
+  (body.ladder as Array<{ rung: string; verdict: string; detail?: string }> | undefined)?.find((s) => s.rung === 'compose');
+
 async function mkUser(id: string, orgId: string): Promise<void> {
   await users.insert({ _id: id, username: id, passwordHash: await hashPassword('pw123456'), role: 'user', orgId, active: true } as never);
   setActivation(id, { active: true, billingLocked: false });
@@ -220,18 +229,45 @@ describe('the compose rung cannot see another organisation\'s collections', () =
     expect(prompt).not.toContain('payroll');
   });
 
-  it('2. naming a collection only ANOTHER org holds reads nothing and answers like a name nobody holds', async () => {
-    await seedApp('app-b', 'orgB', 'userB', { clients: [{ id: 'cB', idade: 20 }] });
+  it('2. naming a collection only ANOTHER org holds reads nothing, and answers IDENTICALLY to a name nobody holds', async () => {
     // Org A holds a collection of its own, so the rung is entered (a tenant with none skips it).
     await seedApp('app-a', 'orgA', 'userA', { matters: [{ id: 'm1' }] });
+    // The SAME name in both halves, so the two answers are compared directly rather than through
+    // string surgery.
+    //
+    // HONEST NOTE ABOUT WHAT THE EQUALITY BELOW PROVES. It is a REGRESSION GUARD, not a mutation-
+    // killable assertion, and saying so is better than letting it look like more. `applyComposition`
+    // reads exactly one scope - the caller's own - so it holds no fact about org B to disclose, and
+    // no mutation of it can make these two answers differ (one that fabricated a difference out of
+    // `actor.orgId` survived the sweep, correctly, because it did not vary with the thing it claimed
+    // to leak). What this pins is that a FUTURE reader which could tell - a "did you mean", a count
+    // of other holders - reds here. The shape that keeps it impossible today is pinned separately,
+    // in `achieve-reuse-ladder.test.ts`: `AppCollectionRead`'s not-found answer is a bare tag.
+    plans.compose = composeBlock({ ...PLAN, collection: 'payroll' });
 
-    const body = await okBody(await achieve(await tokenFor('userA')));
-    expect(body.outcome).toBe('refused');
-    expect(body.code).toBe('compose_unknown_collection');
+    // (i) NOBODY holds `payroll`, anywhere.
+    const nobody = await okBody(await achieve(await tokenFor('userA')));
+    expect(nobody.outcome).toBe('executed');
+    expect(composeStep(nobody)?.verdict).toBe('refused');
 
-    // The very same plan, for the org that owns the rows, composes.
+    // (ii) ORG B holds `payroll`, with a row that would satisfy the predicate and key the join.
+    await seedApp('app-b', 'orgB', 'userB', { payroll: [{ id: 'cA', idade: 31 }] });
+    const peer = await okBody(await achieve(await tokenFor('userA')));
+
+    // THE LOAD-BEARING ASSERTIONS. Nothing of org B's moved: no `items`, no `composition`. And the
+    // answer is byte-identical to the one for a name that exists nowhere, so it discloses nothing
+    // about whether some other tenant holds it.
+    expect(peer.items).toBeUndefined();
+    expect(peer.composition).toBeUndefined();
+    expect(peer).toEqual(nobody);
+    // …and the caller still got their OWN action's answer: the ladder never subtracts one.
+    expect((peer.result as { success: boolean }).success).toBe(true);
+
+    // The very same plan, for the org that owns those rows, composes.
+    plans.compose = composeBlock({ ...PLAN, collection: 'payroll' });
     const owner = await okBody(await achieve(await tokenFor('userB')));
     expect(owner.outcome).toBe('composed');
+    expect((owner.items as Array<{ numeroProcesso: string }>).map((r) => r.numeroProcesso)).toEqual(['111/24.0T8LSB']);
   });
 
   it('3. a collection name both orgs hold does not share its rows', async () => {
@@ -262,9 +298,14 @@ describe('the compose rung cannot see another organisation\'s collections', () =
     await seedApp('app-a2', 'orgA', 'userA2', { clients: [{ id: 'cA', idade: 31 }] });
 
     const body = await okBody(await achieve(await tokenFor('userA')));
+    // Not offered in the prompt, and not readable when named anyway.
     expect(plans.sections.join('\n')).not.toContain('clients');
-    expect(body.outcome).toBe('refused');
-    expect(body.code).toBe('compose_unknown_collection');
+    expect(body.items).toBeUndefined();
+    expect(body.composition).toBeUndefined();
+    expect(composeStep(body)?.verdict).toBe('refused');
+    // The rung stood down; the call did not. userA keeps their own action's answer.
+    expect(body.outcome).toBe('executed');
+    expect((body.result as { success: boolean }).success).toBe(true);
   });
 
   it('5. a peer\'s ORG-VISIBLE artifact does not open that peer\'s owner-shared namespace', async () => {
@@ -278,8 +319,13 @@ describe('the compose rung cannot see another organisation\'s collections', () =
 
     const body = await okBody(await achieve(await tokenFor('userA')));
     expect(plans.sections.join('\n')).not.toContain('clients');
-    expect(body.outcome).toBe('refused');
-    expect(body.code).toBe('compose_unknown_collection');
+    // `cA` keys process 111, so a binding that reached userA2's namespace would COMPOSE here and
+    // hand userA a row selected by a colleague's data. Nothing was joined.
+    expect(body.items).toBeUndefined();
+    expect(body.composition).toBeUndefined();
+    expect(composeStep(body)?.verdict).toBe('refused');
+    expect(body.outcome).toBe('executed');
+    expect((body.result as { success: boolean }).success).toBe(true);
   });
 
   it('6. an owner with TWO apps composes from their one owner-shared scope', async () => {

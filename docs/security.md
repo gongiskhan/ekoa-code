@@ -298,8 +298,16 @@ unit is the OWNER, because that is the only unit `app_data` has for shared rows 
 read in `CollectionsEngine` bind on `scope.scopeKey` (`usr.<ownerUserId>`), and `Scope.appId` is
 never part of any query. The binding is `ownerSharedScope(actor.userId)`: the acting user's own
 namespace, derived from the verified actor, never from the request and never from anything a model
-said. Nothing a caller sends and nothing a model returns reaches the scope key; a name that does not
-resolve there answers `compose_unknown_collection`, byte-identical with a name nobody holds.
+said. Nothing a caller sends and nothing a model returns reaches the scope key.
+
+A NAME THAT DOES NOT RESOLVE THERE IS NOT A REFUSAL AND NOT AN ORACLE. The composition simply does
+not apply: the caller gets the answer their own action produced, with a `compose` ladder step saying
+so (the ladder invariant in `architecture.md` - a rung may only ever add an answer). The step's
+wording is a fact about the CALLER'S OWN namespace and nothing else, so the whole response for a name
+another tenant holds is byte-identical to the response for a name nobody holds anywhere, and the
+isolation suite asserts that by comparing the two bodies rather than by reading them. Until
+2026-08-20 this path answered `compose_unknown_collection` - a refusal decided after the caller's own
+read had already succeeded, which discarded a result the product was holding (D-S5-3).
 
 Two failure modes were found and closed in verification (`docs/decisions.md` D-S5-1), both from
 reasoning per-ARTIFACT over data scoped per-OWNER: a peer's ORG-VISIBLE artifact resolved to

@@ -480,6 +480,29 @@ describe('verifyPlannedArgs is the only check argsSchema ever gets', () => {
     expect(argSlotsOf(hdr.httpConfig).numero).toBe('targeting');
   });
 
+  it('a QUERY argument counts as targeting too - D1 names path AND query, and only one had a case', () => {
+    // A SURVIVING MUTANT until this existed: deleting `queryParams` from the targeting set left the
+    // whole estate green. The path slot has several fixtures and the header slot has the test above;
+    // the QUERY slot - which D1's own text names first, beside the path - had none where the slot
+    // was observable, because the only fixture carrying a query template is a READ (`mutates:
+    // false`), and on a read `mayBeModelFilled` answers true whatever the slot says.
+    //
+    // It is not a live escape today - the allowlist refuses `unused` on a write as firmly as it
+    // refuses `targeting` - but it is D1's stated rule going unasserted, and it is what the prompt's
+    // own slot table tells a model about where its value will land.
+    const q: IntegrationAction = {
+      ...submeterPeca,
+      httpConfig: { ...submeterPeca.httpConfig!, path: '/pecas', queryParams: { processo: '{{numero}}' } },
+    };
+    expect(argSlotsOf(q.httpConfig).numero).toBe('targeting');
+    const v = verdictOn(q, { args: { numero: '999/24.0T8LSB' } });
+    expect(v.passed).toBe(false);
+    expect(failed(v, 'targeting')).toBe(true);
+    // …and it is refused as an argument this platform WATCHED land in the URL, not as one whose
+    // destination it could not see - the two messages exist because the two causes differ.
+    expect(v.checks.find((c) => c.name === 'targeting')?.detail).toContain('do not land in the request body');
+  });
+
   it('REFUSES a value that looks like a pasted credential', () => {
     const v = verdictOn(consultarProcesso, { args: { numero: 'Bearer sk-live-4f9a2b7c1d8e6f0a3b5c' } });
     expect(v.passed).toBe(false);
@@ -768,6 +791,14 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
   });
 
   it('caps what it emits and says so', () => {
+    // A PIN, IN A LITERAL, and it was a SURVIVING MUTANT until this line existed: every assertion
+    // below is written in terms of the constant, so `COMPOSE_MAX_ITEMS` could be moved to any value
+    // at all and the whole estate stayed green. That is precisely the defect round three closed for
+    // `COMPOSE_MAX_COLLECTION_ROWS` two tests down, on the SIBLING constant, and did not close here.
+    // A cap is a promise about how much of an answer a caller silently does not receive, so moving
+    // it is a decision somebody takes in this file rather than a number that drifts.
+    expect(COMPOSE_MAX_ITEMS).toBe(200);
+
     const many = Array.from({ length: COMPOSE_MAX_ITEMS + 5 }, (_, i) => ({ numeroProcesso: `p${i}`, clienteId: 'c1' }));
     const out = composeRows({ plan: CANONICAL_PLAN as never, actionRows: many, collectionRows: CLIENT_ROWS });
     expect(out.items).toHaveLength(COMPOSE_MAX_ITEMS);
@@ -845,6 +876,22 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
       const v = verifyComposePlan({ planned: { ...CANONICAL_PLAN, collection: bad } });
       expect(v.passed).toBe(false);
     }
+  });
+
+  it('nothing below `shape` is judged on a malformed plan - the suite does not guess at a repair', () => {
+    // A SURVIVING MUTANT until this existed: deleting the shape check for a MISSING `collection`
+    // changed no verdict, because `collection_name` refuses `undefined` too. Both statements are
+    // real, only one can fire, and what distinguishes them is the CHECK LIST - which is the rule
+    // itself (`verifyPlannedArgs` is asserted the same way, in section 1): a suite that keeps
+    // judging a plan it has already found malformed is a suite inventing the artifact it judges.
+    const noCollection = verifyComposePlan({ planned: { compose: true, where: CANONICAL_PLAN.where, join: CANONICAL_PLAN.join } });
+    expect(noCollection.passed).toBe(false);
+    expect(noCollection.checks.map((c) => c.name)).toEqual(['shape']);
+    expect(noCollection.plan).toBeNull();
+    // A WELL-FORMED plan is judged all the way down, so the assertion above is about the
+    // short-circuit rather than about this suite only ever running one check.
+    expect(verifyComposePlan({ planned: CANONICAL_PLAN }).checks.map((c) => c.name))
+      .toEqual(['shape', 'collection_name', 'predicate']);
   });
 
   it('`{ "compose": false }` is a well-formed answer that yields no plan', () => {
@@ -948,10 +995,23 @@ describe('CANONICAL: "todos os processos de clientes com menos de 40 anos"', () 
 });
 
 // ---------------------------------------------------------------------------------------------
-// 5. What COMPOSE refuses
+// 5. What COMPOSE does INSTEAD of refusing
 // ---------------------------------------------------------------------------------------------
 
-describe('compose refuses rather than guesses', () => {
+/**
+ * THE LADDER MAY ONLY ADD AN ANSWER, AND THE COMPOSE RUNG IS WHERE THAT WAS STILL FALSE.
+ *
+ * Three paths ended in `outcome: 'refused'`, and TWO OF THEM DID SO AFTER THE REMOTE CALL HAD
+ * ALREADY BEEN MADE AND HAD SUCCEEDED: the product performed the caller's work, got a good answer
+ * back, and then discarded it because a later stage could not run. Spending the side effect and
+ * throwing away the result is worse than refusing up front. The third (`compose_refused`) did not
+ * spend the side effect, but it ended a call that executed before this slice existed.
+ *
+ * All three now return the EXECUTED arm's answer unchanged, with the `compose` step on the ladder
+ * saying the composition did not apply and why. The load-bearing assertion in each case is not the
+ * outcome word - it is that THE ROWS THE PRODUCT HAD IN HAND REACHED THE CALLER.
+ */
+describe('the compose rung stands down; it never takes an answer away', () => {
   it('a WRITE never ENTERS the compose rung: it executes as it always did, and no model is asked', async () => {
     // THE REGRESSION THIS PINS. `submeter_peca` is matched lexically by this goal and the goal has
     // residue, so the old shape asked a model for a plan and then refused the whole call when one
@@ -979,26 +1039,52 @@ describe('compose refuses rather than guesses', () => {
     expect(res.ladder?.find((s) => s.rung === 'compose')?.detail).toContain('can change data');
   });
 
-  it('an unknown collection is refused by name', async () => {
+  it('an UNKNOWN COLLECTION does not discard the answer the remote already gave', async () => {
     await seed([processos]);
     const { planner } = plannerEmitting([composeBlock({ ...CANONICAL_PLAN, collection: 'clientes' })]);
     const { seam } = collectionsOf({ clients: CLIENT_ROWS });
-    const { ctx } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: { processos: PROCESS_ROWS } });
+    const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: { processos: PROCESS_ROWS } });
 
     const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
-    if (res.outcome !== 'refused') throw new Error(`expected refused, got ${res.outcome}`);
-    expect(res.code).toBe('compose_unknown_collection');
+
+    // Before the fix: `refused` / `compose_unknown_collection` - decided AFTER the line below had
+    // already run and answered 200, so the rows were fetched and then thrown away.
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    expect(calls).toHaveLength(1);
+    // THE LOAD-BEARING ASSERTION: what the action returned reached the caller, whole.
+    expect(res.result.success).toBe(true);
+    expect(res.result.data).toEqual({ processos: PROCESS_ROWS });
+    // Nothing was narrowed, so nothing claims to have been.
+    expect((res as { items?: unknown }).items).toBeUndefined();
+    expect((res as { composition?: unknown }).composition).toBeUndefined();
+    const step = res.ladder?.find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('refused');
+    expect(step?.detail).toContain('clientes');
+    expect(res.ladder?.find((s) => s.rung === 'reuse')?.verdict).toBe('taken');
+    // No join happened, so no audit row claims one did.
+    expect(await activityLogs.find({ type: 'capability_achieve_compose' })).toHaveLength(0);
   });
 
-  it('an action result with no single list is refused rather than reshaped', async () => {
+  it('an UNSHAPED result is neither reshaped NOR substituted for the result itself', async () => {
     await seed([processos]);
     const { planner } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
     const { seam } = collectionsOf({ clients: CLIENT_ROWS });
-    const { ctx } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: { processos: PROCESS_ROWS, arquivados: [] } });
+    const two = { processos: PROCESS_ROWS, arquivados: [] };
+    const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: two });
 
     const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
-    if (res.outcome !== 'refused') throw new Error(`expected refused, got ${res.outcome}`);
-    expect(res.code).toBe('compose_unshaped_result');
+
+    // Before the fix: `refused` / `compose_unshaped_result`, again after a successful execute.
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    expect(calls).toHaveLength(1);
+    // THE LOAD-BEARING ASSERTION: BOTH lists reached the caller. This rung would not guess which
+    // one the goal meant, and "I will not guess" is not a reason to hand back neither.
+    expect(res.result.data).toEqual(two);
+    expect((res as { items?: unknown }).items).toBeUndefined();
+    const step = res.ladder?.find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('refused');
+    expect(step?.detail).toContain('several lists');
+    expect(await activityLogs.find({ type: 'capability_achieve_compose' })).toHaveLength(0);
   });
 
   /**
@@ -1039,16 +1125,55 @@ describe('compose refuses rather than guesses', () => {
     expect(audits).toHaveLength(0);
   });
 
-  it('a malformed plan refuses with compose_refused, distinct from the write refusal', async () => {
+  it('a plan the GUARDRAILS reject is discarded, and the read the caller asked for still runs', async () => {
     await seed([processos]);
+    // No `where` and no `join`: `verifyComposePlan`'s shape check rejects the whole plan.
     const { planner } = plannerEmitting([composeBlock({ compose: true, collection: 'clients' })]);
-    const { seam } = collectionsOf({ clients: CLIENT_ROWS });
+    const { seam, reads } = collectionsOf({ clients: CLIENT_ROWS });
     const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: { processos: PROCESS_ROWS } });
 
     const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
-    if (res.outcome !== 'refused') throw new Error(`expected refused, got ${res.outcome}`);
-    expect(res.code).toBe('compose_refused');
-    expect(calls).toHaveLength(0);
+
+    // Before the fix this was `refused` / `compose_refused` and `calls` was EMPTY: an `achieve` on
+    // a trusted READ that had been executing since long before this slice stopped executing
+    // because a model wrote a malformed join.
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    expect(calls).toHaveLength(1);
+    expect(res.result.data).toEqual({ processos: PROCESS_ROWS });
+    // Not one thing the model named survived the discard: no collection was ever read.
+    expect(reads).toHaveLength(0);
+    const step = res.ladder?.find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('refused');
+    // BOTH shape violations are reported, so a suite that stopped checking either one reds here.
+    expect(step?.violations?.join(' ')).toContain('"where" is missing');
+    expect(step?.violations?.join(' ')).toContain('"join" is missing');
+    expect(res.ladder?.find((s) => s.rung === 'reuse')?.verdict).toBe('taken');
+  });
+
+  /**
+   * THE COUNT IS THE INVARIANT. Three previous rounds asserted "a rung may only ADD an answer" in
+   * prose while the code carried three refusal codes that subtracted one. A sentence cannot be
+   * mutated; a union member can, so this asserts the union.
+   *
+   * `AchieveRefusalCode` is a TYPE, so the assertion is on the SOURCE - the same technique the
+   * static-guard section below uses, and for the same reason: a refusal code that exists is a
+   * refusal code somebody will reach for.
+   */
+  it('the ladder introduces NO refusal code: none of the three that subtracted an answer exists', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'integrations', 'integration-achieve.ts'), 'utf-8');
+    const union = src.slice(src.indexOf('export type AchieveRefusalCode ='));
+    const members = (union.slice(0, union.indexOf(';')).match(/'[a-z_]+'/g) ?? []).map((m) => m.replace(/'/g, ''));
+    // Exactly the thirteen AUTHOR-arm codes that pre-date the ladder, and nothing else.
+    expect(members).toEqual([
+      'ambiguous_goal', 'provisional_match', 'not_custodian', 'published_row', 'baseline_package',
+      'not_writable', 'origin_refused', 'origin_unbound', 'authoring_unavailable', 'billing_blocked',
+      'authoring_failed', 'verification_failed', 'persist_failed',
+    ]);
+    // …and nothing in the module can construct one of the removed codes either.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+    for (const gone of ['compose_refused', 'compose_unknown_collection', 'compose_unshaped_result', 'parametrize_refused', 'composed_write_refused']) {
+      expect(code, `${gone} is still reachable`).not.toContain(gone);
+    }
   });
 });
 
@@ -1184,13 +1309,47 @@ describe('static: the ladder routes through the ONE gated executor and never pic
     expect(compose).not.toContain('.actions');
   });
 
-  it('the compose stage reaches no store of its own', () => {
-    expect(compose).not.toContain('collections-engine.js\').CollectionsEngine');
+  it('the compose stage reaches no store of its own - one NAME from the engine, never the engine', () => {
+    // THE OLD FORM OF THIS GUARD COULD NOT FAIL. It searched for the literal
+    // `collections-engine.js').CollectionsEngine` - a CommonJS `require(...)` shape that an ESM file
+    // cannot produce - while the hazard it exists to catch, `import { CollectionsEngine } from
+    // '../data/collections-engine.js'`, sailed through it. A SURVIVING MUTANT proved exactly that:
+    // adding that import to the module left all four slice suites green.
+    //
+    // So the guard now reads the IMPORT LIST. `action-compose.ts` legitimately imports one thing
+    // from the store module - `collectionName`, the name validator, so the plan is judged by the
+    // store's own rule rather than by a second one written in the rung - and nothing else.
+    const imported = [...compose.matchAll(/import\s*\{([^}]*)\}\s*from\s*'([^']+)'/g)]
+      .filter(([, , from]) => (from as string).includes('collections-engine'))
+      .flatMap(([, names]) => (names as string).split(',').map((n) => n.trim().replace(/^type\s+/, '')).filter(Boolean));
+    expect(imported).toEqual(['collectionName']);
     expect(compose).not.toContain('getDb');
     expect(compose).not.toContain('stores.js');
+    // …and no reach around the import list either.
+    expect(compose).not.toContain('require(');
+    expect(compose).not.toContain('await import(');
   });
 
   it('the product modules never import the authoring core directly (tier 3 -> tier 5 runs one way)', () => {
     for (const src of [achieve, parametrize, compose]) expect(src).not.toContain('agents/');
+  });
+
+  it('the collection reader cannot carry a fact about anybody else: not-found has NO payload', () => {
+    // WHY THIS IS A SOURCE ASSERTION AND NOT A BEHAVIOURAL ONE, stated so the isolation suite's
+    // equality check is not read as more than it is. `achieve-compose-isolation.test.ts` test 2
+    // compares the WHOLE response body for a collection name another org holds against the body for
+    // a name nobody holds anywhere, and they are equal - but no mutation of this module can break
+    // that equality, because `applyComposition` cannot reach another tenant's scope and therefore
+    // has no fact about one to leak. That test is a regression guard against a future that CAN.
+    //
+    // What IS mutation-killable is the SHAPE that makes the oracle impossible: the reader's
+    // not-found answer is a bare tag. A `candidates`, a count of other holders, a "did you mean" -
+    // each would be a place for such a fact to travel, and each reds this.
+    // Up to the terminating `;` - the one followed by a newline, not the one inside a member.
+    const union = (compose.match(/export type AppCollectionRead =[\s\S]*?;[ \t]*\n/) ?? [''])[0].replace(/\s+/g, ' ');
+    expect(union).toContain("| { kind: 'rows'; rows: Record<string, unknown>[] }");
+    expect(union).toContain("| { kind: 'unknown_collection' }");
+    // EXACTLY two members - a third would be a third thing the caller could be told.
+    expect(union.match(/kind: '/g) ?? []).toHaveLength(2);
   });
 });

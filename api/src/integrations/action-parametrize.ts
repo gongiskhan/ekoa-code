@@ -347,9 +347,20 @@ export function verifyPlannedArgs(input: VerifyPlannedArgsInput): ParametrizeVer
   return done(args);
 }
 
-/** Local interpolation for the render probe, `authored-action.ts`'s: a name that is NOT in `vars`
- *  stays a literal `{{name}}` rather than collapsing to '', because a probe that silently blanks a
- *  variable renders a URL the real call never makes. */
+/**
+ * Local interpolation for the render probe, `authored-action.ts`'s: a name that is NOT in `vars`
+ * stays a literal `{{name}}` rather than collapsing to '', because a probe that silently blanks a
+ * variable renders a URL the real call never makes.
+ *
+ * THAT FALLBACK IS DEAD CODE AT EVERY CALL SITE HERE, and saying so is better than leaving a test
+ * to pretend otherwise. `vars` is pre-filled by iterating `used`, which `namesIn` builds from
+ * exactly the three templates this function is then called on (`baseUrl`, `path`, each query
+ * value), with `RENDER_PROBE_VALUE` for anything unsupplied - and both sides use the SAME
+ * `PLACEHOLDER_RE`. So every key reached below is present, and dropping the `??` changes nothing:
+ * a mutation sweep confirmed it as an equivalent mutant (`docs/findings.md`, round four). It is
+ * kept as the correct default for a future caller that renders a template `used` was not built
+ * from - a header, say - not as a branch anything exercises today.
+ */
 function renderTemplate(template: string, vars: Record<string, string>): string {
   return template.replace(PLACEHOLDER_RE, (_m, key: string) => vars[key] ?? `{{${key}}}`);
 }
