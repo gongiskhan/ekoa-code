@@ -2711,3 +2711,98 @@ registered, neither secret-shaped, one killing the character class and one killi
 
 DIAGRAM CHECK (FIXED-12): tests only. No module, no runtime edge, no stored shape and no flow
 changed, so no diagram is affected - the check made, not skipped.
+
+## 2026-08-20 - S1: an action's evidence is its own collection, and graduation stops being a shape check
+
+**THE EVIDENCE MODEL, AND WHY IT IS NOT A FIELD.** Slice S1 adds `integration_action_evidence`
+(`api/src/data/stores.ts`, wrapped by `api/src/integrations/action-evidence-store.ts`): exactly ONE
+live row per `(orgId, integrationKey, actionName)`, the `_id` derived from that tuple and nothing
+else, so each validated run SUPERSEDES the previous by writing the same id. No runId, no timestamp
+and no sequence in the id - that is what makes "one live evidence row per action" structural rather
+than a delete somebody has to remember.
+
+It is deliberately NOT a field on the definition document, on two independent grounds either of which
+decides it. It would ride `publishedSnapshot` into every other org - an evidence sample is one
+tenant's real request and real response body, i.e. client names and processo numbers - leaving a
+scrubber remembering to strip it as the only thing between that and a cross-org leak; in its own
+collection there is nothing to remember, because no publish path reads the module. That structural
+exclusion IS the sanitisation for promoted/global integrations (CONVERGENCE_PLAN D5). And it would
+race the 16MB document limit while being re-serialised on every compare-and-swap of a row that every
+reader of every action already touches - the Trap T2 argument `captured-calls-store.ts` already made.
+
+**IT IS NOT `integration_captured_calls`, AND BOTH EXIST.** P2.0's collection is the UNBOUNDED,
+MACHINE-facing raw trace a recipe is compiled out of and then DISCARDED (`discardCapture` is a normal
+end of life, not a deletion). Evidence is the BOUNDED, durable, HUMAN-facing sample the integration
+detail page renders and the graduation prerequisite reads. Collapsing them would mean either keeping
+hundreds of raw rows alive forever to render one sample, or destroying the sample the moment a recipe
+compiled. Different questions, opposite lifecycles, two collections.
+
+**NO NEW REDACTION, AND THAT IS THE SAFETY ARGUMENT.** The api-call sample IS the executor's own
+`requestSummary` - the object `action-executor.ts` already builds on EVERY call through
+`redactSecretsDeep`/`redactHeaders`/`redactUrl` and already persists verbatim on the FAILURE path -
+plus a response body through the same `redactSecretsDeep` and the same
+`truncateForDisplay(..., MAX_BODY_DISPLAY_BYTES)`. Until this slice that summary was simply DISCARDED
+on success. If the redaction were wrong here, the failure path would have been leaking the identical
+bytes since C2. The store then re-checks the WHOLE assembled document against the run's live
+`SecretRegistry` and REFUSES to write a row carrying a live value anywhere in it, including in a
+field a later slice adds and forgets to filter - `captured-calls-store.ts`'s last gate, for its
+reasons.
+
+**POINTERS, NOT COPIES, FOR THE AUTOMATION BACKINGS.** browser-steps and bash-cli evidence stores
+`{runId, stepIndex}` plus the screenshot's own plane URL and a capped excerpt of
+`StepRecord.output`. Copying the PNGs would have created a second copy of an authenticated
+client-portal session under a different access rule - the exact failure `screenshot-plane.ts` exists
+to have fixed. A pointer inherits the rule that already exists.
+
+**A NEW SEAM, BECAUSE OF FIXED-1.** Reading a run means reading `RunRecord`/`StepRecord`/the
+screenshot layout, all in `automation/`, a tier `integrations/` may not import. So the executor
+declares a `RunEvidenceCollector` seam, `api/src/automation/action-evidence.ts` implements it, and
+`server.ts` binds the two halves. The composition root now binds ONE `executorDeps` bundle (the
+automation handler plus the two evidence seams) that all four executor call sites spread, rather than
+each site re-listing members: that file's own comment already warned a call site omitting
+`runAutomationBackedAction` "silently breaks every automation-backed action", and a second seam with
+the same silent-omission property doubles the chance of a half-landed wiring. The guard in
+`tests/integrations/user-defined-poll.test.ts` was widened to match AND to assert the bundle's
+contents seam by seam - without that second half, widening it would have WEAKENED it.
+
+**GRADUATION GAINS TEETH (the behaviour change).** `promoteToTrusted` proved SHAPE and never
+BEHAVIOUR: every guardrail `verifyAuthoredAction` runs is a property of the DRAFT, so an action could
+graduate to `trusted` - and so become auto-runnable by `achieve` - having NEVER RUN ONCE.
+(`authored-action-guardrails-cannot-prove-an-endpoint-exists` records a real `GET /stats` that passed
+all eight checks and 404'd the moment a human promoted it.) It now takes a REQUIRED `evidence`
+argument placed BEFORE the defaulted `now`, so a caller cannot forget it because omitting it does not
+compile, and refuses `unvalidated` when the row is absent, when its `shape` names different bytes, or
+when it carries no shape at all. The gate is SATISFIABLE, which is what keeps it a gate and not a
+ban: a provisional action is stored as a write, so the human approves it, runs it once, sees what it
+really returned, and then promotes - the path the finding itself asks for, now pinned end to end in
+`tests/contract/integrations-achieve.test.ts`.
+
+**THE ONE EDIT IN A FILE THIS SLICE DOES NOT OWN.** `promoteToTrusted` has exactly one production
+caller, `trustAuthoredAction` in `integration-achieve.ts` (owned by the concurrent S4/S5 stream), so
+the prerequisite could only be wired there. Enforcing it in the route instead was considered and
+rejected: it would put a domain gate in a consumer, bypassed by the next direct caller. One line was
+changed, nothing else in that file, and the line is PINNED - mutating it to `null` reddens 4 cases.
+An unpinned call site would have made the whole gate a surviving mutant, which is the dead-binding
+class this repo has now produced four times.
+
+**RETENTION, STATED NARROWLY.** `sweepExpiredScreenshots` gains a `pinnedRunIds` exemption so a run
+named by live evidence survives its own expiry, bounded to the ONE run each action's live evidence
+names and released when that evidence is superseded. **This is an age-sweep exemption and is NOT an
+erasure story, and is deliberately not described as one anywhere.** There is no erasure path over
+this tree at all: `deleteRunScreenshots` has no production caller, which S1 found and logged as
+`screenshot-erasure-path-has-no-production-caller` (OPEN, MEDIUM). A pinned run is therefore retained
+past 7 days with nothing able to remove it on request. Recorded as a gap rather than papered over;
+closing it is its own slice, and half-wiring it would produce a fifth instance of the same class.
+
+**A STALE LEDGER HEADING CORRECTED.** `F-2026-08-03-ungated-write-rails` read "four FIXED, one OPEN"
+for sixteen days after its fifth entry was fixed, one heading above the entry marked FIXED 2026-08-04.
+S1 was briefed to close those two halves as open work and would have re-implemented a live control had
+it trusted the heading over the code. Heading and lead paragraph corrected, with the correction itself
+recorded in the ledger.
+
+DIAGRAM CHECK (FIXED-12): DONE, append-only. `docs/diagrams/05-data-model.excalidraw` gains the new
+collection, its id derivation, the not-a-field argument and the captured-calls contrast;
+`docs/diagrams/02-module-map.excalidraw` gains the two new modules, the cross-tier seam and its
+composition-root bundle, the capture points, the retention exemption and the graduation gate. Both
+appended as single text elements carrying `text`, `rawText` and `originalText`; no existing element
+was edited (74 insertions, 0 deletions).

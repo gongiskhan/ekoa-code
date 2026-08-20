@@ -63,7 +63,7 @@ import {
   type IntegrationActionHttpConfig,
 } from './definitions.js';
 import { resolveDefinition } from './definition-registry.js';
-import { actionRequiresConsent, checkActionConsent, targetResolutionOf, type IntegrationActionConsentDescriptor } from './action-consent.js';
+import { actionRequiresConsent, actionShape, checkActionConsent, targetResolutionOf, type IntegrationActionConsentDescriptor } from './action-consent.js';
 import {
   definitionActorForCredential,
   resolveCredentialEgressBinding,
@@ -86,6 +86,12 @@ import {
   findHeaderValue,
   formUrlEncode,
 } from './http-template.js';
+import {
+  evidenceSecretsFromValues,
+  type ActionEvidenceKey,
+  type RecordEvidenceInput,
+  type RunStepEvidence,
+} from './action-evidence-store.js';
 
 export type FetchLike = (url: string, init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<Response>;
 
@@ -197,6 +203,20 @@ export type AutomationBackedHandler = (input: {
   mutates?: boolean;
 }) => Promise<ExecuteIntegrationActionResult>;
 
+/**
+ * Collect the per-step evidence of an automation run (slice S1). INJECTED, never imported: the
+ * run record, its `StepRecord.output` and its screenshot paths all live in `automation/`, which is
+ * a higher tier this module must not reach into (FIXED-1 / the module-direction table). The
+ * composition root binds it exactly as it binds `runAutomationBackedAction`.
+ *
+ * Answers `null` for a run it cannot resolve - a replay (`replay-…`, which has no
+ * `automationRuns` document behind it) or a run already swept.
+ */
+export type RunEvidenceCollector = (runId: string) => Promise<{
+  status?: string;
+  steps: RunStepEvidence[];
+} | null>;
+
 export interface ExecutorDeps {
   /** Transport seam; default plain fetch (SSRF-exempt by design). Tests inject a fake. */
   fetchImpl?: FetchLike;
@@ -204,6 +224,18 @@ export interface ExecutorDeps {
   timeoutMs?: number;
   /** Optional automation-backed action handler (the automation/ seam). */
   runAutomationBackedAction?: AutomationBackedHandler;
+  /**
+   * Persist the evidence of a VALIDATED run (slice S1). Injected so the unit lane can drive the
+   * capture without a store; `server.ts` binds it to the real `integration_action_evidence`
+   * collection. Absent ⇒ no evidence is recorded and execution is byte-for-byte unchanged, which
+   * is what keeps every existing caller of this executor working (Rule 7 additive).
+   */
+  recordActionEvidence?: (
+    key: ActionEvidenceKey,
+    input: RecordEvidenceInput,
+  ) => Promise<unknown>;
+  /** The automation-run half of the same capture. See `RunEvidenceCollector`. */
+  collectRunEvidence?: RunEvidenceCollector;
 }
 
 const MAX_BODY_DISPLAY_BYTES = 8_000;
@@ -434,7 +466,7 @@ export async function executeUserIntegrationAction(
     if (!deps.runAutomationBackedAction) {
       return { success: false, code: 'automation_required', error: `action "${input.actionName}" is automation-backed and requires the automation seam` };
     }
-    return deps.runAutomationBackedAction({
+    const automationResult = await deps.runAutomationBackedAction({
       binding: action.automationBinding,
       args: input.args,
       credentialFields: resolvedFields,
@@ -465,6 +497,35 @@ export async function executeUserIntegrationAction(
       // gates from drifting apart.
       mutates: actionRequiresConsent(action),
     });
+    // EVIDENCE (slice S1). A run that SUCCEEDED is the "last validated run" the detail page renders
+    // and the graduation prerequisite reads. Pointers only - `{runId, stepIndex}` plus capped
+    // excerpts - never copies of the screenshots, which stay behind the authenticated screenshot
+    // plane that already enforces org + owner on every byte.
+    await captureEvidence(
+      { orgId: input.orgId, integrationKey: input.integrationKey, actionName: input.actionName },
+      backingType,
+      // The bytes this run exercised. `promoteToTrusted` binds the graduation prerequisite to this
+      // rather than to the action's name, so a re-authored action cannot graduate on an old run.
+      actionShape(input.integrationKey, action),
+      deps,
+      async () => {
+        if (!automationResult.success) return null;
+        const runId = runIdOf(automationResult.data);
+        if (runId === undefined) return null;
+        const collected = await deps.collectRunEvidence?.(runId);
+        if (!collected) return null;
+        return {
+          kind: 'automation' as const,
+          runId,
+          ...(collected.status !== undefined ? { status: collected.status } : {}),
+          steps: collected.steps,
+        };
+      },
+      // The values this run actually resolved, so the store's last gate is checked against a real
+      // registry rather than an empty one. `resolvedFields` is the same bundle the seam received.
+      Object.values(resolvedFields),
+    );
+    return automationResult;
   }
 
   // `api-call`: guaranteed to carry an httpConfig — an EXPLICIT api-call without one is refused by
@@ -475,7 +536,63 @@ export async function executeUserIntegrationAction(
   // for value-based redaction in the failure summary and the returned data.
   const secretValues = Object.values(resolvedFields)
     .filter((v): v is string => typeof v === 'string' && v.length >= 4);
-  return executeHttpAction(httpConfig, stringVars, rawVars, deps, secretValues, binding, input.integrationKey);
+  return executeHttpAction(
+    httpConfig,
+    stringVars,
+    rawVars,
+    deps,
+    secretValues,
+    binding,
+    input.integrationKey,
+    // EVIDENCE (slice S1). The redacted `requestSummary` is built on EVERY call and, until this
+    // slice, thrown away on success - the failure path was the only one that kept it. The sample is
+    // that same object plus a capped response body through the same `redactSecretsDeep`; no new
+    // redaction is written here, and reusing the failure path's is the safety argument.
+    { orgId: input.orgId, integrationKey: input.integrationKey, actionName: input.actionName },
+    actionShape(input.integrationKey, action),
+  );
+}
+
+/** The run id an automation-backed answer carries, off `ActionRunEnvelope`. Structural rather than
+ *  imported: the envelope's type lives in `automation/`, a tier this module does not depend on. */
+function runIdOf(data: unknown): string | undefined {
+  if (typeof data !== 'object' || data === null) return undefined;
+  const runId = (data as { runId?: unknown }).runId;
+  return typeof runId === 'string' && runId !== '' ? runId : undefined;
+}
+
+/**
+ * Persist one evidence row, BEST EFFORT AND LOUD.
+ *
+ * The action has already run by the time this is called, so a throw here must never turn a
+ * succeeded call into a failed one - the same rule, for the same reason, as
+ * `discardEvidenceOfRemovedRecipes`. A missing sample is untidy; a call reported as failed after
+ * actually writing to a customer's account is worse.
+ */
+async function captureEvidence(
+  key: ActionEvidenceKey,
+  backingType: IntegrationActionBackingType,
+  shape: string | undefined,
+  deps: ExecutorDeps,
+  build: () => Promise<RecordEvidenceInput['evidence'] | null>,
+  secretValues: Iterable<unknown>,
+): Promise<void> {
+  if (!deps.recordActionEvidence) return;
+  try {
+    const evidence = await build();
+    if (!evidence) return;
+    await deps.recordActionEvidence(key, {
+      backingType,
+      ...(shape !== undefined ? { shape } : {}),
+      evidence,
+      secrets: evidenceSecretsFromValues(secretValues),
+    });
+  } catch (err) {
+    console.warn(
+      `[integrations] evidence for ${key.integrationKey}/${key.actionName} was not recorded: `
+        + `${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 /**
@@ -598,6 +715,11 @@ async function executeHttpAction(
   secretValues: string[] = [],
   binding: { enforced: boolean; origins: string[] } = { enforced: false, origins: [] },
   credentialLabel?: string,
+  /** Slice S1. Present ⇒ record the 2xx sample under this key. Absent ⇒ nothing is captured, which
+   *  is what every existing caller of this function does. */
+  evidenceKey?: ActionEvidenceKey,
+  /** The action shape the call exercises - stamped on the evidence row (slice S1). */
+  evidenceShape?: string,
 ): Promise<ExecuteIntegrationActionResult> {
   const baseUrl = interpolate(httpConfig.baseUrl, vars);
   if (!/^https?:\/\//i.test(baseUrl)) {
@@ -722,7 +844,26 @@ async function executeHttpAction(
     // Success: a 2xx body may still echo the client's own credential (which an automation may then
     // capture + persist via integration.call → capturedValues). Deep-redact the client's secret
     // values from the returned data; a token the API legitimately returns is a different value.
-    return { success: true, status: response.status, data: redactSecretsDeep(data, secretValues) };
+    const redactedData = redactSecretsDeep(data, secretValues);
+    // EVIDENCE (slice S1) - the ONE point where the request summary stops being discarded on
+    // success. The body goes through the SAME `redactSecretsDeep` and the SAME
+    // `truncateForDisplay(…, MAX_BODY_DISPLAY_BYTES)` the failure branch above applies, so the
+    // sample a person is shown can never contain more than the dump an operator already saw.
+    if (evidenceKey) {
+      await captureEvidence(evidenceKey, 'api-call', evidenceShape, deps, async () => ({
+        kind: 'api-call' as const,
+        request: requestSummary,
+        response: {
+          status: response.status,
+          body: truncateForDisplay(
+            redactSecretsDeep(bodyIsJson ? safeStringify(data) : text, secretValues) as string,
+            MAX_BODY_DISPLAY_BYTES,
+          ),
+          bodyIsJson,
+        },
+      }), secretValues);
+    }
+    return { success: true, status: response.status, data: redactedData };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // A transport error message can include the failed URL (secret in the query/authority) — redact.

@@ -520,7 +520,13 @@ describe('the executor remains the second net, so the authoring check is defence
         },
       },
     };
-    expect(promoteToTrusted(PROBE_INTEGRATION, failedVerification, actor('ownerA', 'orgA')))
+    // Slice S1: every promotion now also needs a validated run, so the fixtures state one. It is
+    // supplied HERE (rather than left absent) precisely so this case still isolates `passed` - an
+    // absent evidence row would refuse for the S1 reason and the assertion below would stop being
+    // about the verification verdict at all.
+    const validated = { shape: actionShape(PROBE_INTEGRATION, base), validatedAt: '2026-08-04T00:00:00.000Z' };
+
+    expect(promoteToTrusted(PROBE_INTEGRATION, failedVerification, actor('ownerA', 'orgA'), validated))
       .toEqual({ ok: false, reason: 'unverified' });
 
     // The same action with a PASSED verdict promotes — so the assertion is about `passed`, and the
@@ -529,10 +535,83 @@ describe('the executor remains the second net, so the authoring check is defence
       ...base,
       authoring: { ...failedVerification.authoring!, verification: { verifiedAt: '2026-08-03T00:00:00.000Z', passed: true, checks: [] } },
     };
-    const promoted = promoteToTrusted(PROBE_INTEGRATION, passing, actor('ownerA', 'orgA'));
+    const promoted = promoteToTrusted(PROBE_INTEGRATION, passing, actor('ownerA', 'orgA'), validated);
     if (!promoted.ok) throw new Error(`expected the passing record to promote, got ${promoted.reason}`);
     expect(promoted.action.authoring?.state).toBe('trusted');
     // …and a promoted action is believed, which is what makes the refusal above meaningful.
     expect(isTrustedAction(PROBE_INTEGRATION, promoted.action)).toBe(true);
+  });
+
+  /**
+   * SLICE S1 - GRADUATION NEEDS A VALIDATED RUN, AND IT IS BOUND TO THE BYTES.
+   *
+   * Every guardrail `verifyAuthoredAction` runs is a property of the DRAFT. None can know whether
+   * the endpoint exists (`authored-action-guardrails-cannot-prove-an-endpoint-exists` in
+   * docs/findings.md records a real `GET /stats` that passed all eight checks and 404'd once a human
+   * promoted it), so before this slice an action could become `trusted` - and therefore
+   * auto-runnable by `achieve` - having never run once.
+   *
+   * The fixture is a FULLY PROMOTABLE action in every pre-S1 respect: passed verification, honest
+   * fingerprint, right actor. So only the evidence term can produce these refusals.
+   */
+  describe('promotion needs the last validated run (slice S1)', () => {
+    /** Its own fixture - `base` above is scoped to the sibling case. */
+    const s1Base: IntegrationAction = {
+      actionName: 'consultar_processos',
+      description: 'a fully promotable draft in every pre-S1 respect',
+      mutates: false,
+      httpConfig: { method: 'GET', baseUrl: HOST, path: '/processos' },
+    };
+    const promotable = (): IntegrationAction => ({
+      ...s1Base,
+      authoring: {
+        state: 'provisional',
+        authoredBy: 'someone',
+        authoredAt: '2026-08-03T00:00:00.000Z',
+        goal: 'g',
+        declaredMutates: false,
+        shape: actionShape(PROBE_INTEGRATION, s1Base),
+        verification: { verifiedAt: '2026-08-03T00:00:00.000Z', passed: true, checks: [] },
+      },
+    });
+
+    it('refuses an action that has never had a validated run', () => {
+      expect(promoteToTrusted(PROBE_INTEGRATION, promotable(), actor('ownerA', 'orgA'), null))
+        .toEqual({ ok: false, reason: 'unvalidated' });
+    });
+
+    it('refuses evidence whose run exercised DIFFERENT bytes', () => {
+      // The hole this closes: author, run once, re-author into something else, graduate on the old
+      // run. Same shape check `record.shape` already performs for the draft, applied to the proof.
+      const stale = { shape: 'sha256-of-some-other-action', validatedAt: '2026-08-04T00:00:00.000Z' };
+      expect(promoteToTrusted(PROBE_INTEGRATION, promotable(), actor('ownerA', 'orgA'), stale))
+        .toEqual({ ok: false, reason: 'unvalidated' });
+    });
+
+    it('refuses evidence that names no shape at all', () => {
+      // A row written before the field existed. "We cannot tell which bytes ran" must not share a
+      // code path with "these bytes ran".
+      const shapeless = { validatedAt: '2026-08-04T00:00:00.000Z' };
+      expect(promoteToTrusted(PROBE_INTEGRATION, promotable(), actor('ownerA', 'orgA'), shapeless))
+        .toEqual({ ok: false, reason: 'unvalidated' });
+    });
+
+    it('promotes on evidence of THIS action, so the gate is a gate and not a ban', () => {
+      const matching = { shape: actionShape(PROBE_INTEGRATION, s1Base), validatedAt: '2026-08-04T00:00:00.000Z' };
+      const promoted = promoteToTrusted(PROBE_INTEGRATION, promotable(), actor('ownerA', 'orgA'), matching);
+      if (!promoted.ok) throw new Error(`expected promotion, got ${promoted.reason}`);
+      expect(promoted.action.authoring?.state).toBe('trusted');
+    });
+
+    it('re-confirming an ALREADY-trusted action does not need evidence again', () => {
+      // Idempotence: nothing is granted here that was not already granted, and refusing would mean
+      // an action whose evidence has since been swept could never be re-confirmed.
+      const already: IntegrationAction = {
+        ...s1Base,
+        authoring: { ...promotable().authoring!, state: 'trusted' },
+      };
+      const promoted = promoteToTrusted(PROBE_INTEGRATION, already, actor('ownerA', 'orgA'), null);
+      expect(promoted.ok && promoted.alreadyTrusted).toBe(true);
+    });
   });
 });

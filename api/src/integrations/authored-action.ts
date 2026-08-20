@@ -470,7 +470,20 @@ export function isTrustedAction(integrationKey: string, action: IntegrationActio
 
 export type PromoteAuthoredActionResult =
   | { ok: true; action: IntegrationAction; alreadyTrusted: boolean }
-  | { ok: false; reason: 'not_authored' | 'unverified' };
+  | { ok: false; reason: 'not_authored' | 'unverified' | 'unvalidated' };
+
+/**
+ * WHAT THE PROMOTION READS ABOUT THE LAST VALIDATED RUN (slice S1).
+ *
+ * Structural, and deliberately the SMALLEST projection of `ActionEvidenceDoc` that answers the
+ * question - this module stays pure and gains no store edge, and a caller cannot accidentally
+ * satisfy the gate by handing over something that merely looks like evidence.
+ */
+export interface ValidatedRunEvidence {
+  /** The action SHAPE the validated run actually exercised. */
+  shape?: string;
+  validatedAt: string;
+}
 
 /**
  * The pure half of a promotion: provisional -> trusted, letting the DECLARED `mutates` take effect.
@@ -478,18 +491,54 @@ export type PromoteAuthoredActionResult =
  * Refuses `unverified` when the record's fingerprint no longer matches the action's bytes (it was
  * re-authored since it was verified) or when the frozen verification did not pass. The caller owns
  * the authorisation half — who may promote, and the shape the human echoed back.
+ *
+ * ── AND IT NOW REFUSES `unvalidated` (slice S1) ───────────────────────────────────────────────
+ *
+ * Until this slice, promotion proved SHAPE and never BEHAVIOUR: every guardrail
+ * `verifyAuthoredAction` runs is a property of the DRAFT, and none of them can know whether the
+ * endpoint exists, let alone whether it does what the description claims. That is not a gap in the
+ * guardrails - `authored-action-guardrails-cannot-prove-an-endpoint-exists` in docs/findings.md
+ * records a real `GET /stats` that passed all eight checks and 404'd the moment a human promoted
+ * it - but it did mean an action could graduate to `trusted`, and so become auto-runnable by
+ * `achieve`, having NEVER RUN ONCE.
+ *
+ * So the last validated run becomes the prerequisite. `evidence` is REQUIRED and sits BEFORE the
+ * defaulted `now`, on purpose: a caller cannot forget it, because omitting it does not compile.
+ *
+ * IT IS BOUND TO THE BYTES, not merely to the action name. The evidence carries the `shape` its run
+ * exercised, and a shape that no longer matches refuses - otherwise an action could be authored,
+ * run once, re-authored into something entirely different and then graduate on the old run's
+ * evidence. That is the identical hole `record.shape` closes for the verification two lines above,
+ * and it would be strange to close it for the draft and leave it open for the proof.
+ *
+ * EVIDENCE WITH NO SHAPE (a row written before this field existed) is refused rather than trusted:
+ * "we cannot tell which bytes this run exercised" must not share a code path with "these bytes ran".
+ *
+ * THE GATE IS SATISFIABLE, which is what keeps it a gate rather than a ban. A provisional action is
+ * stored as a WRITE whatever it claimed, so it meets the C2 write gate and a human must approve it
+ * - but nothing stops it EXECUTING once approved (`executeUserIntegrationAction` gates on consent,
+ * never on authoring state). The intended path is therefore exactly the one the finding above asks
+ * for: approve it, run it, see what it really returned, then promote it.
  */
 export function promoteToTrusted(
   integrationKey: string,
   action: IntegrationAction,
   actor: Actor,
+  evidence: ValidatedRunEvidence | null,
   now: () => number = Date.now,
 ): PromoteAuthoredActionResult {
   const record = action.authoring;
   if (!record) return { ok: false, reason: 'not_authored' };
   if (!record.verification?.passed) return { ok: false, reason: 'unverified' };
   if (record.shape !== actionShape(integrationKey, action)) return { ok: false, reason: 'unverified' };
+  // An ALREADY-trusted action is answered before the evidence gate: re-promoting is a no-op, and
+  // refusing it would mean an action whose evidence has since been swept could not be re-confirmed
+  // idempotently. Nothing is granted here that was not already granted.
   if (record.state === 'trusted') return { ok: true, action, alreadyTrusted: true };
+  if (!evidence) return { ok: false, reason: 'unvalidated' };
+  if (!evidence.shape || evidence.shape !== actionShape(integrationKey, action)) {
+    return { ok: false, reason: 'unvalidated' };
+  }
   return {
     ok: true,
     alreadyTrusted: false,

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi, afterEach } from 'vitest';
 import type { Actor } from '@ekoa/shared';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
@@ -12,6 +12,8 @@ import {
   __resetAutomationSeamsForTests,
   type DaemonConnection,
 } from '../../src/automation/seams.js';
+import { automationRunStore } from '../../src/automation/persistence.js';
+import { actionEvidenceStore } from '../../src/integrations/action-evidence-store.js';
 import { buildApp } from '../../src/server.js';
 import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../../src/config.js';
 
@@ -214,6 +216,96 @@ describe('the integration-action executor bound by buildApp carries the discover
     // NO AUTOMATION RAN. The short-circuit is the whole point of the slice.
     expect(await automationRuns.find({})).toEqual([]);
   }, 30_000);
+
+  /**
+   * SLICE S1 - THE EVIDENCE SEAMS ARE BOUND, not merely declared.
+   *
+   * `server.ts` builds ONE `executorDeps` bundle carrying `recordActionEvidence` (the real
+   * `integration_action_evidence` store) and `collectRunEvidence` (the real `automation/` collector),
+   * and hands the SAME bundle to all four executor call sites. Delete either member and nothing
+   * fails: actions keep running and simply stop leaving evidence - the exact silent-loss failure
+   * this file was created for, one seam over.
+   *
+   * WHAT IS REAL HERE AND WHAT IS STUBBED. The chain under test is entirely real: the bundle
+   * `buildApp` built, the executor's capture call, the bound collector, the bound store. The ONE
+   * stub is `automationRunStore.findByRunId`, and it is stubbed for a structural reason rather than
+   * for convenience - a REPLAY answers with a `replay-…` id that by construction has no
+   * `automationRuns` document behind it (`replay-action.ts`), so the collector correctly finds
+   * nothing and there is no evidence to record. Giving it a run to find is what makes the rest of
+   * the real chain observable.
+   */
+  describe('the EVIDENCE seams (slice S1)', () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it('consults the bound run-evidence collector, and records what it collects', async () => {
+      expect((await recipes.putRecipe(ORG, KEY, READ_ACTION, READ_RECIPE, {})).verdict).toBe('ok');
+
+      const findByRunId = vi.spyOn(automationRunStore, 'findByRunId').mockResolvedValue({
+        id: 'r-1',
+        automationId: AUTOMATION_ID,
+        startedAt: '2026-08-17T00:00:00.000Z',
+        status: 'succeeded',
+        inputs: {},
+        triggeredBy: 'user',
+        steps: [
+          { stepId: 's0', index: 0, status: 'succeeded', tier: 'deterministic', durationMs: 1, screenshotPath: `automation-runs/${AUTOMATION_ID}/r-1/step-0.png` },
+          { stepId: 's1', index: 1, status: 'succeeded', tier: 'deterministic', durationMs: 1, output: { kind: 'local_command', stdout: 'listed 1 case', stderr: '', exitCode: 0, durationMs: 1, truncated: false, timedOut: false } },
+        ],
+      } as never);
+      const record = vi.spyOn(actionEvidenceStore, 'recordEvidence');
+
+      const result = await executeIntegrationAction({
+        integrationKey: KEY,
+        actionName: READ_ACTION,
+        args: { ref: '2024-1' },
+        ownerUserId: OWNER,
+      });
+      expect(result.success).toBe(true);
+
+      // `findByRunId` has exactly ONE caller in api/src - the evidence collector - so its being
+      // called at all proves `collectRunEvidence` crossed from the composition root.
+      expect(findByRunId).toHaveBeenCalledTimes(1);
+      expect(findByRunId.mock.calls[0]![0]).toMatch(/^replay-/);
+
+      // …and the collected pointers reached the REAL store under the caller's own tenant.
+      expect(record).toHaveBeenCalledTimes(1);
+      const [key, input] = record.mock.calls[0]!;
+      expect(key).toEqual({ orgId: ORG, integrationKey: KEY, actionName: READ_ACTION });
+      expect(input.backingType).toBe('browser-steps');
+      expect(input.evidence).toMatchObject({
+        kind: 'automation',
+        status: 'succeeded',
+        steps: [
+          // A POINTER into the authenticated screenshot plane, never the PNG bytes.
+          { stepIndex: 0, screenshotUrl: `/automation-screenshots/${AUTOMATION_ID}/r-1/step-0.png` },
+          { stepIndex: 1, excerpt: 'listed 1 case' },
+        ],
+      });
+      // The bytes the run exercised, so a promotion can be bound to them.
+      expect(input.shape).toBeTypeOf('string');
+
+      // And it really landed - the store write is not merely attempted.
+      const stored = await actionEvidenceStore.getEvidence({ orgId: ORG, integrationKey: KEY, actionName: READ_ACTION });
+      expect(stored?.evidence).toMatchObject({ kind: 'automation', runId: findByRunId.mock.calls[0]![0] });
+    }, 30_000);
+
+    it('records NOTHING when the collector cannot resolve the run (the ordinary replay case)', async () => {
+      // The control: without the stub above, a replay's id resolves to no run and the previous
+      // evidence must be left standing rather than replaced by an empty row.
+      expect((await recipes.putRecipe(ORG, KEY, READ_ACTION, READ_RECIPE, {})).verdict).toBe('ok');
+      const record = vi.spyOn(actionEvidenceStore, 'recordEvidence');
+
+      const result = await executeIntegrationAction({
+        integrationKey: KEY,
+        actionName: READ_ACTION,
+        args: { ref: '2024-1' },
+        ownerUserId: OWNER,
+      });
+
+      expect(result.success).toBe(true);
+      expect(record).not.toHaveBeenCalled();
+    }, 30_000);
+  });
 
   it('carries the owner\'s WRITE ASSENT, so an approved write replays instead of hitting the gate', async () => {
     expect((await recipes.putRecipe(ORG, KEY, WRITE_ACTION, WRITE_RECIPE, {})).verdict).toBe('ok');

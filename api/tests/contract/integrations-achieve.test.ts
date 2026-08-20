@@ -10,6 +10,7 @@ import {
   integrationConfigs,
   integrationDefinitions,
   approvedIntegrationActions,
+  integrationActionEvidence,
 } from '../../src/data/stores.js';
 import { setActivation, __resetActivationForTests } from '../../src/data/activation.js';
 import { __resetRevocationsForTests } from '../../src/auth/revocation.js';
@@ -192,7 +193,12 @@ beforeEach(async () => {
   upstream.body = '{"ok":true}';
   drafts.turns = 0;
   drafts.reply = `\`\`\`action-json\n${JSON.stringify(AUTHORED)}\n\`\`\``;
-  for (const s of [users, gatewayKeys, activityLogs, billingAccounts, integrationConfigs, integrationDefinitions, approvedIntegrationActions]) {
+  // `integrationActionEvidence` IS IN THIS LIST FOR A REASON (slice S1). The executor now records an
+  // evidence row on every successful run, and the graduation gate READS that collection - so a row
+  // left behind by an earlier case in this file makes "cannot be promoted having never run" pass
+  // for the wrong reason, or fail for one. Found exactly that way: the journey spec passed alone and
+  // failed in the full contract run.
+  for (const s of [users, gatewayKeys, activityLogs, billingAccounts, integrationConfigs, integrationDefinitions, approvedIntegrationActions, integrationActionEvidence]) {
     await s.deleteMany({});
   }
   await mkUser('ownerA', 'orgA');
@@ -315,7 +321,38 @@ describe('achieve AUTHORS, and the key that authored cannot bless its own work',
     expect(byKey.status).toBe(401);
     expect((await actionView(token, 'exportar_faturas')).authoringState).toBe('provisional');
 
-    // (e) The HUMAN promotes it, echoing the shape they were shown.
+    // (e0) SLICE S1 - AND IT CANNOT BE PROMOTED HAVING NEVER RUN.
+    //
+    // Promotion used to prove SHAPE and never BEHAVIOUR: every guardrail `verifyAuthoredAction`
+    // runs is a property of the DRAFT, so this action - well-formed, verified, on a bound host -
+    // could graduate to `trusted`, and so become auto-runnable by `achieve`, without one byte ever
+    // having left the process. `authored-action-guardrails-cannot-prove-an-endpoint-exists` in
+    // docs/findings.md records a real `GET /stats` that passed all eight checks and 404'd the
+    // moment a human promoted it. The LAST VALIDATED RUN is now the prerequisite.
+    const tooEarly = await call(`/api/v1/integrations/${PROBE_INTEGRATION}/actions/exportar_faturas/trust`, token, {
+      method: 'POST', body: JSON.stringify({ shape: view.shape }),
+    });
+    await expectEnvelope(tooEarly, 400, 'VALIDATION_FAILED');
+    expect((await actionView(token, 'exportar_faturas')).authoringState).toBe('provisional');
+    expect(upstream.calls).toEqual([]);
+
+    // (e1) THE GATE IS SATISFIABLE, which is what keeps it a gate rather than a ban. A provisional
+    // action is stored as a WRITE whatever it declared, so it meets the C2 write gate: the human
+    // approves it, runs it once, and sees what it really returned - exactly the path the finding
+    // above asks for.
+    const approved = await call(`/api/v1/integrations/${PROBE_INTEGRATION}/actions/exportar_faturas/approval`, token, {
+      method: 'POST', body: JSON.stringify({ decision: 'once', shape: view.shape }),
+    });
+    expect(approved.status).toBe(200);
+    const ranOnce = await call(`/api/v1/integrations/${PROBE_INTEGRATION}/actions/exportar_faturas/execute`, token, {
+      method: 'POST', body: '{}',
+    });
+    expect(ranOnce.status).toBe(200);
+    expect(((await ranOnce.json()) as { success: boolean }).success).toBe(true);
+    // The run really went out - this is the behaviour the promotion is now allowed to rest on.
+    expect(upstream.calls).toEqual([{ url: `${HOST}/faturas`, method: 'GET' }]);
+
+    // (e2) NOW the HUMAN promotes it, echoing the shape they were shown.
     const promoted = await call(`/api/v1/integrations/${PROBE_INTEGRATION}/actions/exportar_faturas/trust`, token, {
       method: 'POST', body: JSON.stringify({ shape: view.shape }),
     });
@@ -333,7 +370,11 @@ describe('achieve AUTHORS, and the key that authored cannot bless its own work',
     const ran = (await finally_.json()) as { outcome: string; result: { success: boolean } };
     expect(ran.outcome).toBe('executed');
     expect(ran.result.success).toBe(true);
-    expect(upstream.calls).toEqual([{ url: `${HOST}/faturas`, method: 'GET' }]);
+    // TWO calls now: the human's validating run in (e1), then the key's own.
+    expect(upstream.calls).toEqual([
+      { url: `${HOST}/faturas`, method: 'GET' },
+      { url: `${HOST}/faturas`, method: 'GET' },
+    ]);
   }, 30_000);
 
   it('a promotion echoing a stale shape is refused, and the action stays provisional', async () => {

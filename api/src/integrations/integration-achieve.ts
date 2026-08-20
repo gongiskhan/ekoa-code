@@ -89,6 +89,10 @@ import {
   type AuthoredActionDraft,
   type AuthoredActionVerification,
 } from './authored-action.js';
+// SLICE S1 (branch `feat/s1-s3-integration-surface`) - the evidence row the graduation prerequisite
+// reads. See the call-site comment in `trustAuthoredAction`; this import and that call are the whole
+// of S1's footprint in this file.
+import { actionEvidenceStore } from './action-evidence-store.js';
 import {
   executeIntegrationCapabilityAction,
   resolveCapabilityDefinition,
@@ -741,7 +745,16 @@ export type TrustAuthoredActionResult =
   /** The action was written by a human; there is nothing to promote. */
   | { verdict: 'not_authored' }
   /** Re-authored since it was verified, or its frozen verification did not pass. */
-  | { verdict: 'unverified' };
+  | { verdict: 'unverified' }
+  /**
+   * SLICE S1 (branch `feat/s1-s3-integration-surface`) - the action has never had a validated run,
+   * or its last one exercised different bytes.
+   *
+   * Distinct from `unverified` deliberately: that one means "the DRAFT no longer checks out", this
+   * one means "the draft checks out and has never actually run". Collapsing them would tell a user
+   * to re-author an action whose only problem is that nobody has tried it yet.
+   */
+  | { verdict: 'unvalidated' };
 
 /**
  * PROMOTE an authored action to trusted — the human half of this slice.
@@ -781,8 +794,23 @@ export async function trustAuthoredAction(
   if (!action.authoring) return { verdict: 'not_authored' };
   if (actionShape(integrationKey, action) !== shape) return { verdict: 'shape_mismatch' };
 
-  const promoted = promoteToTrusted(integrationKey, action, actor, now);
-  if (!promoted.ok) return { verdict: promoted.reason === 'not_authored' ? 'not_authored' : 'unverified' };
+  // ── SLICE S1 CALL-SITE CHANGE (branch `feat/s1-s3-integration-surface`) ────────────────────────
+  // This is the ONLY edit that slice makes to this file, and it is here because there is nowhere
+  // else it can be: `promoteToTrusted` is the one producer of `state: 'trusted'` and this is its one
+  // production caller, so a graduation prerequisite wired anywhere else would be a gate in a
+  // consumer that any future caller bypasses.
+  //
+  // Promotion used to prove SHAPE and never BEHAVIOUR - an action could graduate to `trusted`, and
+  // so become auto-runnable by `achieve`, having never run once. The LAST VALIDATED RUN is now the
+  // prerequisite: `integration_action_evidence` holds one live row per (org, integration, action),
+  // written by the executor on a successful run and stamped with the action shape that run
+  // exercised. `promoteToTrusted` refuses when it is missing or names different bytes.
+  const evidence = await actionEvidenceStore.getEvidence({ orgId: actor.orgId, integrationKey, actionName });
+  const promoted = promoteToTrusted(integrationKey, action, actor, evidence, now);
+  if (!promoted.ok) {
+    if (promoted.reason === 'not_authored') return { verdict: 'not_authored' };
+    return { verdict: promoted.reason === 'unvalidated' ? 'unvalidated' : 'unverified' };
+  }
 
   if (!promoted.alreadyTrusted) {
     const actions = [...doc.actions];

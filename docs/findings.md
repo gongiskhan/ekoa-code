@@ -6,6 +6,48 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`screenshot-erasure-path-has-no-production-caller`** (2026-08-20, OPEN, **MEDIUM, raised to
+  MEDIUM by slice S1** - dead binding + a GDPR gap that evidence pins make load-bearing; found
+  while wiring S1's retention exemption, NOT caused by it). `deleteRunScreenshots`
+  (`api/src/automation/screenshot-plane.ts`) has **no production caller**. A grep over `api/`
+  returns exactly three hits: its own definition, its re-export from `automation/index.ts`, and
+  `api/tests/security/screenshot-plane.test.ts`, which calls it directly. Nothing in `api/src`
+  invokes it - not a run delete, not a user delete, not an org delete, not any request path.
+
+  **Its docblock claims otherwise**: *"Erase every screenshot for one run (the delete-on-run-delete
+  / erasure-request path)"*. There is no delete-on-run-delete path and there is no erasure-request
+  path; the only thing that ever removes these PNGs is the AGE-BASED sweep
+  (`sweepExpiredScreenshots`, armed at boot from `server.ts`). So the tree of authenticated
+  client-portal screenshots - court filings, processo numbers, client NIFs, as pixels - has
+  retention but no erasure, while a function named for erasure sits beside it looking like coverage.
+  Its suite is green because it tests the function, never a caller.
+
+  **THIS IS THE FOURTH INSTANCE OF THE DEAD-BINDING CLASS** in this repo (after
+  `the-attended-session-ceremony-was-built-tested-and-unreachable`, `m365proxy-manifest-flag-stripped`
+  and `P4.2-was-dead-code-in-production`), and the third to be found by someone building on top of
+  the thing rather than by a suite. The pattern is identical every time: a correct, tested function
+  whose composition-root binding does not exist, kept plausible by a docblock describing the caller
+  it never got.
+
+  **WHY S1 RAISES THE SEVERITY.** S1 gives `sweepExpiredScreenshots` a `pinnedRunIds` exemption so a
+  run named by an integration action's live evidence is spared however old it is (evidence stores
+  `{runId, stepIndex}` POINTERS, so sweeping the run breaks the detail page and destroys the proof a
+  promotion to `trusted` rests on). That exemption is correct and is tested - and it means a pinned
+  run is now retained PAST the 7-day window with nothing anywhere that can remove it on request.
+  Before S1 the gap was "erasure relies on ageing out"; after S1 it is "for pinned runs, ageing out
+  no longer happens either". **S1 deliberately claims no erasure coverage**: not in the sweeper's
+  docblock, not in a decisions entry, not in its report. The pin is an age-sweep exemption and is
+  documented as exactly that.
+
+  CONSEQUENCE IF NOT CLOSED: this product cannot answer a GDPR erasure request over automation
+  screenshots at all, and for evidence-pinned runs it cannot even wait one out.
+  CLOSE BY: giving `deleteRunScreenshots` its real callers (run delete, user delete, org delete) and
+  making evidence removal release the pin - `actionEvidenceStore.discardEvidence` already exists and
+  is the natural hook - then pinning each binding with a test that reddens when the binding is
+  deleted, which is the only check that would have caught this one. Not done in S1: an erasure path
+  that spans run/user/org deletion is its own slice with its own blast radius, and half-wiring it
+  would produce a fifth instance of exactly this class.
+
 - **`resolve-step-origin-runs-twice-per-gated-browser-step`** (**FIXED 2026-08-19**, round seven;
   see the round-seven fixed section). The walk still runs two to three times per gated browser step -
   that is inherent to resolving locality before the gate and re-resolving after it - but its
@@ -4361,11 +4403,30 @@ planted violations. Revert-verified: five scripted reversions, each turning the 
   sites, and it is recorded here so it is discoverable rather than buried in a marker. If the dev
   need for live streaming is ever solved on the gateway path, delete the flag.
 
-## F-2026-08-03-ungated-write-rails (C2 follow-up; four FIXED, one OPEN)
+## F-2026-08-03-ungated-write-rails (C2 follow-up; ALL FIVE FIXED)
 
 The C2 fresh-context reviewer confirmed the Action write gate is solid on the rail it covers, then
-enumerated five more surfaces that reach the same effect with no gate at all. Four are closed here;
-the fifth is recorded OPEN because the complete fix belongs in a file this slice does not own.
+enumerated five more surfaces that reach the same effect with no gate at all. Four were closed in
+the C2 slice itself; the fifth
+(`consent-target-shows-an-uninterpolated-template-and-config-can-redirect-it`) was closed the next
+day, 2026-08-04, by keying the approval on the RESOLVED destination.
+
+**HEADING CORRECTED 2026-08-20** (slice S1). This heading read "four FIXED, one OPEN", and the
+paragraph under it said the fifth "is recorded OPEN because the complete fix belongs in a file this
+slice does not own", for sixteen days after that fifth entry was fixed - while the entry itself,
+forty lines below, has said **FIXED 2026-08-04** the whole time. The ledger was advertising an open
+consent-integrity defect one heading above the text proving it closed.
+
+Re-verified in code before this edit rather than taken from the entry's own word:
+`actionTarget(action, resolution)` renders the RESOLVED destination and
+`idFor(scope, key, actionName, shape, decision, target)` keys the approval on it
+(`api/src/integrations/action-consent.ts`), so BOTH halves are shut - the placeholder the dialog
+used to show, and the config edit that could move the destination under a live approval. Suite:
+`api/tests/security/consent-destination-binding.test.ts`.
+
+Recorded rather than quietly corrected, because a stale heading is exactly how a closed finding gets
+"fixed" a second time: slice S1 was briefed to close these two halves as open work, and would have
+re-implemented a live control had it trusted this heading over the code.
 
 - **`platform-actions-were-completely-ungated`** (FIXED 2026-08-03, CRITICAL, unapproved writes on
   the org's managed OAuth connection). `google-workspace` / `microsoft-365` short-circuit to

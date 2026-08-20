@@ -167,6 +167,7 @@ import {
   automationRunsRoot,
   screenshotPlaneRouter,
   sweepExpiredScreenshots,
+  collectRunEvidence,
   type RunEventEmitter,
 } from './automation/index.js';
 import { type ActionDrafter } from './integrations/integration-achieve.js';
@@ -175,6 +176,7 @@ import { platformStatus } from './integrations/platform-oauth.js';
 import {
   executeUserIntegrationAction,
   type AutomationBackedHandler,
+  type ExecutorDeps,
   callPlatformIntegration,
   findConfigForOwner,
   persistRotatedCredentials,
@@ -189,6 +191,9 @@ import {
   // of the `load_context` body are joined.
   lessonsForPrompt,
   composeIntegrationContext,
+  // Slice S1: the evidence store the executor's capture seam is bound to, and the retention pins
+  // the screenshot sweep must spare.
+  actionEvidenceStore,
 } from './integrations/index.js';
 // Deep import, deliberately NOT via the integrations barrel (A3 review L2): the importer mints a
 // platform-level actor, so only THIS composition-root boot path may reach it — keeping it off the
@@ -508,6 +513,23 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   //    identity and the owner's write assent both ride it - and a mapping that exists only inside
   //    this function is one no test can enter through.
   const runAutomationBackedAction: AutomationBackedHandler = automationBackedActionHandler();
+  /**
+   * THE ONE EXECUTOR DEPS BUNDLE (slice S1), for exactly the reason the paragraph above gives for
+   * `runAutomationBackedAction` itself: an executor call site that omits a seam does not fail - it
+   * silently loses the behaviour that seam carries. That warning was written about the automation
+   * handler, and there are four call sites. Evidence capture is a second seam with the same
+   * property, so the seams are bundled ONCE here and every call site spreads the bundle rather than
+   * re-listing its members; adding a third seam later cannot half-land.
+   *
+   * `recordActionEvidence` is the real tenant-scoped store and `collectRunEvidence` is the
+   * automation-tier collector. The two halves meet HERE and nowhere else, which is what keeps
+   * `integrations/` free of any import edge to `automation/` (FIXED-1).
+   */
+  const executorDeps: ExecutorDeps = {
+    runAutomationBackedAction,
+    recordActionEvidence: (key, evidence) => actionEvidenceStore.recordEvidence(key, evidence),
+    collectRunEvidence: (runId) => collectRunEvidence(runId),
+  };
   setIntegrationActionExecutor(async (call) => {
     const owner = (await users.get(call.ownerUserId)) as { orgId?: string } | null;
     // REFUSE an org-less caller (A2 review F4). Before A2 an empty orgId merely missed a credential
@@ -525,7 +547,7 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
         actionName: call.actionName,
         args: call.args,
       },
-      { runAutomationBackedAction },
+      executorDeps,
     );
     return { success: r.success, data: r.data, error: r.error, details: r.code };
   });
@@ -881,7 +903,7 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
           actionName: call.actionName,
           args: call.args,
         },
-        { runAutomationBackedAction },
+        executorDeps,
       ),
     now: () => new Date(deps.now()).toISOString(),
   });
@@ -912,7 +934,7 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
           actionName: t.actionName,
           args: t.args ?? {},
         },
-        { runAutomationBackedAction },
+        executorDeps,
       ).then(mapIntegrationOutcome),
     // P4.1: a blocked fire is waiting on its owner, and nothing else surfaces it — `blocked` is
     // neutral against the failure ceiling by design, so without this a schedule could sit waiting
@@ -1245,7 +1267,20 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   };
   app.use(
     '/api/v1/integrations',
-    integrationsRouter({ ...deps, runAutomationBackedAction, draftAction, callPlatform, platformConnected }),
+    integrationsRouter({
+      ...deps,
+      runAutomationBackedAction,
+      // Slice S1: the evidence seams, from the ONE bundle bound above rather than re-listed here -
+      // this router is the fourth executor call site, and the seam-omitted-at-one-call-site failure
+      // is the one the bundle exists to make impossible.
+      executorEvidence: {
+        recordActionEvidence: executorDeps.recordActionEvidence!,
+        collectRunEvidence: executorDeps.collectRunEvidence!,
+      },
+      draftAction,
+      callPlatform,
+      platformConnected,
+    }),
   );
   // ch03 §3.8.14 — the AI integration builder (chat/load/save/test).
   app.use('/api/v1/integration-builder', integrationBuilderRouter(deps));
@@ -1592,9 +1627,21 @@ export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> 
   // path builder, so stale PNGs of authenticated client-portal sessions accumulated forever in an
   // unindexed tree. That is a GDPR erasure gap, so the sweeper lands with the auth change rather
   // than as a follow-up. Best-effort by construction: a sweep failure must never fail boot.
-  void sweepExpiredScreenshots({ now: deps.now })
-    .then(({ removed, scanned }) => {
-      if (removed > 0) console.log(`[automation] screenshot retention: removed ${removed}/${scanned} run dirs`);
+  //
+  // Slice S1 - PINNED EVIDENCE RUNS ARE SPARED. A browser-steps/bash-cli evidence row stores
+  // `{runId, stepIndex}` POINTERS into a run's screenshots rather than copies, so sweeping that run
+  // would leave the detail page rendering broken images and would destroy the "last validated run"
+  // a promotion to `trusted` rests on. The pin set is read here (the sweeper keeps no edge to
+  // `integrations/`) and is bounded to the ONE run each action's LIVE evidence names: evidence is
+  // superseded wholesale, so a newly validated run releases the previous pin in the same write.
+  void actionEvidenceStore
+    .pinnedRunIdsForRetention()
+    .catch(() => new Set<string>())
+    .then((pinnedRunIds) => sweepExpiredScreenshots({ now: deps.now, pinnedRunIds }))
+    .then(({ removed, scanned, pinned }) => {
+      if (removed > 0 || pinned > 0) {
+        console.log(`[automation] screenshot retention: removed ${removed}/${scanned} run dirs, spared ${pinned} pinned by evidence`);
+      }
     })
     .catch(() => {});
 

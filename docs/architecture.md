@@ -595,6 +595,47 @@ credentials decrypted only at execution, the generic platform API caller with in
 Pipedream, and e-signature. Baseline assets ship per integration (`api/assets/integrations/<key>/`);
 the integration-builder agent authors user-defined integrations at runtime.
 
+### Action evidence (slice S1)
+
+`integration_action_evidence` holds exactly ONE live row per `(orgId, integrationKey, actionName)`,
+the `_id` derived from that tuple alone, so a newly validated run SUPERSEDES the previous by writing
+the same id rather than accumulating beside it. `integrations/action-evidence-store.ts` wraps it.
+
+It is NOT a field on the definition document: it would ride `publishedSnapshot` into other orgs (an
+evidence sample is one tenant's real request and real response body) and it would race the 16MB
+limit on a row every reader of every action already touches. Its own collection makes the
+publish exclusion structural - no publish path reads the module - which is the sanitisation for
+promoted and global integrations rather than a scrubber somebody has to maintain.
+
+It is also NOT `integration_captured_calls`, and both exist. That one is the unbounded,
+machine-facing raw trace a recipe is compiled out of and then discarded; this one is the bounded,
+durable, human-facing sample a person is shown and a promotion rests on. Different questions,
+opposite lifecycles.
+
+Capture reuses the executor's existing redaction rather than adding any: the api-call sample IS the
+`requestSummary` `action-executor.ts` already builds on every call and already persists on the
+FAILURE path (it was simply discarded on success), plus a response body through the same
+`redactSecretsDeep` and the same cap. The store then re-checks the whole assembled document against
+the run's live `SecretRegistry` and refuses to write a row carrying a live value anywhere in it.
+
+For browser-steps and bash-cli the row holds `{runId, stepIndex}` POINTERS plus the screenshot's own
+authenticated-plane URL and a capped excerpt of `StepRecord.output` - never copies of the PNGs,
+which would be a second copy of an authenticated portal session under a different access rule.
+Because reading a run means reading `automation/` types that `integrations/` may not import
+(FIXED-1), the executor declares a `RunEvidenceCollector` seam, `automation/action-evidence.ts`
+implements it, and `server.ts` binds both halves into ONE `executorDeps` bundle that every executor
+call site spreads.
+
+Evidence is the graduation prerequisite. `promoteToTrusted` used to prove SHAPE and never BEHAVIOUR,
+so an authored action could become `trusted` - and auto-runnable by `achieve` - having never run
+once. It now takes a required `evidence` argument and refuses `unvalidated` when the row is absent
+or names different bytes. The gate is satisfiable: a provisional action is stored as a write, so the
+owner approves it, runs it once, and promotes on that run.
+
+`sweepExpiredScreenshots` takes a `pinnedRunIds` set so a run named by live evidence survives its
+own expiry. That is an age-sweep exemption and NOT an erasure path - there is no erasure path over
+this tree (see `screenshot-erasure-path-has-no-production-caller` in `findings.md`).
+
 ## Billing
 
 Four tiers (`config.ts`, env-overridable models/efforts/weights): FAST (`claude-haiku-4-5-20251001`,

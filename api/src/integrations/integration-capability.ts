@@ -152,6 +152,21 @@ export interface CapabilityContext {
   /** The automation seam, bound once by the composition root and handed to every rail. */
   runAutomationBackedAction?: ExecutorDeps['runAutomationBackedAction'];
   /**
+   * THE EVIDENCE SEAMS (slice S1), bound once by the composition root alongside the automation one
+   * and merged into the executor deps at the dispatch below.
+   *
+   * Carried as a BUNDLE rather than as two more named fields, deliberately: every seam added to
+   * this context so far has had to be remembered separately at each call site, and the failure mode
+   * when one is forgotten is SILENCE - the rail keeps working and quietly stops doing the thing.
+   * A bundle can only be threaded whole.
+   *
+   * Absent ⇒ the capability rail executes exactly as it did before this slice and records no
+   * evidence. It IS bound in production, and
+   * `api/tests/automation/composition-root-action-seam.test.ts` is what stops that binding from
+   * quietly disappearing.
+   */
+  executorEvidence?: Pick<ExecutorDeps, 'recordActionEvidence' | 'collectRunEvidence'>;
+  /**
    * The PLATFORM seam (google-workspace / microsoft-365), bound once by the composition root
    * exactly like the automation one. Absent, a platform action is refused as `not_connected`
    * rather than silently routed down the user-credential rail — see the dispatch below.
@@ -343,7 +358,13 @@ export async function executeIntegrationCapabilityAction(
             actionName,
             args,
           },
-          ctx.runAutomationBackedAction ? { runAutomationBackedAction: ctx.runAutomationBackedAction } : {},
+          {
+            ...(ctx.runAutomationBackedAction ? { runAutomationBackedAction: ctx.runAutomationBackedAction } : {}),
+            // Slice S1: the evidence seams ride the same deps object the automation seam does, so a
+            // capability-rail execute records the same evidence every other rail records. Spread
+            // whole - see `executorEvidence`.
+            ...(ctx.executorEvidence ?? {}),
+          },
         );
 
   await auditExecute(ctx, integrationKey, actionName, result, t0);

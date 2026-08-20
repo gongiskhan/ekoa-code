@@ -164,6 +164,24 @@ export const integrationDefinitions = new Store<Doc>('integration_definitions');
  * lifecycle, which is what earns a second collection here. See the captured-calls-store header.
  */
 export const integrationCapturedCalls = new Store<Doc>('integration_captured_calls');
+/**
+ * THE ONE LIVE PROOF that an action actually ran (slice S1). Exactly ONE document per
+ * (orgId, integrationKey, actionName) - `_id` deterministic over that tuple alone, so a newly
+ * validated run SUPERSEDES the previous evidence by writing the same id rather than accumulating
+ * beside it. Untyped `Store<Doc>` house currency; the typed document (`ActionEvidenceDoc`) and the
+ * tenant-scoped surface live in integrations/action-evidence-store.ts, which WRAPS this collection.
+ *
+ * NOT THE SAME THING AS `integration_captured_calls` ABOVE, and the difference is the reason both
+ * exist: that one is the unbounded MACHINE-facing trace a recipe is compiled out of and then
+ * discarded; this one is the bounded, durable, HUMAN-facing sample the integration detail page
+ * renders and the graduation-to-trusted prerequisite reads. The evidence-store header sets out the
+ * full argument.
+ *
+ * NOT A FIELD ON THE DEFINITION, deliberately: it would ride `publishedSnapshot` into every other
+ * org (one tenant's real request and real response body) and it would race the 16MB document limit
+ * on a row every reader of every action already touches.
+ */
+export const integrationActionEvidence = new Store<Doc>('integration_action_evidence');
 /** Integration-builder chat sessions (ch03 §3.8.14). PERSISTED — the old cortex builder kept an
  *  in-memory Map that died on restart; load-by-key durability requires a store. Holds the running
  *  transcript + the last generated package/skill so a session can be reloaded and edited. */

@@ -10,6 +10,7 @@ import {
   integrationConfigs,
   integrationDefinitions,
   approvedIntegrationActions,
+  integrationActionEvidence,
 } from '../../src/data/stores.js';
 import { loadConfig, __resetConfigForTests } from '../../src/config.js';
 import { integrationDefinitionStore, definitionIdFor } from '../../src/integrations/definition-store.js';
@@ -24,6 +25,7 @@ import {
   type ActionDrafter,
 } from '../../src/integrations/integration-achieve.js';
 import { isTrustedAction, authoringStateOf } from '../../src/integrations/authored-action.js';
+import { actionEvidenceStore } from '../../src/integrations/action-evidence-store.js';
 import { getIntegrationCapability } from '../../src/integrations/integration-capability.js';
 import type { CapabilityOutcome } from '../../src/integrations/integration-capability.js';
 import type { IntegrationAction } from '../../src/integrations/definitions.js';
@@ -195,7 +197,7 @@ afterAll(async () => {
   await mem.stop();
 });
 beforeEach(async () => {
-  for (const s of [integrationDefinitions, integrationConfigs, approvedIntegrationActions, activityLogs, billingAccounts]) {
+  for (const s of [integrationDefinitions, integrationConfigs, approvedIntegrationActions, activityLogs, billingAccounts, integrationActionEvidence]) {
     await s.deleteMany({});
   }
 });
@@ -481,8 +483,59 @@ describe('PROMOTION is a human act, and it is what makes the state load-bearing'
     return (await storedActions('orgA', PROBE_INTEGRATION)).find((a) => a.actionName === 'arquivar_processo')!;
   }
 
+  /**
+   * SLICE S1 - record the validated run a promotion now rests on.
+   *
+   * This is not test scaffolding around a gate; it is the PRODUCTION SEQUENCE. A provisional action
+   * is stored as a write, so a human approves it and runs it, the executor writes exactly this row,
+   * and only then is there anything to promote on. Every promotion case below states it explicitly,
+   * so a case that is NOT about the evidence gate cannot pass by accident and cannot fail for a
+   * reason it is not about.
+   */
+  async function validateRun(action: IntegrationAction, orgId = 'orgA'): Promise<void> {
+    await actionEvidenceStore.recordEvidence(
+      { orgId, integrationKey: PROBE_INTEGRATION, actionName: action.actionName },
+      {
+        backingType: 'api-call',
+        shape: actionShape(PROBE_INTEGRATION, action),
+        evidence: {
+          kind: 'api-call',
+          request: { method: 'POST', url: 'https://probe.example/processos/9/arquivar', headers: {} },
+          response: { status: 200, body: '{"ok":true}', bodyIsJson: true },
+        },
+      },
+    );
+  }
+
+  it('an action that has never run cannot be promoted (slice S1)', async () => {
+    // No `validateRun`: the ONLY thing missing is the validated run, so only the S1 gate can
+    // produce this verdict - every other promotion precondition is satisfied by `authorOne`.
+    const authored = await authorOne();
+    expect(await trustAuthoredAction(actor('ownerA', 'orgA'), PROBE_INTEGRATION, 'arquivar_processo', authored.authoring!.shape, integrationDefinitionStore, fixedNow))
+      .toEqual({ verdict: 'unvalidated' });
+    const still = (await storedActions('orgA', PROBE_INTEGRATION)).find((a) => a.actionName === 'arquivar_processo')!;
+    expect(still.authoring?.state).toBe('provisional');
+  });
+
+  it('evidence of a DIFFERENT shape does not graduate the action (slice S1)', async () => {
+    const authored = await authorOne();
+    // A run really happened for this action name - but of other bytes. The author/run/re-author
+    // sequence must not be able to launder an old proof onto new content.
+    await actionEvidenceStore.recordEvidence(
+      { orgId: 'orgA', integrationKey: PROBE_INTEGRATION, actionName: 'arquivar_processo' },
+      {
+        backingType: 'api-call',
+        shape: 'sha256-of-the-action-this-used-to-be',
+        evidence: { kind: 'api-call', request: { method: 'POST', url: 'https://probe.example/x', headers: {} }, response: { status: 200 } },
+      },
+    );
+    expect(await trustAuthoredAction(actor('ownerA', 'orgA'), PROBE_INTEGRATION, 'arquivar_processo', authored.authoring!.shape, integrationDefinitionStore, fixedNow))
+      .toEqual({ verdict: 'unvalidated' });
+  });
+
   it('promotion flips the state AND lets the declared mutates take effect', async () => {
     const authored = await authorOne();
+    await validateRun(authored);
     const out = await trustAuthoredAction(actor('ownerA', 'orgA'), PROBE_INTEGRATION, 'arquivar_processo', authored.authoring!.shape, integrationDefinitionStore, fixedNow);
     expect(out).toMatchObject({ verdict: 'ok', state: 'trusted', mutates: false, alreadyTrusted: false });
 
@@ -502,6 +555,7 @@ describe('PROMOTION is a human act, and it is what makes the state load-bearing'
     const before = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'arquivar_processo'));
     expect(before.outcome).toBe('refused');
 
+    await validateRun(authored);
     await trustAuthoredAction(actor('ownerA', 'orgA'), PROBE_INTEGRATION, 'arquivar_processo', authored.authoring!.shape, integrationDefinitionStore, fixedNow);
     const after = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'arquivar_processo'));
     expect(after.outcome).toBe('executed');
@@ -509,6 +563,7 @@ describe('PROMOTION is a human act, and it is what makes the state load-bearing'
 
   it('re-authoring the action UN-PROMOTES it, with nobody resetting a flag', async () => {
     const authored = await authorOne();
+    await validateRun(authored);
     await trustAuthoredAction(actor('ownerA', 'orgA'), PROBE_INTEGRATION, 'arquivar_processo', authored.authoring!.shape, integrationDefinitionStore, fixedNow);
 
     // Somebody edits the action's executable content, leaving the `trusted` record in place.
@@ -556,6 +611,7 @@ describe('PROMOTION is a human act, and it is what makes the state load-bearing'
     expect(before.actions.find((a) => a.actionName === 'arquivar_processo')!.authoringState).toBe('provisional');
     expect(before.actions.find((a) => a.actionName === 'consultar_processo')!.authoringState).toBe('none');
 
+    await validateRun(authored);
     await trustAuthoredAction(actor('ownerA', 'orgA'), PROBE_INTEGRATION, 'arquivar_processo', authored.authoring!.shape, integrationDefinitionStore, fixedNow);
     const after = valueOf(await getIntegrationCapability(ctx, PROBE_INTEGRATION));
     expect(after.actions.find((a) => a.actionName === 'arquivar_processo')!.authoringState).toBe('trusted');

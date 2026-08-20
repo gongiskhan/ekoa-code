@@ -167,7 +167,47 @@ describe('screenshot retention (R-3)', () => {
     await expect(sweepExpiredScreenshots({ root: join(root, 'missing') })).resolves.toEqual({
       removed: 0,
       scanned: 0,
+      pinned: 0,
     });
+  });
+
+  /**
+   * Slice S1 - a run PINNED by an integration action's live evidence survives its own expiry.
+   *
+   * `integration_action_evidence` stores `{runId, stepIndex}` POINTERS into a run's screenshots
+   * rather than copies of them, so sweeping a pinned run leaves the integration detail page
+   * rendering broken images and destroys the "last validated run" that a promotion to `trusted`
+   * rests on.
+   *
+   * The fixture is built so ONLY the pin can produce this result: `old` and `pinned` have the SAME
+   * long-ago mtime, so both are equally expired and any rule other than the pin removes both.
+   */
+  it('spares a run pinned by action evidence, however expired it is', async () => {
+    mkdirSync(join(root, 'a1', 'pinned'), { recursive: true });
+    writeFileSync(join(root, 'a1', 'pinned', 'step-0.png'), 'x');
+    const longAgo = new Date('2020-01-01T00:00:00Z');
+    utimesSync(join(root, 'a1', 'pinned'), longAgo, longAgo);
+
+    const { removed, scanned, pinned } = await sweepExpiredScreenshots({
+      retentionDays: 7,
+      root,
+      pinnedRunIds: new Set(['pinned']),
+    });
+
+    expect(scanned).toBe(3);
+    expect(pinned).toBe(1);
+    // The equally-expired UNPINNED run is still removed - otherwise this would pass on a sweeper
+    // that had simply stopped deleting anything.
+    expect(removed).toBe(1);
+    expect(existsSync(join(root, 'a1', 'pinned'))).toBe(true);
+    expect(existsSync(join(root, 'a1', 'old'))).toBe(false);
+    expect(existsSync(join(root, 'a1', 'fresh'))).toBe(true);
+  });
+
+  it('pins nothing when no pin set is supplied (pre-S1 behaviour is unchanged)', async () => {
+    const { removed, pinned } = await sweepExpiredScreenshots({ retentionDays: 7, root });
+    expect(pinned).toBe(0);
+    expect(removed).toBe(1);
   });
 
   it('deleteRunScreenshots erases exactly one run (the erasure-request path)', async () => {

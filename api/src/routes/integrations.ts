@@ -162,6 +162,7 @@ function capabilityCtxOf(
     now: () => number;
     genId: () => string;
     runAutomationBackedAction?: AutomationBackedHandler;
+    executorEvidence?: CapabilityContext['executorEvidence'];
     draftAction?: ActionDrafter;
     callPlatform?: CapabilityContext['callPlatform'];
     platformConnected?: CapabilityContext['platformConnected'];
@@ -174,6 +175,9 @@ function capabilityCtxOf(
     ...(p ? { principal: { keyId: p.keyId, ...(p.xClient ? { xClient: p.xClient } : {}) } } : {}),
     ...(req.user?.username ? { username: req.user.username } : {}),
     ...(deps.runAutomationBackedAction ? { runAutomationBackedAction: deps.runAutomationBackedAction } : {}),
+    // Slice S1: the evidence seams, threaded whole. See `CapabilityContext.executorEvidence` for
+    // why they are a bundle rather than two more fields to forget one of.
+    ...(deps.executorEvidence ? { executorEvidence: deps.executorEvidence } : {}),
     // D3: the AUTHORING seam, bound once by the composition root exactly like the automation one.
     // Absent, `achieve` still executes and refuses to author (`authoring_unavailable`).
     ...(deps.draftAction ? { draftAction: deps.draftAction } : {}),
@@ -205,6 +209,8 @@ export function integrationsRouter(deps: {
   genId: () => string;
   /** The automation seam the composition root binds ONCE and hands to every executor rail. */
   runAutomationBackedAction?: AutomationBackedHandler;
+  /** The EVIDENCE seams (slice S1), bound once beside it. */
+  executorEvidence?: CapabilityContext['executorEvidence'];
   /** The AUTHORING seam (D3): one drafting turn on D2's shared authoring core. */
   draftAction?: ActionDrafter;
   /** The PLATFORM seam: google-workspace / microsoft-365 run on org-scoped OAuth custody. */
@@ -660,7 +666,7 @@ export function integrationsRouter(deps: {
    * so if a gateway key could reach this route an agent would author an action and bless its own
    * work in the next request. Same rule, same place in this file, as the three consent routes above.
    *
-   * The gates are `trustAuthoredAction`'s, not this handler's. The four verdicts that are not `ok`
+   * The gates are `trustAuthoredAction`'s, not this handler's. The five verdicts that are not `ok`
    * map to the house envelope the way the rest of this domain does — a row the caller cannot see
    * and a row that does not exist answer the same 404, and the three body-shaped refusals answer
    * `VALIDATION_FAILED` with a message that says which, exactly as `approveAction` does for its own
@@ -682,6 +688,11 @@ export function integrationsRouter(deps: {
         return sendError(res, 'VALIDATION_FAILED', 'Esta ação foi escrita por uma pessoa e não precisa de ser confirmada.');
       case 'unverified':
         return sendError(res, 'VALIDATION_FAILED', 'Esta ação mudou desde que foi verificada — peça de novo o objetivo para a reescrever.');
+      // Slice S1: the action checks out and has simply never run. Its own message, not
+      // `unverified`'s - telling someone to re-author an action whose only problem is that nobody
+      // has tried it yet sends them to fix the one thing that is not broken.
+      case 'unvalidated':
+        return sendError(res, 'VALIDATION_FAILED', 'Esta ação ainda não foi executada com sucesso. Execute-a uma vez e confirme depois - a confirmação passa a assentar nessa execução.');
       default:
         return res.json({ ok: true, actionName: out.actionName, state: out.state, mutates: out.mutates });
     }

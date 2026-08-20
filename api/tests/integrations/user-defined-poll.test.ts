@@ -458,12 +458,33 @@ describe('pollUserDefinedSource — automation-backed poll actions (the citius s
     // and the identifier was in fact rebindable to the pre-P2 inline mapping - dropping the action
     // identity, the write assent and `mutates` - with the whole lane green. THAT is pinned at
     // runtime, against the real `buildApp`, by `automation/composition-root-action-seam.test.ts`.
+    // SLICE S1 WIDENED WHAT "THE SEAM" MEANS HERE. The composition root now binds ONE `executorDeps`
+    // bundle - the automation handler plus the two evidence seams - and every call site spreads it,
+    // precisely because this guard's own comment predicted the failure: a second seam with the same
+    // silent-omission property doubles the chance of a half-landed wiring. A call site therefore
+    // satisfies this scan by passing the BUNDLE or the bare handler, and the bundle's own contents
+    // are asserted separately below. Without that second half, a bundle that quietly stopped
+    // carrying a seam would satisfy a scan that only ever looks at call sites - i.e. the widening
+    // would have WEAKENED the guard.
     const src = await readFile(join(__dirname, '..', '..', 'src', 'server.ts'), 'utf8');
     const sites = src.split('executeUserIntegrationAction(').slice(1);
     expect(sites.length).toBeGreaterThanOrEqual(2); // automation `integration` step + listener poll
     for (const [i, site] of sites.entries()) {
-      expect.soft(site.slice(0, 900), `server.ts executor call site #${i + 1} must pass runAutomationBackedAction`)
-        .toContain('runAutomationBackedAction');
+      const head = site.slice(0, 900);
+      expect.soft(
+        head.includes('runAutomationBackedAction') || head.includes('executorDeps'),
+        `server.ts executor call site #${i + 1} must pass the executor seams (the bundle, or the bare handler)`,
+      ).toBe(true);
+    }
+
+    // THE BUNDLE ITSELF, seam by seam. Dropping any one of the three from the binding is the exact
+    // failure this guard exists for, and it is invisible to a call-site scan once the call sites
+    // spread an object.
+    const bundle = src.split('const executorDeps: ExecutorDeps = {')[1];
+    expect(bundle, 'server.ts must bind ONE executorDeps bundle').toBeTruthy();
+    const decl = (bundle ?? '').slice(0, 600);
+    for (const seam of ['runAutomationBackedAction', 'recordActionEvidence', 'collectRunEvidence']) {
+      expect.soft(decl, `executorDeps must bind ${seam}`).toContain(seam);
     }
   });
 

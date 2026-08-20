@@ -129,19 +129,43 @@ export async function sweepExpiredScreenshots(opts?: {
   retentionDays?: number;
   now?: () => number;
   root?: string;
-}): Promise<{ removed: number; scanned: number }> {
+  /**
+   * PINNED RUNS - run ids the sweep must spare however old they are (slice S1).
+   *
+   * An `integration_action_evidence` row for a browser-steps or bash-cli action stores
+   * `{runId, stepIndex}` POINTERS into a run's screenshots rather than copies of them, so once the
+   * sweep removes that run the integration detail page renders broken images and the "last
+   * validated run" a promotion to `trusted` rests on stops being inspectable.
+   *
+   * THIS IS A RETENTION EXTENSION AND IS TREATED AS ONE. It is bounded to the ONE run each action's
+   * LIVE evidence names - evidence is superseded wholesale, so a newly validated run releases the
+   * previous pin in the same write - and it never grows with run volume. It is supplied by the
+   * CALLER rather than read here, so this module keeps no import edge to `integrations/`.
+   *
+   * IT IS NOT AN ERASURE STORY, and must not be read as one. This spares a run from the AGE-BASED
+   * sweep; there is no erasure request path over these directories at all today
+   * (`deleteRunScreenshots` below has no production caller - see the finding of that name in
+   * docs/findings.md). A pinned run is therefore retained past 7 days with nothing that can remove
+   * it on request, which is a real gap and is recorded as one.
+   *
+   * Absent ⇒ nothing is pinned and the sweep behaves exactly as it did before this slice.
+   */
+  pinnedRunIds?: ReadonlySet<string>;
+}): Promise<{ removed: number; scanned: number; pinned: number }> {
   const retentionDays = opts?.retentionDays ?? DEFAULT_SCREENSHOT_RETENTION_DAYS;
   const now = opts?.now?.() ?? Date.now();
   const root = opts?.root ?? automationRunsRoot();
+  const pinnedRunIds = opts?.pinnedRunIds;
   const cutoff = now - retentionDays * 24 * 60 * 60 * 1000;
   let removed = 0;
   let scanned = 0;
+  let pinned = 0;
 
   let automationDirs: string[];
   try {
     automationDirs = await readdir(root);
   } catch {
-    return { removed: 0, scanned: 0 }; // no tree yet
+    return { removed: 0, scanned: 0, pinned: 0 }; // no tree yet
   }
   for (const automationId of automationDirs) {
     let runDirs: string[];
@@ -153,6 +177,12 @@ export async function sweepExpiredScreenshots(opts?: {
     for (const runId of runDirs) {
       const dir = join(root, automationId, runId);
       scanned++;
+      // The pin is checked BEFORE the mtime, not after the delete: a pinned run is spared without
+      // ever becoming a candidate, so no ordering of `stat` failures can drop one.
+      if (pinnedRunIds?.has(runId)) {
+        pinned++;
+        continue;
+      }
       try {
         const st = await stat(dir);
         if (st.mtimeMs < cutoff) {
@@ -164,7 +194,7 @@ export async function sweepExpiredScreenshots(opts?: {
       }
     }
   }
-  return { removed, scanned };
+  return { removed, scanned, pinned };
 }
 
 /** Erase every screenshot for one run (the delete-on-run-delete / erasure-request path). */

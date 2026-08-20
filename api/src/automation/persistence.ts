@@ -48,6 +48,16 @@ export const automationRunStore = {
     const doc = await automationRuns.get(runId);
     return doc ? (doc as unknown as RunRecord) : null;
   },
+  /**
+   * The same lookup, for a caller that holds ONLY a run id (slice S1's evidence collector, which
+   * receives the run id off `ActionRunEnvelope` and never learns the automation). Declared rather
+   * than reached by handing `findById`'s ignored first parameter a throwaway string, so nothing
+   * comes to depend on that parameter staying ignored.
+   */
+  async findByRunId(runId: string): Promise<RunRecord | null> {
+    const doc = await automationRuns.get(runId);
+    return doc ? (doc as unknown as RunRecord) : null;
+  },
   async listForAutomation(automationId: string, limit?: number): Promise<RunRecord[]> {
     const rows = (await automationRuns.find({ automationId }, { startedAt: -1 })) as unknown as RunRecord[];
     return typeof limit === 'number' ? rows.slice(0, limit) : rows;

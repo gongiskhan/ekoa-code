@@ -246,3 +246,12 @@ export {
   deleteRunScreenshots,
   DEFAULT_SCREENSHOT_RETENTION_DAYS,
 } from './screenshot-plane.js';
+
+// Slice S1: the automation half of integration action evidence. `integrations/` may not import
+// `automation/` (FIXED-1), so the executor declares a `RunEvidenceCollector` seam and the
+// composition root binds it to this collector.
+export {
+  collectRunEvidence,
+  type CollectedRunEvidence,
+  type CollectedStepEvidence,
+} from './action-evidence.js';

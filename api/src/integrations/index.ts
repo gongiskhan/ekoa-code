@@ -14,6 +14,25 @@ export * from './platform-oauth.js';
 export * from './platform-call.js';
 export * from './action-executor.js';
 export * from './pipedream.js';
+// Slice S1: the ONE LIVE PROOF that an action actually ran. The composition root binds
+// `recordEvidence` onto the executor's evidence seam; the detail-page read and the
+// graduation-to-trusted prerequisite both come through here.
+export {
+  actionEvidenceStore,
+  ActionEvidenceStore,
+  ActionEvidenceStoreError,
+  actionEvidenceIdFor,
+  evidenceSecretsFromValues,
+  MAX_EVIDENCE_EXCERPT_CHARS,
+  MAX_EVIDENCE_STEPS,
+  type ActionEvidenceKey,
+  type ActionEvidenceDoc,
+  type ActionEvidence,
+  type ApiCallEvidence,
+  type AutomationEvidence,
+  type RunStepEvidence,
+  type RecordEvidenceInput,
+} from './action-evidence-store.js';
 // The live integration pre-fetch (ch05 §5.5.2 layer 3) — the IntegrationPrefetchFn seam impl.
 export { integrationPrefetch, __resetPrefetchCacheForTests, type PrefetchDeps } from './prefetch.js';
 // Config custody + the definitions registry (the composition root binds these to the
