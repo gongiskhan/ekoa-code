@@ -34,7 +34,7 @@
  * branch's evidence collection (P2) - stands on `data/` and `security/` alone and keeps that true.
  */
 import { createHash } from 'node:crypto';
-import type { Actor } from '@ekoa/shared';
+import { PUBLISH_REQUEST_NOTE_MAX_CHARS, type Actor } from '@ekoa/shared';
 import { Store, type Doc } from '../data/store.js';
 import { integrationDefinitions } from '../data/stores.js';
 // THE ONE RUNTIME EDGE OUT OF THIS MODULE, and it is still database-only (see the header note
@@ -724,18 +724,29 @@ export class IntegrationDefinitionStore {
    * publish itself, so a submission can never expose a `private` draft that the author's own
    * colleagues cannot see. Re-submitting an already-submitted row re-stamps it (idempotent, and the
    * note can be corrected) rather than answering an error.
+   *
+   * THE NOTE IS BOUNDED HERE, at the ONE place it is written, and not at the route that mints it.
+   * A cap applied by a caller bounds that caller; this bounds the field. It also has to be here to
+   * be a cap at all on the path that matters: the route's `.max()` schema refuses over-long INPUT,
+   * so the only strings that can exceed the bound are the ones the route's scrub GREW on the way
+   * here (`api_key: {{x}} hunter2` becomes `api_key: {{x}} [REDACTED]`), and those arrive as an
+   * argument rather than as a request body. Truncation is the whole rule - it can only remove, so
+   * it can never re-expose what the scrub took out. The CONTENT rule stays at the route:
+   * `definition-store.ts` holds no runtime dependency on the modules that own the scrub (see this
+   * file's header), and a length bound is not a content rule.
    */
   async requestPublish(id: string, actor: Actor, note?: string): Promise<SetVisibilityResult> {
     const row = await this.store.get(id);
     if (!row || !isDefinitionVisibleTo(row, actor)) return { verdict: 'notfound' };
     if (!canWriteDefinition(row, actor) || row.visibility !== 'org') return { verdict: 'forbidden' };
+    const capped = note === undefined ? undefined : note.slice(0, PUBLISH_REQUEST_NOTE_MAX_CHARS);
     let raced = false;
     const updated = await this.store.update(id, (cur) => {
       const doc = cur as IntegrationDefinitionDoc;
       if (!canWriteDefinition(doc, actor) || doc.visibility !== 'org') { raced = true; return cur; }
       return {
         ...cur,
-        publishRequest: { requestedBy: actor.userId, requestedAt: this.nowIso(), ...(note !== undefined ? { note } : {}) },
+        publishRequest: { requestedBy: actor.userId, requestedAt: this.nowIso(), ...(capped !== undefined ? { note: capped } : {}) },
         updatedAt: this.nowIso(),
       };
     });

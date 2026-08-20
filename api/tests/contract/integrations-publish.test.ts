@@ -501,6 +501,21 @@ describe('S6 - the publish, and what another org then reads', () => {
     }
     expect((await storedDoc(DEF_ID))?.visibility).toBe('org');
 
+    // THE ROUTE'S HALF, TOLD APART FROM THE STORE'S. The loop above cannot do it: for a row the
+    // caller can see, `requireRole('super-admin')` and the store's `visibilityWriteVerdict` answer
+    // the SAME 403, so dropping the role gate from the route left that loop green. What separates
+    // them is WHEN they answer. `requireRole` is middleware: it refuses before the handler runs and
+    // therefore before any row is looked up, so it answers the same 403 for an id that names
+    // NOTHING - where the store, reached, would have to answer the 404 of a missing row. Assert
+    // the id really is missing first, so this cannot pass by naming a row that exists.
+    expect(await storedDoc(MISSING_ID)).toBeNull();
+    for (const who of ['ownerA', 'adminA', 'peerA']) {
+      await expectEnvelope(await publish(await tokenFor(who), MISSING_ID), 403, 'FORBIDDEN');
+    }
+    // (The queue, the other super-admin door, is already told apart the other way round: its route
+    // gate answers 403 where the store's filter would answer an empty 200. The store's own filter
+    // is pinned directly in tests/security/publish-doors-isolation.test.ts.)
+
     // A PRIVATE row is refused even for the super-admin who authored it: demotion lands on `org`,
     // so publishing from `private` would widen the row on the way back down.
     const ownId = (await integrationDefinitionStore.create(

@@ -3573,3 +3573,95 @@ length and not the content.
 **DIAGRAM CHECK (FIXED-12):** 02-module-map gains the five routes and the two new pure projections as
 new edges from the route layer; 05-data-model gains what the frozen snapshot may now contain and the
 note that starts being written. Both APPEND-ONLY. No new module, no new seam, no new collection.
+
+## 2026-08-20 - The review queue runs the PUBLISH FLOOR, and the note's cap moves to the store (S6 review)
+
+Two corrections to the slice above, both found by asking of its own claims "which test would fail if
+this were false?".
+
+### The queue was a WIDER read of tenant content than the preview it precedes
+
+The slice shipped `publishQueueEntry` as a whitelist and rested the whole cross-org argument on one
+sentence, restated in the route comment, in the decision above and in the 12-org-tenancy annotation:
+"IT CARRIES NO CONTENT … that content is exactly what publish-scrub.ts exists to clean before it
+crosses an org boundary". The whitelist was real. The sentence was FALSE for two of the nine fields
+on it.
+
+`key` and `displayName` are PACKAGE FIELDS. `packageConfigFromDoc` puts both in the published config
+and `applyPublishFloor` walks both - `displayName` is a plain string in the config, so the floor's
+`transformString` hook runs the blanket literal-secret scan over it. So an org-A definition named
+`CRM sk_live_…` published as `CRM [REDACTED]`, while the QUEUE served the same row to a super-admin
+of org B carrying the literal key. Proven live before it was fixed, not reasoned about: the mutation
+run prints the queue body with the sentinel in it.
+
+That inverts the intended ordering of the two surfaces. The preview is gated per row
+(`getWritableForActor`) and IS the scrub; the queue needs no per-row admission at all and was the
+laxer of the two. A surface that anyone with the platform role can list should be the narrower one.
+
+**The queue now reads its content fields off `applyPublishFloor(publishableContentOf(doc)).content.config`**
+- the same floor the preview and the publish run, not a second, narrower rule written at the route
+(which is the drift `publish-scrub.ts`'s header refuses on principle). Reading from the floor's
+OUTPUT rather than from the document is the part that matters: the next field added to
+`IntegrationPublishQueueEntry` is scrubbed because of where the route reads it from, not because
+someone remembered. The floor is pure, synchronous and model-free, and the walk costs less than the
+collection scan `listPublishRequests` already does to find the rows.
+
+**The note is scrubbed on the way out as well, and that is not the submit route's scrub repeated.**
+The two enforce different properties: the route scrubs so a pasted credential never reaches the
+DATABASE; the queue scrubs so nothing on the row reaches ANOTHER ORG however it got stored -
+`requestPublish` stores the string it is handed and the store owns no scrub, deliberately. Each has
+its own test, and each test fails when its own layer is removed.
+
+**IDENTITY IS STILL CARRIED, DELIBERATELY, and the two surfaces differ there on purpose.** `orgId`
+and `requestedBy` name the asking tenant and the person who asked: that is the queue's entire reason
+to exist, and it is exactly what the published artifact withholds (`publishableAuthoringOf` drops
+`authoredBy`/`trustedBy` for that reason). Publication is anonymous and permanent; review is
+attributed and revocable. Widening on identity while narrowing on content is the intended shape, and
+saying so is what stops the next reader "fixing" one of the two.
+
+**RESIDUAL, recorded rather than quietly fixed:** a secret-shaped `key` still crosses org boundaries
+raw on the PUBLISHED read path. `publishedViewOf` restores `key: doc.key` over the snapshot on
+purpose - a snapshot never renames the row, and the registry resolves BY key - so scrubbing it there
+would break resolution for every consuming org. The queue is now narrower than the publish for that
+field, which is the safe direction. `docs/findings.md`.
+
+### The note's length cap moves from the route to `requestPublish`
+
+The cap was at the route, next to the scrub, and the test for it could not fail:
+`RequestDefinitionPublishRequest` bounds `note` with `.max(PUBLISH_REQUEST_NOTE_MAX_CHARS)`, so the
+wire refuses anything longer with a 400 and the only lengths the route can be handed are ones a
+server-side cap and a missing server-side cap answer identically.
+
+A cap applied at one of several callers bounds that caller, not the field. `requestPublish` is the
+ONE place the note is written, so the cap is there now and the route keeps the content rule only.
+That also puts it where it has real work to do: the strings that can actually exceed the bound are
+the ones the route's SCRUB grew on the way to the store (`api_key: {{x}} hunter2` becomes
+`api_key: {{x}} [REDACTED]`), and those arrive as an argument rather than as a request body.
+Truncation can only remove, so it can never re-expose what the scrub took out. The layering claim in
+the decision above still holds: `definition-store.ts` gains no dependency on the modules that own a
+scrub, because a length bound is not a content rule.
+
+### Two layers where only one is exercised reads as belt-and-braces and is one belt
+
+Three tests in this slice could not fail, and two of them shared one cause: a gate duplicated across
+two layers, with only the outer layer reachable from the test.
+
+- `POST …/publish` carries `requireRole('super-admin')` AND the store's `visibilityWriteVerdict`.
+  For a row the caller can SEE, both answer 403, so removing the route's gate left the suite green.
+  What separates them is WHEN they answer: middleware refuses before the handler runs and therefore
+  before any row is looked up, so the route bar answers the same 403 for an id that names NOTHING,
+  where the store - if reached - must answer the 404 of a missing row. The suite now asserts that.
+- `listPublishRequests`' own `if (actor.role !== 'super-admin') return []` sits behind the queue
+  route's `requireRole`, so NO HTTP request can reach it with a non-super-admin actor and it could be
+  deleted with everything green. Defence in depth is right; an unpinned second layer is one layer.
+  It is now called DIRECTLY, with the actors the route would never pass, and the Rule 5 proof is the
+  deletion of that line reddening `tests/security/publish-doors-isolation.test.ts`.
+
+The general rule, worth applying beyond this slice: a duplicated gate needs a test that can only be
+satisfied by the layer it names. If both layers answer the same thing on every input the test can
+construct, the second layer is documentation.
+
+**DIAGRAM CHECK (FIXED-12):** 12-org-tenancy gains an AS-BUILT correction block -
+`asbuilt-20260820j-s6-queue-runs-the-floor` - appended beneath the annotation whose "IT CARRIES NO
+CONTENT" claim it corrects; the original stays, since append-only means the record of what was
+believed survives. No module, seam, collection or wire shape changed, so 02 and 05 are unaffected.

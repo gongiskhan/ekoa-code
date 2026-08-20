@@ -214,7 +214,7 @@ export type RequestDefinitionPublishRequest = z.infer<typeof RequestDefinitionPu
 export const IntegrationPublishRequest = z.object({
   requestedBy: z.string(),
   requestedAt: IsoTimestamp,
-  /** Scrubbed and capped server-side before it is stored - see the route. */
+  /** Scrubbed by the route that mints it, and length-capped by the store that writes it. */
   note: z.string().optional(),
 });
 export type IntegrationPublishRequest = z.infer<typeof IntegrationPublishRequest>;
@@ -232,14 +232,26 @@ export type DefinitionPublishRequestResponse = z.infer<typeof DefinitionPublishR
  * The queue is the one surface where a super-admin who is NOT a member of the authoring org reads
  * something of that org's, so what it may carry is decided here rather than by a spread. It carries
  * ADDRESSING and PROVENANCE only: enough to find the row, know which org asked and decide whether to
- * open it. It carries NO CONTENT - no `skillMd`, no `lessons`, no `configSchema`, no action bodies -
- * because that content is exactly what `publish-scrub.ts` exists to scrub before it crosses an org
- * boundary, and the queue runs no scrub. A reviewer reads the content through `previewPublish`,
- * which does.
+ * open it. The BODIES are absent - no `skillMd`, no `lessons`, no `configSchema`, no action bodies -
+ * and a reviewer reads those through `previewPublish`.
+ *
+ * THE ABSENCE OF BODIES IS NOT THE ABSENCE OF CONTENT, which this shape learned the hard way. `key`
+ * and `displayName` ARE package fields: `packageConfigFromDoc` puts both in the published config and
+ * `applyPublishFloor` walks both, so an integration named `CRM sk_live_…` published as
+ * `CRM [REDACTED]` while this projection carried the literal key to another org's super-admin. The
+ * route now builds every content field here off the publish FLOOR's output
+ * (`api/src/routes/integrations.ts`, `publishQueueEntry`), so a field added to this schema later is
+ * scrubbed because of WHERE the route reads it from rather than because someone remembered.
+ *
+ * WHAT IS CARRIED RAW, DELIBERATELY, IS IDENTITY: `orgId` and `requestedBy`. That is the queue's
+ * reason to exist, and it is the one thing the PUBLISHED artifact withholds - the two surfaces
+ * differ there on purpose and in opposite directions (publication is anonymous and permanent,
+ * review is attributed and revocable).
  */
 export const IntegrationPublishQueueEntry = z.object({
   /** The definition `_id` - what `previewPublish` and `publishDefinition` take in their path. */
   id: z.string(),
+  /** Floor-scrubbed, like `displayName`: both are package fields, and this crosses an org boundary. */
   key: z.string(),
   displayName: z.string().optional(),
   /** The asking tenant. The point of the queue, and the reason it is super-admin only. */
@@ -250,6 +262,9 @@ export const IntegrationPublishQueueEntry = z.object({
   republish: z.boolean(),
   requestedBy: z.string(),
   requestedAt: IsoTimestamp,
+  /** Floor-scrubbed AGAIN on the way out - a different property from the submit route's scrub. That
+   *  one keeps a credential out of the DATABASE; this keeps it out of ANOTHER ORG, whatever wrote
+   *  the row (`requestPublish` stores the string it is given). */
   note: z.string().optional(),
 });
 export type IntegrationPublishQueueEntry = z.infer<typeof IntegrationPublishQueueEntry>;

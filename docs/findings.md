@@ -6522,3 +6522,92 @@ re-implemented a live control had it trusted this heading over the code.
   scrub + strict credential-line rule + blanket literal-secret scan), then a 1000-character cap.
   Scrubbed at the route rather than in the store, because `definition-store.ts` deliberately holds no
   runtime dependency on the modules that own the scrub.
+
+- **`s6-the-review-queue-carried-tenant-content-raw-across-an-org-boundary`** (CLOSED 2026-08-20,
+  HIGH, cross-tenant credential disclosure on the one unscrubbed cross-org read). `publishQueueEntry`
+  returned `doc.displayName` and `doc.key` verbatim to a platform super-admin who is not a member of
+  the authoring org, on the strength of a claim - repeated in the route comment, `docs/decisions.md`
+  and the 12-org-tenancy annotation - that the queue "carries no content". Both fields ARE content:
+  `packageConfigFromDoc` puts them in the published package config and `applyPublishFloor` walks
+  them, so the publish redacts a pasted key inside either one. PROVEN LIVE: an org-A definition whose
+  `displayName` carried a pasted Stripe-style live key - described by SHAPE, an `sk_live_` prefix over
+  a 32-character body, and deliberately NOT reproduced here, because a ledger entry about a credential
+  leak is the last place to write a credential-shaped literal - was submitted for review and served to
+  org B's super-admin as that exact string, while the published snapshot of the same row read
+  `CRM [REDACTED]` in its place. The queue was therefore a strictly WIDER read of tenant content than
+  the preview it is documented as being narrower than - and it is the surface with no per-row
+  admission at all.
+  Closed by building every content field of the entry from `applyPublishFloor(...).content.config`
+  rather than from the document, so the property holds for fields added later by where they are read
+  from. The note is scrubbed on the way out too, which is a DIFFERENT property from the submit
+  route's scrub (that one keeps a credential out of the database; this keeps it out of another org
+  whatever wrote the row) and has its own failing test. Verified by mutation: restoring the raw
+  `doc.displayName`/`doc.key` read reddens one case, restoring the raw note reddens another.
+
+- **`s6-the-note-cap-test-could-not-fail`** (CLOSED 2026-08-20, test-quality). "The note is CAPPED
+  server-side, not merely bounded by the schema" submitted EXACTLY
+  `PUBLISH_REQUEST_NOTE_MAX_CHARS` characters through the route - a length the zod schema already
+  allows - so a server-side cap and a missing one answered identically. It was worse than that: the
+  string was `'a'.repeat(1000)`, and a 1000-character run of `a` matches the floor's `LONG_HEX_RE`,
+  so `scrubPublishText` replaced the whole note with the 10-character `[REDACTED]` and the
+  `<= 1000` assertion was true by a mile whatever the cap did. Closed by moving the cap to
+  `requestPublish` - the ONE place the note is written, and the only place a string longer than the
+  bound can arrive, since the wire refuses one - and asserting the stored length as an EQUALITY
+  against a genuinely over-long, non-secret-shaped string, with the route's at-the-bound case kept
+  as the reachability half. Verified by mutation: dropping the `.slice` reddens it (1500 vs 1000).
+
+- **`s6-two-gates-with-only-the-outer-one-exercised`** (CLOSED 2026-08-20, test-quality; the pattern
+  matters more than the two instances). Two of this slice's gates were duplicated across a route and
+  a store, and in both cases only the route was reachable from the suite, so the store half could be
+  deleted with everything green.
+  - `POST …/publish` - removing `requireRole('super-admin')` was a SURVIVING MUTANT: for a row the
+    caller can see, the route gate and the store's `visibilityWriteVerdict` both answer 403. Closed
+    by asserting the ORDER instead of the status: middleware refuses before the handler runs and so
+    before any row is looked up, so the route bar answers the same 403 for an id that names nothing,
+    where the store would answer a 404. Verified by mutation: without `requireRole` the missing-id
+    case answers 404.
+  - `listPublishRequests`' `if (actor.role !== 'super-admin') return []` - unreachable from HTTP
+    because the queue route's `requireRole` sits in front of it. Closed by calling the store directly
+    with a user, an org-admin and a foreign user, with the super-admin control asserted first.
+    Verified by mutation: DELETING the tenancy filter reddens it (Rule 5's required proof).
+
+  The general lesson, recorded because it will recur: two layers where only one is exercised reads as
+  belt-and-braces and is one belt. A duplicated gate needs a test that can only be satisfied by the
+  layer it names - otherwise the redundant layer is documentation, and it will be removed one day by
+  someone who runs the suite and sees green.
+
+- **`s6-a-secret-shaped-definition-key-crosses-orgs-raw-on-the-published-read-path`** (OPEN 2026-08-20,
+  LOW, residual - recorded, not fixed, because the obvious fix breaks resolution). `key` is a free
+  `z.string().min(1).max(120)` with no charset constraint, and while the published snapshot's
+  `config.integrationKey` IS floor-scrubbed, `publishedViewOf` deliberately restores `key: doc.key`
+  over it ("a snapshot never renames the row") - and the registry resolves BY key, so redacting it
+  there would make the published integration unresolvable for every consuming org. A definition whose
+  KEY contains a pasted credential therefore still exposes it cross-org through the ordinary global
+  read. Pre-existing (E1's `POST /global` and E2's publish both have it); not introduced by the
+  publish doors. The queue is now narrower than the publish for this field, which is the safe
+  direction. The real fix is a charset constraint on `key` at the save path - a Rule 7 breaking
+  change for any row already stored with an exotic key, so it needs its own slice and a migration
+  count, not a quiet tightening here.
+
+- **`s6-a-test-fixture-tripped-the-secrets-gate`** (CLOSED 2026-08-20, LOW, gate hygiene). The S6
+  contract suite wrote its planted credential as a LITERAL,
+  `const PLANTED_SECRET = 'sk_live_…'`, and `npm run gate:secrets` flagged it as a stripe access
+  token. Its sibling `tests/security/publish-doors-isolation.test.ts` states the rule in its own
+  header - "sentinels are COMPOSED at runtime, never literals, the gitleaks gate must keep firing on
+  real pasted keys" - and the contract suite broke it. A fixture that trips the secrets gate makes
+  that gate's output something people learn to skim, which is the only way it can fail to catch a
+  genuinely pasted key. Closed by composing the same bytes at runtime; the floor sees an identical
+  value, and the 35 cases across both files stay green. The already-committed copy stays in this
+  branch's history until that commit is rewritten, which is a call for whoever lands the branch.
+
+- **`gitleaks-flags-a-deliberately-non-credential-viewstate-fixture`** (OPEN 2026-08-20, LOW, not
+  this stream's file). `npm run gate:secrets` also reports `generic-api-key` at
+  `api/tests/automation/discovery-replay-acceptance.test.ts:112` - `PAGE_STATE_TOKEN`, a 38-char
+  ASP.NET `__VIEWSTATE` lookalike that the suite deliberately holds as NOT a credential (its whole
+  point is that `looksLikeLiteralSecret` cannot tell and refuses). It landed on main in `c43a190`
+  and belongs to the discovery-replay stream, which is active on this box, so it is reported rather
+  than edited from here: touching a sibling's file to fix a false positive trades one problem for a
+  merge conflict. The fix is the same one-liner as above - compose it at runtime - and it belongs in
+  that stream's next commit. Recorded so the red gate is a known red rather than ambient noise.
+  (`gate:secrets` is not in `ci:lane`, so this is not blocking a PR today; `gate:ledger` is likewise
+  red on main for unrelated web unit suites marked due/unrun at G9.)

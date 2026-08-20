@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Server } from 'node:http';
-import type { Actor } from '@ekoa/shared';
+import { PUBLISH_REQUEST_NOTE_MAX_CHARS, type Actor } from '@ekoa/shared';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { integrationDefinitions, users } from '../../src/data/stores.js';
@@ -19,7 +19,7 @@ import {
   definitionIdFor,
   type IntegrationDefinitionDoc,
 } from '../../src/integrations/definition-store.js';
-import { publishDefinition } from '../../src/integrations/publish-scrub.js';
+import { publishDefinition, scrubPublishText } from '../../src/integrations/publish-scrub.js';
 import { resolveDefinition } from '../../src/integrations/definition-registry.js';
 import { isTrustedAction } from '../../src/integrations/authored-action.js';
 
@@ -61,7 +61,18 @@ import { isTrustedAction } from '../../src/integrations/authored-action.js';
  *
  * 3. THE PUBLISH-REQUEST NOTE. Mounting the submit door created a new field that leaves the tenant:
  *    free text a person typed, read by a super-admin who is not a member of their org. It is
- *    scrubbed and capped at the route, and this suite reads the PERSISTED row back to prove it.
+ *    scrubbed at the route it is minted by and bounded at the store that writes it, and this suite
+ *    reads the PERSISTED row back to prove each.
+ *
+ * 4. THE REVIEW QUEUE'S OWN READ. The queue is the ONE response in the process that carries a
+ *    tenant's row to a super-admin who is not a member of it, and the slice's claim for it was that
+ *    it needs no scrub because it carries no content. That was false for `displayName` - a PACKAGE
+ *    field, walked by the publish floor, served RAW by the queue - which made the queue a strictly
+ *    WIDER read of tenant content than the preview it is documented as being narrower than. The
+ *    queue now reads its content fields off the floor's output, and the assertions below compare it
+ *    to the publish's answer for the same field rather than merely checking that something was
+ *    redacted. Its second gate (the store's own super-admin filter, invisible from the wire because
+ *    `requireRole` sits in front of it) is pinned here too, by calling the store directly.
  *
  * Sentinels are COMPOSED at runtime, never literals - the gitleaks gate must keep firing on real
  * pasted keys, so the fixtures must not themselves look like real pasted keys.
@@ -72,6 +83,8 @@ const S_NOTE = compose('sk_', 'live_', 'NOTEaaaa1111bbbb2222cccc');
 const S_EVIDENCE = compose('ghp_', 'EVIDENCEdddd3333eeee4444ffff5555');
 const S_FEEDBACK = compose('xoxb-', 'FEEDBACKgggg6666hhhh7777');
 const S_GOAL = compose('github_pat_', 'GOALiiii8888jjjj9999kkkk0000');
+/** Planted in the DISPLAY NAME - a package field, walked by the floor, and carried by the queue. */
+const S_NAME = compose('sk_', 'live_', 'DISPLAYNAMEaaaa1111bbbb2222cccc');
 
 const author: Actor = { userId: 'userA1', orgId: 'orgA', role: 'user' };
 const reviewer: Actor = { userId: 'root', orgId: 'orgPlatform', role: 'super-admin' };
@@ -143,7 +156,11 @@ async function seed(): Promise<void> {
       userId: 'userA1',
       key: KEY,
       visibility: 'org',
-      displayName: 'S6 doors',
+      // A DISPLAY NAME CARRYING A PASTED KEY. Not a contrivance for one test: `displayName` is a
+      // package field (`packageConfigFromDoc`), so the publish floor walks it and every containment
+      // assertion in this file now covers it too. It is also the field the review queue carried RAW
+      // across an org boundary while the publish redacted it - see the queue describe below.
+      displayName: `S6 doors ${S_NAME}`,
       description: 'A probe package.',
       configSchema: [],
       actions: [authoredAction()],
@@ -376,11 +393,106 @@ describe('the publish-request note is scrubbed and capped before it is stored', 
     expect(JSON.stringify(await queue.json())).not.toContain(S_NOTE);
   });
 
-  it('the note is CAPPED server-side, not merely bounded by the schema', async () => {
-    // The schema refuses over-long input at the wire; the cap is what holds if any caller ever
-    // reaches `requestPublish` with a longer string. Assert the stored length directly.
-    const res = await submit('a'.repeat(1_000));
+  it('the note is CAPPED where it is WRITTEN, by a string LONGER than the cap', async () => {
+    // WHY THIS GOES THROUGH THE STORE AND NOT THE ROUTE, stated because the previous version of
+    // this test went through the route and could not fail. `RequestDefinitionPublishRequest` bounds
+    // `note` with `.max(PUBLISH_REQUEST_NOTE_MAX_CHARS)`, so the wire refuses anything longer with a
+    // 400 and the only length the route can be handed is one the schema already allows - which a
+    // server-side cap and a missing server-side cap answer identically. (Worse: the string it
+    // submitted was `'a'.repeat(1000)`, and a run of 1000 hex characters is a LONG_HEX_RE match, so
+    // the scrub replaced the whole note with the 10-character `[REDACTED]` and `<= 1000` was true
+    // by a mile whatever the cap did.)
+    //
+    // `requestPublish` is the ONE place the note is written and it takes the string it is given, so
+    // the cap is asserted there, on a string that is genuinely over it, with an EQUALITY.
+    const over = 'x'.repeat(PUBLISH_REQUEST_NOTE_MAX_CHARS + 500);
+    // NON-VACUITY: `x` is outside `[0-9a-f]` and a single character class, so this string is not a
+    // literal-secret shape - nothing but the cap can shorten it.
+    expect(scrubPublishText(over)).toBe(over);
+    expect((await store.requestPublish(ID, author, over)).verdict).toBe('ok');
+    expect((await store.getById(ID))!.publishRequest!.note!.length).toBe(PUBLISH_REQUEST_NOTE_MAX_CHARS);
+
+    // And the cap does not eat a note the schema allows: exactly at the bound, through the ROUTE,
+    // the note is stored WHOLE. (The reachability half - the route really does reach this cap.)
+    const atBound = 'y'.repeat(PUBLISH_REQUEST_NOTE_MAX_CHARS);
+    expect((await submit(atBound)).status).toBe(200);
+    expect((await store.getById(ID))!.publishRequest!.note).toBe(atBound);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// The REVIEW QUEUE - the one response that carries a tenant's row to a non-member super-admin
+// ---------------------------------------------------------------------------------------------
+
+describe('the review queue is not a WIDER read of tenant content than the publish it precedes', () => {
+  beforeEach(async () => {
+    await mkUser('userA1', 'orgA', 'user');
+    await mkUser('rootB', 'orgB', 'super-admin');
+  });
+
+  const queueAs = async (u: string) =>
+    fetch(`http://127.0.0.1:${port}/api/v1/integrations/definitions/publish-requests`, {
+      headers: { authorization: `Bearer ${await tokenFor(u)}` },
+    });
+
+  it('the DISPLAY NAME crosses the org boundary through the same floor the publish applies', async () => {
+    // THE DEFECT THIS PINS. `displayName` is a package field: `packageConfigFromDoc` puts it in the
+    // published config and `applyPublishFloor` walks it, so the publish redacts a pasted key inside
+    // it. The queue returned `doc.displayName` verbatim - to a super-admin of ANOTHER ORG - which
+    // made the queue a strictly wider read of tenant content than the preview it is documented as
+    // being narrower than.
+    expect((await store.requestPublish(ID, author, 'ready')).verdict).toBe('ok');
+
+    // NON-VACUITY FIRST: the sentinel really is on the stored row, so an emptied fixture cannot
+    // make the containment assertion below pass by having nothing to contain.
+    expect((await store.getById(ID))!.displayName).toContain(S_NAME);
+
+    const res = await queueAs('rootB');
     expect(res.status).toBe(200);
-    expect((await store.getById(ID))!.publishRequest!.note!.length).toBeLessThanOrEqual(1_000);
+    const body = await res.json() as { items: Array<{ displayName?: string; key: string }> };
+    const entry = body.items[0]!;
+    expect(JSON.stringify(body), 'the queue must not carry a pasted key across an org boundary').not.toContain(S_NAME);
+    expect(entry.displayName).toContain('[REDACTED]');
+    // The surviving half: a scrub that emptied the name would leave the reviewer nothing to review.
+    expect(entry.displayName).toContain('S6 doors');
+
+    // AND THE TWO SURFACES AGREE. The publish floor's answer for the same field, from the same row,
+    // byte-for-byte - which is the property, rather than "the queue redacts something".
+    const published = await publishSeeded();
+    expect(published.publishedSnapshot!.config.displayName).toBe(entry.displayName);
+  });
+
+  it('a note stored WITHOUT the route\'s scrub is still scrubbed on its way out of the org', async () => {
+    // The submit route scrubs so a credential never reaches the DATABASE. This is the other
+    // property, and it is a different one: nothing on this row reaches ANOTHER ORG unscrubbed,
+    // whatever put it there. `requestPublish` takes the string it is given - the store owns no
+    // scrub, deliberately (it holds no runtime dependency on the modules that own one) - so a
+    // second caller, an import or a migration writes a raw note exactly like this.
+    expect((await store.requestPublish(ID, author, `a chave e ${S_NOTE}, guarda-a`)).verdict).toBe('ok');
+    expect((await store.getById(ID))!.publishRequest!.note, 'the raw note really is stored').toContain(S_NOTE);
+
+    const body = await (await queueAs('rootB')).json() as { items: Array<{ note?: string }> };
+    expect(JSON.stringify(body)).not.toContain(S_NOTE);
+    expect(body.items[0]!.note).toContain('[REDACTED]');
+    expect(body.items[0]!.note).toContain('guarda-a');
+  });
+
+  it('the queue is closed at the STORE as well as at the route, and the store half is pinned HERE', async () => {
+    // THE ROUTE'S `requireRole('super-admin')` MAKES THIS LAYER INVISIBLE FROM THE WIRE: no HTTP
+    // request can reach `listPublishRequests` with a non-super-admin actor, so the store's own
+    // `if (actor.role !== 'super-admin') return []` could be deleted with every suite green - and an
+    // unpinned second layer is one layer. It is called directly, with the actors the route in front
+    // of it would never let through.
+    expect((await store.requestPublish(ID, author)).verdict).toBe('ok');
+    // THE CONTROL FIRST: the submission really is in the queue, so the empties below mean something.
+    expect((await store.listPublishRequests(reviewer)).map((d) => d._id)).toEqual([ID]);
+
+    const orgAdmin: Actor = { userId: 'adminA1', orgId: 'orgA', role: 'org-admin' };
+    for (const who of [author, orgAdmin, foreign]) {
+      expect(
+        await store.listPublishRequests(who),
+        `${who.role} in ${who.orgId} must get nothing from the store itself`,
+      ).toEqual([]);
+    }
   });
 });

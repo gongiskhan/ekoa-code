@@ -44,13 +44,18 @@ import {
   SetIntegrationLessonsRequest,
   RequestDefinitionPublishRequest,
   PublishDefinitionRequest,
-  PUBLISH_REQUEST_NOTE_MAX_CHARS,
 } from '@ekoa/shared';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
 import { requireUserOrApiKey, type ApiKeyPrincipal } from '../auth/api-key-middleware.js';
 import { listConfigs, upsertConfig, updateConfig, deleteConfig, configSummary, findConfigForOwner } from '../integrations/service.js';
 import { refreshDefinitions, integrationAutomationTemplate } from '../integrations/definitions.js';
-import { previewPublish, publishDefinition, scrubPublishText } from '../integrations/publish-scrub.js';
+import {
+  applyPublishFloor,
+  previewPublish,
+  publishDefinition,
+  publishableContentOf,
+  scrubPublishText,
+} from '../integrations/publish-scrub.js';
 import { resolveDefinition, listDefinitionsFor, activeCatalogFor } from '../integrations/definition-registry.js';
 import {
   actionRequiresConsent,
@@ -186,26 +191,56 @@ function sendPublishRequest(res: Response, result: SetVisibilityResult): void {
  * ONE row of the review queue, projected onto `IntegrationPublishQueueEntry`.
  *
  * A WHITELIST, and here it is load-bearing rather than tidy: this is the only response in the
- * process that carries another organisation's row to a super-admin who is not a member of it, and it
- * runs NO scrub. So `skillMd`, `lessons`, `configSchema`, `credentialGuide` and the action bodies -
- * everything `publish-scrub.ts` exists to clean before it crosses an org boundary - are absent by
- * construction, not by a spread that happened to omit them. The reviewer reads content through
+ * process that carries another organisation's row to a super-admin who is not a member of it. So
+ * `skillMd`, `lessons`, `configSchema`, `credentialGuide` and the action bodies - everything
+ * `publish-scrub.ts` exists to clean before it crosses an org boundary - are absent by construction,
+ * not by a spread that happened to omit them. The reviewer reads content through
  * `POST …/publish-preview`, which is the scrub.
  *
- * `actionCount` is the one thing derived from the content: a size signal, never the content.
+ * AND THE WHITELIST WAS NOT ENOUGH, which is the correction this function carries. "It carries no
+ * content, so it needs no scrub" was the claim, and it was FALSE for the two content-bearing strings
+ * that were on the list: `key` and `displayName` are PACKAGE FIELDS - both sit in
+ * `packageConfigFromDoc`'s output and are walked by `applyPublishFloor` - so a definition named
+ * `CRM sk_live_…` published as `CRM [REDACTED]` while the QUEUE served the reviewer of another org
+ * the literal key. The queue was therefore a strictly WIDER read of tenant content than the preview
+ * it is supposed to be narrower than: the surface with no bar to earn it had the laxer scrub.
+ *
+ * SO THE QUEUE RUNS THE SAME FLOOR, and reads its content fields off the floor's OUTPUT rather than
+ * off the document. Not a second, narrower rule written here (that is the drift `publish-scrub.ts`'s
+ * header refuses) and not a per-field patch either: the next field added to
+ * `IntegrationPublishQueueEntry` comes off `floored` and is scrubbed because of where it is read
+ * from, not because someone remembered. The floor is pure, synchronous and model-free, the queue is
+ * a super-admin-only surface over the handful of rows currently submitted, and the walk it costs is
+ * dwarfed by the collection scan `listPublishRequests` already does to find them.
+ *
+ * WHAT IS DELIBERATELY NOT SCRUBBED IS IDENTITY, not content. `orgId` and `requestedBy` name the
+ * asking tenant and the person who asked - which is the queue's entire reason to exist (a reviewer
+ * about to hand a package to every organisation must know whose it is), and it is the ONE thing the
+ * published artifact deliberately withholds (`publishableAuthoringOf` drops `authoredBy`/`trustedBy`
+ * for exactly that reason). The two surfaces differ there ON PURPOSE and in opposite directions:
+ * publication is anonymous and permanent, review is attributed and revocable.
+ *
+ * `actionCount` is the one thing derived from the content: a size signal, never the content, and
+ * counted off the PUBLISHABLE action set so it answers "how many actions would ship".
  */
 function publishQueueEntry(doc: IntegrationDefinitionDoc) {
   const req = doc.publishRequest!;
+  const floored = applyPublishFloor(publishableContentOf(doc)).content.config;
   return {
     id: doc._id,
-    key: doc.key,
-    ...(doc.displayName !== undefined ? { displayName: doc.displayName } : {}),
+    key: floored.integrationKey,
+    ...(floored.displayName !== undefined ? { displayName: floored.displayName } : {}),
     orgId: doc.orgId,
-    actionCount: (doc.actions ?? []).length,
+    actionCount: (floored.actions ?? []).length,
     republish: doc.publishedSnapshot !== undefined,
     requestedBy: req.requestedBy,
     requestedAt: req.requestedAt,
-    ...(req.note !== undefined ? { note: req.note } : {}),
+    // THE NOTE IS SCRUBBED HERE TOO, and this is not the submit route's scrub repeated. The two
+    // enforce DIFFERENT properties: the submit route scrubs so a pasted credential never reaches
+    // the DATABASE, and this scrubs so nothing on this row reaches ANOTHER ORG - a boundary that
+    // must hold for a note however it got stored, since `requestPublish` takes the string it is
+    // given and the store owns no scrub of its own. Each has its own failing test.
+    ...(req.note !== undefined ? { note: scrubPublishText(req.note) } : {}),
   };
 }
 
@@ -414,20 +449,26 @@ export function integrationsRouter(deps: {
    * by the same `scrubPublishText`: the read-path scrub plus the strict credential-line rule plus
    * the BLANKET literal-secret scan. `scrubSecretText` alone is the narrower egress rule and leaves
    * a pasted vendor key sitting in prose (measured, not assumed - the security suite planted one and
-   * watched it survive). Then a hard cap, the shape `authored-action.ts` gives an authoring goal.
+   * watched it survive).
    *
-   * It cannot go in the store: `definition-store.ts` holds no runtime dependency on the modules that
-   * own the scrub (its own header, and the reason `withoutRecipes` is restated there rather than
-   * imported). It cannot rely on the schema alone either - `.max()` bounds the length, not the
-   * content. So the one place that mints a publish request does both, and
+   * The scrub cannot go in the store: `definition-store.ts` holds no runtime dependency on the
+   * modules that own it (its own header, and the reason `withoutRecipes` is restated there rather
+   * than imported). It cannot rely on the schema either - `.max()` bounds the length, not the
+   * content. So the one place that mints a publish request scrubs, and
    * `tests/security/publish-doors-isolation.test.ts` reads the PERSISTED row back to prove it.
+   *
+   * THE LENGTH CAP IS NOT HERE, and moving it out is the point. A cap applied at one of several
+   * callers bounds that caller, not the field; `requestPublish` is the ONE place the note is
+   * written, so that is where it is bounded (see the store). Capping here as well would additionally
+   * have made the cap UNFAILABLE through the wire, because the schema already refuses anything
+   * longer than the cap at this route - so the only strings that can exceed it are the ones this
+   * scrub GREW (a short literal beside a placeholder becomes the longer `[REDACTED]`), and those
+   * are exactly what the store now bounds on their way to storage.
    */
   r.post('/definitions/:id/publish-request', requireAuth, async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, RequestDefinitionPublishRequest, req.body ?? {});
     if (!body) return;
-    const note = body.note === undefined
-      ? undefined
-      : scrubPublishText(body.note).slice(0, PUBLISH_REQUEST_NOTE_MAX_CHARS);
+    const note = body.note === undefined ? undefined : scrubPublishText(body.note);
     const result = await integrationDefinitionStore.requestPublish(req.params.id as string, actorOf(req), note);
     sendPublishRequest(res, result);
   });
