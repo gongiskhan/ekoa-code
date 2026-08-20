@@ -142,17 +142,48 @@ function composeBlock(plan: Record<string, unknown>): string {
 function collectionsOf(byName: Record<string, Record<string, unknown>[]>): {
   seam: AppCollections;
   reads: string[];
+  lists: () => number;
 } {
   const reads: string[] = [];
+  let lists = 0;
   return {
     reads,
+    lists: () => lists,
     seam: {
-      list: async () => Object.keys(byName).sort(),
+      list: async () => {
+        lists++;
+        return Object.keys(byName).sort();
+      },
       read: async (_actor, collection) => {
         reads.push(collection);
         const rows = byName[collection];
         return rows === undefined ? { kind: 'unknown_collection' } : { kind: 'rows', rows };
       },
+    },
+  };
+}
+
+/**
+ * A collections seam that REJECTS, which is what the real one does.
+ *
+ * `server.ts` binds `list`/`read` to `CollectionsEngine.listCollections`/`list` - Mongo queries.
+ * They reject on a dropped connection, a timeout, a replica-set election. `collectionsOf` above
+ * cannot express that: every one of its answers is a resolved value, so a suite built only on it
+ * proves the rung handles every ANSWER the seam gives and says nothing about the seam FAILING.
+ *
+ * The message is deliberately internals-shaped. The rung must not put it on the wire.
+ */
+const STORE_FAILURE = 'MongoNetworkError: connection 4 to ekoa-primary.internal:27017 closed';
+function collectionsThatReject(at: 'list' | 'read', byName: Record<string, Record<string, unknown>[]> = {}): AppCollections {
+  return {
+    list: async () => {
+      if (at === 'list') throw new Error(STORE_FAILURE);
+      return Object.keys(byName).sort();
+    },
+    read: async (_actor, collection) => {
+      if (at === 'read') throw new Error(STORE_FAILURE);
+      const rows = byName[collection];
+      return rows === undefined ? { kind: 'unknown_collection' } : { kind: 'rows', rows };
     },
   };
 }
@@ -900,9 +931,63 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
     expect(v.plan).toBeNull();
   });
 
-  it('parseComposePlan wants exactly one fenced block', () => {
+  /**
+   * A SURVIVING MUTANT: `compose === false` -> `compose !== true` left the estate green, because
+   * every fixture that declines does so with a literal `false`.
+   *
+   * Under it, GARBAGE READS AS A DELIBERATE DECLINE. `{}`, `{ compose: 0 }` and `{ compose: "no" }`
+   * would each take the well-formed branch, so the suite answers `passed: true` about a plan it
+   * never validated, and the ladder records a SKIP with no violations - the caller is told "no
+   * collection narrows this goal" when what happened is that the model emitted nothing usable, and
+   * the repair turn gets no violations to repair from. Those are different facts about a call.
+   */
+  it('only a LITERAL false declines: a malformed plan is malformed, not a decline', () => {
+    for (const bad of [{}, { compose: 0 }, { compose: 'no' }, { compose: null }]) {
+      const v = verifyComposePlan({ planned: bad });
+      expect(v.passed, JSON.stringify(bad)).toBe(false);
+      expect(v.plan).toBeNull();
+      // …and it is diagnosed as a SHAPE problem, so the repair turn is told what was wrong.
+      expect(v.checks.map((c) => c.name)).toEqual(['shape']);
+      expect(v.checks[0]?.detail ?? '').toContain('"compose" must be a literal true or false');
+    }
+  });
+
+  /**
+   * THE SIBLING OF THE MISSING-`collection` CASE ROUND FOUR CLOSED, and it survived that round's
+   * sweep because the fix was written for `undefined` alone. An EMPTY collection name is refused
+   * either way (`collectionName` rejects `''` too), so `passed` cannot tell the two apart - what
+   * distinguishes them is the CHECK LIST, which is the rule itself: a suite that keeps judging a
+   * plan it has already found malformed is a suite inventing the artifact it judges.
+   */
+  it('an EMPTY collection name is a SHAPE problem, and nothing below shape is judged', () => {
+    const v = verifyComposePlan({ planned: { ...CANONICAL_PLAN, collection: '' } });
+    expect(v.passed).toBe(false);
+    expect(v.checks.map((c) => c.name)).toEqual(['shape']);
+    expect(v.checks[0]?.detail ?? '').toContain('"collection" is missing');
+  });
+
+  /**
+   * THE FENCE TAG IS PART OF THE CONTRACT. A SURVIVING MUTANT: relaxing the pattern to
+   * ` ```[a-z-]* ` left every suite green, because no fixture ever put a DIFFERENT fenced block in
+   * a reply. Both rungs share one authoring core and one repair loop, and a planning reply
+   * routinely carries an illustrative ```json block - a tag-blind parser takes the first fenced
+   * thing it finds and hands the wrong artifact to the deterministic suite.
+   */
+  it('each rung parses ITS OWN fenced block and ignores anybody else\'s', () => {
     expect(parseComposePlan(composeBlock({ compose: false })).draft).toEqual({ compose: false });
     expect(parseComposePlan('nothing here').violations).toHaveLength(1);
+
+    // A plain ```json block is NOT a compose plan, however plan-shaped it looks…
+    const plainJson = 'Here is what I would do:\n\n```json\n{"compose":true,"collection":"secrets"}\n```\n';
+    expect(parseComposePlan(plainJson).draft).toBeNull();
+    expect(parseComposePlan(plainJson).violations[0]).toContain('compose-json');
+    // …and neither is the OTHER rung's block, which the same core can produce in the same session.
+    const argsFenced = argsBlock({ numero: '999' });
+    expect(parseComposePlan(argsFenced).draft).toBeNull();
+    expect(parseArgsPlan(composeBlock({ compose: false })).draft).toBeNull();
+    // The right tag is still found when it is not the first block in the reply.
+    const mixed = `${plainJson}\n${composeBlock(CANONICAL_PLAN)}`;
+    expect(parseComposePlan(mixed).draft).toEqual(CANONICAL_PLAN);
   });
 });
 
@@ -1151,6 +1236,162 @@ describe('the compose rung stands down; it never takes an answer away', () => {
   });
 
   /**
+   * A THROW IS THE FOURTH EXIT FROM THE SAME WRONG IDEA, and it was the one still open.
+   *
+   * Round three made the post-stage stop RETURNING a refusal. Round four made it stop returning one
+   * after a successful execute. Neither closed this: `ctx.appCollections.read` is bound in
+   * `server.ts` to `CollectionsEngine.list`, a live Mongo query, and its rejection propagated out of
+   * `applyComposition`, out of `runMatchedAction`, out of `achieveIntegrationGoal` and into the
+   * route's error handler. So the sequence was:
+   *
+   *   the caller's request goes out to Citius -> Citius answers 200 with the processos ->
+   *   our own database blips -> the caller gets a 500 from US and no processos at all.
+   *
+   * The side effect is SPENT and the rows are IN HAND at the moment the post-stage fails. There is
+   * no version of losing them that is correct, and "it threw" is not a different case from "it
+   * refused" - it is the same subtraction wearing a different exit.
+   *
+   * THE LOAD-BEARING ASSERTION IS THE BODY, not the ladder wording: the caller RECEIVES the executed
+   * arm's answer. Restore `applyComposition` to `return await attemptComposition(...)` with no
+   * `try` and this test throws instead of asserting.
+   */
+  it('a THROW out of the collection reader does not destroy the 200 the remote already gave', async () => {
+    await seed([processos]);
+    const { planner } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
+    const { ctx, calls } = ctxWith('ownerA', 'orgA', {
+      planner,
+      collections: collectionsThatReject('read', { clients: CLIENT_ROWS }),
+      data: { processos: PROCESS_ROWS },
+    });
+
+    const out = await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL);
+
+    // Before the fix: this line never ran - the rejection escaped `achieveIntegrationGoal`.
+    const res = valueOf(out);
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    // The request DID go out, so the side effect was spent…
+    expect(calls).toHaveLength(1);
+    // …and THE CALLER RECEIVES THE EXECUTED ARM'S BODY. This is the assertion the blocker names.
+    expect(res.result.success).toBe(true);
+    expect(res.result.data).toEqual({ processos: PROCESS_ROWS });
+    // Nothing was narrowed, so nothing claims to have been.
+    expect((res as { items?: unknown }).items).toBeUndefined();
+    expect((res as { composition?: unknown }).composition).toBeUndefined();
+    // The composition did not apply, and the ladder SAYS SO rather than swallowing it.
+    const step = res.ladder?.find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('refused');
+    expect(step?.detail).toContain('could not be read');
+    // THE STORE'S OWN MESSAGE IS NOT ON THE WIRE. It names our host and our driver; the ladder is a
+    // caller-facing field. Put `err.message` in that detail and this reds.
+    expect(JSON.stringify(res)).not.toContain('MongoNetworkError');
+    expect(JSON.stringify(res)).not.toContain('ekoa-primary.internal');
+    // The rung that ANSWERED is still named.
+    expect(res.ladder?.find((s) => s.rung === 'reuse')?.verdict).toBe('taken');
+    // No join happened, so no audit row claims one did.
+    expect(await activityLogs.find({ type: 'capability_achieve_compose' })).toHaveLength(0);
+  });
+
+  /**
+   * THE SAME RULE ONE STEP EARLIER. The planning stage runs BEFORE the execute, so a rejection there
+   * did not discard a spent 200 - it did something adjacent and just as wrong: the request never
+   * went out at all, and an `achieve` that had been executing since before this slice existed 500'd
+   * because a rung ABOVE the one that answers it could not do its optional extra work.
+   */
+  it('a THROW out of the collection LISTER still lets the call the caller asked for run', async () => {
+    await seed([processos]);
+    const { planner, turns } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
+    const { ctx, calls } = ctxWith('ownerA', 'orgA', {
+      planner,
+      collections: collectionsThatReject('list'),
+      data: { processos: PROCESS_ROWS },
+    });
+
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
+
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    expect(calls).toHaveLength(1);
+    expect(res.result.data).toEqual({ processos: PROCESS_ROWS });
+    // The stage died before a model could be asked, and no model was asked afterwards either.
+    expect(turns()).toBe(0);
+    const step = res.ladder?.find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('skipped');
+    expect(step?.detail).toContain('could not be planned');
+    expect(JSON.stringify(res)).not.toContain('MongoNetworkError');
+    expect(res.ladder?.find((s) => s.rung === 'reuse')?.verdict).toBe('taken');
+  });
+
+  /** …and the same for the PLANNING seam itself, which reaches the LLM chokepoint over a socket. */
+  it('a THROW out of the planning seam still lets the call the caller asked for run', async () => {
+    await seed([processos]);
+    const throwingPlanner: PlanDrafter = async () => { throw new Error('chokepoint socket hang up'); };
+    const { seam, reads } = collectionsOf({ clients: CLIENT_ROWS });
+    const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner: throwingPlanner, collections: seam, data: { processos: PROCESS_ROWS } });
+
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
+
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    expect(calls).toHaveLength(1);
+    expect(res.result.data).toEqual({ processos: PROCESS_ROWS });
+    // The plan never existed, so no collection was read on the strength of one.
+    expect(reads).toHaveLength(0);
+    expect(res.ladder?.find((s) => s.rung === 'compose')?.verdict).toBe('skipped');
+    expect(res.ladder?.find((s) => s.rung === 'reuse')?.verdict).toBe('taken');
+  });
+
+  /**
+   * THE FAIL-CLOSED `mutates` READING, MADE OBSERVABLE AT THIS SEAM.
+   *
+   * `planComposition` gates on `action.mutates !== false`. Round five's guard for that was a fixture
+   * declaring `mutates: true`, against which `!== false` and `=== true` are the SAME PREDICATE - an
+   * equivalent mutant presented as a fix. What makes the reading load-bearing is an action whose
+   * `mutates` is ABSENT, and the question is whether such an action can reach here in production.
+   *
+   * IT CAN, AND THIS TEST USES THE REAL WRITER TO PROVE IT. `definitions.ts` builds a package
+   * definition's actions as `config.actions ?? []` - straight off an unvalidated `config.json`, no
+   * schema and no coercion - and `definition-store.ts` persists an agent-authored action through
+   * `withoutRecipes`, which returns it verbatim. So the action is SEEDED THROUGH
+   * `integrationDefinitionStore.create` with no `mutates` key at all and read back out by
+   * `achieveIntegrationGoal` itself; nothing in this test normalises it, because nothing in the
+   * product does either.
+   *
+   * Read `!== false` as `=== true` and an action with no declared effect at all becomes composable:
+   * the rung is entered, the caller's collection NAMES go into a model prompt, and a model's plan
+   * decides what happens to the answer of a call nobody established was a read.
+   */
+  it('an action whose `mutates` is ABSENT is a WRITE at this seam: the compose rung is never entered', async () => {
+    // No `mutates` key. The cast is the test admitting what the type forbids and the two production
+    // writers permit - it is not a fixture shortcut, it is the shape those writers produce.
+    const undeclared = { ...processos, actionName: 'processos' } as Record<string, unknown>;
+    delete undeclared.mutates;
+    await seed([undeclared as unknown as IntegrationAction]);
+    // Absent `mutates` is a write EVERYWHERE, so the executor's own gate wants a human first.
+    // Approving it is what leaves COMPOSE as the only thing this test is about.
+    await approveAction(
+      { orgId: 'orgA', userId: 'ownerA' },
+      describeAction(PROBE_INTEGRATION, undeclared as unknown as IntegrationAction),
+      'always',
+    );
+    const { planner, turns } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
+    const { seam, reads, lists } = collectionsOf({ clients: CLIENT_ROWS });
+    const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: { processos: PROCESS_ROWS } });
+
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
+
+    // It RAN - the fail-closed reading costs the caller nothing they had before.
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    expect(calls).toHaveLength(1);
+    expect(res.result.data).toEqual({ processos: PROCESS_ROWS });
+    // …and the rung was not entered: no model turn, and the caller's collection NAMES were never
+    // even enumerated, let alone put in a prompt. Each of these three reds on `=== true`.
+    expect(turns()).toBe(0);
+    expect(lists()).toBe(0);
+    expect(reads).toHaveLength(0);
+    const step = res.ladder?.find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('skipped');
+    expect(step?.detail).toContain('can change data');
+  });
+
+  /**
    * THE COUNT IS THE INVARIANT. Three previous rounds asserted "a rung may only ADD an answer" in
    * prose while the code carried three refusal codes that subtracted one. A sentence cannot be
    * mutated; a union member can, so this asserts the union.
@@ -1218,6 +1459,95 @@ describe('an unwired, unavailable or inapplicable rung leaves achieve exactly as
     expect(step?.detail).toContain('unbound');
     // Nothing reached a network: the executor refuses an unbound origin before it fetches.
     expect(res.result.success).toBe(false);
+  });
+
+  /**
+   * A SURVIVING MUTANT: `!ctx.planStep || !ctx.appCollections` -> `&&`. No fixture wired exactly
+   * ONE of the two seams, so "no seams at all" (above) and "both seams" covered the guard between
+   * them and the operator in the middle was free.
+   *
+   * Under `&&` a deployment that binds one seam and not the other walks past the guard: with only
+   * `appCollections`, the caller's whole collection list is read out of the store for a rung that
+   * cannot ask anybody about it, and then `ctx.planStep` is called on `undefined`. Neither costs
+   * the caller their answer any more (the planning stage catches its own throw), which is exactly
+   * why this needs its own assertion: a real store read for nothing is now INVISIBLE in the
+   * outcome and visible only here.
+   */
+  it('ONE seam is not enough: each half absent skips the rung, and reads nothing on the way past', async () => {
+    await seed([processos]);
+    // (a) the planner alone - there is nothing to narrow against.
+    {
+      const { planner, turns } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
+      const { ctx } = ctxWith('ownerA', 'orgA', { planner, data: { processos: PROCESS_ROWS } });
+      const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
+      if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+      expect(turns()).toBe(0);
+      const step = res.ladder?.find((s) => s.rung === 'compose');
+      expect(step?.verdict).toBe('skipped');
+      expect(step?.detail).toContain('not wired');
+    }
+    // (b) the collections alone - there is nobody to ask what to narrow by, and the store must not
+    // be read to discover that.
+    {
+      const { seam, reads, lists } = collectionsOf({ clients: CLIENT_ROWS });
+      const { ctx } = ctxWith('ownerA', 'orgA', { collections: seam, data: { processos: PROCESS_ROWS } });
+      const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
+      if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+      expect(lists()).toBe(0);
+      expect(reads).toHaveLength(0);
+      const step = res.ladder?.find((s) => s.rung === 'compose');
+      expect(step?.verdict).toBe('skipped');
+      expect(step?.detail).toContain('not wired');
+    }
+  });
+
+  /**
+   * A SURVIVING MUTANT: deleting the compose rung's `checkAllowance` gate left everything green.
+   * The rung SPENDS A MODEL CALL, so it meets the same allowance every other model call in this
+   * repo meets - and a billing-locked tenant getting free planning turns is the gate not existing.
+   *
+   * The parametrize rung's identical gate has the same hole; both are asserted here, because they
+   * are two statements of one rule and either could be deleted alone.
+   */
+  it('a BILLING-LOCKED tenant pays for no planning turn on either rung, and still gets the answer', async () => {
+    // A real account with a zero allowance, in the shape `checkAllowance` reads: base exhausted,
+    // no overage, no credit. This is the same fixture the gateway suites use.
+    await billingAccounts.insert({
+      _id: 'ownerA', monthlyBaseTokensUsed: 0, creditBalanceUsd: 0, overageEnabled: false,
+      currentPeriodStart: '2026-01-01T00:00:00.000Z', tokenLimit: 0,
+    } as never);
+    await seed([processos, consultarProcesso]);
+
+    // COMPOSE: residue, both seams wired, and the model must still not be asked.
+    {
+      const { planner, turns } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
+      const { seam, reads } = collectionsOf({ clients: CLIENT_ROWS });
+      const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: { processos: PROCESS_ROWS } });
+      const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
+      if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+      // The READ the caller asked for is NOT billing-gated: a locked allowance stops model calls,
+      // not the product. This is the ladder invariant again - the rung stands down, the call runs.
+      expect(calls).toHaveLength(1);
+      expect(res.result.data).toEqual({ processos: PROCESS_ROWS });
+      expect(turns()).toBe(0);
+      // …and the collection names were read BEFORE the allowance check, which is the honest order
+      // to assert rather than to wish away: the gate is on the MODEL CALL.
+      expect(reads).toHaveLength(0);
+      const step = res.ladder?.find((s) => s.rung === 'compose');
+      expect(step?.verdict).toBe('skipped');
+      expect(step?.detail).toBe('billing');
+    }
+    // PARAMETRIZE: a declared argument the caller omitted, and no turn is bought for it either.
+    {
+      const { planner, turns } = plannerEmitting([argsBlock({ numero: '111/24.0T8LSB' })]);
+      const { ctx } = ctxWith('ownerA', 'orgA', { planner });
+      const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'consultar processo do cliente'));
+      if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+      expect(turns()).toBe(0);
+      const step = res.ladder?.find((s) => s.rung === 'parametrize');
+      expect(step?.verdict).toBe('skipped');
+      expect(step?.detail).toBe('billing');
+    }
   });
 
   it('a goal with no residue never pays for a compose turn', async () => {
@@ -1332,6 +1662,59 @@ describe('static: the ladder routes through the ONE gated executor and never pic
 
   it('the product modules never import the authoring core directly (tier 3 -> tier 5 runs one way)', () => {
     for (const src of [achieve, parametrize, compose]) expect(src).not.toContain('agents/');
+  });
+
+  /**
+   * WHY `if (!out.ok) return out;` HAS NO BEHAVIOURAL TEST, and why that is a dismissal with a
+   * checkable reason rather than a coverage hole.
+   *
+   * A mutant replacing that line with a fabricated `executed` answer SURVIVED the whole estate.
+   * The reason is that the branch is UNREACHABLE from `runMatchedAction`:
+   * `executeIntegrationCapabilityAction` has exactly ONE `ok: false` in it, `no_tenant`, and
+   * `achieveIntegrationGoal` has already refused a tenantless actor in `resolveCapabilityDefinition`
+   * long before a rung is entered. Nothing else about an execute is a capability REFUSAL - a remote
+   * 500, an unknown action and `awaiting_consent` all come back as `ok: true` with the answer inside
+   * `result`, which is exactly why the compose post-stage has to inspect `result.success` itself.
+   *
+   * So no honest test can kill that mutant: it would have to fabricate a refusal the function cannot
+   * return. The line stays as defensive redundancy - it is the one that remains correct if
+   * `executeIntegrationCapabilityAction` ever grows a second refusal - and what IS asserted is the
+   * REASON it is currently unreachable, which is a source fact and does red when it stops being true.
+   */
+  /**
+   * THE OTHER TRUE EQUIVALENT MUTANT THIS ROUND FOUND, and the claim that IS assertable instead.
+   *
+   * `ownerSharedScope`'s `appId` field can be set to any string at all and nothing in the estate
+   * notices - correctly, because `Scope.appId` is NEVER part of a query in `CollectionsEngine`. That
+   * is exactly what the function's own header claims, so the mutant surviving CONFIRMS the design
+   * rather than exposing a hole, and no honest test can kill it.
+   *
+   * What is killable is the property that makes it true, and it is the whole reason the compose
+   * rung's tenancy unit is the OWNER (D-S5-1): every filter in the engine binds on
+   * `scope.scopeKey`, and none binds on `scope.appId`. Add `appId: scope.appId` to any one of them
+   * and this reds - and so does the isolation suite, in the other direction.
+   */
+  it('the store binds on the OWNER key alone: no query in the engine reads `scope.appId`', () => {
+    const engine = read('data', 'collections-engine.ts');
+    // Every filter/insert names `appId: scope.scopeKey` - the field is a column, the OWNER is the
+    // value. Not one names `scope.appId`.
+    expect(engine).toContain('appId: scope.scopeKey');
+    expect(engine).not.toContain('scope.appId');
+    // …and `listCollections`, the reader this rung added, uses that same single binding point.
+    const fn = engine.slice(engine.indexOf('async listCollections('));
+    expect(fn.slice(0, fn.indexOf('\n  }'))).toContain("distinct('collection', { appId: scope.scopeKey })");
+  });
+
+  it('the executor seam has ONE refusal, and it is one `achieve` has already refused upstream', () => {
+    const capability = read('integrations', 'integration-capability.ts');
+    const fn = capability.slice(capability.indexOf('export async function executeIntegrationCapabilityAction'));
+    const body = fn.slice(0, fn.indexOf('\n}\n') + 1);
+    const refusals = [...body.matchAll(/ok:\s*false,\s*refusal:\s*'([a-z_]+)'/g)].map((m) => m[1]);
+    expect(refusals).toEqual(['no_tenant']);
+    // …and `achieve` refuses a tenantless actor before any rung: `resolveCapabilityDefinition` is
+    // the first thing it does, and it is the one that answers `no_tenant`.
+    expect(achieve).toContain('const resolved = await resolveCapabilityDefinition(ctx.actor, integrationKey);');
+    expect(achieve).toContain('if (!resolved.ok) return resolved;');
   });
 
   it('the collection reader cannot carry a fact about anybody else: not-found has NO payload', () => {

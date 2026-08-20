@@ -742,13 +742,19 @@ export async function achieveIntegrationGoal(
  *
  *   - parametrize discards the model's arguments and the request goes out as the CALLER shaped it;
  *   - compose discards the model's plan and the action answers unnarrowed;
- *   - and every way the compose POST-STAGE can fail to apply - a failed execute, a collection name
- *     the caller does not hold, an answer with no single list in it - falls through to that same
- *     exit rather than to a refusal. Two of those three used to refuse AFTER the request had gone
- *     out and come back 200, which spent the side effect and then discarded the result.
+ *   - every way the compose POST-STAGE can fail to apply - a failed execute, a collection name the
+ *     caller does not hold, an answer with no single list in it - falls through to that same exit
+ *     rather than to a refusal. Two of those three used to refuse AFTER the request had gone out
+ *     and come back 200, which spent the side effect and then discarded the result;
+ *   - AND SO DOES A THROW. `applyComposition` and `planComposition` each convert a rejection out of
+ *     their seams into a ladder step and a null/none, because a refusal, a swallowed answer and an
+ *     exception are three exits from the same wrong idea. The store read behind the compose rung is
+ *     a live Mongo query; before this, a dropped connection between the remote's 200 and the join
+ *     turned the caller's successful call into a 500 from us.
  *
- * The discarded rung is recorded `refused` on the ladder, with its `violations`, BESIDE the answer
- * it did not prevent. Nothing on this ladder may take away an answer the product already has.
+ * The discarded rung is recorded on the ladder, with its `violations` where it has any, BESIDE the
+ * answer it did not prevent. Nothing on this ladder may take away an answer the product already
+ * has - not by returning one, not by refusing one, and not by throwing.
  */
 async function runMatchedAction(
   ctx: AchieveContext,
@@ -928,11 +934,26 @@ async function runMatchedAction(
 }
 
 /**
- * THE COMPOSITION POST-STAGE. Returns the narrowed answer, or NULL when it could not be built -
- * NEVER a refusal, and it cannot construct one: the type says so.
+ * WHAT THE POST-STAGE PRODUCED. Two members, and the absence of a third is the point: a stage that
+ * post-processes an answer has no way to say "and therefore the answer is gone".
  *
- * THIS IS WHERE THE LADDER USED TO SUBTRACT AN ANSWER, on three paths, and two of them did it after
- * the request had gone out and come back 200:
+ * `not_applied` carries the LADDER WORDING rather than pushing it, so that every step this rung
+ * records is written at ONE place - see `applyComposition`. That is not tidiness: it is what makes
+ * "a throw cannot leave a half-written ladder behind" true by construction rather than by reading
+ * every branch and checking that each push is followed by a return.
+ */
+type CompositionAttempt =
+  | { kind: 'composed'; items: Record<string, unknown>[]; summary: ComposeSummary }
+  | { kind: 'not_applied'; verdict: 'skipped' | 'refused'; detail: string };
+
+/**
+ * THE COMPOSITION POST-STAGE. Returns the narrowed answer, or NULL when it could not be built -
+ * NEVER a refusal, NEVER a throw, and it can construct neither: the type says the first and the
+ * shape below says the second.
+ *
+ * THIS IS WHERE THE LADDER KEPT SUBTRACTING AN ANSWER, over three rounds, and every version of the
+ * defect happened AFTER the request had gone out and come back 200 - the side effect spent, the
+ * rows in hand:
  *
  *   - a FAILED execute carries no `data` (`action-executor.ts` returns `{ success: false, status,
  *     code, error, details }` for a non-2xx), so `rowsOf` read `unshaped` and the caller was told
@@ -940,12 +961,25 @@ async function runMatchedAction(
  *     accurate story that named the WRONG SYSTEM as the one that failed;
  *   - an UNKNOWN COLLECTION returned `compose_unknown_collection`, discarding a successful result
  *     the product had already paid for and already had in hand;
- *   - an UNSHAPED RESULT returned `compose_unshaped_result`, discarding the same.
+ *   - an UNSHAPED RESULT returned `compose_unshaped_result`, discarding the same;
+ *   - and then, with all three of those turned into `return null`, THE STAGE COULD STILL THROW.
+ *     `ctx.appCollections.read` is bound in `server.ts` to `CollectionsEngine.list`, which is a
+ *     Mongo query: it REJECTS on a dropped connection, a timeout, a replica-set election. That
+ *     rejection propagated out of here, out of `runMatchedAction`, out of `achieveIntegrationGoal`
+ *     and into the route's error handler as a 500 - so the caller's processos were fetched from a
+ *     third party, returned 200, and then thrown away because THIS platform's database hiccuped.
+ *     A refusal, a swallowed answer and an exception are three exits from the same wrong idea: a
+ *     post-stage does not get to decide the answer no longer exists.
  *
  * A composition is an ADDITION to an answer. When the addition cannot be made, what is left is the
- * answer - not nothing. So each of these records the rung on the ladder and returns null, and the
- * caller returns the executed arm verbatim. The route maps it exactly as it always did:
- * `unknown_action` to 404, `awaiting_consent` to the 403 envelope, everything else to the body.
+ * answer - not nothing, and not a stack trace. So the work happens in `attemptComposition`, which
+ * touches the seam and MAY throw, and this function converts every one of its outcomes - including
+ * a rejection - into a ladder step plus a null. There is no expression in this body that can
+ * escape: the only `await` outside the `try` is `auditComposed`, which catches its own.
+ *
+ * WHAT A THROW PUTS ON THE WIRE IS FIXED TEXT. The error's own message is logged for an operator
+ * and never travels: a store rejection's message is this platform's internals (a namespace, a
+ * host, a query shape), and the ladder is a caller-facing field.
  *
  * NO AUDIT ROW IS WRITTEN unless a join really happened, which is the truth of what occurred: the
  * `capability_achieve_compose` row exists to record that a SECOND data source was read to narrow
@@ -959,13 +993,56 @@ async function applyComposition(
   result: ExecuteIntegrationActionResult,
   ladder: AchieveLadderStep[],
 ): Promise<{ items: Record<string, unknown>[]; summary: ComposeSummary } | null> {
+  let attempt: CompositionAttempt;
+  try {
+    attempt = await attemptComposition(ctx, action, plan, result);
+  } catch (err) {
+    console.warn(
+      `[integration-achieve] compose post-stage failed for ${integrationKey}.${action.actionName}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    attempt = {
+      kind: 'not_applied',
+      verdict: 'refused',
+      // No `err` in this string, deliberately - see the header.
+      detail: `the data this goal would have been narrowed by could not be read, so "${action.actionName}" answers unnarrowed`,
+    };
+  }
+  if (attempt.kind === 'not_applied') {
+    ladder.push({ rung: 'compose', verdict: attempt.verdict, detail: attempt.detail });
+    return null;
+  }
+  ladder.push({
+    rung: 'compose',
+    verdict: 'taken',
+    detail: `${attempt.summary.matched} of ${attempt.summary.scanned} rows kept`
+      // The caller is told in words as well as in the summary: an answer narrowed against a
+      // PREFIX of the collection is a subset of the answer they asked for.
+      + (attempt.summary.collectionTruncated
+        ? `, matched against the first ${attempt.summary.collectionScanned} rows of "${attempt.summary.collection}" only`
+        : ''),
+  });
+  await auditComposed(ctx, integrationKey, action.actionName, attempt.summary);
+  return { items: attempt.items, summary: attempt.summary };
+}
+
+/**
+ * The post-stage's WORK, and the only part of it that touches a seam. It may throw - the store read
+ * below is a real database query - and it writes NOTHING: no ladder step, no audit row, no state at
+ * all. That is what lets `applyComposition` treat a rejection exactly like any other "did not
+ * apply" answer instead of having to reason about what a half-finished attempt left behind.
+ */
+async function attemptComposition(
+  ctx: AchieveContext,
+  action: IntegrationAction,
+  plan: NonNullable<ReturnType<typeof verifyComposePlan>['plan']>,
+  result: ExecuteIntegrationActionResult,
+): Promise<CompositionAttempt> {
   if (!result.success) {
-    ladder.push({
-      rung: 'compose',
+    return {
+      kind: 'not_applied',
       verdict: 'skipped',
       detail: `"${action.actionName}" did not succeed, so its own answer is returned unchanged rather than narrowed`,
-    });
-    return null;
+    };
   }
   const collection = await (ctx.appCollections as AppCollections).read(ctx.actor, plan.collection);
   if (collection.kind === 'unknown_collection') {
@@ -976,36 +1053,32 @@ async function applyComposition(
     // REGRESSION guard on that structure (no mutation here can break it) rather than a test of this
     // string. What keeps the structure true is `AppCollectionRead`: its not-found answer is a bare
     // tag with nowhere for such a fact to travel, and the module suite pins that shape.
-    ladder.push({
-      rung: 'compose',
+    return {
+      kind: 'not_applied',
       verdict: 'refused',
       detail: `you hold no "${plan.collection}" collection to narrow this by, so "${action.actionName}" answers unnarrowed`,
-    });
-    return null;
+    };
   }
   const rows = rowsOf(result.data);
   if (rows.kind === 'unshaped') {
-    ladder.push({
-      rung: 'compose',
+    return {
+      kind: 'not_applied',
       verdict: 'refused',
       detail: `${rows.detail}, so "${action.actionName}" answers unnarrowed`,
-    });
-    return null;
+    };
   }
   const composed = composeRows({ plan, actionRows: rows.rows, collectionRows: collection.rows });
-  ladder.push({
-    rung: 'compose',
-    verdict: 'taken',
-    detail: `${composed.summary.matched} of ${composed.summary.scanned} rows kept`
-      // The caller is told in words as well as in the summary: an answer narrowed against a
-      // PREFIX of the collection is a subset of the answer they asked for.
-      + (composed.summary.collectionTruncated
-        ? `, matched against the first ${composed.summary.collectionScanned} rows of "${composed.summary.collection}" only`
-        : ''),
-  });
-  await auditComposed(ctx, integrationKey, action.actionName, composed.summary);
-  return composed;
+  return { kind: 'composed', items: composed.items, summary: composed.summary };
 }
+
+/**
+ * WHAT THE PLANNING STAGE PRODUCED. Same two-member discipline as `CompositionAttempt`, and for the
+ * same reason: the worker returns a VALUE and `planComposition` writes the one ladder step, so a
+ * throw out of the model seam or the collection lister cannot leave a step behind.
+ */
+type CompositionPlanAttempt =
+  | { kind: 'plan'; plan: NonNullable<ReturnType<typeof verifyComposePlan>['plan']> }
+  | { kind: 'none'; verdict: 'skipped' | 'refused'; detail: string; violations?: string[] };
 
 /**
  * PLAN THE JOIN, or decline to. Returns before anything has executed.
@@ -1024,8 +1097,23 @@ async function applyComposition(
  * subtraction, one step earlier in the body, on the rung the entry gate had just been moved to
  * protect. It cannot now: the type below has two members and neither of them is a refusal.
  *
+ * AND IT CANNOT THROW EITHER, which the return type alone did not buy. `ctx.appCollections.list` is
+ * `CollectionsEngine.listCollections` - a Mongo aggregation - and `ctx.planStep` reaches the LLM
+ * chokepoint; either can reject. This stage runs BEFORE the execute, so a rejection here did not
+ * discard a spent 200, it did something adjacent and just as wrong: the request never went out at
+ * all. An `achieve` that had been executing since before this slice existed would 500 because a
+ * rung ABOVE the one that answers it could not do its optional extra work. Same rule, one step
+ * earlier: a rung that only adds an answer must never subtract one, and "the database was busy" is
+ * not a reason to withhold a call the caller is entitled to make.
+ *
  * `mutates === false` as a LITERAL is `action-consent.ts`'s fail-closed reading: an absent or
- * malformed `mutates` is a write, and a write is not composed over.
+ * malformed `mutates` is a write, and a write is not composed over. That reading is OBSERVABLE at
+ * this seam and not merely at `mayBeModelFilled`'s: `definitions.ts` builds a package definition's
+ * actions as `config.actions ?? []` - straight off an unvalidated `config.json`, no schema, no
+ * coercion - and `definition-store.ts` writes an agent-authored action through `withoutRecipes`,
+ * which returns it verbatim. So an action reaching here with NO `mutates` at all is a production
+ * shape, not a hypothetical, and the suite drives one through the real store to prove that reading
+ * this `!== false` as `=== true` would enter the rung on it.
  *
  * THE PRE-FILTER IS DETERMINISTIC AND FREE. The model is consulted only when the goal carries
  * tokens the action's own name and description do not account for - i.e. when the caller asked for
@@ -1046,33 +1134,64 @@ async function planComposition(
   | { kind: 'none' }
   | { kind: 'plan'; plan: NonNullable<ReturnType<typeof verifyComposePlan>['plan']> }
 > {
-  if (action.mutates !== false) {
+  let attempt: CompositionPlanAttempt;
+  try {
+    attempt = await draftCompositionPlan(ctx, goal, action);
+  } catch (err) {
+    console.warn(
+      `[integration-achieve] compose planning failed for "${action.actionName}": ${err instanceof Error ? err.message : String(err)}`,
+    );
+    attempt = {
+      kind: 'none',
+      verdict: 'skipped',
+      // Fixed text; the error's own message is an operator's fact, not a caller's - see
+      // `applyComposition`'s header for the same rule on the post-stage.
+      detail: 'the composition could not be planned, so the action runs and answers as it always did',
+    };
+  }
+  if (attempt.kind === 'none') {
     ladder.push({
       rung: 'compose',
-      verdict: 'skipped',
-      detail: `"${action.actionName}" can change data, and a composed answer is only ever built from a read`,
+      verdict: attempt.verdict,
+      detail: attempt.detail,
+      ...(attempt.violations ? { violations: attempt.violations } : {}),
     });
     return { kind: 'none' };
+  }
+  return { kind: 'plan', plan: attempt.plan };
+}
+
+/**
+ * The planning stage's WORK. Touches both seams, MAY throw, and writes nothing - see
+ * `attemptComposition` for the same division and its reason.
+ */
+async function draftCompositionPlan(
+  ctx: AchieveContext,
+  goal: string,
+  action: IntegrationAction,
+): Promise<CompositionPlanAttempt> {
+  if (action.mutates !== false) {
+    return {
+      kind: 'none',
+      verdict: 'skipped',
+      detail: `"${action.actionName}" can change data, and a composed answer is only ever built from a read`,
+    };
   }
   const accounted = new Set([...goalTokens(action.actionName), ...goalTokens(action.description ?? '')]);
   const residue = goalTokens(goal).filter((t) => !accounted.has(t));
   if (residue.length === 0) {
-    ladder.push({ rung: 'compose', verdict: 'skipped', detail: 'the goal asks for nothing the action is not already named for' });
-    return { kind: 'none' };
+    return { kind: 'none', verdict: 'skipped', detail: 'the goal asks for nothing the action is not already named for' };
   }
   if (!ctx.planStep || !ctx.appCollections) {
-    ladder.push({ rung: 'compose', verdict: 'skipped', detail: 'the compose seams are not wired in this deployment' });
-    return { kind: 'none' };
+    return { kind: 'none', verdict: 'skipped', detail: 'the compose seams are not wired in this deployment' };
   }
   const collections = await ctx.appCollections.list(ctx.actor);
   if (collections.length === 0) {
-    ladder.push({ rung: 'compose', verdict: 'skipped', detail: 'your organisation holds no collections to narrow a result by' });
-    return { kind: 'none' };
+    return { kind: 'none', verdict: 'skipped', detail: 'your organisation holds no collections to narrow a result by' };
   }
   const allowance = await checkAllowance(ctx.actor.userId);
   if (!allowance.ok) {
-    ladder.push({ rung: 'compose', verdict: 'skipped', detail: 'billing' });
-    return { kind: 'none' };
+    return { kind: 'none', verdict: 'skipped', detail: 'billing' };
   }
 
   const turn = await ctx.planStep({
@@ -1085,8 +1204,7 @@ async function planComposition(
     repairs: 1,
   });
   if (turn.status === 'unavailable') {
-    ladder.push({ rung: 'compose', verdict: 'skipped', detail: `the planning model was unavailable (${turn.reason})` });
-    return { kind: 'none' };
+    return { kind: 'none', verdict: 'skipped', detail: `the planning model was unavailable (${turn.reason})` };
   }
 
   const verdict = verifyComposePlan({ planned: turn.draft });
@@ -1101,20 +1219,18 @@ async function planComposition(
     // Nothing unsafe survives the discard: `verdict.plan` is null on a failed verdict, so no
     // model-named collection, field or comparison reaches the stage, and the request that goes out
     // below is byte-for-byte the request the caller asked for.
-    ladder.push({
-      rung: 'compose',
+    return {
+      kind: 'none',
       verdict: 'refused',
       detail: 'the way this goal would have been narrowed did not pass the guardrails and was discarded; the action answers unnarrowed',
       violations: [
         ...turn.violations,
         ...verdict.checks.filter((c) => !c.ok).map((c) => c.detail ?? `${c.name} failed`),
       ],
-    });
-    return { kind: 'none' };
+    };
   }
   if (!verdict.plan) {
-    ladder.push({ rung: 'compose', verdict: 'skipped', detail: 'no collection narrows this goal' });
-    return { kind: 'none' };
+    return { kind: 'none', verdict: 'skipped', detail: 'no collection narrows this goal' };
   }
   return { kind: 'plan', plan: verdict.plan };
 }

@@ -219,6 +219,104 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   reconstruction of who resolves what today. **NOT by widening the erasure back to every owner in the
   org.**
 
+- **`the-compose-post-stage-could-still-destroy-a-spent-200-by-THROWING`** (**FIXED 2026-08-20**,
+  S4/S5 round five, was BLOCKER; see `docs/decisions.md` D-S5-4). The fourth consecutive round of one
+  defect, and this is the exit the previous three did not cover, because a return type cannot forbid
+  an exception.
+  `achieveCollections.read` is bound in `server.ts` to `CollectionsEngine.list` - a live Mongo query
+  that rejects on a dropped connection, a timeout or a replica-set election. The rejection propagated
+  out of `applyComposition`, out of `runMatchedAction`, out of `achieveIntegrationGoal` and into the
+  route's error handler. So: the caller's request reached the third party, the third party answered
+  200 with the rows, OUR database blipped, and the caller got a 500 from us and nothing else. The
+  side effect was spent and the rows were in hand at the moment the post-stage failed.
+  Round three stopped the post-stage RETURNING a refusal; round four stopped it returning one after a
+  successful execute and removed all three refusal codes; neither closed this. **A refusal, a
+  swallowed answer and an exception are three exits from one wrong idea.**
+  FIXED BY SHAPE, not by wrapping a branch: each stage is split into a WORKER (`attemptComposition`,
+  `draftCompositionPlan`) that touches the seams, may throw, and writes nothing at all, and a
+  RECORDER (`applyComposition`, `planComposition`) that converts every outcome - a rejection included
+  - into exactly one ladder step plus a null/none. A half-written ladder is therefore impossible by
+  construction rather than by checking each branch. The PLANNING stage got the same treatment: it
+  runs before the execute, so a rejection there stopped the request going out at all.
+  What a throw puts on the wire is FIXED TEXT; the driver's own message (namespace, replica-set host,
+  query shape) is logged for an operator and never travels.
+  PINNED AT BOTH LEVELS, and the wire-level pin is the load-bearing one: the contract suite injects
+  ONE rejection into the real `CollectionsEngine.list` the real composition root binds and requires a
+  200 whose body is the executed arm - `result.data.processos` complete, no `items`, no
+  `composition`, `compose` recorded `refused`, `reuse` recorded as the rung that answered, no audit
+  row, and the injected failure text nowhere in the body. Verified RED by restoring
+  `return await attemptComposition(...)` with no `try`.
+
+- **`the-fail-closed-mutates-reading-on-the-compose-gate-was-unfailable`** (**FIXED 2026-08-20**,
+  S4/S5 round five, was MAJOR; see `docs/decisions.md` D-S5-4). `planComposition` gates on
+  `action.mutates !== false`, and the only fixture guarding it declared `mutates: true` - against
+  which `!== false` and `=== true` are the SAME PREDICATE. An equivalent mutant presented as a fix,
+  and the identical shape P2 was caught in with the identical field.
+  The reading is now observable AT THIS SEAM, with a caller that does not normalise, and the reason
+  such a caller exists is a fact about the code: `definitions.ts` builds a package definition's
+  actions as `config.actions ?? []` off an unvalidated `config.json`, and `definition-store.ts`
+  persists an agent-authored action through `withoutRecipes`, which returns it verbatim. An action
+  with NO `mutates` key is a production shape. The test seeds exactly that through
+  `integrationDefinitionStore.create` - the real writer - and requires no planning turn, no
+  `listCollections` call and no read, with the call itself still running. `=== true` reds it.
+
+- **`all-four-ordering-operators-could-lose-their-Number-coercion`** (**FIXED 2026-08-20**, S4/S5
+  round five, was MAJOR; see `docs/decisions.md` D-S5-4). `lt`, `lte`, `gt` and `gte` in
+  `data/simple-query.ts` coerce both sides with `Number()`. Deleting ALL FOUR coercions at once left
+  every suite in the repo green, because every fixture anywhere compares numbers to numbers and JS
+  answers the same either way.
+  Without them JS compares strings LEXICOGRAPHICALLY. `app_data` holds whatever an app wrote - a
+  form-entered age is a string, a CSV/ERP import writes strings - and on the compose rung the
+  compared VALUE is a model's JSON, which may be `"40"`. On the rung whose canonical demo is
+  "clients under 40", `lt "40"` over string ages then DROPS the nine-year-old (`'9' < '40'` is false)
+  and ADMITS the hundred-year-old (`'100' < '40'` is true): the wrong answer, delivered confidently,
+  with a summary saying how it was built. It also reaches every shipped recipe, since `store.query`
+  runs the same predicate.
+  Closed with a string-age fixture (`'9'`, `'31'`, `'40'`, `'100'`) against a string bound where the
+  two orderings disagree for each of the four operators, driven through `store.query`'s primitive AND
+  asserted directly on `matchesSimpleQuery`. Each operator mutated INDIVIDUALLY and each reds.
+
+- **`seven-more-assertions-in-the-reuse-ladder-suite-could-not-fail`** (**FIXED 2026-08-20**, S4/S5
+  round five, LOW severity, process finding; see `docs/decisions.md` D-S5-4). A 55-mutant source-side
+  sweep (each mutant applied to the SOURCE, run against all four slice suites, restored, verified
+  byte-identical by sha1) returned TEN survivors. One was a STALE ANCHOR - the mutant added a comment
+  rather than changing behaviour - and is recorded as such and re-run properly rather than counted.
+  SEVEN were real and are closed by tests, each killed in a confirmation pass:
+  (a) `compose === false` -> `!== true`: `{}`, `{compose: 0}` and `{compose: "no"}` all read as a
+  deliberate DECLINE, so the deterministic suite answered `passed: true` about a plan it never
+  validated and the ladder recorded a skip with no violations.
+  (b) the shape check for an EMPTY `collection` - the sibling of the missing-`collection` case round
+  four closed, whose fix was written for `undefined` alone. Only the CHECK LIST distinguishes them.
+  (c) `parseComposePlan`'s FENCE TAG could be relaxed to any fenced block. Both rungs share one
+  authoring core and one repair loop, and planning replies carry illustrative ```json blocks, so a
+  tag-blind parser hands the wrong artifact to the suite and repairs against violations about
+  something the model never proposed. `parseArgsPlan` had the same hole; both asserted, both ways.
+  (d) `!ctx.planStep || !ctx.appCollections` -> `&&`: no fixture wired exactly ONE seam. Under `&&` a
+  deployment binding one and not the other reads the caller's whole collection list out of the store
+  for a rung that cannot ask anybody about it.
+  (e) and (f) the compose rung's and the parametrize rung's `checkAllowance` gates, both deletable
+  and green. These rungs SPEND A MODEL CALL; a billing-locked tenant getting free planning turns is
+  the gate not existing. The same test pins the other half of the invariant: the READ is not
+  billing-gated, so the locked tenant still gets their answer.
+  (g) `neq` strict -> loose. `eq` was pinned in an earlier round and its twin twenty characters away
+  was not, because every `neq` probe compared same-typed values.
+  (h) `listCollections`' `.sort()`, deletable and green - every fixture happened to be written in
+  sorted order. Those names go into a MODEL PROMPT, so their order is part of the input to a
+  nondeterministic step: unsorted, the same tenant asking the same goal twice is asked a different
+  question. (Counted with the seven above as the eighth item; the headline count of SEVEN is the
+  number that had a behavioural consequence for a caller.)
+  DISMISSED, IN WRITING, EACH WITH THE CLAIM THAT IS TRUE ASSERTED IN ITS PLACE:
+  `runMatchedAction`'s `if (!out.ok) return out;` is UNREACHABLE - `executeIntegrationCapabilityAction`
+  has exactly one `ok: false` (`no_tenant`) and `achieveIntegrationGoal` refuses a tenantless actor
+  upstream, while a remote 500, an unknown action and `awaiting_consent` all arrive as `ok: true`
+  with the answer inside `result`; the line stays as defensive redundancy and the REASON it is
+  unreachable is now asserted from both sources. `ownerSharedScope`'s `appId` can be any string
+  because `Scope.appId` is never part of a query - the mutant surviving CONFIRMS the design, and what
+  is now asserted from the engine's source is that every filter binds `appId: scope.scopeKey` and
+  none reads `scope.appId`. The caller-args spread order, re-confirmed for the third round. And
+  `if (!verdict.passed || !verdict.args)` -> `if (!verdict.args)`, redundant by construction because
+  `verifyPlannedArgs`'s `done()` nulls `args` whenever `passed` is false.
+
 - **`the-canonical-ongoing-processes-action-is-unreachable-from-the-canonical-goal`** (OPEN
   2026-08-20, S5, MEDIUM, a plan/code mismatch found while building the compose rung; blocks the S9
   Citius reference case as written). TWO separate facts, and the second survives fixing the first.

@@ -129,6 +129,12 @@ export function verifyComposePlan(input: {
     return done(null);
   }
   // A declined composition is WELL-FORMED. It passes the suite and yields no plan.
+  //
+  // A LITERAL `false`, and the mutant that proved this line load-bearing was `!== true`: under it
+  // `{}`, `{ compose: 0 }` and `{ compose: "no" }` all read as a deliberate decline, so the suite
+  // returned `passed: true` about a plan it never validated and the ladder recorded a SKIP with no
+  // violations. "The model chose not to join" and "the model emitted garbage" are different facts
+  // about a call, and the second is the one that has to reach the repair turn and the ladder.
   if (obj.compose === false) {
     checks.push(check('shape', true));
     return done(null);
@@ -326,7 +332,16 @@ export function composeRows(input: {
   };
 }
 
-/** Extract the single ```compose-json block and parse it. No JSON repair pass - `achieve`'s rule. */
+/**
+ * Extract the single ```compose-json block and parse it. No JSON repair pass - `achieve`'s rule.
+ *
+ * THE FENCE TAG IS PART OF THE CONTRACT, not decoration, and a mutant relaxing it to `` ```[a-z-]* ``
+ * survived the whole estate. The two rungs share one authoring core and one repair loop, and a
+ * planning reply routinely carries prose with an illustrative ```json block in it; a tag-blind
+ * parser would take the FIRST fenced thing it found - an example, or the other rung's `args-json` -
+ * and hand it to `verifyComposePlan` as this rung's plan. The suite would then refuse a plan the
+ * model never proposed, and the violations sent back for repair would be about the wrong artifact.
+ */
 export function parseComposePlan(text: string): { draft: ComposePlan | null; violations: string[] } {
   const block = text.match(/```compose-json\s*\n([\s\S]*?)```/);
   if (!block) return { draft: null, violations: ['no ```compose-json block in the reply'] };

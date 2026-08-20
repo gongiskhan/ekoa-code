@@ -470,6 +470,61 @@ describe('CANONICAL, through the real app: "todos os processos de clientes com m
     expect(step?.detail).toContain('clientes');
   });
 
+  /**
+   * THE BLOCKER, ON THE REAL WIRE: the route must answer 200 with the action's own body when the
+   * post-stage's STORE READ FAILS.
+   *
+   * The test above covers a collection the tenant does not HOLD - an answer the reader RETURNS.
+   * This one covers the reader not answering at all, which is a different exit and was the one
+   * still open after three rounds of removing refusals: `achieveCollections.read` is bound in
+   * `server.ts` to `CollectionsEngine.list`, a live Mongo query that rejects on a dropped
+   * connection, a timeout or a replica-set election. That rejection propagated out of
+   * `applyComposition`, out of `achieveIntegrationGoal`, and into the route's error handler:
+   *
+   *   the caller's request reaches the upstream -> 200 with the processos ->
+   *   our own database blips -> the caller gets a 500 from US, and no processos.
+   *
+   * The side effect is SPENT and the rows are IN HAND at the moment the post-stage fails. A
+   * refusal, a swallowed answer and an exception are three exits from one wrong idea.
+   *
+   * THE FAILURE IS INJECTED AT THE STORE, not at a seam this suite invented: one rejection from the
+   * real engine method the real binding calls. Everything above it - the router mount, the
+   * owner-scoped binding, `applyComposition`, the route's response mapping - is the product.
+   */
+  it('a store failure in the post-stage does not cancel the read the product already made', async () => {
+    await seedDefinition([processos]);
+    await seedClients();
+    plans.compose = composeBlock(COMPOSE_PLAN);
+
+    const spy = vi.spyOn(CollectionsEngine.prototype, 'list')
+      .mockRejectedValueOnce(new Error('MongoNetworkError: connection 4 to ekoa-primary.internal:27017 closed'));
+    let body: Record<string, unknown>;
+    try {
+      // Before the fix this was a 500 and `okBody` never got a body to validate.
+      body = await okBody(await achieve(await tokenFor('ownerA'), CANONICAL_GOAL));
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The upstream WAS called - the "already spent" half of the blocker.
+    expect(upstream.calls).toHaveLength(1);
+    // THE CALLER RECEIVES THE EXECUTED ARM'S BODY, whole.
+    expect(body.outcome).toBe('executed');
+    expect((body.result as { success: boolean }).success).toBe(true);
+    expect((body.result as { data?: { processos?: unknown[] } }).data?.processos).toHaveLength(PROCESS_ROWS.length);
+    expect(body.items).toBeUndefined();
+    expect(body.composition).toBeUndefined();
+    // The composition did not apply and the ladder SAYS so - not swallowed, not a refused call.
+    const step = (body.ladder as Array<{ rung: string; verdict: string; detail?: string }>).find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('refused');
+    expect(step?.detail).toContain('could not be read');
+    // The store's message names our host and our driver; it must not reach a caller's wire.
+    expect(JSON.stringify(body)).not.toContain('MongoNetworkError');
+    expect(JSON.stringify(body)).not.toContain('ekoa-primary.internal');
+    // No join happened, so no audit row claims one did.
+    expect(await activityLogs.find({ type: 'capability_achieve_compose' })).toHaveLength(0);
+  });
+
   it('a compose plan the guardrails REJECT does not cancel the read either', async () => {
     await seedDefinition([processos]);
     await seedClients();

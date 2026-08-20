@@ -217,8 +217,13 @@ beforeEach(async () => {
 });
 
 describe('the compose rung cannot see another organisation\'s collections', () => {
-  it('1. the collection NAMES offered to the model are the caller\'s own', async () => {
-    await seedApp('app-a', 'orgA', 'userA', { clients: [{ id: 'cA', idade: 31 }] });
+  it('1. the collection NAMES offered to the model are the caller\'s own, in a stable order', async () => {
+    // Written in an order that is NOT the sorted one, deliberately - see the ordering assertion.
+    await seedApp('app-a', 'orgA', 'userA', {
+      matters: [{ id: 'm1' }],
+      clients: [{ id: 'cA', idade: 31 }],
+      arquivo: [{ id: 'a1' }],
+    });
     await seedApp('app-b', 'orgB', 'userB', { payroll: [{ id: 'p1', salario: 1 }] });
 
     await okBody(await achieve(await tokenFor('userA')));
@@ -227,6 +232,16 @@ describe('the compose rung cannot see another organisation\'s collections', () =
     expect(prompt).toContain('clients');
     // Even the EXISTENCE of org B's app is a leak, before a row moves.
     expect(prompt).not.toContain('payroll');
+
+    // A SURVIVING MUTANT: `listCollections`' `.sort()` could be deleted and the whole estate stayed
+    // green, because every fixture happened to be written in sorted order. These names go straight
+    // into a MODEL PROMPT, so their order is part of the input to a nondeterministic step: without
+    // the sort the prompt varies with Mongo's `distinct` return order, and the same tenant asking
+    // the same goal twice is asked a different question. Asserted on the rendered prompt rather
+    // than on the function, because the prompt is where it matters.
+    expect(prompt).toContain('- arquivo');
+    expect(prompt.indexOf('- arquivo')).toBeLessThan(prompt.indexOf('- clients'));
+    expect(prompt.indexOf('- clients')).toBeLessThan(prompt.indexOf('- matters'));
   });
 
   it('2. naming a collection only ANOTHER org holds reads nothing, and answers IDENTICALLY to a name nobody holds', async () => {

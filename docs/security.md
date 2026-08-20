@@ -318,10 +318,21 @@ rows.** Consequence, accepted deliberately with a review date of 2026-11-20: com
 COLLEAGUE'S app data is refused even where the app is shared org-wide, because the store has no
 per-app dimension with which to grant the narrow version.
 
+A FAILED READ TELLS THE CALLER NOTHING ABOUT THIS PLATFORM'S INSIDES (added round five). The
+collections seam is a live Mongo query, so it can REJECT rather than answer; the rung converts that
+into a fixed ladder sentence ("the data this goal would have been narrowed by could not be read")
+and logs the error's own message server-side. A driver's message carries a namespace, a replica-set
+host and a query shape, and the ladder is a caller-facing field on a public capability endpoint -
+so the message is an operator's fact, never a caller's. Pinned by asserting that the injected
+failure text appears nowhere in the response body, at both the module and the wire level.
+
 Isolation suite: `api/tests/security/achieve-compose-isolation.test.ts`, of the
 `memvault-isolation.test.ts` class, driven through the real app and the real binding. Proven a gate
 by DELETING the tenancy filter at the single query-binding point (`appId: scope.scopeKey`), which
-reds it in both directions - rows via `list`, collection names via `listCollections`.
+reds it in both directions - rows via `list`, collection names via `listCollections`. The claim that
+makes the OWNER the right unit - `Scope.appId` is never part of any query - is asserted from the
+engine's source as well, so adding an `appId`-bound filter reds rather than silently re-introducing
+a per-app dimension the rest of the design assumes away.
 
 ## Incident response
 

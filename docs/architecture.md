@@ -921,10 +921,20 @@ is inherited on the same terms every other rail meets it.
   executing under a standing approval into a refusal.
   The rung is a POST-STAGE, NOT AN ERROR BOUNDARY, and it has no failure mode that costs the caller
   their answer. A failed execute, a collection name the caller does not hold, an action answer with
-  no single list in it, a plan the deterministic suite rejects: every one of them returns the
-  `executed` arm unchanged - the remote's own status, code, message and data, exactly as
-  `POST …/execute` would have returned them - with the `compose` step on the ladder saying the
-  composition did not apply and why.
+  no single list in it, a plan the deterministic suite rejects, AND A STORE READ THAT REJECTS: every
+  one of them returns the `executed` arm unchanged - the remote's own status, code, message and
+  data, exactly as `POST …/execute` would have returned them - with the `compose` step on the ladder
+  saying the composition did not apply and why.
+  THE LAST OF THOSE IS A THROW, and it needed its own fix because a return type cannot forbid one.
+  `appCollections` is bound to `CollectionsEngine`, so `read` is a live Mongo query that rejects on
+  a dropped connection, a timeout or an election - and that rejection propagated out of the
+  post-stage and became a 500 from us, AFTER the caller's request had reached the third party and
+  been answered 200. `applyComposition` and `planComposition` are therefore each split into a WORKER
+  that may throw and writes nothing at all, and a RECORDER that turns every outcome - a rejection
+  included - into exactly one ladder step: a half-written ladder is impossible by construction
+  rather than by checking that each branch remembered to return. What a throw puts on the wire is
+  FIXED TEXT; the error's own message is logged for an operator and never travels, because a store
+  rejection's message is this platform's internals and the ladder is a caller-facing field.
   TWO CAPS, BOTH REPORTED. `COMPOSE_MAX_ITEMS` (200) caps what is EMITTED
   (`composition.truncated`); `COMPOSE_MAX_COLLECTION_ROWS` (5000) caps how much of the collection
   the join KEY SET is built from, which caps the QUESTION rather than the answer - a subset served
@@ -941,6 +951,17 @@ thirteen author-arm codes that pre-date it, every one of which refuses a call th
 in the first place. A rejected argument plan is discarded and the request goes out as the caller
 shaped it; a write never enters the compose rung; and every way the compose post-stage can fail to
 apply hands back the executed answer with the rung recorded `refused` beside it.
+
+A COUNT OF REFUSAL CODES IS NOT THE WHOLE INVARIANT, and round five is why that is written here
+rather than left implied: **an answer can be taken away by returning, by refusing, or by throwing,
+and only the first two are visible in a type.** After the codes were removed the post-stage could
+still reject - the store read behind it is a Mongo query - and a rejection out of it was a 500 from
+us on a call the remote had already answered 200. So the rule is stated in full: there is no code
+path from "the composition could not be built" to "the caller loses the executed answer", and the
+shape that guarantees it is the worker/recorder split described above. Pinned at both levels: a
+module-level test with a rejecting seam, and a wire-level one that injects one rejection into the
+real `CollectionsEngine.list` the composition root binds and requires a 200 carrying the action's
+own body.
 
 That count is what three earlier rounds of prose did not achieve. `compose_refused`,
 `compose_unknown_collection` and `compose_unshaped_result` all existed while this section claimed
