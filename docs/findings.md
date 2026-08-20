@@ -6597,8 +6597,23 @@ re-implemented a live control had it trusted this heading over the code.
   real pasted keys" - and the contract suite broke it. A fixture that trips the secrets gate makes
   that gate's output something people learn to skim, which is the only way it can fail to catch a
   genuinely pasted key. Closed by composing the same bytes at runtime; the floor sees an identical
-  value, and the 35 cases across both files stay green. The already-committed copy stays in this
-  branch's history until that commit is rewritten, which is a call for whoever lands the branch.
+  value, and the cases across both files stay green.
+
+  ROUND FOUR FINISHED IT, because composing the fixture had NOT made the gate green and the round
+  that did it recorded the remainder only here. `gitleaks detect` - what `npm run gate:secrets` and
+  the `security-gates` CI job both run - scans git HISTORY, not the working tree, so the literal
+  stayed reachable in the commit that introduced it and the job stayed red on the PR however clean
+  the tree looked. That is the trap worth carrying forward: for a history-scanning gate, a follow-up
+  commit is not a fix. MEASURED BEFORE: `gitleaks detect --log-opts="main..HEAD"` reported one
+  `stripe-access-token` at `tests/contract/integrations-publish.test.ts:110`, while a scan of the
+  working tree alone reported none of it - which is exactly how a round can believe it has closed
+  this and report clean. Closed by REPLAYING the branch's three commits with the fixture composed
+  from the start, so the whole literal exists in no tree and in no diff of the branch; the replay was
+  safe because the branch has no upstream. MEASURED AFTER: `--log-opts="main..HEAD"` exits 0 with
+  zero findings. Explicitly NOT closed with an entry in `scripts/gitleaks.toml` - that file already
+  carries seven allowlisted values and its own warning that each is a deliberate act, and an eighth
+  added to quiet a fixture the author controls is how a gate turns into decoration. The pre-rewrite
+  tip is kept at `backup/s6-pre-secret-scrub` until the branch lands.
 
 - **`gitleaks-flags-a-deliberately-non-credential-viewstate-fixture`** (OPEN 2026-08-20, LOW, not
   this stream's file). `npm run gate:secrets` also reports `generic-api-key` at
