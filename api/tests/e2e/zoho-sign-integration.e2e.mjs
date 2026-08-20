@@ -12,9 +12,11 @@
  *
  * Proves against a RUNNING api (SKIPs cleanly if unreachable — an unreachable-server skip
  * is exit 0 + SKIP, NEVER a false green under the ledger):
- *   1. the zoho-sign integration DEFINITION loads with authType api_key, its actions
- *      (test_connection / list_requests / get_request) and its config schema
- *      (client_id / client_secret / grant_code / refresh_token / dc);
+ *   1. the zoho-sign integration DEFINITION loads with authType oauth2, its actions
+ *      (test_connection / list_requests / get_request) and its OAuth config schema
+ *      (grant_code / refresh_token / dc — the client_id/client_secret pair is now
+ *      platform-level env, ZOHO_CLIENT_ID/ZOHO_CLIENT_SECRET, after the Zoho OAuth
+ *      parity sweep e371088, so it is deliberately absent from the per-config schema);
  *   2. the AI-builder `load` rebuilds an editable package that exposes test_connection.
  *
  * DOCUMENTED SKIP (reported to the lead, not worked around here): the builder Tests-tab
@@ -128,16 +130,16 @@ async function main() {
     const defs = (await restJson('GET', '/api/v1/integrations')).json.items || [];
     const zoho = defs.find((s) => s.integrationKey === 'zoho-sign');
     assert(zoho, 'zoho-sign integration definition not loaded (api/assets/integrations/zoho-sign missing?)');
-    assert(zoho.authType === 'api_key', `zoho-sign authType should be api_key, got ${zoho.authType}`);
+    assert(zoho.authType === 'oauth2', `zoho-sign authType should be oauth2, got ${zoho.authType}`);
     const actions = (zoho.actions || []).map((a) => a.actionName);
     for (const a of ['test_connection', 'list_requests', 'get_request']) {
       assert(actions.includes(a), `zoho-sign definition missing action ${a} (has: ${actions.join(', ')})`);
     }
     const fields = (zoho.configSchema || []).map((f) => f.key);
-    for (const k of ['client_id', 'client_secret', 'grant_code', 'refresh_token', 'dc']) {
+    for (const k of ['grant_code', 'refresh_token', 'dc']) {
       assert(fields.includes(k), `zoho-sign definition missing config field ${k} (has: ${fields.join(', ')})`);
     }
-    ok('zoho-sign definition loaded (api_key + test_connection/list_requests/get_request + config schema)');
+    ok('zoho-sign definition loaded (oauth2 + test_connection/list_requests/get_request + OAuth config schema)');
 
     // ---- The AI-builder load rebuilds an editable package -----------------
     const load = await restJson('GET', '/api/v1/integration-builder/package?integrationKey=zoho-sign');
