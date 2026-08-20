@@ -8,8 +8,6 @@ import {
   ActionEvidenceStoreError,
   actionEvidenceIdFor,
   evidenceSecretsFromValues,
-  MAX_EVIDENCE_EXCERPT_CHARS,
-  MAX_EVIDENCE_STEPS,
   type ActionEvidence,
 } from '../../src/integrations/action-evidence-store.js';
 
@@ -419,22 +417,32 @@ describe('the last gate: a live credential value is never written', () => {
   });
 });
 
+/**
+ * THE BOUNDS, WITH THE STORE'S NUMBERS RESTATED AS LITERALS rather than imported - the discipline
+ * `tests/automation/action-evidence.test.ts` applies to the collector's mirror of the same caps, and
+ * the reason is that `'x'.repeat(CAP + N)` asserted against `toHaveLength(CAP)` holds for EVERY value
+ * `CAP` could take. Measured before these literals existed: `MAX_EVIDENCE_EXCERPT_CHARS`
+ * 8_000 -> 111 and `MAX_EVIDENCE_STEPS` 50 -> 7 both left this suite green.
+ */
 describe('bounds: a row cannot grow without limit', () => {
-  it('caps an over-long response body and says so', async () => {
+  const MAX_EXCERPT_CHARS = 8_000;
+  const MAX_STEPS = 50;
+
+  it(`caps an over-long response body at ${MAX_EXCERPT_CHARS} chars and says so`, async () => {
     await store.recordEvidence(
       { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
       {
         backingType: 'api-call',
-        evidence: { kind: 'api-call', request: { method: 'GET', url: 'https://probe.example/big', headers: {} }, response: { status: 200, body: 'x'.repeat(MAX_EVIDENCE_EXCERPT_CHARS + 500) } },
+        evidence: { kind: 'api-call', request: { method: 'GET', url: 'https://probe.example/big', headers: {} }, response: { status: 200, body: 'x'.repeat(MAX_EXCERPT_CHARS + 500) } },
       },
     );
     const row = await store.getEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION });
     const response = (row!.evidence as { response: { body: string; truncated?: boolean } }).response;
-    expect(response.body).toHaveLength(MAX_EVIDENCE_EXCERPT_CHARS);
+    expect(response.body).toHaveLength(MAX_EXCERPT_CHARS);
     expect(response.truncated).toBe(true);
   });
 
-  it('caps the number of pinned steps and says so', async () => {
+  it(`caps the number of pinned steps at ${MAX_STEPS} and says so`, async () => {
     await store.recordEvidence(
       { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
       {
@@ -442,13 +450,13 @@ describe('bounds: a row cannot grow without limit', () => {
         evidence: {
           kind: 'automation',
           runId: 'run-1',
-          steps: Array.from({ length: MAX_EVIDENCE_STEPS + 10 }, (_, i) => ({ stepIndex: i })),
+          steps: Array.from({ length: MAX_STEPS + 10 }, (_, i) => ({ stepIndex: i })),
         },
       },
     );
     const row = await store.getEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION });
     const ev = row!.evidence as { steps: unknown[]; truncated?: boolean };
-    expect(ev.steps).toHaveLength(MAX_EVIDENCE_STEPS);
+    expect(ev.steps).toHaveLength(MAX_STEPS);
     expect(ev.truncated).toBe(true);
   });
 });

@@ -77,6 +77,20 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   `deleteRunScreenshots` still has no production caller and this entry still claims no erasure
   coverage over the screenshot tree.
 
+  **2026-08-20 (S1 round six), CORRECTING THE PARAGRAPH ABOVE ONE LAST TIME - TWO OF THE FIVE
+  RELEASES LISTED THERE NO LONGER EXIST.** Round five deleted every synchronous collector, so *"the
+  READER'S own run when it can no longer resolve the action"* and *"the writing org's own
+  reconciliation"* are gone; that paragraph outlived them by a round, which is the same class of
+  stale claim round six is otherwise cleaning up. **Pin release is now exactly three things**: the
+  owner's erasure control (`DELETE /api/v1/integrations/:key/actions/:actionName/evidence`), the
+  credential disconnection, and the boot retention sweep at 90 days (`sweepExpiredEvidence`) - plus
+  the structural supersede, which releases the previous pin whenever a newer validated run replaces
+  the row. **The bound is therefore carried entirely by the sweep**, which is what round six pins
+  (`the-retention-window-was-a-number-no-test-could-tell-from-any-other`, below): before it, nothing
+  stopped that 90 from becoming a 1 and taking every pinned run's PNGs with it on the next boot.
+  Unchanged: `deleteRunScreenshots` still has no production caller, and this entry still claims no
+  erasure coverage over the screenshot tree.
+
 - **`evidence-orphan-window-until-ttl`** (2026-08-20, OPEN, **LOW**, opened DELIBERATELY by S1
   round four and WIDENED DELIBERATELY by round five - the accepted cost of the fix above. RENAMES
   and REWRITES `evidence-orphan-window-until-the-reader-returns`: the old slug named a bound that no
@@ -116,6 +130,15 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   synchronous collector on any write, any run, any read or any boot-time reachability check, under
   any scope or any actor** - that is the exact thing four rounds proved does not work, and the
   round-five decision entry exists to stop the fifth attempt.
+
+  **THE "AT MOST 90 DAYS" BOUND IS NOW ENFORCED, added round six** (2026-08-20). Until then this
+  entry's central number was pinned by nothing: 90 -> 1 left every suite green while deleting all
+  tenants' evidence a day after their last run. `sweepExpiredEvidence - the retention bound` in
+  `api/tests/integrations/action-evidence.test.ts` restates 90 as a literal and straddles the cutoff
+  by half a day either side, so any integer change reddens it - including the shortening this entry
+  lists as a legitimate close path, which must therefore move that literal in the same commit. See
+  `the-retention-window-was-a-number-no-test-could-tell-from-any-other` below. The WINDOW itself is
+  unchanged and this entry stays OPEN.
 
 - **`resolve-step-origin-runs-twice-per-gated-browser-step`** (**FIXED 2026-08-19**, round seven;
   see the round-seven fixed section). The walk still runs two to three times per gated browser step -
@@ -5964,3 +5987,55 @@ re-implemented a live control had it trusted this heading over the code.
   and it takes the evidence with it). DELIBERATELY NARROW, journaled in `docs/decisions.md`: not
   `user-or-key` on either, and NO dashboard surface in this slice. The list route is also what finally
   gives `recipe-store.listRecipesForActor` a caller; it had none.
+
+- **`the-retention-window-was-a-number-no-test-could-tell-from-any-other`** (**FIXED 2026-08-20**,
+  S1 round six, **MAJOR** - a load-bearing constant unpinned in the direction that destroys tenant
+  data; created BY round five's simplification, not by a mistake in it). Round five removed every
+  synchronous evidence collector and left TTL as the sole automatic one. That promoted
+  `EVIDENCE_RETENTION_DAYS` from a backstop to the thing four documents rest their accepted-cost
+  argument on - and **nothing enforced it**.
+
+  **MEASURED**: 90 -> 1 left all thirteen S1 suites green (246/246), and since only three files in
+  the 404-file estate touch `sweepExpiredEvidence` / `sweepScreenshotsSparingPinnedEvidence`, the
+  wider suite went green with them. The WIDENING direction was caught (90 -> 36_500 reddens 4 across
+  3 suites); the NARROWING direction was not, because the one case that could have caught it stamped
+  its surviving row ONE DAY before the sweep - pinning the window to `>= 1 day` and nothing more.
+  **Consequence if it had shipped**: an edit or an env-driven override narrowing the window deletes
+  every tenant's evidence shortly after their last run - the owner's only copy of their own
+  third-party request and response - AND releases every automation-backed row's screenshot pin in the
+  same boot, so the next sweep takes the PNGs too.
+
+  Closed by restating `90` as a LITERAL in `sweepExpiredEvidence - the retention bound`
+  (`api/tests/integrations/action-evidence.test.ts`) and straddling the cutoff by HALF A DAY either
+  side - whole-day offsets let a 90 -> 89 mutant survive, because that row would sit exactly on the
+  new cutoff and the comparison is a strict `$lt`. Verified by mutating the source: 90 -> 89,
+  90 -> 91 and 90 -> 1 each redden exactly this case; restored, `git diff` clean. The constant's own
+  docblock now points at the case, so a deliberate shortening meets an explanation rather than a bare
+  red.
+
+- **`a-cap-asserted-through-its-own-import-pins-the-name-not-the-value`** (**FIXED 2026-08-20**, S1
+  round six, **MINOR x2**, same class as the entry above). `MAX_EVIDENCE_STEPS` and
+  `MAX_EVIDENCE_EXCERPT_CHARS` were **fully unpinned**: every case built `CONST + N` inputs and
+  asserted `toHaveLength(CONST)`, which is true of every value the constant could hold. Measured:
+  50 -> 7 and 8_000 -> 111 both left `action-evidence.test.ts` and `action-evidence-isolation.test.ts`
+  green. Both are now literals in both suites, following the discipline
+  `tests/automation/action-evidence.test.ts` already states for the collector's mirror of the same
+  caps. The step case additionally asserts the FIRST steps by index, so a `slice(-MAX_EVIDENCE_STEPS)`
+  mutant dies here too (measured: reddens 1). **The rule: a test that imports the constant it checks
+  pins that constant's NAME, never its VALUE.**
+
+- **`four-claims-that-outlived-the-code-justifying-them`** (**FIXED 2026-08-20**, S1 round six,
+  **MINOR x4**, documentation-only). (1) `shared/src/integrations.ts`'s `discardActionEvidence`
+  descriptor still said a row is *"collected when the action stops resolving"* - the mechanism round
+  five DELETED - and omitted the TTL that is now the only automatic collector. This is the SHIPPED
+  CONTRACT FILE, the first place a contract reader looks, and it was the sixth copy of a claim whose
+  other five had been rewritten. (2) `service.ts`'s `deleteConfig` claimed the exclusion list is read
+  after the delete *"so the list is what the resolver would see now"* - a consequence the code cannot
+  have, in the function that performs the module's widest delete: that branch runs only when `c` is
+  the custodian-less row, so `c` is filtered out of the list either way. Measured: hoisting the read
+  above `integrationConfigs.delete` leaves 13/13 green. Corrected to say the ordering is inert, why,
+  and what IS load-bearing (the `id !== ''` filter). (3) `listForIntegration`'s docblock called it
+  *"the detail page's read"* while having **no production caller** - S2/S3 lives on another branch -
+  so a reader could mistake pinned surface for a covered production path; now stated, with a note to
+  delete the paragraph when the page mounts. (4) `EVIDENCE_RETENTION_DAYS`'s docblock now names its
+  enforcing case.

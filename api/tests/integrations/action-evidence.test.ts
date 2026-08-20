@@ -23,13 +23,27 @@ import {
   ActionEvidenceStore,
   ActionEvidenceStoreError,
   actionEvidenceIdFor,
-  MAX_EVIDENCE_EXCERPT_CHARS,
-  MAX_EVIDENCE_STEPS,
   type ActionEvidenceKey,
 } from '../../src/integrations/action-evidence-store.js';
 import { secretRegistryFromValues } from '../../src/security/redaction.js';
 import { promoteToTrusted } from '../../src/integrations/authored-action.js';
 import { actionShape } from '../../src/integrations/action-consent.js';
+
+/**
+ * THE STORE'S NUMBERS, RESTATED AS LITERALS rather than imported - the discipline
+ * `tests/automation/action-evidence.test.ts` already applies to the collector's mirror of the same
+ * caps ("restated here so a change to either is visible as a failure rather than absorbed by a
+ * shared import"). Importing the constant makes the test say "the cap is whatever the cap is",
+ * which is true of every value the constant could hold.
+ *
+ * MEASURED, NOT ASSUMED: before these literals existed, `MAX_EVIDENCE_STEPS` 50 -> 7 and
+ * `MAX_EVIDENCE_EXCERPT_CHARS` 8_000 -> 111 both left every suite that touches them green, because
+ * each case built `CONST + N` inputs and asserted `toHaveLength(CONST)`.
+ */
+const MAX_STEPS = 50;
+const MAX_EXCERPT_CHARS = 8_000;
+const RETENTION_DAYS = 90;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 let mem: MongoMemoryServer;
 let clock = 0;
@@ -138,6 +152,41 @@ describe('sweepExpiredEvidence - the retention bound', () => {
       .toEqual(['arquivar_processo']);
   });
 
+  /**
+   * THE WINDOW IS 90 DAYS, AND THE NUMBER IS PINNED IN THE DIRECTION THAT DESTROYS DATA.
+   *
+   * The case above pins the sweep's SHAPE - old goes, recent stays - and pins the window only to
+   * ">= 1 day", because its kept row is stamped ONE day before the sweep. So the widening direction
+   * was caught (`EVIDENCE_RETENTION_DAYS` 90 -> 36_500 reddens four cases across three suites,
+   * measured) and the NARROWING direction was not: 90 -> 1 left all thirteen S1 suites green, and
+   * since only three files in the estate touch `sweepExpiredEvidence` /
+   * `sweepScreenshotsSparingPinnedEvidence`, the full suite stayed green with it.
+   *
+   * That is the one direction whose consequence is unrecoverable. Round five made TTL the SOLE
+   * automatic collector, which is what made this constant load-bearing: an edit or an env-driven
+   * override that narrows it deletes every tenant's evidence - the owner's only copy of their own
+   * third-party request and response - shortly after their last run, AND releases every
+   * automation-backed row's screenshot pin in the same boot, so the next sweep takes the PNGs too.
+   * "At most `EVIDENCE_RETENTION_DAYS`" is the accepted-cost argument in docs/decisions.md,
+   * docs/findings.md (`evidence-orphan-window-until-ttl`), docs/architecture.md and this store's own
+   * header; four documents rested on it and nothing enforced it.
+   *
+   * HALF A DAY EITHER SIDE, NOT A WHOLE ONE, so the pin is exact rather than approximate. With
+   * whole-day offsets a 90 -> 89 mutant survives (the row stamped 89 days back would sit exactly ON
+   * the new cutoff, and the sweep's comparison is strict `$lt`); straddling the boundary by half a
+   * day means ANY integer change to the constant moves one of these two rows across it.
+   */
+  it(`the window is ${RETENTION_DAYS} days: half a day inside survives, half a day outside goes`, async () => {
+    const now = Date.parse('2026-08-20T00:00:00.000Z');
+    const boundary = now - RETENTION_DAYS * DAY_MS;
+    await aged(new Date(boundary + DAY_MS / 2).toISOString(), { ...KEY, actionName: 'inside-the-window' });
+    await aged(new Date(boundary - DAY_MS / 2).toISOString(), { ...KEY, actionName: 'outside-the-window' });
+
+    expect(await store.sweepExpiredEvidence({ now })).toBe(1);
+    expect((await integrationActionEvidence.find({})).map((r) => (r as unknown as { actionName: string }).actionName))
+      .toEqual(['inside-the-window']);
+  });
+
   it('a non-positive window sweeps NOTHING rather than everything', async () => {
     // The dangerous misconfiguration: a zero or negative retention read as "expire it all". The
     // cutoff would be now-or-later, so every row would match.
@@ -218,27 +267,31 @@ describe('discardEvidenceForDisconnectedConfig - what a credential produced', ()
 });
 
 describe('the caps are real and truncation is recorded', () => {
-  it('caps a response body at MAX_EVIDENCE_EXCERPT_CHARS and says so', async () => {
-    const huge = 'x'.repeat(MAX_EVIDENCE_EXCERPT_CHARS + 5_000);
+  it(`caps a response body at ${MAX_EXCERPT_CHARS} chars and says so`, async () => {
+    const huge = 'x'.repeat(MAX_EXCERPT_CHARS + 5_000);
     await store.recordEvidence(KEY, {
       backingType: 'api-call',
       evidence: { ...apiCallEvidence(), response: { status: 200, body: huge } },
     });
     const row = await store.getEvidence(KEY);
     const ev = row!.evidence as { response: { body: string; truncated?: boolean } };
-    expect(ev.response.body).toHaveLength(MAX_EVIDENCE_EXCERPT_CHARS);
+    expect(ev.response.body).toHaveLength(MAX_EXCERPT_CHARS);
     expect(ev.response.truncated).toBe(true);
   });
 
-  it('caps the step count and records that the trace was cut', async () => {
-    const steps = Array.from({ length: MAX_EVIDENCE_STEPS + 12 }, (_, i) => ({ stepIndex: i }));
+  it(`caps the step count at ${MAX_STEPS} and records that the trace was cut`, async () => {
+    const steps = Array.from({ length: MAX_STEPS + 12 }, (_, i) => ({ stepIndex: i }));
     await store.recordEvidence(KEY, {
       backingType: 'browser-steps',
       evidence: { kind: 'automation', runId: 'run-1', steps },
     });
     const row = await store.getEvidence(KEY);
-    const ev = row!.evidence as { steps: unknown[]; truncated?: boolean };
-    expect(ev.steps).toHaveLength(MAX_EVIDENCE_STEPS);
+    const ev = row!.evidence as { steps: { stepIndex: number }[]; truncated?: boolean };
+    expect(ev.steps).toHaveLength(MAX_STEPS);
+    // FIRST steps, not last - asserted by index so a `slice(-MAX_EVIDENCE_STEPS)` mutant dies here
+    // as it does in the collector's own suite. A trace is read top-down.
+    expect(ev.steps[0]!.stepIndex).toBe(0);
+    expect(ev.steps[MAX_STEPS - 1]!.stepIndex).toBe(MAX_STEPS - 1);
     expect(ev.truncated).toBe(true);
   });
 
@@ -262,12 +315,12 @@ describe('the caps are real and truncation is recorded', () => {
           method: 'POST',
           url: 'https://citius.pt/processos',
           headers: {},
-          body: `${'p'.repeat(MAX_EVIDENCE_EXCERPT_CHARS)}… [truncated, 4000 more bytes]`,
+          body: `${'p'.repeat(MAX_EXCERPT_CHARS)}… [truncated, 4000 more bytes]`,
         },
       },
     });
     const ev = (await store.getEvidence(KEY))!.evidence as { request: { body: string; truncated?: boolean } };
-    expect(ev.request.body).toHaveLength(MAX_EVIDENCE_EXCERPT_CHARS);
+    expect(ev.request.body).toHaveLength(MAX_EXCERPT_CHARS);
     expect(ev.request.body).not.toContain('[truncated,');
     expect(ev.request.truncated).toBe(true);
   });

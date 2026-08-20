@@ -619,7 +619,20 @@ export async function deleteConfig(actor: Actor, integrationKey: string): Promis
     // never the deleted row: one member's write destroying another member's data, the same disease
     // as the cross-org one, one tenant in. The correct scope is every owner for whom
     // `findConfigForOwner` WOULD have resolved THIS row - everyone except those still holding a
-    // config of their own, read back AFTER the delete so the list is what the resolver would see now.
+    // config of their own.
+    //
+    // THE READ SITS AFTER THE DELETE AND THAT ORDERING IS INERT, stated because the previous
+    // revision of this note claimed the opposite ("read back AFTER the delete so the list is what
+    // the resolver would see now"). It cannot be: this branch runs only when `c.ownerUserId` is
+    // falsy - `c` IS the custodian-less org-shared row - so `c` contributes nothing to the list
+    // either way, dropped by the `id !== ''` filter below whether or not it is still in the
+    // collection. Hoisting the read above `integrationConfigs.delete` leaves all thirteen S1 suites
+    // green (measured), and no input can make the two orders differ. The read is here because it
+    // belongs with the erasure it feeds, not because it changes the answer.
+    //
+    // WHAT IS LOAD-BEARING is that filter: it keeps the list to owners who genuinely hold a row of
+    // their own, so a peer row carrying no custodian - another legacy shared row for the same key -
+    // cannot land in the exclusion list and spare the very members the deleted credential served.
     const stillOwnTheirOwn = c.ownerUserId
       ? []
       : ((await integrationConfigs.find({ orgId: c.orgId, integrationKey: c.integrationKey })) as IntegrationConfigDoc[])

@@ -3147,3 +3147,73 @@ the describes for the two deleted methods go with them. Docs: `architecture.md`'
 section is rewritten around the three signals; `findings.md` gains the two round-four defects as
 FIXED and re-opens the retention window honestly. Diagrams: `02-module-map` and `05-data-model`
 appended (append-only, every new element carrying text/rawText/originalText).
+
+## 2026-08-20 - S1 round six: the number the whole trade rests on is now enforced by a test
+
+Round five's decision (above) removed every synchronous evidence collector and left **TIME as the
+sole automatic one**. That was the right call and this entry does not reopen it. It records the
+consequence nobody priced at the time: making TTL the only collector made `EVIDENCE_RETENTION_DAYS`
+**load-bearing**, and nothing pinned it.
+
+**MEASURED.** `EVIDENCE_RETENTION_DAYS` 90 -> 1 left all thirteen S1 suites green (246/246), and
+because only three files in the estate touch `sweepExpiredEvidence` /
+`sweepScreenshotsSparingPinnedEvidence`, the wider suite went green with them. The WIDENING direction
+was caught (90 -> 36_500 reddens 4 cases across 3 suites); the NARROWING direction - the one that
+destroys data - was not. The one case that could have caught it stamped its surviving row **one day**
+before the sweep, so it pinned the window to `>= 1 day` and nothing more.
+
+**WHY THAT MATTERS MORE HERE THAN IT WOULD ELSEWHERE.** A narrowing edit, or an env-driven override,
+deletes every tenant's evidence shortly after their last run - the owner's ONLY copy of their own
+third-party request and response - **and** releases every automation-backed row's screenshot pin in
+the same boot, so the next sweep takes the PNGs too. "At most 90 days" is the entire accepted-cost
+argument in the round-five entry above, in `findings.md` (`evidence-orphan-window-until-ttl`), in
+`architecture.md` and in `action-evidence-store.ts`'s header. **Four documents rested on a number
+that no test could tell from any other number.**
+
+**THE FIX IS A LITERAL AND A BOUNDARY, not a constant compared to itself.** `sweepExpiredEvidence -
+the retention bound` restates `90` as a literal (the discipline
+`tests/automation/action-evidence.test.ts` already applies to its own caps: *"restated here so a
+change to either is visible as a failure rather than absorbed by a shared import"*) and stamps two
+rows **half a day either side of the cutoff**. Half a day rather than a whole one is deliberate:
+whole-day offsets let a 90 -> 89 mutant survive, because the row stamped 89 days back would sit
+exactly ON the new cutoff and the sweep's comparison is a strict `$lt`. Straddling by half a day
+means any integer change moves one of the two rows across the boundary. Verified by mutating the
+source: 90 -> 89, 90 -> 91 and 90 -> 1 each redden exactly this case, restored, `git diff` clean.
+
+**THE SAME DEFECT CLASS, TWO MORE INSTANCES, FIXED IN THE SAME COMMIT.** `MAX_EVIDENCE_STEPS` and
+`MAX_EVIDENCE_EXCERPT_CHARS` were fully unpinned for the identical reason: every case built
+`CONST + N` inputs and asserted `toHaveLength(CONST)`, which holds for **every** value the constant
+could take. Measured: 50 -> 7 and 8_000 -> 111 both left their suites green. Both are now literals in
+both suites that assert them, and the step case additionally asserts the FIRST steps by index, so a
+`slice(-MAX_EVIDENCE_STEPS)` mutant dies here as it already did in the collector's suite (measured:
+reddens 1). **The rule this leaves behind: a test that imports the constant it is checking pins the
+constant's NAME, never its VALUE.**
+
+**FOUR DOCUMENTATION CORRECTIONS, all cases of a claim outliving the code that justified it.**
+
+- `shared/src/integrations.ts`'s `discardActionEvidence` descriptor still said a row is *"collected
+  when the action stops resolving"* - the mechanism round five DELETED - and never mentioned the TTL
+  that is now the only automatic collector. This is the **shipped contract file**, the first place a
+  contract reader looks, and it was the sixth copy of a claim whose other five were rewritten. It now
+  names all four ways a row goes, says which is automatic, and says plainly that nothing watches for
+  an unresolvable action any more and why.
+- `service.ts`'s `deleteConfig` claimed the exclusion list is read AFTER the delete *"so the list is
+  what the resolver would see now"* - **a consequence the code cannot have.** That branch runs only
+  when `c.ownerUserId` is falsy, i.e. `c` IS the custodian-less row, so `c` contributes nothing to
+  the list either way (the `id !== ''` filter drops it). Measured: hoisting the read above
+  `integrationConfigs.delete` leaves 13/13 green, and no input can make the orders differ. The
+  comment now says the ordering is inert, why, and what IS load-bearing there - the filter that keeps
+  a second legacy shared row out of the exclusion list.
+- `listForIntegration`'s docblock called it *"the detail page's read"*. That page is S2/S3 and lives
+  on another branch; on this one **every caller is a test**. Said so, so a later reader does not
+  treat it as covered production path, with a note to delete the paragraph when the page mounts.
+- `EVIDENCE_RETENTION_DAYS`'s own docblock now points at the case that enforces it, so an editor
+  shortening the window meets the tripwire with an explanation attached rather than a bare red.
+
+Rule 7: nothing on the wire moves - no schema, descriptor shape, route, auth class or status. The
+only `shared/` change is a docblock, so OpenAPI and the generated cortex-cli are byte-identical
+(regenerated, clean) and `EXPECTED_PENDING_COUNT` is unmoved. Rule 5: the isolation suite is edited
+only in its `bounds` describe, which is not a tenancy leg; every tenancy case is untouched and still
+green. Diagrams: no structural, flow or data-shape change - three comments, one docblock and two test
+files - so FIXED-12 requires no diagram edit, and stating that is part of the rule rather than an
+exemption from it.

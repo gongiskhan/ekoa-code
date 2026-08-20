@@ -205,6 +205,17 @@ export type DisconnectedConfigScope = {
  * prerequisite would evaporate between a run and the human who confirms it); much longer stops
  * bounding anything. Every successful run rewrites `validatedAt`, so an integration in real use
  * never ages out - only one nobody has run for a quarter of a year.
+ *
+ * CHANGING THIS NUMBER IS A TRIPWIRE ON PURPOSE. Round five made TTL the SOLE automatic collector,
+ * which turned this constant from a backstop into the thing every "bounded gap" argument in
+ * docs/decisions.md, docs/findings.md, docs/architecture.md and this file's own header rests on -
+ * and until round six nothing enforced it: 90 -> 1 left the whole estate green while deleting every
+ * tenant's evidence a day after their last run and releasing each automation-backed row's screenshot
+ * pin in the same boot. `sweepExpiredEvidence - the retention bound` in
+ * `api/tests/integrations/action-evidence.test.ts` now restates 90 as a LITERAL and straddles the
+ * cutoff by half a day either side, so any integer change here reddens it. If you are shortening the
+ * window deliberately, change that literal in the same commit and say why in docs/decisions.md; if
+ * you did not mean to change it, the red case is the point.
  */
 export const EVIDENCE_RETENTION_DAYS = 90;
 
@@ -359,7 +370,15 @@ export class ActionEvidenceStore {
   }
 
   /**
-   * Every evidence row ONE OWNER holds for one integration - the detail page's read.
+   * Every evidence row ONE OWNER holds for one integration.
+   *
+   * IT HAS NO PRODUCTION CALLER YET, AND THAT IS SAID HERE RATHER THAN LEFT TO BE DISCOVERED. This
+   * docblock read "the detail page's read", which describes a page that is slice S2/S3 and lives on
+   * a different branch; on THIS branch every caller is a test. So the tenancy legs below are pinned
+   * SURFACE, not a covered production path. The isolation suite attacks the method directly, which
+   * is deliberate - a Rule 5 store's list read is attacked before it is exposed, not after - but
+   * nothing routes to it, so a change here is not additionally caught by any end-to-end case. Delete
+   * this paragraph when the detail page mounts.
    *
    * THE POST-FILTER IS REDUNDANT BY CONSTRUCTION, and is recorded as such rather than left to look
    * load-bearing. An exact-match query on `orgId`/`ownerUserId` cannot return a document whose

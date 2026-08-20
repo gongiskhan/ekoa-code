@@ -932,11 +932,25 @@ export const integrationsEndpoints = {
    *
    * WHY IT HAS TO EXIST. An evidence row holds one person's real request and real response body -
    * client names, processo numbers, invoice totals - and, for an automation-backed action, PINS that
-   * run's screenshots out of the 7-day retention sweep for as long as the row lives. Every other way
-   * a row goes belongs to somebody else's action: it is superseded by a later run, collected when the
-   * action stops resolving, or erased when the credential is disconnected. Without this endpoint a
-   * person who simply does not want the sample kept has to disconnect the whole integration to be rid
-   * of it. Erasure of your own data is not a side effect of another operation.
+   * run's screenshots out of the 7-day retention sweep for as long as the row lives.
+   *
+   * THIS IS THE ONLY ERASURE THE PERSON THEMSELVES CONTROLS. The other three ways a row goes are
+   * somebody else's operation, or nobody's. It is superseded by the NEXT validated run of the same
+   * action - which needs the action to still work and to be run again. It is erased when the
+   * CREDENTIAL is disconnected - which costs the whole integration. And, failing both, it is
+   * collected by TIME: the boot retention sweep ends every row not re-validated inside
+   * `EVIDENCE_RETENTION_DAYS` (90), and that sweep is the ONLY automatic collector there is.
+   *
+   * NOTHING WATCHES FOR AN ACTION THAT STOPPED RESOLVING AND DELETES ITS SAMPLE ON THAT BASIS, and
+   * this descriptor said it did until round six - a whole round after the mechanism was gone. The
+   * server did have such a collector; asking "is this action still reachable?" at one instant, about
+   * a row whose lifetime is durable, deleted live tenant data across four rounds of correction, so
+   * it was REMOVED rather than refined (docs/decisions.md; the removal rule in
+   * `integrations/action-evidence-store.ts`).
+   *
+   * So without this endpoint a person who simply does not want the sample kept must either
+   * disconnect the integration or wait out a quarter of a year. Erasure of your own data is not a
+   * side effect of another operation, and it is not something you wait for.
    *
    * `auth: 'user'` AND NOT `user-or-key`, the reading `approveAction`, `setLessons` and `trustAction`
    * all take in this domain: a destructive control over a person's own data is the person's, and a
