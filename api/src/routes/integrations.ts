@@ -177,7 +177,7 @@ function sendVisibility(res: Response, result: SetVisibilityResult): void {
  * appears on the other.
  *
  * `model_pass_required` is unreachable unless the caller passed `requireModelPass`, and of the two
- * doors ONLY `POST …/publish` ever does — `POST …/global` deliberately never asks, so that a
+ * doors ONLY `POST …/publish` ever does - `POST …/global` deliberately never asks, so that a
  * chokepoint outage cannot block the promotion half of a tier toggle whose other half is an
  * un-publish. From the `/global` door this branch is therefore DEAD CODE, and that is DISCLOSED here
  * rather than claimed to be tested: no fixture reaches it through that route, and the only way to
@@ -464,8 +464,8 @@ export function integrationsRouter(deps: {
    * IT REMAINS A TIER TOGGLE, WHICH MEANS IT IS IDEMPOTENT (S6 review round four, MINOR-1). The fold
    * above changed WHAT `{global:true}` does, and on an already-`global` row it changed the answer
    * too: `visibilityWriteVerdict` permits `global -> global` on purpose (that is how a published
-   * artifact is refreshed at all), so a bare `publishDefinition` here would have made a RETRY — after
-   * a timeout, or a reviewer re-asserting a tier they believe is set — a full unreviewed re-scrub of
+   * artifact is refreshed at all), so a bare `publishDefinition` here would have made a RETRY - after
+   * a timeout, or a reviewer re-asserting a tier they believe is set - a full unreviewed re-scrub of
    * the author's CURRENT live row, replacing the reviewed artifact in every consuming org and
    * stamping `supersedes`, with no preview in the loop. The route's own contract never said that:
    * `{global:boolean}` answers `{ok, visibility}`, and before the fold this call was a no-op. So the
@@ -639,7 +639,7 @@ export function integrationsRouter(deps: {
     // asks for it, because SUPERSEDING IS THIS DOOR'S JOB (see above). Mapped to `INTERNAL` rather
     // than cast away, and `INTERNAL` rather than a plausible-looking 403: it would mean the server
     // reached a state this handler does not model, which is not something to dress up as a refusal
-    // the caller could act on. Same discipline as `sendPublishRefusal`'s `model_pass_required` arm —
+    // the caller could act on. Same discipline as `sendPublishRefusal`'s `model_pass_required` arm -
     // a default that changes later must not fall through into `publishedSnapshot!`.
     if (out.verdict === 'already-published') return sendError(res, 'INTERNAL', 'Erro interno.');
     if (out.verdict !== 'ok') return sendPublishRefusal(res, out);

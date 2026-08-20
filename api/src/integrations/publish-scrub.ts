@@ -516,13 +516,13 @@ export const MODEL_PASS_BUDGET_MS = 30_000;
  * `llm/attribution.ts`, which this slice does not own and must not widen (docs/decisions.md).
  *
  * IT IS DEADLINED (S6 review round four, MINOR-3). `scrubForPublish` degrades to the floor when this
- * pass THROWS — but a provider that accepts the connection and then never answers is not a throw, and
+ * pass THROWS - but a provider that accepts the connection and then never answers is not a throw, and
  * without a deadline the publish waits on it for as long as the socket stays open. That exposure
  * predates this slice on `POST …/publish`; what made it worth arming now is that S6 folded
  * `POST …/global` `{global:true}` into the same path, so a door that used to be a single store write
  * came to sit behind an un-deadlined network call. The budget is armed the same way
- * `llm/gateway.ts`'s `CLASSIFY_BUDGET_MS` arms the classifier's — an `AbortController` handed to
- * `completeFast`, which rejects with `LlmAbortedError` — and the rejection lands in
+ * `llm/gateway.ts`'s `CLASSIFY_BUDGET_MS` arms the classifier's - an `AbortController` handed to
+ * `completeFast`, which rejects with `LlmAbortedError` - and the rejection lands in
  * `scrubForPublish`'s catch, so a timeout publishes the FLOOR with `modelPass: {status:'failed'}`
  * recorded on the artifact. It is never a refusal, because the floor is the control and the model is
  * the second net; only `requireModelPass: true` turns a degraded pass into a refusal.
@@ -603,7 +603,7 @@ export interface PublishScrubOptions {
    * replace the reviewed artifact in every consuming org with an unreviewed re-scrub, stamped
    * `supersedes`, with no preview in the loop.
    *
-   * A `global` row with NO snapshot is NOT already published and IS promoted here — that state is
+   * A `global` row with NO snapshot is NOT already published and IS promoted here - that state is
    * exactly what MAJOR-2 exists to end (a legacy-runtime import, or a row flipped by the pre-fold
    * route, served cross-org through the read-time floor), so this door repairing it is the point.
    */
@@ -850,7 +850,7 @@ export type PublishPreviewResult = PublishPreview | { verdict: 'notfound' } | { 
 export type PublishResult =
   | { verdict: 'ok'; doc: IntegrationDefinitionDoc; redactions: PublishRedaction[]; modelPass: PublishModelPassRecord }
   /**
-   * NOTHING WAS WRITTEN, and the row was already where the caller wanted it — the `promoteOnly`
+   * NOTHING WAS WRITTEN, and the row was already where the caller wanted it - the `promoteOnly`
    * answer above. Deliberately its OWN verdict rather than an `ok` carrying `redactions: []` and a
    * synthesised `modelPass`: no scrub ran, so there is no honest value for either field, and a
    * caller that recorded a fabricated `{status:'skipped'}` would be recording an inspection that
@@ -908,7 +908,7 @@ export async function publishDefinition(
   const pre = await store.publishPrecheck(id, actor);
   if (pre.verdict !== 'ok') return pre;
 
-  // ALREADY PROMOTED, SO NOTHING TO DO — see `PublishScrubOptions.promoteOnly`. Judged AFTER the
+  // ALREADY PROMOTED, SO NOTHING TO DO - see `PublishScrubOptions.promoteOnly`. Judged AFTER the
   // pre-check, never before it: the admission answer must be identical whatever this option says, or
   // the door would gain an existence oracle (a caller who may not see the row must still get the
   // uniform 404, not a cheap "already published"). Judged from the SAME read the gate used, so no

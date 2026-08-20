@@ -3805,9 +3805,9 @@ names") was applied to this round's gates, and one result is negative and record
 the review window is a READ-only widening, and the `global` tier now has ONE writer. The prior
 annotations stay. No collection, module or wire shape changed, so 02 and 05 are unaffected.
 
-## 2026-08-20 — S6 review round four: the doors are right, the gate was not
+## 2026-08-20 - S6 review round four: the doors are right, the gate was not
 
-**MAJOR — a gate, not a defect. `gitleaks detect` SCANS HISTORY, so a follow-up commit is not a fix.**
+**MAJOR - a gate, not a defect. `gitleaks detect` SCANS HISTORY, so a follow-up commit is not a fix.**
 The branch introduced a `stripe-access-token` finding: the S6 contract suite wrote its planted
 credential as a literal. Round three composed it at runtime, saw a clean working tree and reported the
 gate closed. It was not: `npm run gate:secrets` and the `security-gates` CI job both run

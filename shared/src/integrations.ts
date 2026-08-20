@@ -896,12 +896,12 @@ export const integrationsEndpoints = {
    *
    * `{global:true}` IS `publishDefinition` (2026-08-20, S6 review MAJOR-2), not a tier flag. It was a
    * bare `setVisibility(..., 'global')`, which moved a row across the org boundary while writing NO
-   * `publishedSnapshot` — so consuming orgs read the author's LIVE row through the read-time floor,
+   * `publishedSnapshot` - so consuming orgs read the author's LIVE row through the read-time floor,
    * with no chokepoint model pass, nothing frozen and no `scrubbedAt`/`scrubbedBy`/`scrubVersion`
    * provenance. It now runs the same scrub-and-snapshot write as `publishDefinition` below, so ONE
    * path crosses the boundary and it always leaves an artifact. Callers see no change in the REQUEST
-   * or the RESPONSE — this descriptor is byte-identical, which is why the change is additive under
-   * Rule 7 — but the call now costs a chokepoint model pass and writes a snapshot.
+   * or the RESPONSE - this descriptor is byte-identical, which is why the change is additive under
+   * Rule 7 - but the call now costs a chokepoint model pass and writes a snapshot.
    *
    * IT IS STILL IDEMPOTENT (S6 review round four). On a row that is already `global` AND already
    * holds a snapshot, `{global:true}` changes nothing and answers the tier: this door is a toggle,
