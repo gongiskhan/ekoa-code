@@ -1254,7 +1254,11 @@ describe('runAutomationForAction - the hosted capture path is bounded at every h
     // evidence of anything.
     const noise = Array.from({ length: 40 }, (_, n) => ({ ...EXCHANGE, resourceType: 'document', url: `https://portal.example/page/${n}` }));
     const api = manyExchanges(MAX_PERSISTED_EVIDENCE + 20);
-    await runAutomationForAction(base, { ...deps, replay: noRecipe, run: runObserving([...noise, ...api]) });
+    // ORDER MATTERS, and the obvious order makes this test unfailable. persistEvidence keeps the
+    // NEWEST MAX_PERSISTED_EVIDENCE, so with the noise FIRST the surviving window is all api calls
+    // whether or not the filter ran, and both assertions below hold against a deleted filter. The
+    // noise goes LAST so it competes for the window and only the filter can keep it out.
+    await runAutomationForAction(base, { ...deps, replay: noRecipe, run: runObserving([...api, ...noise]) });
 
     expect(appendCapturedCall).toHaveBeenCalledTimes(MAX_PERSISTED_EVIDENCE);
     const written = appendCapturedCall.mock.calls.map((c) => c[2].url);
