@@ -489,16 +489,21 @@ describe('the retention pins cross tenants, and carry identifiers only', () => {
 });
 
 /**
- * THE SECOND DELIBERATELY CROSS-TENANT READER (verification round three).
+ * THE SECOND CROSS-TENANT READER, DELETED (verification round four).
  *
- * `listOwnerRefsForKey` exists because a definition write in ONE org can end an action for another -
- * the `global` tier is exactly that - so the reconciler cannot ask its question from inside a single
- * org. That is a real widening of this module's reach and it is held to the same rule as the pins:
- * what crosses the boundary is IDENTIFIERS, bounded by the projection rather than by a promise, and
- * the caller (`discardEvidenceOfUnresolvableActions`) hands its own caller a COUNT and never a row.
+ * Round three added `listOwnerRefsForKey(key)` - every tenant's rows for a key - so a write-time
+ * reconciler could decide a foreign org's rows. It could not: whether a consumer still reaches an
+ * action depends on THEIR credential's custodian and on a FROZEN published snapshot the writer never
+ * sees, and the reconciler asked for the live row as the runner. A cross-tenant LISTING is what made
+ * a cross-tenant DELETE expressible, so the listing is gone rather than narrowed and the collector
+ * is handed the writing org's own id.
+ *
+ * WHAT THIS DESCRIBE PINS IS THEREFORE THE BOUND ITSELF: `listOwnerRefsInOrg` must answer for ONE
+ * org, and must still carry identifiers only - `pinnedRunIdsForRetention` remains this module's one
+ * cross-tenant reader, and it returns run ids to a boot job with no actor.
  */
-describe('the reconciler\'s cross-tenant listing carries no tenant\'s data', () => {
-  it('names every tenant holding a row for the key, with no sample of anyone\'s in it', async () => {
+describe('the collector\'s listing is org-scoped, and carries no tenant\'s data', () => {
+  it('names only the asked org\'s owners, with no sample of anyone\'s in it', async () => {
     await store.recordEvidence(
       { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
       { backingType: 'browser-steps', evidence: { kind: 'automation', runId: 'run-A', steps: [{ stepIndex: 0, excerpt: 'orgA private text' }] } },
@@ -508,21 +513,48 @@ describe('the reconciler\'s cross-tenant listing carries no tenant\'s data', () 
       { backingType: 'api-call', evidence: { kind: 'api-call', request: { method: 'GET', url: 'https://x/y', headers: {} }, response: { status: 200, body: 'orgB private text' } } },
     );
 
-    const refs = await store.listOwnerRefsForKey(KEY);
+    const refs = await store.listOwnerRefsInOrg('orgA', KEY);
 
-    expect(refs.map((r) => `${r.orgId}/${r.ownerUserId}/${r.actionName}`).sort())
-      .toEqual([`orgA/${OWNER}/${ACTION}`, `orgB/${PEER}/${ACTION}`]);
+    // THE TENANCY CLAIM: orgB's row names the same key and the same action and is still not here.
+    expect(refs.map((r) => `${r.orgId}/${r.ownerUserId}/${r.actionName}`)).toEqual([`orgA/${OWNER}/${ACTION}`]);
     const serialised = JSON.stringify(refs);
     expect(serialised).not.toContain('orgA private text');
     expect(serialised).not.toContain('orgB private text');
     for (const ref of refs) expect(Object.keys(ref).sort()).toEqual(['actionName', 'orgId', 'ownerUserId']);
+    // …and asking as orgB answers orgB's row, so "one row" above is the SCOPE and not an empty read.
+    expect((await store.listOwnerRefsInOrg('orgB', KEY)).map((r) => r.ownerUserId)).toEqual([PEER]);
   });
 
-  it('an empty key lists NOTHING rather than every tenant\'s rows', async () => {
+  it('an empty org or an empty key lists NOTHING rather than every tenant\'s rows', async () => {
     await store.recordEvidence(
       { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
       { backingType: 'api-call', evidence: { kind: 'api-call', request: { method: 'GET', url: 'https://x/y', headers: {} }, response: { status: 200 } } },
     );
-    expect(await store.listOwnerRefsForKey('')).toEqual([]);
+    expect(await store.listOwnerRefsInOrg('orgA', '')).toEqual([]);
+    expect(await store.listOwnerRefsInOrg('', KEY)).toEqual([]);
+  });
+
+  it('the READER\'S OWN collection cannot be pointed at another tenant or another member', async () => {
+    // `discardOwnerEvidence` is the seam the executor's refusal path calls. Both tenancy terms are
+    // required by its scope type AND are exact-match query terms, so the two rows below are
+    // unreachable from a caller who names either one differently.
+    await store.recordEvidence(
+      { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
+      { backingType: 'api-call', evidence: { kind: 'api-call', request: { method: 'GET', url: 'https://x/y', headers: {} }, response: { status: 200, body: 'orgA private text' } } },
+    );
+    await store.recordEvidence(
+      { orgId: 'orgB', ownerUserId: PEER, integrationKey: KEY, actionName: ACTION },
+      { backingType: 'api-call', evidence: { kind: 'api-call', request: { method: 'GET', url: 'https://x/y', headers: {} }, response: { status: 200, body: 'orgB private text' } } },
+    );
+
+    // Right owner, WRONG org; right org, WRONG owner. Neither reaches a document.
+    expect(await store.discardOwnerEvidence({ orgId: 'orgB', ownerUserId: OWNER, integrationKey: KEY })).toBe(0);
+    expect(await store.discardOwnerEvidence({ orgId: 'orgA', ownerUserId: PEER, integrationKey: KEY })).toBe(0);
+    expect(await integrationActionEvidence.find({})).toHaveLength(2);
+
+    // …and the matching pair does reach its own, so the two refusals above are the FILTERS and not a
+    // primitive that had stopped deleting.
+    expect(await store.discardOwnerEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY })).toBe(1);
+    expect((await integrationActionEvidence.find({})).map((r) => (r as unknown as { orgId: string }).orgId)).toEqual(['orgB']);
   });
 });

@@ -642,52 +642,72 @@ or names different bytes. The gate is satisfiable: a provisional action is store
 owner approves it, runs it once, and promotes on that run.
 
 NOTHING DURABLE OUTLIVES THE THING IT IS EVIDENCE FOR - the invariant `recipe-lifecycle.ts` states
-for the sibling collection, inherited here. A ROW LIVES ONLY WHILE ITS OWNER CAN STILL RESOLVE ITS
-ACTION, which is a reconciliation and not an enumeration of writes.
+for the sibling collection, inherited here. The rule that implements it took four rounds to reach,
+and the two wrong shapes are recorded because each was a *reasonable* reading of the previous one.
 
-The previous text here said the removal paths were "enumerated from the code", that there was
-"exactly ONE", and that the collector `discardEvidenceOfRemovedActions` was scoped to the writing
-org. Both halves were wrong in the same way, and the way is worth naming because this codebase has
-now made it five times - per-run where it should be per-origin, per-recipe where it should be
-per-call, per-action where it should be per-call, per-artifact where it should be per-owner, and
-here per-writing-org where it should be per-RUNNING-org. A row is keyed by the org that ran the
-action, and the `global` tier exists precisely so that the org which AUTHORS a definition need not be
-the org that runs it: a super-admin publishes org A's definition, a user in org B resolves it through
-`getForActor`, connects their own credential and runs it, and the row lands in org B. Org A dropping
-that action collected nothing - leaving a durable row of org B's real response body and a screenshot
-pin nothing could ever release, since an action that resolves for nobody can never be superseded
-either. And `setVisibility` (`global -> org`, `org -> private`) ends actions for a whole org while
-dropping none, so no diff of action sets could ever have covered it.
+Round two ENUMERATED the writes that drop an action and scoped the collector to `input.orgId`, the
+org that WROTE the definition. Every row is keyed by the org that RAN the action, and the `global`
+tier exists precisely so those differ, so every consumer of a published definition was orphaned.
+Round three widened the same collector to reconcile ACROSS TENANTS by asking `getForActor` per row
+owner - and DELETED ACROSS AN ORG BOUNDARY, twice over:
 
-So `discardEvidenceOfUnresolvableActions` asks, per `(orgId, ownerUserId)` - the row's own key - which
-action names that owner still resolves for the integration, through `getForActor` itself, and drops
-every row of theirs that names something else. `definition-store.ts` calls it from both writes that
-can narrow reach: the replace branch (beside the recipe collection's
-`discardEvidenceOfRemovedRecipes`) and `setVisibility`. It fails towards KEEPING everywhere - a
-listing that throws collects nothing, a resolution that throws keeps that owner's rows - because
-deletion here is irreversible and the row is somebody's only copy. Its cross-tenant listing
-(`listOwnerRefsForKey`) is projected to org + owner + action name, so no tenant's sample crosses the
-boundary and its caller only ever learns a count.
+- it asked for the LIVE row while a consumer resolves the FROZEN `publishedSnapshot` (the replace
+  branch carries the snapshot forward deliberately, and `setVisibility` re-promotes without
+  re-scrubbing), so org A's re-save destroyed org B's only copy of a sample for an action **org B
+  could still run**;
+- it asked as the RUNNER while an org-shared credential resolves the definition as the CUSTODIAN
+  (`definitionActorForCredential`), so a peer's rows were wiped by a save that dropped nothing.
 
-THE OWNER'S ERASURE CONTROL is separate and differently scoped: `deleteConfig` (`DELETE
-/api/v1/integrations/:key`) calls `discardEvidenceOfDisconnectedConfig`. Disconnecting a credential
-does not change what resolves - a reconcile keeps every row - while the third-party account whose
-traffic the sample holds is no longer connected and the person who connected it has asked for it to
-go. A config with no custodian is the legacy org-shared credential every member uses, so removing it
-takes every member's samples for that integration.
+THE STANDING RULE IS NOW A SHAPE, NOT A PARAMETER: **a write by one org never deletes another org's
+data.** "Who can still resolve this action" has a genuinely different answer per reader - live row
+vs frozen snapshot, runner vs custodian, own-org row vs a foreign `global` row vs the shipped
+baseline - so it is never answered at write time on behalf of a reader the writer cannot see. Three
+mechanisms replace the one:
+
+1. **The reader collects its own.** `action-executor.ts` resolves through `action-resolution.ts` -
+   the ONE production resolution, shared with the run path itself - so it knows, for this org, this
+   owner, this credential and this document, whether the integration or the action is still
+   reachable. When it is not, the refusal drops that owner's rows (`discardOwnerEvidence`, whose
+   scope type REQUIRES both tenancy terms and has no org-wide arm).
+2. **The write collects inside its own tenant.** `definition-store.ts` declares a seam taking
+   `(orgId, integrationKey)`; `evidence-reconcile.ts` implements it, asking the same production
+   resolution per owner, and `server.ts` binds the two through
+   `bindDefinitionEvidenceReconciler()`. The store cannot import the resolution directly (that is a
+   cycle through `definition-registry.ts`), and putting the call at the four higher-tier write sites
+   would make reachability something four authors must remember. Bounded by
+   `MAX_RECONCILED_OWNERS`; unbound, it collects nothing, which is the safe direction.
+3. **Everything else fails towards RETAINING, and the gap is bounded rather than argued away.** An
+   orphaned row is a retention and privacy gap; a deleted row is unrecoverable tenant data. Those
+   costs are not comparable. `sweepExpiredEvidence` at boot ends every row not re-validated within
+   `EVIDENCE_RETENTION_DAYS` (90), whether or not any collector noticed; `DELETE
+   /api/v1/integrations/:key/actions/:actionName/evidence` is the owner's own erasure control (and
+   the reason `discardEvidence` has a production caller); and `deleteConfig` erases what a
+   disconnected credential produced. The residual window is an open entry in `findings.md`.
+
+Read as what a CONSUMER RESOLVES rather than as what a definition says, the narrowing writes are:
+`create(..., 'replace')`, `setVisibility` in either narrowing direction, and `publishSnapshot` on a
+RE-PUBLISH - a fresh snapshot with fewer actions narrows every consumer at once, which earlier text
+here dismissed as "widening only". All three collect the writing org's rows and none of them touches
+another tenant's.
+
+`deleteConfig`'s org-shared arm is an EXCLUSION LIST, not "everyone": `findConfigForOwner` answers a
+member's own row before falling back to the custodian-less shared one, so a member holding their own
+credential was never served by the deleted row and their sample is a sample of a credential they
+still have. The scope is every owner for whom `findConfigForOwner` would have resolved THIS row.
 
 `sweepExpiredScreenshots` takes a REQUIRED `pinnedRunIds` set so a run named by live evidence
 survives its own expiry; required, so a caller that stops supplying it does not compile.
-`server.ts`'s `sweepScreenshotsSparingPinnedEvidence` is the one production composition of the pin
-read and the sweep, and `bootState` awaits it AND READS ITS COUNTS - the read is what pins the await,
-since no test can distinguish an awaited call from a fire-and-forget one there (boot awaits slower
-things afterwards) while `void` has no `.removed`. The pin read is bounded by a projection and a
-`kind` query term: rows are hundreds of KB and grow as orgs x owners x integrations x actions, and
-an unprojected `find({})` at boot was a multi-gigabyte materialisation whose OOM abort is not a
-rejection and therefore not something the caller's `.catch` could degrade. Pinning is an age-sweep
-exemption and NOT an erasure path - there is no erasure path over this tree (see
-`screenshot-erasure-path-has-no-production-caller` in `findings.md`), which is why the pin has to be
-released when the action stops resolving: it is bounded by the live evidence row and by nothing else.
+`server.ts`'s `sweepScreenshotsSparingPinnedEvidence` is the one production composition of the
+evidence retention sweep, the pin read and the screenshot sweep - in that order, so a row that ages
+out releases its pin on the SAME boot rather than granting its screenshots one extra boot's grace.
+`bootState` awaits it AND READS ITS COUNTS - the read is what pins the await, since no test can
+distinguish an awaited call from a fire-and-forget one there (boot awaits slower things afterwards)
+while `void` has no `.removed`. The pin read is bounded by a projection and a `kind` query term:
+rows are hundreds of KB and grow as orgs x owners x integrations x actions, and an unprojected
+`find({})` at boot was a multi-gigabyte materialisation whose OOM abort is not a rejection and
+therefore not something the caller's `.catch` could degrade. Pinning is an age-sweep exemption and
+NOT an erasure path - there is no erasure path over this tree (see
+`screenshot-erasure-path-has-no-production-caller` in `findings.md`).
 
 ## Billing
 

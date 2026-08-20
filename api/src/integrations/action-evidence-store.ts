@@ -77,63 +77,62 @@
  * re-checked on every fetched document. Suite:
  * `api/tests/security/action-evidence-isolation.test.ts`.
  *
- * The ONE cross-tenant reader is `pinnedRunIdsForRetention`, and it is not a tenancy hole: see its
- * own docblock. It is reachable from the boot sweeper alone and returns run IDENTIFIERS ONLY.
+ * The ONE cross-tenant reader left in this module is `pinnedRunIdsForRetention`, and it is not a
+ * tenancy hole: see its own docblock. It is reachable from the boot sweeper alone and returns run
+ * IDENTIFIERS ONLY. Round three had a SECOND one - `listOwnerRefsForKey`, which handed the write-time
+ * reconciler every tenant's rows for a key - and it is deleted rather than narrowed: a listing that
+ * crosses tenants is what made a cross-tenant DELETE expressible in the first place.
  *
- * ── THE REMOVAL PATHS, ENUMERATED FROM THE CODE ───────────────────────────────────────────────
+ * ── THE REMOVAL RULE: A WRITE BY ONE ORG NEVER DELETES ANOTHER ORG'S DATA ─────────────────────
  *
  * `recipe-lifecycle.ts` states the invariant this collection inherits: NOTHING DURABLE OUTLIVES THE
- * THING IT IS EVIDENCE FOR. An evidence row is durable, has no TTL, and PINS its run's screenshots
- * out of the 7-day sweep for as long as it lives, so a row whose action no longer exists converts a
- * bounded retention into an unbounded one.
+ * THING IT IS EVIDENCE FOR. An evidence row is durable and PINS its run's screenshots out of the
+ * 7-day sweep for as long as it lives, so a row whose action no longer resolves converts a bounded
+ * retention into an unbounded one. THREE CONSECUTIVE ROUNDS tried to close that at WRITE TIME and
+ * each one was wrong in a different direction, so the shape changed rather than the parameter:
  *
- * TWO REVISIONS OF THIS HEADER GOT THE REMOVAL WRONG, IN THE SAME WAY TWICE, AND THE WAY IS THE
- * POINT. The first claimed two removal paths and HAD NEITHER (`discardEvidence` had no production
- * caller). The second enumerated the paths correctly - grep the writers of the definition document
- * and only `IntegrationDefinitionStore.create` can drop an action - and then handed the collector
- * THE WRONG UNIT: `discardEvidenceOfRemovedActions({ orgId: input.orgId, ... })`, the org that WROTE
- * the definition. A row is keyed by the org that RAN it. Those are the same org only while nothing
- * crosses an org boundary, and the whole `global` tier exists so that they do not:
+ *   round two  - a diff of action sets scoped to `input.orgId`, the org that WROTE the definition.
+ *                Every row is keyed by the org that RAN the action, which the `global` tier makes a
+ *                different org, so a consumer org's rows were ORPHANED - never collected at all.
+ *   round three - the same collector widened to reconcile ACROSS TENANTS by asking `getForActor`
+ *                per row owner. That deleted across an org boundary, twice over: the reconciler
+ *                asked for the LIVE row while a consumer resolves the FROZEN `publishedSnapshot`
+ *                (deliberately carried forward by the replace branch), so org A's ordinary re-save
+ *                destroyed org B's only copy of an action org B COULD STILL RUN; and it asked as
+ *                the RUNNER while an org-shared credential resolves the definition as the CUSTODIAN
+ *                (`definitionActorForCredential`: "never as the reader"), so a peer's rows were
+ *                wiped by a save that dropped nothing at all.
  *
- *   a super-admin publishes org A's definition to `visibility: 'global'`; `getForActor` grants the
- *   cross-org tier, so a user in org B resolves it, connects THEIR OWN credential and runs the
- *   action. The row lands under `{orgId: orgB, ownerUserId: uB}` holding org B's real response body.
- *   Org A then re-authors without that action - and a `deleteMany` filtered on org A matches
- *   nothing. The action now resolves for NOBODY, so the row can never be superseded either, and its
- *   screenshot pin exempts an authenticated client-portal session from the 7-day sweep permanently.
+ * The lesson is not "use a better actor". "Who can still resolve this action" has a genuinely
+ * different answer per reader - live row vs frozen snapshot, runner vs custodian, own credential vs
+ * shared, own org's row vs a global one vs the shipped baseline - so a reconciler that answers it at
+ * WRITE TIME on behalf of readers it cannot see will keep being wrong, and being wrong here destroys
+ * a tenant's only copy of its own data. THE COSTS ARE NOT COMPARABLE: an orphaned row is a BOUNDED
+ * retention and privacy gap, and a deleted row is unrecoverable. So:
  *
- * That is the fifth time in this codebase a decision has been scoped to the wrong UNIT (per-run
- * where it should be per-origin, per-recipe where it should be per-call, per-action where it should
- * be per-call, per-artifact where it should be per-owner, and here per-writing-org where it should
- * be per-RUNNING-org). So the collector is no longer a diff of action sets at all.
+ *   1. THE READER COLLECTS ITS OWN. `action-executor.ts` resolves through the one production path
+ *      (`action-resolution.ts`), so it KNOWS - for this org, this owner, this credential, this
+ *      document - whether the integration or the action is still reachable. When it is not, the
+ *      run's refusal drops that owner's rows through `discardOwnerEvidence` below. Own rows only,
+ *      both tenancy terms required by the type.
+ *   2. THE WRITE COLLECTS ONLY INSIDE ITS OWN TENANT. `evidence-reconcile.ts` reconciles the rows
+ *      of the WRITING ORG and no other, asking the SAME production resolution per owner. The blast
+ *      radius of the worst possible bug in it is one org: the org whose member just wrote.
+ *   3. EVERYTHING ELSE FAILS TOWARDS RETAINING, and the gap is bounded rather than argued away:
+ *      `sweepExpiredEvidence` (a retention sweep at boot, `EVIDENCE_RETENTION_DAYS`) ends every row
+ *      that has not been re-validated, orphan or not; `discardEvidence` is the OWNER'S control,
+ *      reachable at `DELETE /api/v1/integrations/:key/actions/:actionName/evidence`; and
+ *      `discardEvidenceForDisconnectedConfig` erases what a credential produced when the credential
+ *      goes. docs/findings.md carries the residual window as an open entry, not as a closed one.
  *
- * ── THE RULE: A ROW LIVES ONLY WHILE ITS OWNER CAN STILL RESOLVE ITS ACTION ────────────────────
- *
- * `discardEvidenceOfUnresolvableActions` below RECONCILES, per (orgId, ownerUserId) - the row's own
- * key, i.e. the unit that produced it - by asking the ONE resolver production runs actions through
- * (`getForActor`) which action names that owner still resolves for the key, and dropping every row
- * of theirs that names something else. Stating it that way makes it independent of WHICH write
- * narrowed the reach, which is what the two previous enumerations could not be:
- *
- *   1. THE ACTION SET REWRITTEN - `create(..., onConflict: 'replace')`: the builder save
- *      (`definition-save.ts`) and `achieve`'s in-place write (`integration-achieve.ts`, twice). A
- *      removed or renamed action, in the writing org AND in every org that resolved that definition
- *      cross-org.
- *   2. THE REACH NARROWED - `setVisibility`. `global -> org` takes EVERY action of the integration
- *      away from every consumer org at once; `org -> private` does the same to every peer inside the
- *      author's own org. The previous header dismissed this transition by name as "NOT A REMOVAL
- *      PATH … hides a definition without dropping any action", which is true of the definition and
- *      false of what the consumer can reach - the unit error again, one level up.
- *   3. THE CREDENTIAL DISCONNECTED - `DELETE /api/v1/integrations/:key` (`service.ts` `deleteConfig`).
- *      Not a definition write at all: the action still resolves, but the third-party account whose
- *      request and response the sample holds is no longer connected, and the owner has asked for it
- *      to go. Collector: `discardEvidenceForDisconnectedConfig`, called there. This is the OWNER'S
- *      erasure control, and it is why `discardEvidence` is no longer a method without a caller.
- *
- * NOT A REMOVAL PATH, counted the same way: `publishSnapshot` (org -> global) only WIDENS reach, so
- * it can orphan nothing; `requestPublish`/`withdrawPublishRequest` move a review window that
- * `getForActor` never consults for a foreign org; `IntegrationRecipeStore` only `map`s the existing
- * `actions` array, so it cannot drop one; and there is no definition-delete path in this codebase.
+ * WHAT THIS MEANS FOR THE WRITES THAT NARROW REACH, stated as what the CONSUMER RESOLVES rather
+ * than as what the definition says - which is the reading every previous revision of this header got
+ * wrong. `create(..., 'replace')` (the builder save and `achieve`'s in-place write), `setVisibility`
+ * in either narrowing direction, AND `publishSnapshot` on a re-publish (a fresh snapshot with fewer
+ * actions narrows every consumer at once, which the round-three header dismissed as "widening
+ * only") all end an action for SOMEBODY. For the writing org's own rows, (2) collects. For every
+ * other org's rows, (1) collects on their next run and (3) bounds the window until then. No write
+ * anywhere in this codebase deletes a row outside its own tenant.
  *
  * THE SCREENSHOT TREE still has no subject-erasure path of its own (`screenshot-plane.ts`); that
  * remains recorded as an open gap in docs/findings.md rather than implied to be closed here.
@@ -170,10 +169,9 @@ export interface ActionEvidenceKey {
 }
 
 /**
- * WHO produced a row - the unit a removal decision is scoped by, and the unit the previous
- * collector got wrong. Exactly the pair `findConfigForOwner` resolves a credential under, so
- * "which actions can this owner still resolve" is a question about a real principal rather than
- * about whoever happened to write the definition.
+ * WHO produced a row - the unit a removal decision is scoped by. Exactly the pair
+ * `findConfigForOwner` resolves a credential under, so "which actions can this owner still resolve"
+ * is a question about a real principal rather than about whoever happened to write the definition.
  */
 export interface ActionEvidenceOwner {
   orgId: string;
@@ -181,32 +179,59 @@ export interface ActionEvidenceOwner {
 }
 
 /**
- * ONE row, as the reconciler sees it: WHOSE it is and WHICH action it names, and nothing else.
- *
- * There is no sample in this shape and that is deliberate rather than economical - the reconciler
- * reads across tenants (see `listOwnerRefsForKey`), so it must not be able to see a byte of anyone's
- * request or response body in the first place.
+ * ONE row, as the writing org's reconciler sees it: WHOSE it is and WHICH action it names, and
+ * nothing else. There is no sample in this shape - a retention decision has no business holding a
+ * byte of anyone's request or response body.
  */
 export interface ActionEvidenceOwnerRef extends ActionEvidenceOwner {
   actionName: string;
 }
 
 /**
- * The scope of the OWNER'S erasure control - a disconnected credential (`deleteConfig`).
+ * One OWNER'S rows for one integration, optionally narrowed to one action. The scope of every
+ * reader-side collection, and the reason it can never reach past the caller: both tenancy terms are
+ * REQUIRED by the type, and `actionName` - the only optional one - narrows rather than widens.
+ */
+export interface OwnerEvidenceScope extends ActionEvidenceOwner {
+  integrationKey: string;
+  actionName?: string;
+}
+
+/**
+ * The scope of the credential-disconnection erasure (`deleteConfig`).
  *
  * A DISCRIMINATED `owner`, NOT AN OPTIONAL `ownerUserId`, because the two cases are genuinely
  * different and an optional term is one a caller can forget: a config row stamped with a custodian
  * (`ownerUserId`) is that one person's credential, while a legacy org-shared row carries none and is
- * the fallback `findConfigForOwner` hands to EVERY member of the org - so deleting it disconnects
- * all of them, and leaving their samples behind would leave every one of those rows naming an
- * account nobody is connected to any more. Forgetting the term would silently turn the second case
- * into "drop nobody's".
+ * the fallback `findConfigForOwner` hands to every member of the org that has no row of their own.
+ *
+ * `everyOwnerExcept` IS THAT SECOND ARM, AND ITS SHAPE IS THE ROUND-FOUR CORRECTION. It used to read
+ * `'every-owner-in-org'`, which erased the samples of peers whose OWN credential was never the
+ * deleted row: `findConfigForOwner` returns `rows.find(c => c.ownerUserId === owner)` BEFORE it
+ * falls back to the shared row, so a member holding their own config for the key never resolved the
+ * deleted one and their sample is a sample of a credential they still have. The correct scope is
+ * "every owner for whom `findConfigForOwner` would have resolved THIS row", i.e. every owner in the
+ * org except those still holding a config of their own - which is what the caller passes.
  */
 export type DisconnectedConfigScope = {
   orgId: string;
   integrationKey: string;
-  owner: { userId: string } | 'every-owner-in-org';
+  owner: { userId: string } | { everyOwnerExcept: readonly string[] };
 };
+
+/**
+ * How long a validated run stays evidence. The RETENTION BOUND that makes an orphaned row a bounded
+ * gap rather than an unbounded one, and the reason "fail towards retaining" is an acceptable posture
+ * at all: a row not re-validated within this window goes at the next boot whether or not anything
+ * ever noticed its action stopped resolving.
+ *
+ * 90 DAYS, AND THE NUMBER IS A TRADE RATHER THAN A ROUND FIGURE. Shorter than the screenshot sweep's
+ * 7 days is wrong (an automation row's pointers would outlive nothing, but the graduation
+ * prerequisite would evaporate between a run and the human who confirms it); much longer stops
+ * bounding anything. Every successful run rewrites `validatedAt`, so an integration in real use
+ * never ages out - only one nobody has run for a quarter of a year.
+ */
+export const EVIDENCE_RETENTION_DAYS = 90;
 
 /** The api-call sample: the executor's own redacted request summary plus a capped response body. */
 export interface ApiCallEvidence {
@@ -399,50 +424,105 @@ export class ActionEvidenceStore {
   }
 
   /**
-   * Drop the samples a DISCONNECTED credential produced - the owner's erasure control (path 3).
+   * Drop ONE owner's rows for one integration, or one of them - THE READER'S OWN COLLECTION.
    *
-   * Scoped to the config that went, and the config's own unit is (org, custodian, integration): the
-   * `every-owner-in-org` arm is not a widening, it is the shape of a legacy org-shared config row,
-   * which carries no custodian and is the credential `findConfigForOwner` hands to every member. In
-   * both arms `orgId` and `integrationKey` are exact-match terms, so nothing outside the tenant whose
-   * config was deleted is reachable. Answers how many rows went.
+   * The seam `action-executor.ts` calls when a run has just proved, through the one production
+   * resolution, that this caller can no longer reach the integration or the action. Both tenancy
+   * terms are exact-match query terms AND required by `OwnerEvidenceScope`, so this cannot be
+   * pointed at anybody else's rows: there is no org-wide arm and no all-owners arm on it at all.
+   * Answers how many rows went.
    */
-  async discardEvidenceForDisconnectedConfig(scope: DisconnectedConfigScope): Promise<number> {
-    if (scope.orgId === '' || scope.integrationKey === '') return 0;
-    if (scope.owner !== 'every-owner-in-org' && scope.owner.userId === '') return 0;
+  async discardOwnerEvidence(scope: OwnerEvidenceScope): Promise<number> {
+    if (scope.orgId === '' || scope.ownerUserId === '' || scope.integrationKey === '') return 0;
+    if (scope.actionName !== undefined && scope.actionName === '') return 0;
     return this.store.deleteMany({
       orgId: scope.orgId,
+      ownerUserId: scope.ownerUserId,
       integrationKey: scope.integrationKey,
-      ...(scope.owner === 'every-owner-in-org' ? {} : { ownerUserId: scope.owner.userId }),
+      ...(scope.actionName !== undefined ? { actionName: scope.actionName } : {}),
     });
   }
 
   /**
-   * WHO holds a row for this integration key, and WHICH action it names - across every tenant.
+   * Drop the samples a DISCONNECTED credential produced.
    *
-   * DELIBERATELY CROSS-TENANT, AND HELD TO IDENTIFIERS BY THE PROJECTION RATHER THAN BY A PROMISE.
-   * The reconciler has to decide a row's fate per (orgId, ownerUserId), and a definition write in
-   * one org can end an action for another (the `global` tier), so the question cannot be asked
-   * inside one org - that scoping error is exactly what this replaces. What crosses the boundary is
-   * bounded by the projection: three short strings per row, no sample, no request, no response body,
-   * no run id. The one caller is `discardEvidenceOfUnresolvableActions`, which returns a COUNT to
-   * its caller and never a row.
-   *
-   * The projection is also the SIZE bound - see `Store.find`'s note. Rows are hundreds of KB and
-   * grow as orgs x owners x integrations x actions, so this read must never materialise a sample.
+   * Scoped to the config that went. `orgId` and `integrationKey` are exact-match terms in BOTH arms,
+   * so nothing outside the tenant whose config was deleted is reachable; the arms differ only in
+   * WHICH members of that tenant were connected THROUGH the deleted row - see
+   * `DisconnectedConfigScope` for why the shared-config arm is an exclusion list and not "everyone".
+   * Answers how many rows went.
    */
-  async listOwnerRefsForKey(integrationKey: string): Promise<ActionEvidenceOwnerRef[]> {
-    if (integrationKey === '') return [];
+  async discardEvidenceForDisconnectedConfig(scope: DisconnectedConfigScope): Promise<number> {
+    if (scope.orgId === '' || scope.integrationKey === '') return 0;
+    if ('userId' in scope.owner && scope.owner.userId === '') return 0;
+    return this.store.deleteMany({
+      orgId: scope.orgId,
+      integrationKey: scope.integrationKey,
+      ...('userId' in scope.owner
+        ? { ownerUserId: scope.owner.userId }
+        // `$nin` also matches a row carrying NO `ownerUserId` at all (a hand-written or pre-owner
+        // migrated one). That is the right side to err on here: such a row names an account inside
+        // this org for this integration and can never be superseded, since no writer produces that
+        // shape any more.
+        : { ownerUserId: { $nin: [...scope.owner.everyOwnerExcept] } }),
+    });
+  }
+
+  /**
+   * WHO holds a row for this integration key INSIDE ONE ORG, and WHICH action it names.
+   *
+   * ORG-SCOPED, AND THAT IS THE ROUND-FOUR CORRECTION RATHER THAN AN OPTIMISATION. Its predecessor
+   * (`listOwnerRefsForKey`) took a key alone and answered across every tenant, because the write-time
+   * reconciler it fed believed it could decide a foreign org's rows. It could not - the answer
+   * depends on the reader's credential and on a frozen snapshot the writer never sees - and a
+   * cross-tenant LISTING is precisely what made a cross-tenant DELETE expressible. The only caller
+   * is `evidence-reconcile.ts`, which passes the WRITING org's own id.
+   *
+   * HELD TO IDENTIFIERS BY THE PROJECTION RATHER THAN BY A PROMISE: three short strings per row, no
+   * sample, no request, no response body, no run id. The projection is also the SIZE bound - see
+   * `Store.find`'s note - because rows are hundreds of KB and grow as owners x actions.
+   */
+  async listOwnerRefsInOrg(orgId: string, integrationKey: string): Promise<ActionEvidenceOwnerRef[]> {
+    if (orgId === '' || integrationKey === '') return [];
     const rows = await this.store.find(
-      { integrationKey },
-      { orgId: 1, ownerUserId: 1, actionName: 1 },
+      { orgId, integrationKey },
+      { ownerUserId: 1, actionName: 1 },
       { projection: { orgId: 1, ownerUserId: 1, actionName: 1 } },
     );
-    return rows.map((row) => ({
-      orgId: row.orgId ?? '',
-      ownerUserId: row.ownerUserId ?? '',
-      actionName: row.actionName ?? '',
-    }));
+    return rows
+      // The post-filter is the same belt-and-braces `listForIntegration` keeps and is recorded as
+      // such: the exact-match query cannot return another org's row, so this masks it. It is here so
+      // a later change to the query shape cannot silently be the removal of the only tenancy term.
+      .filter((row) => row.orgId === orgId)
+      .map((row) => ({
+        orgId: row.orgId ?? '',
+        ownerUserId: row.ownerUserId ?? '',
+        actionName: row.actionName ?? '',
+      }));
+  }
+
+  /**
+   * THE RETENTION SWEEP - every row not re-validated inside the window goes, orphan or not.
+   *
+   * THIS IS WHAT MAKES "FAIL TOWARDS RETAINING" AN ACCEPTABLE POSTURE. Everywhere else in this
+   * module a doubt keeps the row, because deleting somebody's only copy is unrecoverable while
+   * keeping it is a bounded gap - and this method is what bounds it. A row whose action stopped
+   * resolving for a reader who never runs it again is collected by nothing else; here it ages out,
+   * releasing its screenshot pin with it.
+   *
+   * CROSS-TENANT BY NECESSITY AND NOT A TENANCY HOLE, for the reason `pinnedRunIdsForRetention` is
+   * not one: retention belongs to no tenant, this runs on a boot job that has no actor and cannot be
+   * reached by a request, and it returns a COUNT - it never reads, projects or hands back a row.
+   *
+   * ONE `deleteMany` AND NO MATERIALISATION: `validatedAt` is an ISO-8601 stamp, which orders
+   * lexicographically, so the cutoff is a plain string comparison in the query rather than a scan of
+   * documents that hold hundreds of KB each.
+   */
+  async sweepExpiredEvidence(opts: { now: number; retentionDays?: number }): Promise<number> {
+    const days = opts.retentionDays ?? EVIDENCE_RETENTION_DAYS;
+    if (!Number.isFinite(days) || days <= 0) return 0;
+    const cutoff = new Date(opts.now - days * 24 * 60 * 60 * 1000).toISOString();
+    return this.store.deleteMany({ validatedAt: { $lt: cutoff } });
   }
 
   /**
@@ -573,114 +653,17 @@ export function evidenceSecretsFromValues(values: Iterable<unknown>): SecretRegi
 export const actionEvidenceStore = new ActionEvidenceStore();
 
 /**
- * Which action names of one integration key an OWNER can still resolve. `getForActor`'s answer,
- * mapped to names - i.e. the same resolution the executor runs an action through, asked on behalf of
- * the principal whose row is being judged. An empty set means "resolves the key but no such action";
- * it is also the honest answer when the key resolves to nothing at all.
- */
-export type ResolveOwnerActionNames = (owner: ActionEvidenceOwner) => Promise<ReadonlySet<string>>;
-
-/**
- * THE PAIRING - the ONE implementation of "a durable sample lives only while its OWNER can still
- * reach the action it is a sample of".
+ * THE CREDENTIAL-DISCONNECTION ERASURE - the samples a credential produced go when the credential
+ * does.
  *
- * SCOPED BY THE ROW, NOT BY THE WRITE, and that is the entire correction. Its predecessor took the
- * writing org and the names the incoming action set had dropped, which answered a question about the
- * AUTHOR while every row is keyed by the RUNNER (module header). Asking each row's own owner what
- * they still resolve makes the collector independent of which write narrowed the reach, so the two
- * paths that narrow it - a rewritten action set and a `setVisibility` that takes the definition out
- * of an org's tier - reach ONE rule rather than each needing to be remembered. It is also why this
- * is a free function: `definition-store.ts` owns the resolver, this file owns the collection, and
- * neither may own both.
+ * ITS OWN FUNCTION BECAUSE IT ANSWERS A DIFFERENT QUESTION FROM EVERY OTHER REMOVAL HERE. The
+ * others ask "can this reader still REACH the action", and a disconnected credential does not change
+ * that answer: the definition still resolves. What changed is that the third-party account whose
+ * request and response the sample holds is no longer connected, and the person who connected it has
+ * just asked for it to go.
  *
- * FAILS TOWARDS KEEPING, EVERYWHERE. Deletion here is irreversible and the row is somebody's only
- * copy, so every uncertainty keeps it: a listing that throws collects nothing, a resolution that
- * throws keeps every row of that owner, and a discard that throws does not abandon the rest of the
- * batch. The inverse posture - "delete when unsure" - would turn one Mongo blip during an ordinary
- * save into silent data loss across every tenant that had ever run the integration.
- *
- * BEST EFFORT AND LOUD. The write that narrowed the reach has already landed by the time this runs;
- * a throw here must not undo it or be reported as a failed save.
- */
-export async function discardEvidenceOfUnresolvableActions(
-  integrationKey: string,
-  resolveActionNames: ResolveOwnerActionNames,
-  deps: {
-    listOwnerRefsForKey?: (integrationKey: string) => Promise<ActionEvidenceOwnerRef[]>;
-    discardEvidence?: (key: ActionEvidenceKey) => Promise<boolean>;
-  } = {},
-): Promise<number> {
-  if (integrationKey === '') return 0;
-  const listOwnerRefs = deps.listOwnerRefsForKey
-    ?? ((key: string) => actionEvidenceStore.listOwnerRefsForKey(key));
-  const discard = deps.discardEvidence ?? ((key: ActionEvidenceKey) => actionEvidenceStore.discardEvidence(key));
-
-  let refs: ActionEvidenceOwnerRef[];
-  try {
-    refs = await listOwnerRefs(integrationKey);
-  } catch (err) {
-    console.warn(`[integrations] could not list the evidence of '${integrationKey}' to reconcile it: ${messageOf(err)}`);
-    return 0;
-  }
-
-  // One resolution per OWNER, not per row: an owner with twelve actions asks `getForActor` once.
-  // `null` records "we asked and could not find out", which is not the same as "resolves nothing".
-  const resolvedPerOwner = new Map<string, ReadonlySet<string> | null>();
-  let discarded = 0;
-  for (const ref of refs) {
-    if (ref.orgId === '' || ref.actionName === '') continue;
-    if (ref.ownerUserId === '') {
-      // A row that names no owner cannot be addressed by the removal primitive (its key would not be
-      // tenant-scoped), so it can never be superseded or discarded either. No writer in this
-      // codebase produces that shape - `ActionEvidenceDoc.ownerUserId` is required and the executor
-      // always stamps it - so this is loud rather than handled: it means a hand-written or migrated
-      // row is sitting in the collection pinning screenshots that nothing can release.
-      console.warn(
-        `[integrations] an evidence row of '${integrationKey}' in org ${ref.orgId} names no owner and `
-          + 'cannot be reconciled - it must be removed by hand',
-      );
-      continue;
-    }
-    const ownerId = JSON.stringify([ref.orgId, ref.ownerUserId]);
-    if (!resolvedPerOwner.has(ownerId)) {
-      try {
-        resolvedPerOwner.set(ownerId, await resolveActionNames({ orgId: ref.orgId, ownerUserId: ref.ownerUserId }));
-      } catch (err) {
-        console.warn(
-          `[integrations] could not resolve '${integrationKey}' for ${ref.orgId}/${ref.ownerUserId}; `
-            + `keeping their evidence: ${messageOf(err)}`,
-        );
-        resolvedPerOwner.set(ownerId, null);
-      }
-    }
-    const resolvable = resolvedPerOwner.get(ownerId);
-    if (resolvable == null || resolvable.has(ref.actionName)) continue;
-    try {
-      if (await discard({ orgId: ref.orgId, ownerUserId: ref.ownerUserId, integrationKey, actionName: ref.actionName })) {
-        discarded += 1;
-      }
-    } catch (err) {
-      console.warn(
-        `[integrations] the evidence of ${integrationKey}/${ref.actionName} outlived the action it was `
-          + `evidence for, for ${ref.orgId}/${ref.ownerUserId}: ${messageOf(err)}`,
-      );
-    }
-  }
-  return discarded;
-}
-
-/**
- * THE OWNER'S ERASURE CONTROL - the samples a credential produced go when the credential does.
- *
- * A SEPARATE FUNCTION FROM THE RECONCILER BECAUSE IT ANSWERS A DIFFERENT QUESTION. The reconciler
- * asks "can this owner still REACH the action" and a disconnected credential does not change that
- * answer: the definition still resolves, so a reconcile would keep every row. What changed is that
- * the third-party account whose request and response the sample holds is no longer connected, and
- * the person who connected it has just asked for it to go.
- *
- * BEST EFFORT AND LOUD, for the same reason as above: `deleteConfig` has already removed the
- * credential by the time this runs, and an undeletable config would be a worse failure than a
- * reported leftover.
+ * BEST EFFORT AND LOUD: `deleteConfig` has already removed the credential by the time this runs, and
+ * an undeletable config would be a worse failure than a reported leftover.
  */
 export async function discardEvidenceOfDisconnectedConfig(
   scope: DisconnectedConfigScope,

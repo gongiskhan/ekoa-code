@@ -62,16 +62,18 @@ import {
   type IntegrationActionBackingType,
   type IntegrationActionHttpConfig,
 } from './definitions.js';
-import { resolveDefinition } from './definition-registry.js';
 import { actionRequiresConsent, actionShape, checkActionConsent, targetResolutionOf, type IntegrationActionConsentDescriptor } from './action-consent.js';
+// THE ONE RESOLUTION (S1 round four). This module used to inline it; it is now shared with the
+// evidence collector so "what a run reaches" and "what a retention decision believes a run reaches"
+// are the same function rather than two that drifted. See `action-resolution.ts`'s header.
+import { resolveOwnerActionSurface } from './action-resolution.js';
 import {
-  definitionActorForCredential,
   resolveCredentialEgressBinding,
   observeCredentialShadow,
 } from './credential-cofre.js';
 import { guardedFetch } from '../services/url-fetcher.js';
 import { assertOriginAllowed, CredentialOriginError } from '../security/origin-binding.js';
-import { findConfigForOwner, persistRotatedCredentials, type IntegrationConfigDoc } from './service.js';
+import { persistRotatedCredentials, type IntegrationConfigDoc } from './service.js';
 import { envelopeDecrypt } from '../data/crypto.js';
 import {
   interpolate,
@@ -236,6 +238,58 @@ export interface ExecutorDeps {
   ) => Promise<unknown>;
   /** The automation-run half of the same capture. See `RunEvidenceCollector`. */
   collectRunEvidence?: RunEvidenceCollector;
+  /**
+   * THE READER'S OWN COLLECTION (slice S1, round four) - drop the evidence THIS caller holds for an
+   * integration or an action they can no longer resolve.
+   *
+   * A SEAM AND NOT AN IMPORT, for the same reason `recordActionEvidence` is one: absent ⇒ nothing is
+   * collected and execution is byte-for-byte what it was, so no existing caller of this executor
+   * changes behaviour (Rule 7 additive).
+   *
+   * THE SCOPE TYPE CARRIES BOTH TENANCY TERMS AND NO OPTIONAL ONE. `orgId` and `ownerUserId` are
+   * required by the type, so the seam cannot be called with a filter that reaches past the caller;
+   * `actionName` is the only optional term and its absence means "this owner's rows for this
+   * integration", never "everyone's".
+   */
+  discardOwnActionEvidence?: (scope: OwnActionEvidenceScope) => Promise<number>;
+}
+
+/**
+ * What the reader's own collection may address: ONE owner, ONE integration, optionally ONE action.
+ * There is no org-wide arm and no all-owners arm - a run collects its own rows or nothing.
+ */
+export interface OwnActionEvidenceScope {
+  orgId: string;
+  ownerUserId: string;
+  integrationKey: string;
+  actionName?: string;
+}
+
+/**
+ * Call the reader's collection seam, BEST EFFORT AND LOUD.
+ *
+ * The refusal this sits beside has already been decided, so a failure here must not change what the
+ * caller is told - the same rule `captureEvidence` follows, for the same reason. FAILING TO COLLECT
+ * IS THE SAFE DIRECTION: it leaves an orphaned row, which the boot retention sweep and the owner's
+ * own erasure control both still reach.
+ */
+async function discardOwnEvidence(deps: ExecutorDeps, scope: OwnActionEvidenceScope): Promise<void> {
+  if (!deps.discardOwnActionEvidence) return;
+  try {
+    const dropped = await deps.discardOwnActionEvidence(scope);
+    if (dropped > 0) {
+      console.log(
+        `[integrations] ${scope.orgId}/${scope.ownerUserId} can no longer resolve `
+          + `${scope.integrationKey}${scope.actionName ? `/${scope.actionName}` : ''}; `
+          + `discarded ${dropped} action-evidence row(s) of their own`,
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `[integrations] could not collect ${scope.orgId}/${scope.ownerUserId}'s own evidence for `
+        + `${scope.integrationKey}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 const MAX_BODY_DISPLAY_BYTES = 8_000;
@@ -265,9 +319,16 @@ export async function executeUserIntegrationAction(
   // `not_connected`/`disabled`, so an unapproved write still cannot probe connection state and
   // still cannot cause a credential to be decrypted. What changed is one un-decrypted row read
   // moving above a gate that never depended on it.
-  const config = await findConfigForOwner(input.orgId, input.ownerUserId, input.integrationKey);
-  const definitionActor = definitionActorForCredential(actor, config);
-  if (!definitionActor) {
+  //
+  // THE RESOLUTION ITSELF MOVED OUT (S1 round four) to `action-resolution.ts`, and the move is what
+  // makes the evidence collector safe rather than being a tidy-up. The collector has to know
+  // whether a reader can still reach an action, and three rounds of answering that with a
+  // re-derivation deleted other tenants' data. It now calls THE SAME function this line calls, so a
+  // divergence between "what a run resolves" and "what a retention decision believes a run
+  // resolves" is not expressible. Byte-for-byte the same order, the same actor and the same
+  // refusals as before; see that module's header for the three axes a re-derivation got wrong.
+  const surface = await resolveOwnerActionSurface(input.orgId, input.ownerUserId, input.integrationKey);
+  if (!surface) {
     // Fail closed on an incoherent (actor, config) pair — an org-less reader, or a row from another
     // tenant. There is no principal to resolve the package as, and "resolve it as somebody" is the
     // failure mode this whole change exists to remove.
@@ -277,12 +338,37 @@ export async function executeUserIntegrationAction(
       error: `cannot establish the credential custodian for ${input.integrationKey}`,
     };
   }
+  // `definitionActor` is deliberately NOT destructured here: the egress binding below re-derives the
+  // custodian from the CONFIG ROW through the shared rule (`resolveCredentialEgressBinding`), so
+  // that the package an action comes from and the package its allow-list comes from cannot be two
+  // different packages. Binding a second name to the same principal would invite a future caller to
+  // pass it there and quietly split that guarantee in two.
+  const { config, definition: def } = surface;
 
-  const def = await resolveDefinition(definitionActor, input.integrationKey);
-  if (!def) return { success: false, code: 'unknown_integration', error: `unknown integration: ${input.integrationKey}` };
+  if (!def) {
+    // ── THE READER'S OWN COLLECTION (S1 round four) ───────────────────────────────────────────
+    // This reader has just proved, through the ONE production resolution, that they cannot reach
+    // this integration at all. Every evidence row THEY hold for it is therefore a sample of an
+    // action nobody can run again, pinning its screenshots out of the 7-day sweep for ever. It is
+    // collected HERE because here is the only place the answer is knowable: a writer in another org
+    // cannot see this reader's config, cannot see which document this reader resolves, and cannot
+    // see whether a frozen published snapshot still offers it. Scoped to (this org, this owner) and
+    // nothing else - the blast radius is the caller's own row, by construction.
+    await discardOwnEvidence(deps, { orgId: input.orgId, ownerUserId: input.ownerUserId, integrationKey: input.integrationKey });
+    return { success: false, code: 'unknown_integration', error: `unknown integration: ${input.integrationKey}` };
+  }
 
   const action = def.actions.find((a) => a.actionName === input.actionName);
   if (!action) {
+    // The same collection, one action wide: the key still resolves for this reader, this action
+    // does not. A row exists here only if this very owner ran this very action successfully once,
+    // so there is no way for a mistyped action name to reach anyone else's data.
+    await discardOwnEvidence(deps, {
+      orgId: input.orgId,
+      ownerUserId: input.ownerUserId,
+      integrationKey: input.integrationKey,
+      actionName: input.actionName,
+    });
     const available = def.actions.map((a) => a.actionName).join(', ');
     return { success: false, code: 'unknown_action', error: `action "${input.actionName}" not found on ${input.integrationKey}. Available: ${available}` };
   }

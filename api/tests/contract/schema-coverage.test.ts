@@ -279,6 +279,16 @@ const COVERED = new Set<string>([
   // integrations-capability.test.ts's stack walk, which probes every route this router mounts.)
   // TWO NEW descriptors, two COVERED entries: the pinned EXPECTED_PENDING_COUNT below is UNCHANGED.
   'integrations.listRecipes', 'integrations.forgetRecipe',
+  // 2026-08-20 (S1 round four) - the OWNER'S CONTROL over the sample their own run left behind
+  // (integrations-achieve.test.ts, through the real app: a real run records the row, the DELETE
+  // answers `DiscardActionEvidenceResponse` with `discarded: true`, a second DELETE answers the
+  // same shape with `false` rather than a 404 - the state the caller asked for holds either way,
+  // and a 404 would be an existence oracle over a colleague's runs; another tenant's row for the
+  // same action is untouched, because the row is addressed by the deterministic id over the
+  // VERIFIED actor; and a minted gateway key is refused 401 with the sample still in place, so an
+  // agent cannot destroy the evidence a promotion to `trusted` rests on). ONE NEW descriptor, one
+  // COVERED entry: the pinned EXPECTED_PENDING_COUNT below is UNCHANGED.
+  'integrations.discardActionEvidence',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

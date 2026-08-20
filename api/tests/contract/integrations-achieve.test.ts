@@ -22,12 +22,14 @@ import { buildApp } from '../../src/server.js';
 import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../../src/config.js';
 import { integrationDefinitionStore } from '../../src/integrations/definition-store.js';
 import type { IntegrationAction } from '../../src/integrations/definitions.js';
+import { actionEvidenceStore } from '../../src/integrations/action-evidence-store.js';
 import {
   ErrorEnvelope,
   AchieveIntegrationGoalResponse,
   IntegrationCapability,
   IntegrationActionConsentRequest,
   TrustAuthoredActionResponse,
+  DiscardActionEvidenceResponse,
   integrationsEndpoints,
 } from '@ekoa/shared';
 
@@ -416,6 +418,84 @@ describe('achieve AUTHORS, and the key that authored cannot bless its own work',
 });
 
 // ---------------------------------------------------------------------------------------------
+// 3b. The OWNER'S ERASURE CONTROL over their own evidence (slice S1, round four)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * `DELETE /api/v1/integrations/:key/actions/:actionName/evidence`.
+ *
+ * WHY IT HAS TO EXIST, on the wire rather than in a store: every other way an evidence row goes is a
+ * consequence of something else - a later run supersedes it, the action stops resolving for its
+ * reader, the credential is disconnected, the retention window closes. None of those is "I do not
+ * want this sample of my third-party account kept", and until this endpoint a person who simply
+ * wanted it gone had to disconnect the whole integration. It is also the reason `discardEvidence`
+ * has a production caller at all.
+ */
+describe('a person can erase the sample their own run left behind', () => {
+  /** Run the read action once, over the wire, so the row under test is the one PRODUCTION writes. */
+  async function runOnce(auth: string): Promise<void> {
+    const res = await call(`/api/v1/integrations/${PROBE_INTEGRATION}/actions/list_things/execute`, auth, {
+      method: 'POST', body: '{}',
+    });
+    expect(res.status).toBe(200);
+  }
+  const evidenceOf = (orgId: string, ownerUserId: string) =>
+    actionEvidenceStore.getEvidence({ orgId, ownerUserId, integrationKey: PROBE_INTEGRATION, actionName: 'list_things' });
+  const erase = (auth: string | null, opts: { key?: string } = {}) =>
+    call(`/api/v1/integrations/${opts.key ?? PROBE_INTEGRATION}/actions/list_things/evidence`, auth, { method: 'DELETE' });
+
+  it('erases the caller\'s own row, answers the declared shape, and is idempotent', async () => {
+    const token = await tokenFor('ownerA');
+    await runOnce(token);
+    expect(await evidenceOf('orgA', 'ownerA')).not.toBeNull();
+
+    const res = await erase(token);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; discarded: boolean };
+    expect(DiscardActionEvidenceResponse.safeParse(body).success, JSON.stringify(body)).toBe(true);
+    expect(body.discarded).toBe(true);
+    expect(await evidenceOf('orgA', 'ownerA')).toBeNull();
+
+    // IDEMPOTENT BY CONTRACT: the caller asked for a STATE, and it holds. A 404 here would also be
+    // an existence oracle over whether a colleague has ever run the action.
+    const again = await erase(token);
+    expect(again.status).toBe(200);
+    expect(((await again.json()) as { discarded: boolean }).discarded).toBe(false);
+  }, 30_000);
+
+  it('erases NOBODY ELSE\'S - not another tenant\'s row for the same action', async () => {
+    await seed([readAction, writeAction], PROBE_INTEGRATION, 'orgB', 'ownerB');
+    const a = await tokenFor('ownerA');
+    const b = await tokenFor('ownerB');
+    await runOnce(a);
+    await runOnce(b);
+
+    expect(((await (await erase(a)).json()) as { discarded: boolean }).discarded).toBe(true);
+
+    // The row is addressed by the deterministic id over the VERIFIED actor, so org B's row is a
+    // different document this request cannot name.
+    expect(await evidenceOf('orgA', 'ownerA')).toBeNull();
+    expect(await evidenceOf('orgB', 'ownerB')).not.toBeNull();
+  }, 30_000);
+
+  it('is NOT on the gateway-key surface: an agent cannot destroy the evidence a promotion rests on', async () => {
+    const token = await tokenFor('ownerA');
+    await runOnce(token);
+    const minted = await mintKey(token, 'erasure-probe');
+
+    const byKey = await erase(null, {}).then(() => call(
+      `/api/v1/integrations/${PROBE_INTEGRATION}/actions/list_things/evidence`,
+      null,
+      { method: 'DELETE', headers: { 'x-api-key': minted.key } },
+    ));
+
+    expect(byKey.status).toBe(401);
+    // …and the sample is still there, which is what makes the 401 a refusal rather than a detail.
+    expect(await evidenceOf('orgA', 'ownerA')).not.toBeNull();
+  }, 30_000);
+});
+
+// ---------------------------------------------------------------------------------------------
 // 4. The declared classes
 // ---------------------------------------------------------------------------------------------
 
@@ -428,5 +508,11 @@ describe('descriptors: achieve is key-reachable, its promotion is not', () => {
     // routes it would otherwise reach for.
     expect(integrationsEndpoints.trustAction.auth).toBe('user');
     expect(integrationsEndpoints.approveAction.auth).toBe('user');
+    // And the same rule over the DESTRUCTIVE side of the same collection: a key that cannot promote
+    // an action must not be able to destroy the run the promotion would rest on either.
+    expect(integrationsEndpoints.discardActionEvidence.auth).toBe('user');
+    expect(integrationsEndpoints.discardActionEvidence.method).toBe('DELETE');
+    expect(integrationsEndpoints.discardActionEvidence.path)
+      .toBe('/api/v1/integrations/:key/actions/:actionName/evidence');
   });
 });

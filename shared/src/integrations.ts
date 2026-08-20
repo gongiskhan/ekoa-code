@@ -591,6 +591,21 @@ export const TrustAuthoredActionResponse = z.object({
 });
 export type TrustAuthoredActionResponse = z.infer<typeof TrustAuthoredActionResponse>;
 
+/**
+ * THE OWNER'S ERASURE CONTROL over their own action evidence (slice S1).
+ *
+ * IDEMPOTENT BY CONTRACT, on `ForgetIntegrationRecipeResponse`'s reading: erasing a sample that is
+ * not there answers `ok` with `discarded: false`, never a 404. The caller asked for a STATE — "this
+ * action holds no sample of my third-party account" — and that state holds either way. A 404 would
+ * additionally be an existence oracle over whether a colleague has ever run the action.
+ */
+export const DiscardActionEvidenceResponse = z.object({
+  ok: z.literal(true),
+  /** True when a row was actually removed; false means there was nothing of the CALLER'S to remove. */
+  discarded: z.boolean(),
+});
+export type DiscardActionEvidenceResponse = z.infer<typeof DiscardActionEvidenceResponse>;
+
 export const integrationsEndpoints = {
   /**
    * The definition list — the CAPABILITY DISCOVERY endpoint since D1.
@@ -907,5 +922,37 @@ export const integrationsEndpoints = {
     params: IntegrationActionParams,
     request: TrustAuthoredActionRequest,
     response: TrustAuthoredActionResponse,
+  },
+
+  /* --- Action EVIDENCE erasure (slice S1) ---------------------------------------------------- */
+
+  /**
+   * ERASE the sample of the caller's own third-party account that this action's last validated run
+   * left behind.
+   *
+   * WHY IT HAS TO EXIST. An evidence row holds one person's real request and real response body -
+   * client names, processo numbers, invoice totals - and, for an automation-backed action, PINS that
+   * run's screenshots out of the 7-day retention sweep for as long as the row lives. Every other way
+   * a row goes belongs to somebody else's action: it is superseded by a later run, collected when the
+   * action stops resolving, or erased when the credential is disconnected. Without this endpoint a
+   * person who simply does not want the sample kept has to disconnect the whole integration to be rid
+   * of it. Erasure of your own data is not a side effect of another operation.
+   *
+   * `auth: 'user'` AND NOT `user-or-key`, the reading `approveAction`, `setLessons` and `trustAction`
+   * all take in this domain: a destructive control over a person's own data is the person's, and a
+   * gateway-key agent must not be able to destroy the very evidence a promotion to `trusted` rests
+   * on. Widening an auth class later is additive under Rule 7; narrowing one is not.
+   *
+   * TENANCY IS THE STORE'S AND IT IS NOT A FILTER THE HANDLER APPLIES: the row is addressed by the
+   * deterministic `_id` over (orgId, ownerUserId, integrationKey, actionName), built from the
+   * VERIFIED actor, so a colleague's sample of the same action is a different document that this
+   * request cannot name.
+   */
+  discardActionEvidence: {
+    method: 'DELETE',
+    path: '/api/v1/integrations/:key/actions/:actionName/evidence',
+    auth: 'user',
+    params: IntegrationActionParams,
+    response: DiscardActionEvidenceResponse,
   },
 } as const satisfies DomainDescriptorMap;

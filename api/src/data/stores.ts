@@ -166,10 +166,23 @@ export const integrationDefinitions = new Store<Doc>('integration_definitions');
 export const integrationCapturedCalls = new Store<Doc>('integration_captured_calls');
 /**
  * THE ONE LIVE PROOF that an action actually ran (slice S1). Exactly ONE document per
- * (orgId, integrationKey, actionName) - `_id` deterministic over that tuple alone, so a newly
- * validated run SUPERSEDES the previous evidence by writing the same id rather than accumulating
- * beside it. Untyped `Store<Doc>` house currency; the typed document (`ActionEvidenceDoc`) and the
- * tenant-scoped surface live in integrations/action-evidence-store.ts, which WRAPS this collection.
+ * (orgId, ownerUserId, integrationKey, actionName) - `_id` deterministic over that tuple alone, so a
+ * newly validated run SUPERSEDES the previous evidence by writing the same id rather than
+ * accumulating beside it. Untyped `Store<Doc>` house currency; the typed document
+ * (`ActionEvidenceDoc`) and the tenant-scoped surface live in integrations/action-evidence-store.ts,
+ * which WRAPS this collection.
+ *
+ * THE OWNER TERM IS NOT DECORATION, and this docblock was the SIXTH copy of the claim that it does
+ * not exist - the one a future author reads first, and the one the last correction missed while
+ * fixing five others. `findConfigForOwner` resolves a credential per (orgId, ownerUserId), so inside
+ * ONE org an org-visible definition run by two people is two different third-party accounts and two
+ * different people's client data. Without the term a peer's run overwrote the owner's sample at the
+ * same `_id`, and `trustAuthoredAction` - which reads this collection - let one member promote an
+ * action to `trusted` on the strength of another member's run against another member's account.
+ *
+ * RETENTION IS BOUNDED, which is what lets every collector on this collection fail towards KEEPING:
+ * `sweepExpiredEvidence` at boot ends every row not re-validated within `EVIDENCE_RETENTION_DAYS`,
+ * whether or not anything ever noticed its action had stopped resolving for its owner.
  *
  * NOT THE SAME THING AS `integration_captured_calls` ABOVE, and the difference is the reason both
  * exist: that one is the unbounded MACHINE-facing trace a recipe is compiled out of and then

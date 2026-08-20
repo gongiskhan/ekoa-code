@@ -100,44 +100,123 @@ describe('one live row per action, superseded wholesale', () => {
 });
 
 /**
- * THE TWO REMOVAL PRIMITIVES, at the store. Counted by DOCUMENT, because the whole failure class
- * this collection keeps producing is a row that STAYED.
+ * THE REMOVAL PRIMITIVES, at the store. Counted by DOCUMENT, because the whole failure class this
+ * collection keeps producing is a row that STAYED - or, in round three, one that went when it was
+ * somebody else's.
  *
- * Their production call sites are proved where they live - the reconciler through the real
- * definition writes (`tests/integrations/action-evidence-removal.test.ts`), the erasure control
- * through the real `deleteConfig` (same file) - never here.
+ * Their production call sites are proved where they live - the write-time collector through the real
+ * definition writes, the reader's own collection through the real executor, and the
+ * credential-disconnection erasure through the real `deleteConfig`, all in
+ * `tests/integrations/action-evidence-removal.test.ts` - never here.
  */
-describe('listOwnerRefsForKey - who holds a row, and nothing else about it', () => {
-  it('names every tenant and every owner holding a row for the key, and no sample', async () => {
+describe('listOwnerRefsInOrg - who inside ONE org holds a row, and nothing else about it', () => {
+  it('names every owner of THAT ORG holding a row for the key, and no sample', async () => {
     await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence(200, '{"secretish":"orgA owner"}') });
     await store.recordEvidence({ ...KEY, ownerUserId: 'u-peer' }, { backingType: 'api-call', evidence: apiCallEvidence() });
     await store.recordEvidence({ ...KEY, orgId: 'orgB' }, { backingType: 'api-call', evidence: apiCallEvidence() });
     // A different key must not appear: the reconciler judges one integration at a time.
     await store.recordEvidence({ ...KEY, integrationKey: 'outra' }, { backingType: 'api-call', evidence: apiCallEvidence() });
 
-    const refs = await store.listOwnerRefsForKey('citius');
+    const refs = await store.listOwnerRefsInOrg('orgA', 'citius');
 
-    // CROSS-TENANT ON PURPOSE - a `global` definition's consumers hold rows in their own orgs, and
-    // the reconciler cannot find them from inside the authoring org.
+    // ORG-SCOPED, WHICH IS THE ROUND-FOUR CORRECTION. Its predecessor took a key alone and answered
+    // across every tenant, and a cross-tenant LISTING is what made a cross-tenant DELETE
+    // expressible. orgB's row is absent even though it names the same key and the same action.
     expect(refs.map((r) => `${r.orgId}/${r.ownerUserId}/${r.actionName}`).sort()).toEqual([
       'orgA/u-owner/consultar_processo',
       'orgA/u-peer/consultar_processo',
-      'orgB/u-owner/consultar_processo',
     ]);
-    // …AND HELD TO IDENTIFIERS BY THE PROJECTION. This is the assertion that makes the cross-tenant
-    // read defensible: no response body of anyone's crosses the boundary, and the row is not even
-    // materialised in memory to be filtered afterwards.
+    // …AND HELD TO IDENTIFIERS BY THE PROJECTION: no response body crosses into the collector, and
+    // the row is not even materialised in memory to be filtered afterwards.
     expect(JSON.stringify(refs)).not.toContain('secretish');
     for (const ref of refs) expect(Object.keys(ref).sort()).toEqual(['actionName', 'orgId', 'ownerUserId']);
   });
 
-  it('an empty key lists NOTHING rather than every tenant\'s rows', async () => {
+  it('an empty org or an empty key lists NOTHING rather than every tenant\'s rows', async () => {
     await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
-    expect(await store.listOwnerRefsForKey('')).toEqual([]);
+    expect(await store.listOwnerRefsInOrg('orgA', '')).toEqual([]);
+    expect(await store.listOwnerRefsInOrg('', 'citius')).toEqual([]);
   });
 });
 
-describe('discardEvidenceForDisconnectedConfig - the owner\'s erasure control', () => {
+/**
+ * THE READER'S OWN COLLECTION, at the store. Its production caller is the executor's refusal path
+ * (proved in the removal suite); what is pinned here is that the scope cannot widen.
+ */
+describe('discardOwnerEvidence - one owner\'s rows, optionally one action', () => {
+  it('drops one action for one owner, and nobody else\'s row for it', async () => {
+    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
+    await store.recordEvidence({ ...KEY, ownerUserId: 'u-peer' }, { backingType: 'api-call', evidence: apiCallEvidence() });
+    await store.recordEvidence({ ...KEY, orgId: 'orgB' }, { backingType: 'api-call', evidence: apiCallEvidence() });
+
+    const dropped = await store.discardOwnerEvidence({
+      orgId: 'orgA', ownerUserId: 'u-owner', integrationKey: 'citius', actionName: 'consultar_processo',
+    });
+
+    expect(dropped).toBe(1);
+    expect((await integrationActionEvidence.find({})).map((r) => (r as unknown as { orgId: string; ownerUserId: string }))
+      .map((r) => `${r.orgId}/${r.ownerUserId}`).sort()).toEqual(['orgA/u-peer', 'orgB/u-owner']);
+  });
+
+  it('with NO action term it drops that owner\'s whole integration - never the org\'s', async () => {
+    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
+    await store.recordEvidence({ ...KEY, actionName: 'arquivar_processo' }, { backingType: 'api-call', evidence: apiCallEvidence() });
+    await store.recordEvidence({ ...KEY, ownerUserId: 'u-peer' }, { backingType: 'api-call', evidence: apiCallEvidence() });
+    await store.recordEvidence({ ...KEY, integrationKey: 'outra' }, { backingType: 'api-call', evidence: apiCallEvidence() });
+
+    expect(await store.discardOwnerEvidence({ orgId: 'orgA', ownerUserId: 'u-owner', integrationKey: 'citius' })).toBe(2);
+    expect((await integrationActionEvidence.find({})).map((r) => (r as unknown as { ownerUserId: string; integrationKey: string }))
+      .map((r) => `${r.ownerUserId}/${r.integrationKey}`).sort()).toEqual(['u-owner/outra', 'u-peer/citius']);
+  });
+
+  it('an empty term drops NOTHING rather than matching everything', async () => {
+    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
+    for (const scope of [
+      { orgId: '', ownerUserId: 'u-owner', integrationKey: 'citius' },
+      { orgId: 'orgA', ownerUserId: '', integrationKey: 'citius' },
+      { orgId: 'orgA', ownerUserId: 'u-owner', integrationKey: '' },
+      // An empty ACTION term must not collapse into "the whole integration": absent and empty are
+      // different requests, and only the absent one is a widening the type permits.
+      { orgId: 'orgA', ownerUserId: 'u-owner', integrationKey: 'citius', actionName: '' },
+    ]) {
+      expect(await store.discardOwnerEvidence(scope)).toBe(0);
+    }
+    expect(await integrationActionEvidence.find({})).toHaveLength(1);
+  });
+});
+
+/**
+ * THE RETENTION SWEEP - the bound that makes "fail towards retaining" honest rather than a way of
+ * saying "keep it for ever".
+ */
+describe('sweepExpiredEvidence - the retention bound', () => {
+  const aged = async (validatedAt: string, key = KEY): Promise<void> => {
+    const doc = await store.recordEvidence(key, { backingType: 'api-call', evidence: apiCallEvidence() });
+    await integrationActionEvidence.update(doc._id, (cur) => ({ ...cur, validatedAt }));
+  };
+
+  it('removes what was not re-validated inside the window and keeps what was', async () => {
+    await aged('2020-01-01T00:00:00.000Z');
+    await aged('2026-08-19T00:00:00.000Z', { ...KEY, actionName: 'arquivar_processo' });
+
+    const removed = await store.sweepExpiredEvidence({ now: Date.parse('2026-08-20T00:00:00.000Z') });
+
+    expect(removed).toBe(1);
+    expect((await integrationActionEvidence.find({})).map((r) => (r as unknown as { actionName: string }).actionName))
+      .toEqual(['arquivar_processo']);
+  });
+
+  it('a non-positive window sweeps NOTHING rather than everything', async () => {
+    // The dangerous misconfiguration: a zero or negative retention read as "expire it all". The
+    // cutoff would be now-or-later, so every row would match.
+    await aged('2020-01-01T00:00:00.000Z');
+    expect(await store.sweepExpiredEvidence({ now: Date.now(), retentionDays: 0 })).toBe(0);
+    expect(await store.sweepExpiredEvidence({ now: Date.now(), retentionDays: -1 })).toBe(0);
+    expect(await integrationActionEvidence.find({})).toHaveLength(1);
+  });
+});
+
+describe('discardEvidenceForDisconnectedConfig - what a credential produced', () => {
   it('takes every row the OWNER holds for that integration, and nobody else\'s', async () => {
     await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
     await store.recordEvidence({ ...KEY, actionName: 'arquivar_processo' }, { backingType: 'api-call', evidence: apiCallEvidence() });
@@ -158,19 +237,36 @@ describe('discardEvidenceForDisconnectedConfig - the owner\'s erasure control', 
       .toEqual(['orgA/u-owner/outra', 'orgA/u-peer/citius', 'orgB/u-owner/citius']);
   });
 
-  it('a config with NO custodian is the org-shared credential, so every member\'s rows go', async () => {
-    // `findConfigForOwner` falls back to the row with no `ownerUserId` for EVERY member, so deleting
-    // it disconnects all of them at once. Their samples were all produced through that one credential.
+  it('the org-shared arm takes the members it SERVED and spares one holding their own credential', async () => {
+    // `findConfigForOwner` answers `rows.find(c => c.ownerUserId === owner)` BEFORE it falls back to
+    // the row with no `ownerUserId`, so the shared credential served only the members who had none.
+    // The round-three arm, `'every-owner-in-org'`, erased the rest as well - one member's write
+    // destroying another member's data, which is the cross-org disease one tenant in.
     await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
     await store.recordEvidence({ ...KEY, ownerUserId: 'u-peer' }, { backingType: 'api-call', evidence: apiCallEvidence() });
     await store.recordEvidence({ ...KEY, orgId: 'orgB' }, { backingType: 'api-call', evidence: apiCallEvidence() });
 
     const dropped = await store.discardEvidenceForDisconnectedConfig({
-      orgId: 'orgA', integrationKey: 'citius', owner: 'every-owner-in-org',
+      orgId: 'orgA', integrationKey: 'citius', owner: { everyOwnerExcept: ['u-peer'] },
     });
 
-    // Every member of orgA, and STILL not the other tenant - `orgId` is an exact-match term of both arms.
-    expect(dropped).toBe(2);
+    // The served member's row, and STILL not the other tenant - `orgId` is an exact-match term of
+    // both arms - and STILL not the peer who has a credential of their own.
+    expect(dropped).toBe(1);
+    expect((await integrationActionEvidence.find({})).map((r) => (r as unknown as { orgId: string; ownerUserId: string }))
+      .map((r) => `${r.orgId}/${r.ownerUserId}`).sort()).toEqual(['orgA/u-peer', 'orgB/u-owner']);
+  });
+
+  it('an EMPTY exclusion list is the whole org, which is what a shared config with no peers means', async () => {
+    // The control for the case above: "spares the peer" must be the exclusion doing it, not the arm
+    // having quietly stopped deleting.
+    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
+    await store.recordEvidence({ ...KEY, ownerUserId: 'u-peer' }, { backingType: 'api-call', evidence: apiCallEvidence() });
+    await store.recordEvidence({ ...KEY, orgId: 'orgB' }, { backingType: 'api-call', evidence: apiCallEvidence() });
+
+    expect(await store.discardEvidenceForDisconnectedConfig({
+      orgId: 'orgA', integrationKey: 'citius', owner: { everyOwnerExcept: [] },
+    })).toBe(2);
     expect((await integrationActionEvidence.find({})).map((r) => (r as unknown as { orgId: string }).orgId)).toEqual(['orgB']);
   });
 
@@ -181,7 +277,7 @@ describe('discardEvidenceForDisconnectedConfig - the owner\'s erasure control', 
       { orgId: 'orgA', integrationKey: '', owner: { userId: 'u-owner' } },
       { orgId: 'orgA', integrationKey: 'citius', owner: { userId: '' } },
       // The dangerous one: an empty org with the org-wide arm would be "delete the whole collection".
-      { orgId: '', integrationKey: 'citius', owner: 'every-owner-in-org' as const },
+      { orgId: '', integrationKey: 'citius', owner: { everyOwnerExcept: [] } },
     ]) {
       expect(await store.discardEvidenceForDisconnectedConfig(scope)).toBe(0);
     }

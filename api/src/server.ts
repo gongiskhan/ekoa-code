@@ -191,9 +191,12 @@ import {
   // of the `load_context` body are joined.
   lessonsForPrompt,
   composeIntegrationContext,
-  // Slice S1: the evidence store the executor's capture seam is bound to, and the retention pins
-  // the screenshot sweep must spare.
+  // Slice S1: the evidence store the executor's capture seam is bound to, the retention pins the
+  // screenshot sweep must spare, the retention window the sweep reports, and the ONE binder that
+  // joins the definition store's write-time collector to the production resolution.
   actionEvidenceStore,
+  EVIDENCE_RETENTION_DAYS,
+  bindDefinitionEvidenceReconciler,
 } from './integrations/index.js';
 // Deep import, deliberately NOT via the integrations barrel (A3 review L2): the importer mints a
 // platform-level actor, so only THIS composition-root boot path may reach it — keeping it off the
@@ -529,7 +532,21 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     runAutomationBackedAction,
     recordActionEvidence: (key, evidence) => actionEvidenceStore.recordEvidence(key, evidence),
     collectRunEvidence: (runId) => collectRunEvidence(runId),
+    // THE READER'S OWN COLLECTION (round four). The executor is the only place that knows, for a
+    // given org + owner + credential + resolved document, whether an action is still reachable - so
+    // it is where a row stops being evidence and starts being an orphan. Bound to the store method
+    // whose scope type REQUIRES both tenancy terms, so this binding cannot be pointed at anyone
+    // else's rows.
+    discardOwnActionEvidence: (scope) => actionEvidenceStore.discardOwnerEvidence(scope),
   };
+  // THE WRITE-TIME COLLECTOR (round four), bound through the ONE named production binder rather
+  // than by reaching for the store's setter here: `definition-store.ts` cannot import the resolution
+  // it needs (that is a cycle), and the four higher-tier write call sites must not each have to
+  // remember to collect. Unbound, a definition write collects nothing - which is the safe direction,
+  // since the reader path, the retention sweep and the owner's erasure control all still reach those
+  // rows. `tests/automation/composition-root-action-seam.test.ts` is what stops this line from
+  // quietly disappearing.
+  bindDefinitionEvidenceReconciler();
   setIntegrationActionExecutor(async (call) => {
     const owner = (await users.get(call.ownerUserId)) as { orgId?: string } | null;
     // REFUSE an org-less caller (A2 review F4). Before A2 an empty orgId merely missed a credential
@@ -1276,6 +1293,7 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       executorEvidence: {
         recordActionEvidence: executorDeps.recordActionEvidence!,
         collectRunEvidence: executorDeps.collectRunEvidence!,
+        discardOwnActionEvidence: executorDeps.discardOwnActionEvidence!,
       },
       draftAction,
       callPlatform,
@@ -1622,14 +1640,31 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
  */
 export async function sweepScreenshotsSparingPinnedEvidence(
   now: () => number,
-): Promise<{ removed: number; scanned: number; pinned: number }> {
+): Promise<{ removed: number; scanned: number; pinned: number; evidenceRemoved: number }> {
+  // THE EVIDENCE RETENTION SWEEP RUNS FIRST, AND THE ORDER IS THE POINT (round four). An evidence
+  // row that ages out here releases its screenshot pin, and releasing it BEFORE the pin set is read
+  // means the run it was pinning is swept on THIS boot rather than the next one. Reversed, every
+  // expiring row would grant its screenshots one extra boot's grace - a retention rule that is a
+  // little bit longer than it says it is.
+  //
+  // AND THIS IS WHAT BOUNDS THE ORPHANED ROW. `integration_action_evidence` fails towards RETAINING
+  // everywhere else, because deleting a tenant's only copy of its own data is unrecoverable while
+  // keeping it is a gap - and a gap is only acceptable if something closes it. This is that
+  // something: a row nobody re-validates goes at 90 days whether or not any collector ever noticed
+  // its action stopped resolving.
+  const evidenceRemoved = await actionEvidenceStore
+    .sweepExpiredEvidence({ now: now() })
+    .catch((err: unknown) => {
+      console.warn(`[integrations] the action-evidence retention sweep did not run: ${err instanceof Error ? err.message : String(err)}`);
+      return 0;
+    });
   const pinnedRunIds = await actionEvidenceStore
     .pinnedRunIdsForRetention()
     .catch(() => new Set<string>());
   try {
-    return await sweepExpiredScreenshots({ now, pinnedRunIds });
+    return { ...(await sweepExpiredScreenshots({ now, pinnedRunIds })), evidenceRemoved };
   } catch {
-    return { removed: 0, scanned: 0, pinned: 0 };
+    return { removed: 0, scanned: 0, pinned: 0, evidenceRemoved };
   }
 }
 
@@ -1687,6 +1722,12 @@ export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> 
     console.log(
       `[automation] screenshot retention: removed ${screenshotSweep.removed}/${screenshotSweep.scanned} run dirs, `
         + `spared ${screenshotSweep.pinned} pinned by evidence`,
+    );
+  }
+  if (screenshotSweep.evidenceRemoved > 0) {
+    console.log(
+      `[integrations] action-evidence retention: removed ${screenshotSweep.evidenceRemoved} row(s) not `
+        + `re-validated in ${EVIDENCE_RETENTION_DAYS} days`,
     );
   }
 

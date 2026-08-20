@@ -2957,3 +2957,93 @@ as "why its paths cannot be counted this way at all"; `findings.md` gains the ma
 minors and corrects the round-two paragraph on the standing screenshot-erasure entry. Diagrams:
 `05-data-model` and `02-module-map` appended with the reconciler, its cross-tenant listing and the
 disconnect erasure control (append-only, every new element carrying text/rawText/originalText).
+
+## 2026-08-20 - S1 round four: a write by one org never deletes another org's data
+
+The S1 verification pass repeated a third time. Round two's collector was too NARROW and orphaned a
+consumer's evidence; round three widened it and produced TWO BLOCKERS in the other direction - it
+DELETED ACROSS A TENANT BOUNDARY. Both were reproduced end to end. **Three rounds is evidence that
+the shape was wrong, not the parameter**, so this entry retires the mechanism the round-three entry
+above describes rather than tuning it, and the two entries should be read together.
+
+**WHAT ROUND THREE GOT WRONG, ON TWO INDEPENDENT AXES.** The reconciler asked `getForActor` - the
+LIVE row - while a consumer resolves through the FROZEN `publishedSnapshot`, which the replace branch
+deliberately carries forward and which `setVisibility` re-promotes without re-scrubbing. So org A's
+ordinary re-authoring destroyed org B's only copy of its own client PII sample and its screenshot
+pin, for an action **org B could still run** (measured, through the real executor). And it asked as
+the RUNNER while an org-shared credential resolves the definition as the CUSTODIAN
+(`definitionActorForCredential`, documented "never as the reader"), so the runner - who cannot see
+the custodian's private row - answered the empty set and every peer's evidence was wiped by a re-save
+that dropped nothing at all.
+
+**THE RULE.** *A write by one org must never delete another org's data.* Not narrowly, not carefully,
+not with a better actor. "Who can still resolve this action" has a genuinely different answer per
+reader - live row vs frozen snapshot, runner vs custodian, own-org row vs a foreign `global` row vs
+the shipped baseline - so any reconciler that answers it at WRITE time on behalf of readers it cannot
+see will keep being wrong, and being wrong there is unrecoverable.
+
+**AND THE COSTS ARE NOT COMPARABLE, WHICH IS WHY THE POSTURE IS ASYMMETRIC.** An orphaned row is a
+bounded retention and privacy gap - fixable by a sweep, an owner control and an honest ledger entry.
+A deleted row is unrecoverable tenant data. Round three chose the worse one; every collector now
+fails towards RETAINING, and the gap it leaves is bounded rather than argued away.
+
+**THE THREE MECHANISMS THAT REPLACE THE ONE.**
+
+1. *The reader collects its own.* `action-executor.ts` already resolves the definition for this org,
+   this owner, this credential and this document, so it is the only place the answer is knowable. Its
+   `unknown_integration` / `unknown_action` refusals now drop that owner's rows through
+   `discardOwnerEvidence`, whose scope type REQUIRES both tenancy terms and has no org-wide arm.
+2. *The write collects inside its own tenant.* `definition-store.ts` declares a seam taking
+   `(orgId, integrationKey)` - the org is a required first parameter, which IS the tenancy contract -
+   implemented by `evidence-reconcile.ts` and bound by `bindDefinitionEvidenceReconciler()` in
+   `buildApp`. A seam rather than an import because the store cannot import the resolution without a
+   cycle through `definition-registry.ts`, and calling it from the four higher-tier write sites would
+   make reachability something four authors must remember - which is the failure this slice has
+   already shipped twice. Unbound, it collects nothing, which is the safe direction.
+3. *The bounds.* `sweepExpiredEvidence` at boot ends every row not re-validated within
+   `EVIDENCE_RETENTION_DAYS` (90), whether or not any collector ever noticed; it runs BEFORE the pin
+   read so an expiring row releases its screenshot pin on the same boot rather than earning one
+   extra boot's grace. `DELETE /api/v1/integrations/:key/actions/:actionName/evidence` (`auth: 'user'`,
+   idempotent) is the owner's own erasure control. `deleteConfig` still erases what a disconnected
+   credential produced.
+
+**THE RESOLUTION IS NOW ONE FUNCTION, SHARED WITH THE RUN PATH.** `action-resolution.ts` holds
+`findConfigForOwner -> definitionActorForCredential -> resolveDefinition`, and `action-executor.ts`
+CALLS IT. That is deliberate and is the structural half of the fix: a retention decision cannot
+believe something a run does not, because if this function is wrong execution is wrong first, loudly.
+
+**FOUR MORE OF THE SAME DISEASE, CLOSED IN THE SAME PASS.** `deleteConfig`'s `'every-owner-in-org'`
+arm erased peers whose OWN credential was never the deleted row (`findConfigForOwner` answers a
+member's own row first), and is now an exclusion list computed from the configs still present.
+`publishSnapshot` on a RE-PUBLISH narrows every consumer at once and was dismissed as "widening
+only" - it is named as a narrowing write everywhere the enumeration appears, and still collects no
+consumer rows because no write does. `stores.ts` still documented the key as
+`(orgId, integrationKey, actionName)` - the sixth copy, and the one a future author reads first.
+And `resolvableActionNames`' `role: 'user'` was an EQUIVALENT MUTANT (76/76 green as `super-admin`)
+under a docblock justifying it as the least-privileged reading; the method is deleted with the
+collector it served.
+
+**PERFORMANCE IS PART OF THE SHAPE, NOT A FOLLOW-UP.** The round-three reconcile was an uncapped
+cross-collection scan plus one sequential database read per owner, awaited inside every ordinary
+definition save. Org-scoping the listing makes N the owners of ONE org, and `MAX_RECONCILED_OWNERS`
+(25) stops the fan-out rather than paying it - the remainder falls to the reader path and the sweep,
+which is what a retaining posture is for.
+
+**AND THE FIXTURE HONESTY THAT LET THE BLOCKER HIDE.** Three global-tier cases were UNFAILABLE: the
+suite built its `global` row with `definitions.create({ visibility: 'global' })` instead of the
+production writer (`requestPublish` -> `publishDefinition`), so no snapshot existed and
+`publishedViewOf` silently fell back to live content - i.e. the fixture described a world where live
+and published can never disagree, which is the one thing that mattered. The suite now publishes
+through the real flow and proves reachability by RUNNING the action after the write rather than by
+asking a resolver.
+
+Rule 7: the new endpoint is additive (`integrations.discardActionEvidence`, `auth: 'user'`, so the
+key-reachable OpenAPI surface and the generated cortex-cli are unchanged - both regenerated in this
+commit and clean), with its contract test in `integrations-achieve.test.ts` and its COVERED entry
+leaving `EXPECTED_PENDING_COUNT` unmoved. Rule 5: `discardOwnerEvidence` and `listOwnerRefsInOrg`
+carry their tenancy terms in `action-evidence-isolation.test.ts`, proved by deleting the filter.
+Docs: `architecture.md`'s "Action evidence" section is rewritten around the rule; `findings.md` gains
+the blocker, the major and five minors, opens `evidence-orphan-window-until-the-reader-returns` as
+the accepted cost, and corrects the round-three paragraph on the standing screenshot-erasure entry.
+Diagrams: `02-module-map` and `05-data-model` appended (append-only, every new element carrying
+text/rawText/originalText).

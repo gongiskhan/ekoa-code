@@ -169,7 +169,7 @@ describe('sweepScreenshotsSparingPinnedEvidence - the composition itself', () =>
 
     const result = await sweepScreenshotsSparingPinnedEvidence(() => Date.now());
 
-    expect(result).toEqual({ removed: 1, scanned: 2, pinned: 1 });
+    expect(result).toEqual({ removed: 1, scanned: 2, pinned: 1, evidenceRemoved: 0 });
     expect(existsSync(runDir(PINNED_RUN))).toBe(true);
   });
 
@@ -182,9 +182,46 @@ describe('sweepScreenshotsSparingPinnedEvidence - the composition itself', () =>
 
     const result = await sweepScreenshotsSparingPinnedEvidence(() => Date.now());
 
-    expect(result).toEqual({ removed: 1, scanned: 2, pinned: 1 });
+    expect(result).toEqual({ removed: 1, scanned: 2, pinned: 1, evidenceRemoved: 0 });
     expect(existsSync(runDir(LOOSE_RUN))).toBe(true);
     expect(existsSync(runDir(PINNED_RUN))).toBe(false);
+  });
+
+  /**
+   * ROUND FOUR - THE RETENTION SWEEP RUNS FIRST, AND THE ORDER IS THE CLAIM.
+   *
+   * An evidence row that ages out releases its screenshot pin. Reading the pins BEFORE sweeping the
+   * evidence would spare that run for one more boot, so the retention rule would be a little bit
+   * longer than it says it is - the sort of drift nobody notices because it only ever shows up as
+   * one extra day of a client-portal session on disk. The composition therefore sweeps evidence,
+   * THEN reads the pins, THEN sweeps the tree, and this case is what distinguishes the two orders:
+   * the pinning row is expired, so the run it pins survives only if the pin was read first.
+   */
+  it('an EXPIRED evidence row releases its pin on the SAME boot, not the next one', async () => {
+    await seedPinningEvidence();
+    const [row] = await integrationActionEvidence.find({});
+    await integrationActionEvidence.update(row!._id, (cur) => ({ ...cur, validatedAt: '2020-01-01T00:00:00.000Z' }));
+
+    const result = await sweepScreenshotsSparingPinnedEvidence(() => Date.parse('2026-08-20T00:00:00.000Z'));
+
+    expect(result).toEqual({ removed: 2, scanned: 2, pinned: 0, evidenceRemoved: 1 });
+    expect(existsSync(runDir(PINNED_RUN))).toBe(false);
+    expect(await integrationActionEvidence.find({})).toEqual([]);
+  });
+
+  it('a retention sweep that THROWS never becomes a throw of its own, and the screenshot sweep still runs', async () => {
+    // Same posture as the pin read below: a mongo blip at boot must not fail boot, and must not
+    // turn into the one failure mode that destroys data (an UNPINNED sweep).
+    await seedPinningEvidence();
+    const original = actionEvidenceStore.sweepExpiredEvidence.bind(actionEvidenceStore);
+    actionEvidenceStore.sweepExpiredEvidence = async () => { throw new Error('mongo is unhappy'); };
+    try {
+      await expect(sweepScreenshotsSparingPinnedEvidence(() => Date.now()))
+        .resolves.toEqual({ removed: 1, scanned: 2, pinned: 1, evidenceRemoved: 0 });
+      expect(existsSync(runDir(PINNED_RUN))).toBe(true);
+    } finally {
+      actionEvidenceStore.sweepExpiredEvidence = original;
+    }
   });
 
   it('a pin read that THROWS degrades to pinning nothing, and never to a throw of its own', async () => {
@@ -195,7 +232,7 @@ describe('sweepScreenshotsSparingPinnedEvidence - the composition itself', () =>
     actionEvidenceStore.pinnedRunIdsForRetention = async () => { throw new Error('mongo is unhappy'); };
     try {
       await expect(sweepScreenshotsSparingPinnedEvidence(() => Date.now()))
-        .resolves.toEqual({ removed: 2, scanned: 2, pinned: 0 });
+        .resolves.toEqual({ removed: 2, scanned: 2, pinned: 0, evidenceRemoved: 0 });
     } finally {
       actionEvidenceStore.pinnedRunIdsForRetention = original;
     }

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi, afterEach } 
 import type { Actor } from '@ekoa/shared';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
-import { users, automations, automationRuns, integrationDefinitions, approvedIntegrationActions } from '../../src/data/stores.js';
+import { users, automations, automationRuns, integrationDefinitions, approvedIntegrationActions, integrationActionEvidence } from '../../src/data/stores.js';
 import { IntegrationDefinitionStore, type IntegrationDefinitionCreate } from '../../src/integrations/definition-store.js';
 import { IntegrationRecipeStore } from '../../src/integrations/recipe-store.js';
 import { approveAction, describeAction } from '../../src/integrations/action-consent.js';
@@ -222,9 +222,11 @@ describe('the integration-action executor bound by buildApp carries the discover
    *
    * `server.ts` builds ONE `executorDeps` bundle carrying `recordActionEvidence` (the real
    * `integration_action_evidence` store) and `collectRunEvidence` (the real `automation/` collector),
-   * and hands the SAME bundle to all four executor call sites. Delete either member and nothing
-   * fails: actions keep running and simply stop leaving evidence - the exact silent-loss failure
-   * this file was created for, one seam over.
+   * and hands the SAME bundle to all four executor call sites - plus, from round four,
+   * `discardOwnActionEvidence` (the reader's own collection) and one call to
+   * `bindDefinitionEvidenceReconciler()` beside it. Delete any member and nothing fails: actions
+   * keep running and simply stop leaving - or stop collecting - evidence, the exact silent-loss
+   * failure this file was created for, one seam over.
    *
    * WHAT IS REAL HERE AND WHAT IS STUBBED. The chain under test is entirely real: the bundle
    * `buildApp` built, the executor's capture call, the bound collector, the bound store. The ONE
@@ -308,6 +310,54 @@ describe('the integration-action executor bound by buildApp carries the discover
 
       expect(result.success).toBe(true);
       expect(record).not.toHaveBeenCalled();
+    }, 30_000);
+
+    /**
+     * ROUND FOUR - THE TWO COLLECTION BINDINGS, which have the same silent-loss property as the two
+     * above and one extra: what they collect is somebody's only copy of their own data, so a
+     * binding that is missing leaves an orphan and a binding that is wrong destroys a row.
+     */
+    it('the READER\'S OWN collection is bound: a run that cannot resolve drops the CALLER\'S row', async () => {
+      await integrationActionEvidence.deleteMany({});
+      // Two rows for an action that is about to stop resolving: the caller's, and a colleague's.
+      for (const owner of [OWNER, 'u-colleague']) {
+        await actionEvidenceStore.recordEvidence(
+          { orgId: ORG, ownerUserId: owner, integrationKey: KEY, actionName: 'accao_removida' },
+          { backingType: 'api-call', evidence: { kind: 'api-call', request: { method: 'GET', url: `${ORIGIN}/x`, headers: {} }, response: { status: 200 } } },
+        );
+      }
+
+      const result = await executeIntegrationAction({
+        integrationKey: KEY,
+        actionName: 'accao_removida',
+        args: {},
+        ownerUserId: OWNER,
+      });
+
+      expect(result.success).toBe(false);
+      // ONLY the caller's row. `discardOwnActionEvidence` unbound leaves both; bound to anything
+      // wider takes the colleague's too, and the colleague never made this call.
+      const left = (await integrationActionEvidence.find({})) as unknown as { ownerUserId: string }[];
+      expect(left.map((r) => r.ownerUserId)).toEqual(['u-colleague']);
+    }, 30_000);
+
+    it('the WRITE-TIME collector is bound: a definition rewrite collects that org\'s stranded rows', async () => {
+      // `bindDefinitionEvidenceReconciler()` is ONE line in `buildApp`. Without it a definition
+      // write collects nothing at all - which is safe but silent, and the retention gap it leaves
+      // is the whole reason the line exists.
+      await integrationActionEvidence.deleteMany({});
+      await actionEvidenceStore.recordEvidence(
+        { orgId: ORG, ownerUserId: OWNER, integrationKey: KEY, actionName: READ_ACTION },
+        { backingType: 'api-call', evidence: { kind: 'api-call', request: { method: 'GET', url: `${ORIGIN}/x`, headers: {} }, response: { status: 200 } } },
+      );
+
+      const row = definitionRow();
+      await definitions.create(
+        { ...row, actions: row.actions.filter((a) => a.actionName !== READ_ACTION) },
+        { actor, onConflict: 'replace' },
+      );
+
+      expect(await integrationActionEvidence.find({})).toEqual([]);
     }, 30_000);
   });
 

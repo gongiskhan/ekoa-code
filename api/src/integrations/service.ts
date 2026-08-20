@@ -13,10 +13,11 @@ import {
   discardCredentialShadow,
   type CredentialShadowWrite,
 } from './credential-cofre.js';
-// THE OWNER'S ERASURE CONTROL over `integration_action_evidence`. Database-only, exactly like the
-// edges `definition-store.ts` takes for the same reason: disconnecting a credential is the one
-// moment a person says "remove what my third-party account produced", and `deleteConfig` is the only
-// place that hears it. See `action-evidence-store.ts`'s removal-path enumeration, path 3.
+// THE CREDENTIAL-DISCONNECTION ERASURE over `integration_action_evidence`. Database-only, exactly
+// like the edge `definition-store.ts` takes and for the same reason: disconnecting a credential is
+// one of the two moments a person says "remove what my third-party account produced" (the other is
+// the explicit `DELETE .../actions/:actionName/evidence` control), and `deleteConfig` is the only
+// place that hears this one. See `action-evidence-store.ts`'s removal rule.
 import { discardEvidenceOfDisconnectedConfig } from './action-evidence-store.js';
 
 export interface IntegrationConfigDoc extends Doc {
@@ -602,21 +603,32 @@ export async function deleteConfig(actor: Actor, integrationKey: string): Promis
     // is connected to any more, which is untidy but reachable - and discarding it before a delete
     // that then failed would destroy the sample of a credential the user still has.
     //
-    // WHY THIS IS NOT THE RECONCILER. `discardEvidenceOfUnresolvableActions` asks whether the owner
-    // can still REACH the action, and disconnecting a credential does not change that answer - the
-    // definition still resolves, so a reconcile keeps every row. What ended is the connection to the
-    // third-party account whose real request and real response body the row holds, and the person
-    // who made that connection has just asked for it to end. Until this existed, connecting an
-    // integration, running one browser-steps action and then disconnecting left a durable row of
-    // that account's traffic plus a permanent screenshot pin, with no way to remove it and no way to
-    // supersede it (that needs re-connecting and re-running).
+    // WHY THIS IS NOT A REACHABILITY QUESTION. Every other removal on this collection asks whether
+    // the owner can still REACH the action, and disconnecting a credential does not change that
+    // answer - the definition still resolves. What ended is the connection to the third-party
+    // account whose real request and real response body the row holds, and the person who made that
+    // connection has just asked for it to end. Until this existed, connecting an integration,
+    // running one browser-steps action and then disconnecting left a durable row of that account's
+    // traffic plus a permanent screenshot pin, with no way to supersede it (that needs re-connecting
+    // and re-running).
+    //
+    // THE ORG-SHARED ARM IS AN EXCLUSION LIST, NOT "EVERYONE" (round four). A config row carrying no
+    // custodian is the legacy ORG-SHARED credential, but `findConfigForOwner` hands it only to
+    // members who have NO row of their own - it answers `rows.find(c => c.ownerUserId === owner)`
+    // first. So `'every-owner-in-org'` erased the samples of colleagues whose own credential was
+    // never the deleted row: one member's write destroying another member's data, the same disease
+    // as the cross-org one, one tenant in. The correct scope is every owner for whom
+    // `findConfigForOwner` WOULD have resolved THIS row - everyone except those still holding a
+    // config of their own, read back AFTER the delete so the list is what the resolver would see now.
+    const stillOwnTheirOwn = c.ownerUserId
+      ? []
+      : ((await integrationConfigs.find({ orgId: c.orgId, integrationKey: c.integrationKey })) as IntegrationConfigDoc[])
+        .map((row) => row.ownerUserId)
+        .filter((id): id is string => typeof id === 'string' && id !== '');
     const forgotten = await discardEvidenceOfDisconnectedConfig({
       orgId: c.orgId,
       integrationKey: c.integrationKey,
-      // A row with no custodian is the legacy ORG-SHARED config - the credential `findConfigForOwner`
-      // hands to every member of the org - so deleting it disconnects all of them at once, and every
-      // member's sample was produced through it.
-      owner: c.ownerUserId ? { userId: c.ownerUserId } : 'every-owner-in-org',
+      owner: c.ownerUserId ? { userId: c.ownerUserId } : { everyOwnerExcept: stillOwnTheirOwn },
     });
     if (forgotten > 0) {
       console.log(`[integrations] disconnecting ${c.integrationKey} discarded ${forgotten} action-evidence row(s)`);

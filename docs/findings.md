@@ -65,6 +65,41 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   over `integration_action_evidence`, NOT over the screenshot tree - `deleteRunScreenshots` still has
   no production caller and this entry still claims no erasure coverage over the PNGs.
 
+  **2026-08-20 (S1 round four), CORRECTING THE PARAGRAPH ABOVE AGAIN, AND THE ERASURE HALF MOVES
+  AGAIN.** "It is closed now by a reconciliation keyed on the row's own owner" was a fix that
+  DELETED ACROSS A TENANT BOUNDARY (`write-time-reconciler-deleted-across-a-tenant-boundary` below),
+  so it is gone. Pin release is now: the READER'S own run when it can no longer resolve the action,
+  the writing org's own reconciliation, the owner's new erasure control
+  (`DELETE /api/v1/integrations/:key/actions/:actionName/evidence`), the credential disconnection,
+  and - the one that needs nobody to notice anything - the boot retention sweep at 90 days
+  (`sweepExpiredEvidence`). That last one is what finally makes the pin's retention BOUNDED in every
+  case rather than in the cases somebody enumerated. It is still not erasure over the PNGs:
+  `deleteRunScreenshots` still has no production caller and this entry still claims no erasure
+  coverage over the screenshot tree.
+
+- **`evidence-orphan-window-until-the-reader-returns`** (2026-08-20, OPEN, **LOW**, opened
+  DELIBERATELY by S1 round four as the accepted cost of the fix above). An evidence row whose action
+  has stopped resolving for its owner is now collected in one of five ways, and none of them is
+  instantaneous for a reader in another tenant: their own next run of that integration collects it,
+  their own erasure control removes it on request, disconnecting the credential removes it, and the
+  boot retention sweep removes it at `EVIDENCE_RETENTION_DAYS` (90). A reader who never returns
+  therefore keeps a durable sample of their own third-party account - and, for an automation-backed
+  row, a screenshot pin - for up to that window.
+
+  **WHY THIS IS THE ACCEPTED SIDE OF THE TRADE, STATED AS A TRADE.** The alternative is a write-time
+  reconciler that answers "can this reader still resolve it" on behalf of readers it cannot see, and
+  three rounds of that produced first an orphan for every consumer of a published definition and then
+  deletion across an org boundary for actions those consumers could still run. An orphaned row is a
+  bounded retention and privacy gap; a deleted row is unrecoverable tenant data. Those costs are not
+  comparable, so the collector fails towards retaining and the window is bounded by a sweep rather
+  than closed by a guess.
+  CONSEQUENCE IF NOT CLOSED: a sample of a third-party account outlives the reachability of the
+  action it documents, by up to 90 days, for a reader who never comes back.
+  CLOSE BY (optional, and only if the window is judged too long): shortening
+  `EVIDENCE_RETENTION_DAYS`, or a lazy reconcile on the S2/S3 detail-page read - which is a READER'S
+  path and therefore may collect that reader's own rows safely. NOT by re-introducing a write-time
+  cross-tenant collector under any parameterisation.
+
 - **`resolve-step-origin-runs-twice-per-gated-browser-step`** (**FIXED 2026-08-19**, round seven;
   see the round-seven fixed section). The walk still runs two to three times per gated browser step -
   that is inherent to resolving locality before the gate and re-resolving after it - but its
@@ -3203,6 +3238,103 @@ silently absorbed into a ledger note):
   `sales-crm.png` ("Página não encontrada" 404 instead of the dashboard) - `booking-system` is
   disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
   `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
+
+## Recently fixed - 2026-08-20 action evidence round four (one blocker + one major + five minors)
+
+The S1 verification pass repeated a third time. Round two was too NARROW and orphaned a consumer's
+evidence; round three widened it and DELETED ACROSS A TENANT BOUNDARY. Three rounds is evidence that
+the shape was wrong, not the parameter, so these entries retire the mechanism the section below
+describes rather than tuning it.
+
+- **`write-time-reconciler-deleted-across-a-tenant-boundary`** (2026-08-20, **BLOCKER, FIXED**).
+  Round three's `discardEvidenceOfUnresolvableActions` reconciled EVERY tenant's rows from a
+  definition write in ONE tenant, asking `getForActor(runner)` per row owner. It was wrong on two
+  independent axes, each reproduced end to end before anything changed:
+
+  **(a) LIVE ROW vs FROZEN SNAPSHOT.** A row of another org is resolved through its
+  `publishedSnapshot` (`crossOrgView` -> `publishedViewOf`), never through its live fields - that is
+  what publishing is for, and the replace branch carries the snapshot forward deliberately while
+  `setVisibility` re-promotes without re-scrubbing. The reconciler asked for the live row. So: org A
+  publishes `[consultar_processo, arquivar_processo]`; org B connects its own credential and runs
+  `consultar_processo` against its own clients' data; org A un-publishes, drops the action, and
+  re-promotes. Org B's run of `consultar_processo` STILL SUCCEEDS - measured, through the real
+  executor - while org A's write deleted org B's only copy of the sample and its screenshot pin.
+  **(b) RUNNER vs CUSTODIAN.** An org-shared credential resolves the definition as the CUSTODIAN and
+  "never as the reader" (`definitionActorForCredential`, whose docblock spends a paragraph on the
+  exfiltration hole that rule closed). The evidence key is stamped with the RUNNER. The reconciler
+  asked as the runner, who cannot see the custodian's private row, got the empty set, and every
+  peer's evidence was wiped by a re-save that DROPPED NOTHING.
+
+  **FIXED BY CHANGING THE SHAPE, and the standing rule is now one sentence: a write by one org never
+  deletes another org's data.** The cross-tenant listing (`listOwnerRefsForKey`) is DELETED rather
+  than narrowed - a cross-tenant listing is what made a cross-tenant delete expressible. In its
+  place: (1) the READER collects its own, in `action-executor.ts`, which resolves through the one
+  production path and therefore knows the answer for its own org, owner, credential and document;
+  (2) the WRITE collects inside its own tenant only, through a seam taking `(orgId, integrationKey)`
+  implemented by `evidence-reconcile.ts`; (3) everything else fails towards RETAINING, bounded by
+  `sweepExpiredEvidence`, the owner's erasure control and the credential disconnection. The
+  resolution itself moved to `action-resolution.ts` and is SHARED WITH THE RUN PATH, so a retention
+  decision cannot believe something a run does not.
+  Suite: `api/tests/integrations/action-evidence-removal.test.ts` (33 cases, entered at
+  `saveAuthoredDefinition`, `create(..., 'replace')`, `setVisibility`, `publishDefinition`,
+  `executeUserIntegrationAction` and `deleteConfig`).
+
+- **`three-global-tier-cases-were-unfailable-through-the-wrong-fixture-writer`** (2026-08-20,
+  **MAJOR, FIXED**). This is HOW the blocker above hid. The removal suite built its `global` rows
+  with `definitions.create({ visibility: 'global' })` instead of the production writer
+  (`requestPublish` -> `publishDefinition`), so the row had NO `publishedSnapshot` and
+  `publishedViewOf` silently fell back to the live content. Every cross-org case therefore described
+  a world in which live and published can never disagree - which is the ONLY thing that mattered.
+  With the real writer the same fixture describes a deletion that destroys still-runnable evidence.
+  The suite now publishes through the real flow and proves reachability by RUNNING THE ACTION after
+  the write rather than by asking a resolver.
+
+- **`delete-config-org-shared-arm-erased-peers-it-never-served`** (2026-08-20, **MAJOR, FIXED**).
+  `deleteConfig`'s `'every-owner-in-org'` arm deleted the evidence of every member of the org.
+  `findConfigForOwner` answers `rows.find(c => c.ownerUserId === owner)` BEFORE falling back to the
+  custodian-less shared row, so a member holding their own credential was never served by the deleted
+  row: their sample is a sample of a credential they still have, and one member's disconnect
+  destroyed another member's data - the same disease as the cross-org one, one tenant in. The scope
+  is now `{ everyOwnerExcept: [...] }`, computed from the configs still present after the delete, i.e.
+  every owner for whom `findConfigForOwner` WOULD have resolved this row.
+
+- **`publish-snapshot-was-dismissed-as-widening-only`** (2026-08-20, MINOR, FIXED). The enumeration
+  reasoned about the DEFINITION rather than about what the consumer RESOLVES: a `global -> global`
+  re-publish writes a fresh snapshot, and a snapshot with fewer actions narrows every consumer at
+  once. It is now named as a narrowing write in every place the enumeration appears; it still does
+  not collect consumer rows, because no write does.
+
+- **`the-evidence-key-claim-survived-in-stores-ts`** (2026-08-20, MINOR, FIXED). `api/src/data/stores.ts`
+  still documented the key as `(orgId, integrationKey, actionName)` - the SIXTH copy of a claim the
+  previous round's commit says it corrected in five places, and the one a future author reads first
+  because it sits on the collection handle itself. Corrected, with the owner term's reason stated
+  there rather than referenced.
+
+- **`resolvable-action-names-role-was-an-equivalent-mutant`** (2026-08-20, MINOR, FIXED).
+  `resolvableActionNames` passed `role: 'user'` under a docblock that spent a paragraph justifying it
+  as "the least-privileged reading" - and the whole suite stayed green (76/76) with `super-admin`
+  substituted, because `isDefinitionVisibleTo`'s role branches only ever fire for a sentinel-org row
+  or a review window. The prose asserted a safety property the tests could not see. The method is
+  deleted with the collector it served; the replacement resolves through the production path, where
+  the principal is not a parameter anyone chooses.
+
+- **`the-reconcile-was-an-uncapped-scan-inside-every-save`** (2026-08-20, MINOR, FIXED). The
+  round-three reconcile did a cross-collection listing plus ONE sequential database read PER OWNER,
+  awaited inside every ordinary definition save. For a popular global integration that is N
+  sequential round-trips on every save, uncapped and untimed, and the cliff appears first in the
+  tenants with the most data. Now: the listing is org-scoped (so N is owners in ONE org), and
+  `MAX_RECONCILED_OWNERS` (25) stops the fan-out rather than paying it - the remainder is left to the
+  reader path and the retention sweep, which is exactly what "fail towards retaining" is for.
+
+- **`action-evidence-had-no-owner-erasure-control`** (2026-08-20, MINOR, FIXED). Round three wired
+  `deleteConfig`, which is real, so the claim that `discardEvidence` had "zero production callers"
+  was already stale when it was made - the CODE had one, through the reconciler's default dep and
+  through the disconnect path. What was genuinely missing is the control a person actually asks for:
+  every removal was a consequence of something ELSE (a later run supersedes, the action stops
+  resolving, the credential is disconnected, the window closes), so somebody who simply did not want
+  a sample of their third-party account kept had to disconnect the whole integration to be rid of it.
+  `DELETE /api/v1/integrations/:key/actions/:actionName/evidence` (`auth: 'user'`, idempotent,
+  addressed by the deterministic id over the VERIFIED actor) is that control.
 
 ## Recently fixed - 2026-08-20 action evidence round three (one major + four minors)
 

@@ -73,6 +73,10 @@ import {
 import { readLessons, writeLessons } from '../integrations/definition-lessons.js';
 import { integrationRecipeStore } from '../integrations/recipe-store.js';
 import { forgetRecipe } from '../integrations/recipe-lifecycle.js';
+// Slice S1: the owner's erasure control over their own action evidence. The ONE store method a
+// request may reach on that collection, and it is addressed by the verified actor - see the DELETE
+// `/:key/actions/:actionName/evidence` handler.
+import { actionEvidenceStore } from '../integrations/action-evidence-store.js';
 import type { IntegrationActionRecipe } from '../integrations/definitions.js';
 import { provisionIntegrationAutomations, sessionActionRows, type ProvisionBinding } from '../automation/index.js';
 import { requestAttendedCeremony } from '../bridge/attended.js';
@@ -696,6 +700,39 @@ export function integrationsRouter(deps: {
       default:
         return res.json({ ok: true, actionName: out.actionName, state: out.state, mutates: out.mutates });
     }
+  });
+
+  /**
+   * DELETE /api/v1/integrations/:key/actions/:actionName/evidence -> { ok, discarded }.
+   *
+   * THE OWNER'S ERASURE CONTROL over the sample their own last validated run left behind (slice S1,
+   * round four). Below the `requireAuth` blanket with the consent and recipe routes, and for the
+   * same reason they are: the row holds this person's real third-party request and response, and the
+   * decision to keep or destroy it is theirs rather than an agent's.
+   *
+   * IT IS WHY `discardEvidence` EXISTS AS A PUBLIC METHOD AT ALL. Every other removal on that
+   * collection is a consequence of something else - a later run supersedes it, the action stops
+   * resolving, the credential is disconnected, the retention window closes. None of those is "I do
+   * not want this kept", which is the one a person actually asks for, and until this route there was
+   * no way to ask it.
+   *
+   * TENANCY IS NOT A FILTER THIS HANDLER APPLIES. The key is built from the VERIFIED actor and
+   * hashed into the deterministic `_id`, so the request cannot name a colleague's row or another
+   * tenant's; `discardEvidence` then re-checks the stored org and owner on the fetched document
+   * before deleting it. IDEMPOTENT: nothing to erase answers `ok` with `discarded: false` — see the
+   * descriptor for why that is not a 404.
+   */
+  r.delete('/:key/actions/:actionName/evidence', async (req: AuthedRequest, res: Response) => {
+    const params = IntegrationActionParams.safeParse(req.params);
+    if (!params.success) return sendError(res, 'VALIDATION_FAILED', 'Parâmetros inválidos.', { issues: params.error.issues });
+    const actor = actorOf(req);
+    const discarded = await actionEvidenceStore.discardEvidence({
+      orgId: actor.orgId,
+      ownerUserId: actor.userId,
+      integrationKey: params.data.key,
+      actionName: params.data.actionName,
+    });
+    res.json({ ok: true, discarded });
   });
 
   // --- Per-integration LESSONS (slice C3) -----------------------------------------------------

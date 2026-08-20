@@ -56,13 +56,21 @@
  * orgs, and `setVisibility` ends an action for a consumer org without any write touching an action
  * set at all - so no enumeration of writes-to-this-row could ever have been complete.
  *
- * The sibling is therefore collected by a RECONCILER rather than by a diff:
- * `discardEvidenceOfUnresolvableActions` asks each row's own owner, through `getForActor`, which
- * actions of the key they still resolve, and drops the rest. `definition-store.ts` calls it from
- * both writes that can narrow reach - the replace branch (beside `discardEvidenceOfRemovedRecipes`,
- * on the same line of the same branch) and `setVisibility` - and `service.ts` `deleteConfig` calls
- * the separate owner-erasure control. A CAPTURE PILE stays a per-row question because the recipe
- * that names it lives on this row; an EVIDENCE ROW never was one.
+ * THE NEXT REVISION OF THIS PARAGRAPH WAS ALSO WRONG, AND IN THE MORE DANGEROUS DIRECTION. It said
+ * the sibling was collected by a RECONCILER that asked each row's owner, across every tenant, which
+ * actions of the key they still resolved. That reconciler answered with the LIVE row while a
+ * consumer resolves the FROZEN published snapshot, and asked as the RUNNER while an org-shared
+ * credential resolves as the CUSTODIAN - so an ordinary re-save in one org deleted another org's
+ * only copy of a sample for an action that org could still run.
+ *
+ * THE STANDING RULE IS NOW A SHAPE RATHER THAN AN ENUMERATION: a write by one org never deletes
+ * another org's data. `definition-store.ts` collects the WRITING ORG'S rows only, through a seam
+ * bound to `evidence-reconcile.ts`, which asks the one production resolution
+ * (`action-resolution.ts`). Every other tenant's rows are collected on that tenant's OWN reader path
+ * (`action-executor.ts` - the only place the answer is knowable), and bounded until then by a
+ * retention sweep, the owner's erasure control and `deleteConfig`'s credential erasure. A CAPTURE
+ * PILE stays a per-row question because the recipe that names it lives on this row; an EVIDENCE ROW
+ * never was one, and is not decided at write time at all outside the writer's own tenant.
  *
  * ── WHY THE CLEAR IS A MODULE AND NOT A METHOD ───────────────────────────────────────────────
  *

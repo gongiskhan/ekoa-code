@@ -23,6 +23,7 @@ export {
   ActionEvidenceStoreError,
   actionEvidenceIdFor,
   evidenceSecretsFromValues,
+  EVIDENCE_RETENTION_DAYS,
   MAX_EVIDENCE_EXCERPT_CHARS,
   MAX_EVIDENCE_STEPS,
   type ActionEvidenceKey,
@@ -30,9 +31,27 @@ export {
   type ActionEvidence,
   type ApiCallEvidence,
   type AutomationEvidence,
+  type OwnerEvidenceScope,
   type RunStepEvidence,
   type RecordEvidenceInput,
 } from './action-evidence-store.js';
+// Slice S1 round four: the WRITE-TIME collector, scoped to the writing org and nothing else, plus
+// the ONE production binder that joins it to the definition store's seam. Exported as a binder
+// rather than as a setter so the composition root has a single named thing to call and a test has a
+// single named thing to enter.
+export {
+  bindDefinitionEvidenceReconciler,
+  reconcileOwnOrgEvidence,
+  MAX_RECONCILED_OWNERS,
+} from './evidence-reconcile.js';
+// THE ONE RESOLUTION every run and every retention decision goes through. See its header for the
+// three axes - live row vs frozen snapshot, runner vs custodian, own row vs global vs baseline - on
+// which a re-derivation of it deleted other tenants' data three rounds running.
+export {
+  resolveOwnerActionSurface,
+  resolvableActionNamesForOwner,
+  type OwnerActionSurface,
+} from './action-resolution.js';
 // The live integration pre-fetch (ch05 §5.5.2 layer 3) — the IntegrationPrefetchFn seam impl.
 export { integrationPrefetch, __resetPrefetchCacheForTests, type PrefetchDeps } from './prefetch.js';
 // Config custody + the definitions registry (the composition root binds these to the
