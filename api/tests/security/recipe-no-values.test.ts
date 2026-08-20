@@ -202,6 +202,47 @@ describe('the recipe store refuses any recipe that carries a value', () => {
   });
 
   /**
+   * THE HEADER-NAME GRAMMAR LEG, WITH A KILLER OF ITS OWN.
+   *
+   * The first row above plants a REGISTERED value in `headerNames`, so the registry leg catches it
+   * first and the grammar leg could be deleted whole with every case above still green - measured,
+   * not assumed: with that `forEach` removed, the whole security + integrations + automation +
+   * contract lane passed. A leg no case can separate is a leg nobody is checking.
+   *
+   * It is the leg that has to hold when there is NO registry to compare against and no shape to
+   * recognise - a "name" that came off a live capture through a cast, which is the only way one
+   * gets here at all (`HeaderName` is branded, so a raw string does not compile).
+   *
+   * Both strings below are therefore grammatically not header names, are values no registry holds,
+   * and are far under `looksLikeLiteralSecret`'s floor (a >=24-character run over three character
+   * classes). Nothing but the grammar can refuse them.
+   */
+  it('refuses a header NAME that is not one, with no registry and no secret shape to lean on', async () => {
+    const draft = baseDraft();
+    const call = draft.injectedCalls[0]!;
+    const notNames = [
+      // An HTTP/2 pseudo-header. The capture path DROPS these deliberately (`normaliseNames`, "a
+      // live capture legitimately carries HTTP/2 pseudo-headers"), so one arriving here means that
+      // filter stopped filtering - and `:` is not a token character.
+      ':authority',
+      // Token characters throughout, and 72 of them. The `{1,64}` BOUND is the half of the grammar
+      // a JWT-shaped "name" fails; single-cased text has no shape for any other leg to see.
+      `x-${'a'.repeat(70)}`,
+    ];
+    for (const name of notNames) {
+      const poisoned = { ...draft, injectedCalls: [{ ...call, headerNames: [...call.headerNames, name] }] };
+      // NO REGISTRY AT ALL - the leg under test is the only one that can see this.
+      expect(() => assertCarriesNoValues(poisoned)).toThrow(RecipeStoreError);
+      // …and the same refusal through the real store, WITH the registry present, so the case is not
+      // quietly relying on the absence of one.
+      await expect(
+        recipes.putRecipe('orgA', 'citius', 'list_processos', poisoned, { secrets: liveRegistry() }),
+      ).rejects.toThrow(RecipeStoreError);
+    }
+    expect(await recipes.getRecipe('orgA', 'citius', 'list_processos')).toBeNull();
+  });
+
+  /**
    * THE SUPERSEDE'S OWN FIELD GOES THROUGH THE SAME PROOF - it did not.
    *
    * `supersedeRecipe` destructured `reason` OUT of the payload before `assertCarriesNoValues`, so

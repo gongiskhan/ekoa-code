@@ -2652,3 +2652,62 @@ DIAGRAM CHECK (FIXED-12): no new module and no stored shape change, but ONE new 
 `docs/diagrams/02-module-map.excalidraw` gains an as-built `(h)` annotation, appended as a new
 element exactly as `(b)`-`(g)` were. `05-data-model.excalidraw` is untouched: `capturedCallsRef` and
 `supersedes.reason` are read and bounded here, never re-shaped - the check made, not skipped.
+
+## 2026-08-20 - P2 round eight, close-out: the capture store's last gate stops being an unproven gate
+
+**`assertNoLiveSecret` SURVIVED A FULL NO-OP.** Replacing the body of the capture store's last gate
+with an unconditional `return` left all 202 tests across the TWELVE suites that can reach
+`appendCapturedCall` at all GREEN - measured against those files, not inferred. That is not an equivalent mutant. It is a gate nobody was checking, and
+the reason is a division of labour that reads like belt-and-braces and is not:
+
+  - `redactCapturedCall` redacts the URL and the two bodies. It copies `method`, `contentType` and
+    BOTH header-name arrays through verbatim - a name is a name, and which header carries the session
+    is the learning the whole spine exists to keep;
+  - `assertCarriesNoValues` (the recipe store) re-proves the property over the recipe, so a value
+    smuggled into a REQUEST header name was caught THERE, `learnFromRun`'s `finally` discarded the
+    evidence, and the capture store's own refusal never decided anything.
+
+But a recipe carries the REQUEST header names OF THE CALLS THE COMPILE KEPT, and nothing else. A
+`responseHeaderNames` entry never reaches a recipe at all. Neither does `contentType`. Neither does
+anything on an exchange the compile DROPPED while `persistEvidence` kept it - and the two keep
+different sets: `MAX_COMPILED_CALLS` is 24, `MAX_PERSISTED_EVIDENCE` is 48, and the compile
+additionally drops a login POST (`bodyIsSecretShaped`) and a URL it cannot take apart (userinfo, a
+non-http scheme). A gate that only the compiled subset is ever checked against is not the store's
+gate.
+
+WHAT THE MISS COSTS, which is why the new cases assert by COUNTING DOCUMENTS rather than by reading a
+verdict: `persistEvidence` is deliberately tolerant per append, so the refused exchange is dropped and
+the recipe still stores `ok` - `stored` is true, the `finally` discards nothing, the surviving
+recipe's `capturedCallsRef` names the pile as the LIVE one so no removal path applies, there is no
+TTL, and `listCaptureIds` has no production caller. A document that lands here carrying a live
+credential is durable forever.
+
+DECISION: no source change. Refusal-not-repair is this module's standing posture (redacting a header
+NAME would destroy the learning, and `method` is a verb), and the gate as written is already
+whole-document. What was missing was the proof, so it is now
+`api/tests/security/captured-evidence-last-gate.test.ts`: the learn pass driven through
+`runAutomationForAction` against the REAL stores with a LOW-ENTROPY credential
+(`sessao-do-portal-2024` - 21 characters over two character classes, under
+`looksLikeLiteralSecret`'s 24-character three-class floor, and a valid header name, so NO shape rule
+can see it and only the run's own `SecretRegistry` can), poisoning in turn a response header name, a
+content-type parameter, and a REQUEST header name on each of the three exchanges the compile drops.
+Each case asserts the recipe LANDED (so the `finally` collected nothing) and then asserts the
+collection: empty, or exactly the rest of the pass with the dropped call's URL absent. `method` is
+asserted at the store rather than through the learn pass, and the file says why: `redactCaptures`
+upper-cases it and `internalApiCalls` keeps only the seven verbs, so today's compile cannot deliver a
+poisoned one - but `appendCapturedCall` is an exported method with no compile in front of it, and the
+gate is the STORE's. Verified by the mutation: 8 of the 10 cases go red under the no-op, the two that
+stay green being the two controls, which is what a control is for.
+
+**THE HEADER-NAME GRAMMAR LEG OF `assertCarriesNoValues` HAD NO INDEPENDENT KILLER.** Its one case
+planted a REGISTERED value in `headerNames`, which the registry leg catches first, so the whole
+`forEach` could be deleted with the lane green - measured, not assumed: with it removed, 198 files and
+2837 tests across `tests/security`, `tests/integrations`, `tests/automation` and `tests/contract`
+passed. It is the leg that has to hold when there is no registry to compare against and no shape to
+recognise, which is the only state a cast-defeated `HeaderName` arrives in. It now has a case only it
+can catch - `:authority` (an HTTP/2 pseudo-header, which the capture path drops deliberately, so one
+arriving means that filter stopped filtering) and a 72-character single-cased token name - neither
+registered, neither secret-shaped, one killing the character class and one killing the `{1,64}` bound.
+
+DIAGRAM CHECK (FIXED-12): tests only. No module, no runtime edge, no stored shape and no flow
+changed, so no diagram is affected - the check made, not skipped.
