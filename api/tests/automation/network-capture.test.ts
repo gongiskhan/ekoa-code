@@ -31,15 +31,27 @@ function capture(over: Partial<LocalBrowserCapture> = {}): LocalBrowserCapture {
 }
 
 describe('redactCaptures - the second boundary (trap T8)', () => {
-  it('substitutes a live credential out of a URL and a body', () => {
+  it('substitutes a live credential out of a URL and a body - the REGISTRY leg, on each', () => {
+    // THE PARAMETER AND FIELD NAMES ARE THE POINT, and they were wrong. `redactCaptures` composes
+    // the two legs (`redactUrlByName(secrets.redact(url))` on the URL; `redactStream` on the
+    // bodies), and this case used to put the value under `?auth=` - a name `SECRET_KEY_PATTERN`
+    // matches - so the NAME leg masked it and the case stayed green with the URL's registry leg
+    // deleted entirely. `sid` and `echo`/`seen` match no pattern, so the only thing that can find
+    // this value is the run's own registry, and each leg is asserted on its own field.
     const secrets = secretRegistryFromValues(['s3cret-session-token']);
     const [out] = redactCaptures(
       [capture({
-        url: 'https://portal.example/api/cases?auth=s3cret-session-token',
-        responseBody: '{"echo":"s3cret-session-token"}',
+        url: 'https://portal.example/api/cases?sid=s3cret-session-token',
+        requestBody: '{"echo":"s3cret-session-token"}',
+        responseBody: '{"seen":"s3cret-session-token"}',
       })],
       secrets,
     );
+    expect(out!.url).not.toContain('s3cret-session-token');
+    expect(out!.requestBody).not.toContain('s3cret-session-token');
+    expect(out!.responseBody).not.toContain('s3cret-session-token');
+    // …and the blanket restatement over the whole exchange, which catches a field a later slice
+    // adds and forgets to pass through a leg.
     expect(JSON.stringify(out)).not.toContain('s3cret-session-token');
   });
 

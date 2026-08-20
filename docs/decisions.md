@@ -2561,3 +2561,94 @@ new endpoints, so `docs/diagrams/02-module-map.excalidraw` gains an as-built `(g
 Appended as a new element, as `(b)`-`(f)` were, so no existing element is rewritten. No stored shape
 changed this round - `answersWith` and `capturedCallsRef` are read, not altered - so
 `05-data-model.excalidraw` is untouched, and that is the check being recorded rather than skipped.
+
+## 2026-08-20 - P2 round eight: every exit collects, and the removal paths are counted from the code
+
+**THE COLLECTOR GUARDED THE EXITS SOMEBODY THOUGHT OF.** `learnFromRun` writes the pass's evidence
+FIRST (the recipe carries `capturedCallsRef` INTO it, so the other order publishes a pointer to
+documents that may never arrive) and collected the orphan with `if (!stored) discardEvidence(...)`.
+That line is reached only when the write RETURNS a verdict, and `putRecipe`/`supersedeRecipe` do not
+always return: `assertCarriesNoValues` THROWS - refusal rather than redaction is that module's whole
+posture - and so does any store error. The throw propagates to `runAutomationForAction`'s `.catch`,
+which logs a warning and correctly reports the run as the success it was, so the discard never ran.
+
+AND IT REPEATS, which is what makes it a blocker rather than a leak. The refusal is decided AT THE
+STORE from what the pass captured, so it is a property of the pass: the recipe is never written,
+`priorCaptureRef` reads a recipe that is absent, and every later run writes a fresh pile of full
+redacted request AND response bodies - the most sensitive thing this pipeline touches - with no TTL,
+no other index, the owner's DELETE answering `evidenceDiscarded: 0`, and `listCaptureIds` having no
+production caller. The reachable shape is ordinary and is now the acceptance fixture: a page fetches
+`GET /api/cases?ref=2024-1` plus a `GET /api/view?state=<38-char page-state token>` (a `__VIEWSTATE`,
+a continuation token, a nonce). No redaction leg touches that value - the run never held it, and
+`state` is in no name pattern - the compile leaves it literal because it is not one of the run's
+arguments, and `looksLikeLiteralSecret` then refuses the whole recipe.
+
+DECISION: the write, the supersede discard and the outcome sit in a `try`, and the orphan collection
+in its `finally`. `discardEvidence` swallows and logs its own failures, so it can never replace the
+exception on its way past. The rule stated positively: EVERY exit from the learn pass, a throw
+included, takes its evidence with it.
+
+**THE REMOVAL PATHS ARE FOUR, AND THEY ARE NOW COUNTED FROM THE CODE.** Round seven's module header
+claimed clearing was "the third way a recipe can go" and that `forgetRecipe` was reached by "BOTH
+removal paths so a future third cannot forget". Both counts were written from memory. The paths, and
+the collector that closes each: (1) THE CLEAR - `clearRecipe`, via the owner's DELETE route and the
+run loop's `clearRefusedRecipe` - `forgetRecipe`; (2) THE SUPERSEDE - `supersedeRecipe` -
+`learnFromRun`'s `priorCaptureRef`; (3) THE WRITE THAT NEVER LANDS - `exists`/`notfound` OR A THROW -
+`learnFromRun`'s `finally`, above; (4) THE ACTION SET REWRITTEN -
+`IntegrationDefinitionStore.create(..., onConflict: 'replace')`, i.e. the ordinary builder save
+(`definition-save.ts`) and `achieve`'s in-place write. `carryRecipesForward` re-attaches each stored
+recipe BY ACTION NAME, so an action the incoming set no longer names loses its recipe - renaming or
+removing an action is an ORDINARY edit and exactly what an agent re-authoring an integration does -
+and nothing collected the pile that recipe was the only index into. Path 4 is newly REACHABLE because
+of this spine: before it, `appendCapturedCall` had no production caller at all.
+
+DECISION ON WHERE THE PAIRING LIVES: one function,
+`capturedCallsStore.discardEvidenceOfRemovedRecipes(scope, removed[], deps)` - given recipes that are
+ALREADY gone, drop what each named, best-effort and loud, one failure never abandoning the batch.
+`forgetRecipe` delegates to it; `definition-store.create` calls it directly. It is NOT in
+`recipe-lifecycle.ts`, and the reason is structural rather than aesthetic: paths 2 and 4 remove a
+recipe as a SIDE EFFECT of a write that rewrote something else, and only the writer knows what it
+dropped, so the pairing must be callable from `definition-store.ts` - which stands deliberately on
+the database alone. Importing `recipe-lifecycle.ts` there would drag `recipe-store.ts` ->
+`definitions.ts` (the file-based registry, with its two synchronous disk tiers) into it and close an
+import cycle. `captured-calls-store.ts` imports `data/` and `security/` only, so the one new runtime
+edge (definition-store -> captured-calls-store, tier 3 to tier 3) keeps that claim true, and the
+module header now says so.
+
+**THE SUPERSEDE'S OWN FIELD GOES THROUGH THE PERSISTENCE-BOUNDARY PROOF.** `supersedeRecipe`
+destructured `reason` OUT of the payload before `assertCarriesNoValues`, so the one string in a
+supersede that this repo did not compile was exempt from all three legs at once: the run's
+`SecretRegistry`, `looksLikeLiteralSecret`, and `LIMITS.stringChars`. It is the LEAST trusted string
+in the payload - `classifyReplayDrift`'s signal reason, i.e. daemon-supplied or fetch-error text - it
+is written as `supersedes.reason` onto the DEFINITION document (so it rides every read and every CAS
+of that row: Trap T2, the entire bounded-recipe argument), and this branch newly surfaces it to the
+owner through `recipeSummary`. DECISION: the proof is handed `next`, not `draft`. A refusal is the
+right outcome rather than a truncation, for the module's standing reason - a redacted recipe would be
+a silently broken recipe - and every real drift reason this repo produces is a short sentence.
+
+**TWO ASSERTION DEFECTS, RECORDED BECAUSE THE SHAPE RECURS.** (1) The property this slice is named
+for - the replay answers with the call the recipe NAMES - was implemented correctly and asserted
+nowhere: the replay suite's `recipe()` helper DEFAULTED `answersWith` to `{callIndex: calls.length-1}`
+(precisely the pre-fix reading), the one case that overrode it asserted only outcome and URLs, and
+the `session()` stub answered one canned body for every call so no assertion on `data` could have
+distinguished the two readings. The helper now REFUSES to default a multi-call fixture, the stub
+answers per URL, and two cases assert `result.data` in both directions (a recipe naming call 0 of 2,
+and one naming call 1 of 2). (2) `redactCaptures`'s registry leg on the URL was pinned by a case
+whose value sat under `?auth=` - a name `SECRET_KEY_PATTERN` matches - so the name-pattern leg alone
+satisfied it and the registry leg could be deleted with the suite green. The parameter is now `sid`
+and the body fields `echo`/`seen`, which no pattern matches.
+
+WHAT REMAINS UNPROVABLE WITHOUT A DISPLAY OR A LIVE TARGET (unchanged by this round, restated): the
+daemon half - `api/**` may not import `clients/**`, so the acceptance's machine is a STAND-IN at the
+frame boundary and the real cookie-jar/header inheritance is proved against a real Chromium in
+`clients/bridge/test/browser/`; no lane anywhere exercises a real third-party portal, a real Cofre
+credential, or a headed display; and no test exercises a shipped browser-only automation producing a
+structured answer, because none of them can (`citius-notificacoes-automation-produces-no-output` in
+`docs/findings.md`). This round adds nothing to that list: the blocker, the fourth removal path and
+both minors are proved against the real stores and the real refusals.
+
+DIAGRAM CHECK (FIXED-12): no new module and no stored shape change, but ONE new runtime edge
+(`definition-store.ts` -> `captured-calls-store.ts`) and a corrected count of the removal paths, so
+`docs/diagrams/02-module-map.excalidraw` gains an as-built `(h)` annotation, appended as a new
+element exactly as `(b)`-`(g)` were. `05-data-model.excalidraw` is untouched: `capturedCallsRef` and
+`supersedes.reason` are read and bounded here, never re-shaped - the check made, not skipped.

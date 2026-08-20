@@ -30,11 +30,18 @@
  * The package/action/config field TYPES are imported type-only from `./definitions.ts` — the ONE
  * canonical shape — never duplicated. The type-only import carries no runtime dependency on the
  * file-based registry (it is erased at compile time), so this store stands entirely on the database.
+ * The one runtime import it has picked up since - `captured-calls-store.ts`, for the replace
+ * branch's evidence collection (P2) - stands on `data/` and `security/` alone and keeps that true.
  */
 import { createHash } from 'node:crypto';
 import type { Actor } from '@ekoa/shared';
 import { Store, type Doc } from '../data/store.js';
 import { integrationDefinitions } from '../data/stores.js';
+// THE ONE RUNTIME EDGE OUT OF THIS MODULE, and it is still database-only (see the header note
+// above): `captured-calls-store.ts` stands on `data/` and `security/` alone. It is here because
+// `create`'s replace branch is a REMOVAL PATH for a compiled recipe - see `carryRecipesForward`
+// and `integrations/recipe-lifecycle.ts`'s enumeration.
+import { discardEvidenceOfRemovedRecipes, type RemovedRecipe } from './captured-calls-store.js';
 import type {
   IntegrationConfigField,
   IntegrationAction,
@@ -263,6 +270,31 @@ function carryRecipesForward(
   });
 }
 
+/**
+ * The stored recipes `carryRecipesForward` could NOT re-attach - i.e. the ones this replace REMOVES.
+ *
+ * A REMOVAL PATH, and it took three rounds to be counted as one (`integrations/recipe-lifecycle.ts`
+ * enumerates all four). Carrying forward per action NAME is right - the recipe describes that action
+ * and nothing else - but it means an action the incoming set no longer names loses its recipe, and
+ * the recipe is the ONLY index back into `integration_captured_calls`. Renaming or removing an
+ * action is an ordinary edit and exactly what an agent re-authoring an integration does, so without
+ * this the pile of full redacted request and response bodies it named was orphaned by a routine
+ * save, permanently and unreachably (no TTL, no other index, `listCaptureIds` has no caller).
+ */
+function recipesDroppedBy(
+  incoming: IntegrationAction[],
+  existing: IntegrationAction[] | undefined,
+): RemovedRecipe[] {
+  if (!existing || existing.length === 0) return [];
+  const kept = new Set((incoming ?? []).map((a) => a.actionName));
+  return existing
+    .filter((a) => a.recipe !== undefined && !kept.has(a.actionName))
+    .map((a) => ({
+      actionName: a.actionName,
+      ...(a.recipe!.capturedCallsRef !== undefined ? { capturedCallsRef: a.recipe!.capturedCallsRef } : {}),
+    }));
+}
+
 type VisibilityView = Pick<IntegrationDefinitionFields, 'orgId' | 'userId' | 'visibility'> &
   Partial<Pick<IntegrationDefinitionFields, 'publishRequest'>>;
 
@@ -433,7 +465,7 @@ export class IntegrationDefinitionStore {
     // org) and would revoke the org's standing review request as a side effect of an edit. Carried
     // forward unless the caller states them explicitly, so `definition-save.ts`'s own preservation
     // becomes belt-and-braces instead of the only thing holding it.
-    return this.store.put({
+    const replaced = await this.store.put({
       ...doc,
       // …and the LEARNING about an action survives a rewrite of that action for the same reason the
       // publication record does: an ordinary builder save posts the package the author edited, which
@@ -449,6 +481,15 @@ export class IntegrationDefinitionStore {
       createdAt: existing?.createdAt ?? doc.createdAt,
       updatedAt: nowIso,
     });
+    // …AND WHAT THE REWRITE DROPPED TAKES ITS EVIDENCE WITH IT (removal path 4 - see
+    // `recipesDroppedBy`). AFTER the put, never before: the recipe is what NAMES the evidence, so
+    // discarding first would - on a put that then failed - leave a live recipe pointing at documents
+    // that no longer exist, which is the same order `forgetRecipe` argues for.
+    await discardEvidenceOfRemovedRecipes(
+      { orgId: input.orgId, integrationKey: input.key },
+      recipesDroppedBy(doc.actions, existing?.actions),
+    );
+    return replaced;
   }
 
   /** RAW by-id fetch — NOT tenant-scoped (see the class doc). */

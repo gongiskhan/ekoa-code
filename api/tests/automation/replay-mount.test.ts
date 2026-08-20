@@ -36,7 +36,7 @@ import type { runAutomation } from '../../src/automation/engine.js';
 import type { RecipeDraft } from '../../src/integrations/recipe-store.js';
 import { automations, automationRuns, integrationDefinitions, integrationCapturedCalls } from '../../src/data/stores.js';
 import type { StepOutput } from '../../src/automation/types.js';
-import { IntegrationRecipeStore } from '../../src/integrations/recipe-store.js';
+import { IntegrationRecipeStore, RecipeStoreError } from '../../src/integrations/recipe-store.js';
 import { CapturedCallsStore } from '../../src/integrations/captured-calls-store.js';
 import { IntegrationDefinitionStore } from '../../src/integrations/definition-store.js';
 import { bootAgentTestDb, shutdownAgentTestDb, resetAgentState } from '../agents/_setup.js';
@@ -452,6 +452,59 @@ describe('runAutomationForAction - drift routes the compile through the SUPERSED
       getRecipe: async () => ({}),
     });
     expect(discardCapture.mock.calls.map((c) => c[0].captureId)).toEqual(['cap-1']);
+  });
+
+  // ===========================================================================================
+  // …AND ON THE EXIT THE COLLECTOR DID NOT HANDLE: A THROW.
+  //
+  // `putRecipe` does not merely ANSWER a verdict. Its persistence-boundary proof
+  // (`assertCarriesNoValues`, `assertAnswerPointsAtACall`) THROWS - refusal rather than redaction is
+  // that module's entire posture - and so does any store error. The throw propagates to the learn's
+  // caller, which logs a warning and reports the run as the success it was, so an `if (!stored)`
+  // collector after the write simply never ran.
+  //
+  // AND IT REPEATS: the refusal is decided from what the pass captured, so it is a property of the
+  // pass. The recipe is never written, so `priorCaptureRef` finds nothing on the next run either,
+  // and every run leaves a fresh pile. Proved end to end against the REAL store and a REAL refusal
+  // in `discovery-replay-acceptance.test.ts`; pinned here at the seam, on both write routes.
+  // ===========================================================================================
+  it('collects the orphan when the write THROWS - the exit an `if (!stored)` cannot see', async () => {
+    const { deps, discardCapture } = storeSpies();
+    const result = await runAutomationForAction(base, {
+      ...deps,
+      replay: async () => ({ outcome: 'no-recipe', reason: 'never discovered' }),
+      run: runObserving([EXCHANGE]),
+      putRecipe: (async () => {
+        throw new RecipeStoreError('UNSAFE', 'injectedCalls[1].urlTemplate contains a literal secret-shaped token (length 38)');
+      }) as never,
+      getRecipe: async () => ({}),
+    });
+    // The evidence WAS written, and then collected - so this is a collection and not a fixture that
+    // wrote nothing.
+    expect(deps.captures!.appendCapturedCall).toHaveBeenCalled();
+    expect(discardCapture.mock.calls.map((c) => c[0].captureId)).toEqual(['cap-1']);
+    // …and the run that WORKED is still a success. Learning is a by-product; that posture is
+    // correct and is not what changed.
+    expect(result.success).toBe(true);
+  });
+
+  it('…and on the SUPERSEDE route, where the same proof runs and the LIVE evidence must survive', async () => {
+    const { deps, discardCapture } = storeSpies();
+    await runAutomationForAction(base, {
+      ...deps,
+      replay: drifted,
+      run: runObserving([EXCHANGE]),
+      getRecipe: async () => ({ capturedCallsRef: 'cap-previous' }),
+      supersedeRecipe: (async () => {
+        throw new RecipeStoreError('UNSAFE', 'reason contains a live credential value from this run');
+      }) as never,
+    });
+    const discarded = discardCapture.mock.calls.map((c) => c[0].captureId);
+    // The orphan this pass wrote goes…
+    expect(discarded).toEqual(['cap-1']);
+    // …and the LIVE recipe's evidence stays: nothing was replaced, so `cap-previous` is still what
+    // the recipe that is actually running was distilled from.
+    expect(discarded).not.toContain('cap-previous');
   });
 
   it('does NOT discard the evidence this very pass just wrote', async () => {

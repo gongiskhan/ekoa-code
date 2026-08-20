@@ -195,7 +195,15 @@ export class IntegrationRecipeStore {
     if (typeof reason !== 'string' || reason.trim() === '') {
       throw new RecipeStoreError('INVALID', 'a supersede must state why the previous recipe was replaced');
     }
-    assertCarriesNoValues(draft, opts.secrets);
+    // THE WHOLE PAYLOAD, `reason` INCLUDED - `next`, not `draft`. `reason` is written as
+    // `supersedes.reason` and is therefore a persisted string like any other, but destructuring it
+    // out before the proof exempted it from all three checks at once: the SecretRegistry leg, the
+    // literal-secret scan and `LIMITS.stringChars`. It is the LEAST trusted string in the payload -
+    // it is daemon-supplied or fetch-error text (`classifyReplayDrift`'s signal reason) rather than
+    // anything this module compiled - it rides every read and every CAS of the definition document
+    // (Trap T2, the whole bounded-recipe argument), and `recipeSummary` puts it on the wire to the
+    // owner. "Every write goes through it" is the header's claim; this makes it true.
+    assertCarriesNoValues(next, opts.secrets);
     assertAnswerPointsAtACall(draft);
     return this.writeRecipe(orgId, key, actionName, (current) => {
       // Nothing to supersede is `notfound`, not an implicit first compile: a heal that believes it

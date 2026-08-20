@@ -71,7 +71,7 @@
  * navigated to - exactly as `runInjectedCall` refuses a page it could not put on the origin. A
  * regression that stops the hosted side sending what the daemon needs therefore fails HERE too.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { Actor } from '@ekoa/shared';
@@ -84,6 +84,7 @@ import {
 } from '../../src/integrations/definition-store.js';
 import { IntegrationRecipeStore } from '../../src/integrations/recipe-store.js';
 import { CapturedCallsStore } from '../../src/integrations/captured-calls-store.js';
+import { saveAuthoredDefinition } from '../../src/integrations/definition-save.js';
 import { executeUserIntegrationAction } from '../../src/integrations/action-executor.js';
 import { approveAction, describeAction } from '../../src/integrations/action-consent.js';
 import { automationBackedActionHandler } from '../../src/automation/service.js';
@@ -102,6 +103,13 @@ let server: Server;
 let origin: string;
 /** Flipped by the drift test: the endpoint "moves" the way a real portal's does. */
 let apiPath = '/api/cases';
+/**
+ * The opaque page-state value `/api/view` carries - an ASP.NET `__VIEWSTATE` in miniature. 38
+ * characters of mixed case and digits, which is what `looksLikeLiteralSecret` refuses (a >=24-char
+ * opaque run using all three character classes). NOT a credential and nothing in this suite holds
+ * it as one: the point is precisely that the store cannot tell, refuses, and THROWS.
+ */
+const PAGE_STATE_TOKEN = 'dDwtMTIzNDU2Nzg5MDtWaWV3U3RhdGUxMjM0NQ';
 let requests: Array<{ method: string; url: string; headers: Record<string, string> }> = [];
 
 function startFixture(): Promise<void> {
@@ -127,6 +135,18 @@ function startFixture(): Promise<void> {
       // captures it too, and it FINISHES LAST. See the case that uses it.
       res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
       res.end('{"unread":7}');
+      return;
+    }
+    if (url.pathname === '/api/view') {
+      // AN ORDINARY PAGE-STATE CALL, and the one whose captured URL the RECIPE STORE REFUSES BY
+      // THROWING. Every server-rendered portal has one (`__VIEWSTATE`, a continuation token, a
+      // nonce): a script-issued JSON GET carrying an opaque generated value that the run's registry
+      // never held (so no redaction leg substitutes it) under a parameter name that is not
+      // conventionally credential-ish (so no name-pattern leg masks it), and which is not one of
+      // this run's arguments (so the compile leaves it LITERAL in the template). Every gate before
+      // the store passes; `looksLikeLiteralSecret` then refuses the whole recipe AT the store.
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+      res.end('{"pane":"cases"}');
       return;
     }
     res.writeHead(404, { 'content-type': 'text/html' });
@@ -161,7 +181,7 @@ function startFixture(): Promise<void> {
  * CORTEX NEVER SENDS A HEADER VALUE TO IT AND IT NEVER SENDS ONE BACK. `live` is this machine's;
  * frames carry names.
  */
-function daemonForFixture(opts: { alsoPollsTheBadge?: boolean } = {}): DaemonConnection & {
+function daemonForFixture(opts: { alsoPollsTheBadge?: boolean; alsoFetchesPageState?: boolean } = {}): DaemonConnection & {
   armed: boolean;
   leaseReleased: boolean;
   /** Every `captureOp` this machine was sent, in order. A LOG rather than the `armed` flag: the
@@ -260,6 +280,8 @@ function daemonForFixture(opts: { alsoPollsTheBadge?: boolean } = {}): DaemonCon
         // observed AFTER the search, so it is last in `page.on('response')` completion order -
         // which is the order the capture, and therefore the compiled recipe, is built in.
         if (opts.alsoPollsTheBadge) await observeTraffic(`${origin}/api/badge`);
+        // …and, when asked, the page-state call whose opaque value the recipe store refuses.
+        if (opts.alsoFetchesPageState) await observeTraffic(`${origin}/api/view?state=${PAGE_STATE_TOKEN}`);
       }
       const captures = buffered;
       buffered = [];
@@ -772,6 +794,156 @@ describe('ACCEPTANCE: learned on the run that was going to happen, replayed dete
     expect(await captures.listCapture({
       orgId: actor.orgId, integrationKey: KEY, actionName: ACTION, captureId: CONSTANT_CAPTURE,
     })).toEqual([]);
+  }, 60_000);
+});
+
+// =============================================================================================
+// ACCEPTANCE: A LEARN THAT THE STORE REFUSES LEAVES NOTHING BEHIND - INCLUDING WHEN IT THROWS.
+//
+// THE DEFECT, and the shape of it is the lesson. The evidence collector handled every exit that
+// RETURNED a verdict (`exists`, `notfound`) and none that THREW. `putRecipe`'s persistence-boundary
+// proof (`assertCarriesNoValues`) THROWS by design - it refuses rather than redacts - and so does
+// any store error. The throw propagates to the learn's caller, which logs a warning and reports the
+// run as the success it was, so `if (!stored) discardEvidence(...)` never ran at all.
+//
+// AND IT REPEATS. The refusal is decided AT THE STORE from what the pass captured, so it is a
+// property of the pass rather than a one-off: the recipe is never written, `priorCaptureRef` reads
+// the CURRENT recipe and finds none, and every later run of the action writes a fresh pile of full
+// redacted request AND response bodies. No TTL, no other index, the owner's DELETE route answers
+// `evidenceDiscarded: 0` (there is no recipe to clear), and `listCaptureIds` has no production
+// caller. Unbounded, forever, on an action that reports success every time.
+//
+// ENTERED AT `executeUserIntegrationAction` against the REAL stores, and the refusal is REAL - the
+// fixture page fetches an ordinary page-state URL and the real `looksLikeLiteralSecret` refuses the
+// real compiled template. Nothing here injects a failure.
+// =============================================================================================
+describe('ACCEPTANCE: a recipe write that THROWS takes the pass\'s evidence with it', () => {
+  it('writes the evidence, is refused AT THE STORE, and leaves the capture collection empty - on every run', async () => {
+    const appended = vi.spyOn(captures, 'appendCapturedCall');
+
+    for (const run of [1, 2, 3]) {
+      transport = resetAgentState({ oneShotText: RESOLVER_JSON });
+      setDaemonConnectionResolver(() => daemonForFixture({ alsoFetchesPageState: true }));
+      const before = appended.mock.calls.length;
+
+      const result = await runTheAction();
+
+      // THE RUN IS UNAFFECTED. Learning is a by-product and a refusal to learn must never turn a
+      // run that WORKED into a failure - that posture is correct and is not what changed.
+      expect(result.success).toBe(true);
+      expect((result.data as { runId?: string }).runId).toBeTruthy();
+      // The page really did make the page-state call, so the refusal below is about that call.
+      expect(requests.some((r) => r.url.includes('/api/view?state='))).toBe(true);
+
+      // THE EVIDENCE WAS WRITTEN - which is what makes "the collection is empty" a COLLECTION and
+      // not an empty fixture. Both internal calls of this pass were appended, through the real store.
+      expect(appended.mock.calls.length - before).toBeGreaterThanOrEqual(2);
+
+      // THE RECIPE WAS REFUSED. Not stored, not partially stored: the store throws before it writes.
+      expect(await recipes.getRecipe(actor.orgId, KEY, ACTION)).toBeNull();
+
+      // ── THE PROPERTY ─────────────────────────────────────────────────────────────────────
+      // Asserted over the WHOLE collection rather than one capture key, because the leak's shape is
+      // a NEW captureId every run: keyed assertions would each be green while the pile grew. Against
+      // the pre-fix code this reads 2, then 4, then 6 - which is why the run number rides along.
+      expect({ run, orphans: (await integrationCapturedCalls.find({})).length }).toEqual({ run, orphans: 0 });
+    }
+
+    // ── THE CONTROL, in the same test and against the same stores ──────────────────────────
+    //
+    // Without it, everything above also holds for a build in which the learn writes no evidence at
+    // all, or in which the page-state call is simply never captured. The identical action on the
+    // identical fixture, with only that one page-state call removed, LEARNS - and its evidence is
+    // still there afterwards, because that recipe landed.
+    transport = resetAgentState({ oneShotText: RESOLVER_JSON });
+    setDaemonConnectionResolver(() => daemonForFixture());
+    expect((await runTheAction()).success).toBe(true);
+    const learned = await recipes.getRecipe(actor.orgId, KEY, ACTION);
+    expect(learned).not.toBeNull();
+    expect(await captures.listCapture({
+      orgId: actor.orgId, integrationKey: KEY, actionName: ACTION, captureId: learned!.capturedCallsRef!,
+    })).not.toEqual([]);
+
+    appended.mockRestore();
+  }, 120_000);
+});
+
+// =============================================================================================
+// ACCEPTANCE: THE FOURTH REMOVAL PATH - AN ORDINARY SAVE THAT RENAMES AN ACTION.
+//
+// `IntegrationDefinitionStore.create(..., onConflict: 'replace')` is the ordinary builder save and
+// `achieve`'s in-place write. It re-attaches each stored recipe BY ACTION NAME
+// (`carryRecipesForward`), so an action the incoming set no longer names loses its recipe - which is
+// correct, the recipe describes that action and nothing else - and NOTHING collected the pile that
+// recipe was the only index into. Renaming or removing an action is an ordinary edit, and an agent
+// re-authoring an integration does it routinely.
+//
+// It is newly reachable BECAUSE of this slice: before it, `appendCapturedCall` had no production
+// caller at all, so the collection was always empty and this path removed nothing.
+//
+// ENTERED AT `saveAuthoredDefinition` - the builder's own save function, not the store method - so
+// the hop that actually performs this in production is the one under test.
+// =============================================================================================
+describe('ACCEPTANCE: a save that renames an action takes that action\'s evidence with it', () => {
+  it('drops the orphaned recipe AND its capture, and leaves the surviving action\'s alone', async () => {
+    // ── LEARN, for real, on both actions of the row. ────────────────────────────────────────
+    setDaemonConnectionResolver(() => daemonForFixture());
+    expect((await runTheAction()).success).toBe(true);
+    const learned = (await recipes.getRecipe(actor.orgId, KEY, ACTION))!;
+    const evidenceKey = {
+      orgId: actor.orgId, integrationKey: KEY, actionName: ACTION, captureId: learned.capturedCallsRef!,
+    };
+    expect((await captures.listCapture(evidenceKey)).length).toBeGreaterThan(0);
+
+    // A SECOND action on the SAME row that also learned, so the case can tell "collected what the
+    // save dropped" from "wiped the row's captures". It is written through the real recipe store
+    // and its evidence through the real captures store.
+    const KEPT_CAPTURE = 'cap-kept-action';
+    const keptKey = {
+      orgId: actor.orgId, integrationKey: KEY, actionName: WRITE_ACTION, captureId: KEPT_CAPTURE,
+    };
+    await captures.appendCapturedCall(keptKey, 0, {
+      method: 'GET', url: `${origin}/api/badge`, requestHeaderNames: ['accept'], responseBody: '{"unread":7}',
+    });
+    await recipes.putRecipe(actor.orgId, KEY, WRITE_ACTION, {
+      goal: `replay of ${KEY}/${WRITE_ACTION}`,
+      injectedCalls: [{ method: 'GET', urlTemplate: `${origin}/api/badge`, headerNames: [], idempotent: true }],
+      scriptedSteps: [],
+      lessons: [],
+      capturedCallsRef: KEPT_CAPTURE,
+    }, {});
+
+    // ── THE ORDINARY EDIT: the author renames one action and re-saves the package. ──────────
+    const row = definitionRow();
+    const saved = await saveAuthoredDefinition(
+      actor,
+      {
+        integrationKey: KEY,
+        authType: 'none',
+        configSchema: [],
+        actions: row.actions.map((a) => (a.actionName === ACTION ? { ...a, actionName: 'listar_processos' } : a)),
+      },
+      row.skillMd!,
+      definitions,
+    );
+    expect(saved.ok).toBe(true);
+
+    // THE RECIPE IS GONE - the store's own documented behaviour, restated here as the premise of
+    // the assertion that follows rather than as the thing being changed.
+    expect(await recipes.getRecipe(actor.orgId, KEY, ACTION)).toBeNull();
+    expect(await recipes.getRecipe(actor.orgId, KEY, 'listar_processos')).toBeNull();
+
+    // ── THE PROPERTY: ITS EVIDENCE WENT WITH IT ────────────────────────────────────────────
+    //
+    // Nothing could ever have reached this pile again: `getRecipe` answers null so the owner's
+    // DELETE route discards 0, `priorCaptureRef` reads a recipe that is absent, and the collection
+    // has no TTL and no other index.
+    expect(await captures.listCapture(evidenceKey)).toEqual([]);
+
+    // …AND ONLY ITS OWN. The action the save kept still has its recipe and its capture, so this is
+    // a collection of what was dropped and not a sweep of the row.
+    expect(await recipes.getRecipe(actor.orgId, KEY, WRITE_ACTION)).not.toBeNull();
+    expect((await captures.listCapture(keptKey)).length).toBe(1);
   }, 60_000);
 });
 

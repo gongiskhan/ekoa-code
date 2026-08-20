@@ -1718,8 +1718,9 @@ export async function runAutomationForAction(
  *  - THE EVIDENCE IS WRITTEN FIRST AND IS DURABLE ONLY IF THE RECIPE IS. The recipe carries
  *    `capturedCallsRef` pointing INTO the evidence, so writing the recipe first would publish a
  *    pointer to evidence that may not land. The order therefore stays evidence-then-recipe, and the
- *    orphan that order creates is COLLECTED: a write that did not land drops the evidence it just
- *    wrote, so nothing durable outlives the thing it is evidence for.
+ *    orphan that order creates is COLLECTED ON EVERY EXIT, A THROW INCLUDED - which is what the
+ *    `finally` below is for, and what the earlier `if (!stored)` was not. See it for the failure it
+ *    left open.
  */
 async function learnFromRun(args: {
   input: ActionRunInput;
@@ -1814,90 +1815,93 @@ async function learnFromRun(args: {
   // full cost, correctly.
 
   const captures = deps.captures ?? capturedCallsStore;
-  await persistEvidence(captures, { orgId: input.orgId, integrationKey, actionName, captureId }, exchanges, secrets);
+  const evidenceKey: CaptureKey = { orgId: input.orgId, integrationKey, actionName, captureId };
+  await persistEvidence(captures, evidenceKey, exchanges, secrets);
 
-  // What the recipe about to be replaced was distilled from - read BEFORE the write, because after
-  // it the pointer is the new one. This is the head of the discard below.
-  const supersededCaptureRef = await priorCaptureRef(input, deps);
-
-  let stored = false;
-  if (driftReason !== undefined) {
-    const supersedeRecipe = deps.supersedeRecipe
-      ?? ((orgId, key, action, next, opts) => integrationRecipeStore.supersedeRecipe(orgId, key, action, next, opts ?? {}));
-    const healed = await healDriftedRecipe(
-      {
-        orgId: input.orgId,
-        integrationKey,
-        actionName,
-        reason: driftReason,
-        secrets,
-        // NO ASSENT IS INHERITED HERE, and that is the point. A heal RE-AUTHORS the call set: the
-        // draft is compiled from a fresh pass and can name calls nothing has ever shown anybody.
-        // Carrying the action's old answer forward would let one approval, given once about an
-        // action, silently authorise every future set the system writes for itself. The heal is
-        // read-only by construction (a draft containing writes never reaches this line, refused
-        // above), so nothing legitimate is blocked by leaving this closed.
-      },
-      draft,
-      { supersedeRecipe },
-    );
-    if (healed.outcome !== 'healed') {
-      console.warn(`[automation] the re-learned recipe for ${integrationKey}/${actionName} did not go live: ${healed.outcome}`);
-    }
-    stored = healed.outcome === 'healed';
-  } else {
-    const putRecipe = deps.putRecipe
-      ?? ((orgId, key, action, d, opts) => integrationRecipeStore.putRecipe(orgId, key, action, d, opts));
-    const written = await putRecipe(input.orgId, integrationKey, actionName, draft, { secrets });
-    if (written.verdict === 'notfound') {
-      // NOT SILENT (the `global`-definition case). A recipe is tenant data and is written onto the
-      // org's OWN definition row, so an org running an action off somebody else's published/global
-      // definition has no row to write to and can never learn. That is a real and defensible
-      // limitation - one tenant's learning must not land on a row every org reads - but a learn
-      // that vanishes without a word is indistinguishable from a broken one.
-      console.warn(
-        `[automation] ${integrationKey}/${actionName} cannot store a recipe in org ${input.orgId}: ` +
-          'the org has no definition row of its own for this integration (it is running a published ' +
-          'or global definition). Learning is per-tenant; this action will keep using its automation.',
-      );
-    }
-    stored = written.verdict === 'ok';
-  }
-
-  // ── THE RAW EVIDENCE ENDS ITS LIFE HERE (capture -> learn -> compile -> DISCARD) ──────────
-  //
-  // The captures collection exists BECAUSE this data is unbounded and short-lived; the compiled
-  // recipe is the durable artefact. Every learn wrote a new captureId and nothing ever removed the
-  // old one, so a weekly action accumulated a fresh pile of full request/response bodies - the most
-  // sensitive thing this pipeline touches - every week, forever.
-  //
-  // The CURRENT recipe's evidence stays (it is what `capturedCallsRef` points at, and the reason a
-  // human can see what the live recipe was distilled from). What goes is the evidence behind the
-  // recipe this write just replaced. Discarded only once the new recipe is actually live, and never
-  // fatal: a leaked capture is untidy, losing the evidence for a recipe that failed to store would
-  // be destroying the only record of the pass.
-  if (stored && supersededCaptureRef && supersededCaptureRef !== captureId) {
-    await discardEvidence(
-      { orgId: input.orgId, integrationKey, actionName, captureId: supersededCaptureRef },
-      deps,
-    );
-  }
-
-  // ── AND THE ORPHAN THE OTHER WAY: EVIDENCE FOR A RECIPE THAT NEVER LANDED ────────────
+  // ── EVERY EXIT FROM HERE ON TAKES THE EVIDENCE WITH IT, INCLUDING A THROW ────────────────
   //
   // The evidence has to be written FIRST - the recipe carries `capturedCallsRef` INTO it, so writing
   // the recipe first would publish a pointer to documents that may never arrive. The consequence is
-  // that a write which does not land (`exists`, because `putRecipe` refuses to overwrite; `notfound`,
-  // because the org runs a published definition and has no row of its own) leaves a full pass's
-  // request and response bodies - the most sensitive thing this pipeline touches - with nothing
-  // pointing at them and nothing that would ever collect them. An action in that state runs weekly
-  // and orphans a fresh pile every week, forever.
+  // that a write which does not land leaves a full pass's request and response bodies - the most
+  // sensitive thing this pipeline touches - with nothing pointing at them and nothing that would
+  // ever collect them.
   //
-  // So evidence becomes DURABLE only once the thing it is evidence for is: the write is attempted,
-  // and if it did not land the evidence this pass just wrote is dropped again. Best effort and loud,
-  // exactly like the supersede discard above - and, unlike it, on the common path.
-  if (!stored) {
-    await discardEvidence({ orgId: input.orgId, integrationKey, actionName, captureId }, deps);
+  // IT IS A `finally` BECAUSE A THROW IS ONE OF THE WAYS A WRITE DOES NOT LAND, and the collector
+  // that only handled the RETURNING exits was the whole defect. `putRecipe` does not merely answer
+  // `exists`/`notfound`; it THROWS at its persistence-boundary proof (`assertCarriesNoValues`,
+  // `assertAnswerPointsAtACall`), and so does any store error. That throw propagates to the caller's
+  // `.catch`, which logs and reports the run as the success it was - so the discard simply never
+  // ran. And it repeats: the refusal is a property of the pass, decided at the store, so EVERY later
+  // run of that action writes a fresh pile, unbounded, with the recipe absent (so `priorCaptureRef`
+  // cannot reach them), no TTL, and no collector left that can.
+  let stored = false;
+  try {
+    // What the recipe about to be replaced was distilled from - read BEFORE the write, because after
+    // it the pointer is the new one. This is the head of the supersede discard below.
+    const supersededCaptureRef = await priorCaptureRef(input, deps);
+
+    if (driftReason !== undefined) {
+      const supersedeRecipe = deps.supersedeRecipe
+        ?? ((orgId, key, action, next, opts) => integrationRecipeStore.supersedeRecipe(orgId, key, action, next, opts ?? {}));
+      const healed = await healDriftedRecipe(
+        {
+          orgId: input.orgId,
+          integrationKey,
+          actionName,
+          reason: driftReason,
+          secrets,
+          // NO ASSENT IS INHERITED HERE, and that is the point. A heal RE-AUTHORS the call set: the
+          // draft is compiled from a fresh pass and can name calls nothing has ever shown anybody.
+          // Carrying the action's old answer forward would let one approval, given once about an
+          // action, silently authorise every future set the system writes for itself. The heal is
+          // read-only by construction (a draft containing writes never reaches this line, refused
+          // above), so nothing legitimate is blocked by leaving this closed.
+        },
+        draft,
+        { supersedeRecipe },
+      );
+      if (healed.outcome !== 'healed') {
+        console.warn(`[automation] the re-learned recipe for ${integrationKey}/${actionName} did not go live: ${healed.outcome}`);
+      }
+      stored = healed.outcome === 'healed';
+    } else {
+      const putRecipe = deps.putRecipe
+        ?? ((orgId, key, action, d, opts) => integrationRecipeStore.putRecipe(orgId, key, action, d, opts));
+      const written = await putRecipe(input.orgId, integrationKey, actionName, draft, { secrets });
+      if (written.verdict === 'notfound') {
+        // NOT SILENT (the `global`-definition case). A recipe is tenant data and is written onto the
+        // org's OWN definition row, so an org running an action off somebody else's published/global
+        // definition has no row to write to and can never learn. That is a real and defensible
+        // limitation - one tenant's learning must not land on a row every org reads - but a learn
+        // that vanishes without a word is indistinguishable from a broken one.
+        console.warn(
+          `[automation] ${integrationKey}/${actionName} cannot store a recipe in org ${input.orgId}: ` +
+            'the org has no definition row of its own for this integration (it is running a published ' +
+            'or global definition). Learning is per-tenant; this action will keep using its automation.',
+        );
+      }
+      stored = written.verdict === 'ok';
+    }
+
+    // ── THE RAW EVIDENCE ENDS ITS LIFE HERE (capture -> learn -> compile -> DISCARD) ────────
+    //
+    // The captures collection exists BECAUSE this data is unbounded and short-lived; the compiled
+    // recipe is the durable artefact. Every learn wrote a new captureId and nothing ever removed
+    // the old one, so a weekly action accumulated a fresh pile of full request/response bodies
+    // every week, forever.
+    //
+    // The CURRENT recipe's evidence stays (it is what `capturedCallsRef` points at, and the reason
+    // a human can see what the live recipe was distilled from). What goes is the evidence behind
+    // the recipe this write just replaced. Discarded only once the new recipe is actually live, and
+    // never fatal: a leaked capture is untidy, losing the evidence for a recipe that failed to
+    // store would be destroying the only record of the pass.
+    if (stored && supersededCaptureRef && supersededCaptureRef !== captureId) {
+      await discardEvidence({ ...evidenceKey, captureId: supersededCaptureRef }, deps);
+    }
+  } finally {
+    // Evidence becomes DURABLE only once the thing it is evidence for is. `discardEvidence` swallows
+    // and logs its own failures, so this can never replace the exception on its way past.
+    if (!stored) await discardEvidence(evidenceKey, deps);
   }
 }
 

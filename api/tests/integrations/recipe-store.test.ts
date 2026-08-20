@@ -242,8 +242,12 @@ describe('a recipe is not caller content', () => {
     expect(await recipes.getRecipe('orgA', 'citius', 'list_processos')).toBeNull();
   });
 
-  it('an ordinary save carries the stored recipe forward instead of dropping it', async () => {
-    await recipes.putRecipe('orgA', 'citius', 'list_processos', recipeDraft('v1'));
+  it('an ordinary save carries the stored recipe forward instead of dropping it - EVIDENCE INCLUDED', async () => {
+    const kept: CaptureKey = { orgId: 'orgA', integrationKey: 'citius', actionName: 'list_processos', captureId: 'cap-kept' };
+    await captures.appendCapturedCall(kept, 0, {
+      method: 'GET', url: 'https://portal.example.pt/api/processos?page=1', requestHeaderNames: ['cookie'], responseBody: '{"items":[]}',
+    });
+    await recipes.putRecipe('orgA', 'citius', 'list_processos', { ...recipeDraft('v1'), capturedCallsRef: 'cap-kept' });
     // The builder posts the package it was shown - which has never carried a recipe.
     const resaved = definitionDraft();
     resaved.actions[0]!.description = 'lista os processos (revisto)';
@@ -253,15 +257,63 @@ describe('a recipe is not caller content', () => {
     expect(stored?.goal).toBe('v1');
     expect(stored?.version).toBe(1);
     expect((await row()).actions[0]?.description).toBe('lista os processos (revisto)');
+    // THE CONTROL for the case below: a save that KEEPS the action keeps its evidence, so what
+    // that case asserts is a collection of what was DROPPED and not a sweep of the row.
+    expect(await captures.listCapture(kept)).toHaveLength(1);
   });
 
-  it('removing the action removes its recipe with it', async () => {
-    await recipes.putRecipe('orgA', 'citius', 'list_processos', recipeDraft('v1'));
+  /**
+   * THE FOURTH REMOVAL PATH (see `integrations/recipe-lifecycle.ts`'s enumeration).
+   *
+   * `carryRecipesForward` re-attaches per action NAME, so an action the incoming set no longer
+   * names loses its recipe - correct, the recipe describes that action and nothing else. What was
+   * missing is the other half: the recipe is the ONLY index into `integration_captured_calls`, so
+   * the pile it named became unreachable to every collector there is (no TTL; `priorCaptureRef`
+   * reads a recipe that is now absent; the owner's DELETE route has nothing to clear and answers
+   * `evidenceDiscarded: 0`; `listCaptureIds` has no production caller). Renaming or removing an
+   * action is an ORDINARY edit.
+   */
+  it('removing the action removes its recipe with it - AND the evidence that recipe named', async () => {
+    const dropped: CaptureKey = { orgId: 'orgA', integrationKey: 'citius', actionName: 'list_processos', captureId: 'cap-dropped' };
+    const survivor: CaptureKey = { orgId: 'orgA', integrationKey: 'citius', actionName: 'abrir_processo', captureId: 'cap-survivor' };
+    for (const key of [dropped, survivor]) {
+      await captures.appendCapturedCall(key, 0, {
+        method: 'GET', url: 'https://portal.example.pt/api/processos?page=1', requestHeaderNames: ['cookie'], responseBody: '{"items":[]}',
+      });
+    }
+    await recipes.putRecipe('orgA', 'citius', 'list_processos', { ...recipeDraft('v1'), capturedCallsRef: 'cap-dropped' });
+    await recipes.putRecipe('orgA', 'citius', 'abrir_processo', { ...recipeDraft('v1'), capturedCallsRef: 'cap-survivor' });
+    expect(await captures.listCapture(dropped)).toHaveLength(1);
+
     const trimmed = definitionDraft();
     trimmed.actions = [{ actionName: 'abrir_processo', description: 'abre', mutates: false }];
     await definitions.create(trimmed, { actor: author, onConflict: 'replace' });
+
     expect(await recipes.getRecipe('orgA', 'citius', 'list_processos')).toBeNull();
-    expect(await recipes.listRecipes('orgA', 'citius')).toEqual([]);
+    // …and its evidence went with it.
+    expect(await captures.listCapture(dropped)).toEqual([]);
+    // …while the action the save KEPT still has both. Nothing here sweeps a row.
+    expect(await recipes.getRecipe('orgA', 'citius', 'abrir_processo')).not.toBeNull();
+    expect(await captures.listCapture(survivor)).toHaveLength(1);
+  });
+
+  it('a RENAME is the same removal - the incoming action set simply no longer names it', async () => {
+    // The commonest shape of the path above, and the one an agent re-authoring an integration
+    // produces routinely: the action is not deleted, it is called something else.
+    const orphaned: CaptureKey = { orgId: 'orgA', integrationKey: 'citius', actionName: 'list_processos', captureId: 'cap-renamed' };
+    await captures.appendCapturedCall(orphaned, 0, {
+      method: 'GET', url: 'https://portal.example.pt/api/processos?page=1', requestHeaderNames: ['cookie'], responseBody: '{"items":[]}',
+    });
+    await recipes.putRecipe('orgA', 'citius', 'list_processos', { ...recipeDraft('v1'), capturedCallsRef: 'cap-renamed' });
+
+    const renamed = definitionDraft();
+    renamed.actions[0] = { actionName: 'listar_processos', description: 'lista os processos', mutates: false };
+    await definitions.create(renamed, { actor: author, onConflict: 'replace' });
+
+    // Neither name carries it: the old one is gone from the row, the new one never learned.
+    expect(await recipes.getRecipe('orgA', 'citius', 'list_processos')).toBeNull();
+    expect(await recipes.getRecipe('orgA', 'citius', 'listar_processos')).toBeNull();
+    expect(await captures.listCapture(orphaned)).toEqual([]);
   });
 });
 

@@ -225,6 +225,57 @@ export class CapturedCallsStore {
   }
 }
 
+/** A recipe as a REMOVAL path sees it once it is gone: which action it belonged to, and the pile it
+ *  named. Deliberately structural - `IntegrationActionRecipe` lives in the definitions tree, and a
+ *  collector that imported it would drag the file-based registry into every caller. */
+export interface RemovedRecipe {
+  actionName: string;
+  capturedCallsRef?: string;
+}
+
+/**
+ * THE PAIRING - the ONE implementation of "a recipe that has been REMOVED takes its evidence with
+ * it", reached by every removal path there is (`integrations/recipe-lifecycle.ts` enumerates them).
+ *
+ * WHY IT LIVES HERE AND NOT IN `recipe-lifecycle.ts`. Two of the four removal paths remove the
+ * recipe by CLEARING it (that module's own job); the other two remove it as a side effect of a write
+ * that rewrote the action set, and only the writer knows what it dropped. So the pairing has to be
+ * callable from `definition-store.ts` - which stands deliberately on the database alone and must not
+ * gain a runtime edge to the file-based registry (`recipe-store.ts` -> `definitions.ts`). This
+ * module has no such edge, and the operation IS the end of the evidence lifecycle this module owns.
+ *
+ * BEST EFFORT AND LOUD, per recipe. The removal is the operation and it has already happened by the
+ * time this runs; a throw here must not undo it or be reported as a failed removal. A leaked capture
+ * is untidy, and a removal that reported failure after actually removing something is worse.
+ */
+export async function discardEvidenceOfRemovedRecipes(
+  scope: { orgId: string; integrationKey: string },
+  removed: readonly RemovedRecipe[],
+  deps: { discardCapture?: (key: CaptureKey) => Promise<number> } = {},
+): Promise<number> {
+  const discardCapture = deps.discardCapture ?? ((key: CaptureKey) => capturedCallsStore.discardCapture(key));
+  let discarded = 0;
+  for (const recipe of removed) {
+    // A recipe compiled before `capturedCallsRef` existed names no pile. Deleting on that would be
+    // a delete nothing asked for.
+    if (recipe.capturedCallsRef === undefined || recipe.capturedCallsRef === '') continue;
+    try {
+      discarded += await discardCapture({
+        orgId: scope.orgId,
+        integrationKey: scope.integrationKey,
+        actionName: recipe.actionName,
+        captureId: recipe.capturedCallsRef,
+      });
+    } catch (err) {
+      console.warn(
+        `[integrations] the evidence ${recipe.capturedCallsRef} of ${scope.integrationKey}/${recipe.actionName} `
+          + `outlived the recipe that named it: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+  return discarded;
+}
+
 function isTenantScoped(key: CaptureKey): boolean {
   return key.orgId !== '' && key.integrationKey !== '' && key.actionName !== '' && key.captureId !== '';
 }

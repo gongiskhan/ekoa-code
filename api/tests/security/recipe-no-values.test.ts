@@ -201,6 +201,52 @@ describe('the recipe store refuses any recipe that carries a value', () => {
     expect(await recipes.getRecipe('orgA', 'citius', 'list_processos')).toBeNull();
   });
 
+  /**
+   * THE SUPERSEDE'S OWN FIELD GOES THROUGH THE SAME PROOF - it did not.
+   *
+   * `supersedeRecipe` destructured `reason` OUT of the payload before `assertCarriesNoValues`, so
+   * the one string in a supersede that this repo did NOT compile was the one string exempt from all
+   * three legs at once: the run's SecretRegistry, `looksLikeLiteralSecret` and `LIMITS.stringChars`.
+   *
+   * It is the LEAST trusted string in the payload, not the most: it is `classifyReplayDrift`'s
+   * signal reason - daemon-supplied or fetch-error text, i.e. bytes from the site - and it is
+   * written as `supersedes.reason` onto the DEFINITION document, so it rides every read and every
+   * compare-and-swap of that row (Trap T2, the whole bounded-recipe argument), and `recipeSummary`
+   * puts it on the wire to the owner.
+   */
+  it('refuses a supersede whose REASON carries a live value, or is a dump', async () => {
+    expect((await recipes.putRecipe('orgA', 'citius', 'list_processos', baseDraft(), { secrets: liveRegistry() })).verdict).toBe('ok');
+    const supersede = (reason: string, over: Partial<RecipeDraft> = {}) =>
+      recipes.supersedeRecipe(
+        'orgA', 'citius', 'list_processos',
+        { ...baseDraft(), ...over, reason },
+        { secrets: liveRegistry() },
+      );
+
+    // THE CONTROL, in the identical call shape: the SAME token one field over, in `goal`, is
+    // refused. Without it a green assertion below could mean the registry never held this value.
+    await expect(supersede('the endpoint moved', { goal: `replay ${BEARER}` })).rejects.toThrow(RecipeStoreError);
+
+    // …and now in `reason` itself, which is exactly the shape a drift reason takes: the replay's
+    // own failure text, quoting what came back off the wire.
+    await expect(supersede(`replayed call 1 could not be made: 401 for Bearer ${BEARER}`)).rejects.toThrow(RecipeStoreError);
+    // The literal-secret leg too, with a value the registry never held (one the SITE minted).
+    await expect(supersede(`replayed call 1 answered 401: ${CSRF}${CSRF}Aa`)).rejects.toThrow(RecipeStoreError);
+    // …and the BOUND, which is the third thing the exemption gave away.
+    await expect(supersede('x'.repeat(50_000))).rejects.toThrow(RecipeStoreError);
+
+    // NOTHING LANDED. The refusals are refusals, not partial writes: still version 1, no lineage.
+    const held = await recipes.getRecipe('orgA', 'citius', 'list_processos');
+    expect(held!.version).toBe(1);
+    expect(held!.supersedes).toBeUndefined();
+
+    // …AND AN ORDINARY REASON STILL SUPERSEDES, so this is a boundary and not a wall - every real
+    // drift reason this repo produces is a sentence of this shape.
+    expect((await supersede('replayed call 1 answered 404')).verdict).toBe('ok');
+    const healed = await recipes.getRecipe('orgA', 'citius', 'list_processos');
+    expect(healed!.supersedes).toEqual({ version: 1, reason: 'replayed call 1 answered 404' });
+  });
+
   it('refuses a secret-SHAPED literal even with no registry to compare against', () => {
     const draft = baseDraft();
     const call = draft.injectedCalls[0]!;

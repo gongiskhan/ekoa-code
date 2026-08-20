@@ -54,14 +54,19 @@ function recipe(over: Record<string, unknown> = {}): unknown {
     compiledAt: '2026-08-18T10:00:00.000Z',
     ...over,
   };
-  // THE ANSWER POINTER, defaulted to the LAST call - which is exactly what these fixtures meant
-  // while the replay simply answered with the last call's body, so every case below goes on
-  // asserting what it always asserted. A case about the pointer overrides it. A recipe with no
-  // calls gets none: a pointer must index a call that exists, and `parseCompiledRecipe` refuses
-  // one that does not.
+  // THE ANSWER POINTER. A one-call fixture is defaulted - there is exactly one body it could
+  // answer with, so naming it says nothing. A MULTI-CALL fixture must SAY which one, and that is a
+  // rule about this suite rather than about the fixtures: the default used to be
+  // `calls.length - 1`, which is precisely the reading `answerOf` exists to REPLACE, so every
+  // multi-call fixture silently agreed with the bug and the pre-fix code passed all of them. A
+  // recipe with no calls gets no pointer: a pointer must index a call that exists, and
+  // `parseCompiledRecipe` refuses one that does not.
   const calls = merged.injectedCalls;
-  if (merged.answersWith === undefined && Array.isArray(calls) && calls.length > 0) {
-    merged.answersWith = { callIndex: calls.length - 1, matchedBy: 'run-output-identity' };
+  if (merged.answersWith === undefined && Array.isArray(calls)) {
+    if (calls.length > 1) {
+      throw new Error('a fixture with more than one injected call must state answersWith - "the last call" is the defect');
+    }
+    if (calls.length === 1) merged.answersWith = { callIndex: 0, matchedBy: 'run-output-identity' };
   }
   return merged;
 }
@@ -79,11 +84,23 @@ const TWO_ORIGIN_RECIPE = recipe({
     { method: 'GET', urlTemplate: 'https://portal.example/api/cases', headerNames: [], idempotent: true },
     { method: 'GET', urlTemplate: 'https://cdn.other.example/api/docs?ref={{input.ref}}', headerNames: [], idempotent: true },
   ],
+  // THE SECOND call answers - stated, not defaulted. It is the one carrying the `ref` hole, which
+  // is what the coverage cases below turn on.
+  answersWith: { callIndex: 1, matchedBy: 'run-output-identity' },
 });
 
 type Answer = { status: number; bodyText: string };
 
-function session(answer: Answer | (() => never)): BrowserSession & { calls: unknown[]; acts: unknown[] } {
+/**
+ * The page, as the replay sees it.
+ *
+ * `answer` may be a FUNCTION OF THE CALL'S URL, and that is not a convenience. A stub that hands
+ * back one canned body for every call cannot tell `calls[answersWith.callIndex]` from
+ * `calls[calls.length - 1]` - so with it, the property this whole module is named for is
+ * unobservable no matter what is asserted. A thrower (which never returns) still fits the shape and
+ * stands in for "the page could not make the call at all".
+ */
+function session(answer: Answer | ((url: string) => Answer)): BrowserSession & { calls: unknown[]; acts: unknown[] } {
   const calls: unknown[] = [];
   const acts: unknown[] = [];
   return {
@@ -101,8 +118,7 @@ function session(answer: Answer | (() => never)): BrowserSession & { calls: unkn
     accessibilitySnapshot: () => undefined,
     injectCall: vi.fn(async (call: unknown) => {
       calls.push(call);
-      // A thrower stands in for "the page could not make the call at all"; it never returns.
-      const a: Answer = typeof answer === 'function' ? answer() : answer;
+      const a: Answer = typeof answer === 'function' ? answer((call as { url: string }).url) : answer;
       return { status: a.status, ok: a.status < 400, bodyText: a.bodyText, responseHeaderNames: ['content-type'] };
     }),
   } as unknown as BrowserSession & { calls: unknown[]; acts: unknown[] };
@@ -312,6 +328,9 @@ describe('replayCompiledAction - the write gate (trap T4)', () => {
       { method: 'GET', urlTemplate: 'https://portal.example/api/cases', headerNames: [], idempotent: true },
       { method: 'POST', urlTemplate: 'https://portal.example/api/cases/{{input.ref}}/notes', headerNames: [], bodyTemplate: '{"ref":"{{input.ref}}"}', idempotent: false },
     ],
+    // Named because the helper requires a multi-call fixture to name one; which call it names is
+    // irrelevant to every case here, because the gate refuses before ANY call runs.
+    answersWith: { callIndex: 1, matchedBy: 'run-output-identity' },
   });
 
   it('stops BEFORE any call runs, so a partial replay cannot half-mutate the site', async () => {
@@ -553,7 +572,14 @@ describe('replayCompiledAction - what an ARGUMENT may not decide', () => {
     // below asks - is whether the call the caller actually SEES the body of can carry the argument.
     // Widening this rule to "every call must carry every hole" would refuse this fixture, which is a
     // perfectly good recipe; narrowing it away entirely would let the constant-answer recipe through.
-    const browser = session({ status: 200, bodyText: '{"items":[{"id":1}]}' });
+    // PER-URL BODIES, so the answer is observable: without them both calls return the same bytes
+    // and `result.data` cannot distinguish which call was read.
+    const browser = session((url) => ({
+      status: 200,
+      bodyText: url.startsWith('https://cdn.other.example')
+        ? '{"items":[{"id":2}],"from":"docs"}'
+        : '{"items":[{"id":1}],"from":"cases"}',
+    }));
     const result = await replayCompiledAction(
       { ...base, args: { ref: '2024-1' }, browser, classify: always(ADVERSARIAL) },
       { loadRecipe: async () => TWO_ORIGIN_RECIPE },
@@ -566,6 +592,12 @@ describe('replayCompiledAction - what an ARGUMENT may not decide', () => {
     // The hole-free call is the one this recipe does NOT answer with. That is the whole difference
     // between this case and the next, so it is asserted rather than left to the fixture's default.
     expect((TWO_ORIGIN_RECIPE as { answersWith: { callIndex: number } }).answersWith.callIndex).toBe(1);
+    // …AND THE ANSWER IS THAT CALL'S BODY. Here the named call IS the last one, so this half alone
+    // cannot fail under the pre-fix `calls[calls.length - 1]` reading - it is the CONTROL for the
+    // case below, which names the first of two. Both directions are needed: one pins the reading
+    // against `calls[0]`, the other against `calls[calls.length - 1]`.
+    expect((result as Extract<ReplayResult, { outcome: 'ok' }>).data)
+      .toEqual({ items: [{ id: 2 }], from: 'docs' });
   });
 
   // ===========================================================================================
@@ -612,7 +644,18 @@ describe('replayCompiledAction - what an ARGUMENT may not decide', () => {
     // THE CONTROL. Identical calls, identical argument; the only difference is which call the
     // recipe names as the answer. Without it "nothing was sent" above would also hold for a
     // fixture whose calls cannot be sent at all.
-    const browser = session({ status: 200, bodyText: '{"items":[{"id":1}]}' });
+    //
+    // AND IT IS THE CASE THAT PINS `answerOf` ITSELF. The named call is the FIRST of two and the
+    // page answers a DIFFERENT body per URL, so `result.data` below is the one assertion in this
+    // suite that separates `calls[answersWith.callIndex]` from `calls[calls.length - 1]` - the
+    // exact pre-fix reading. Both halves are load-bearing: with one canned body for every call,
+    // asserting `data` here would prove nothing at all.
+    const browser = session((url) => ({
+      status: 200,
+      bodyText: url.includes('/api/summary')
+        ? '{"items":[{"id":9}],"from":"summary"}'
+        : '{"items":[{"id":1}],"from":"cases"}',
+    }));
     const soundAnswer = recipe({
       injectedCalls: [
         { method: 'GET', urlTemplate: 'https://portal.example/api/cases?ref={{input.ref}}', headerNames: [], idempotent: true },
@@ -629,6 +672,13 @@ describe('replayCompiledAction - what an ARGUMENT may not decide', () => {
       'https://portal.example/api/cases?ref=2025-9',
       'https://portal.example/api/summary',
     ]);
+    // THE PROPERTY THIS SLICE IS NAMED FOR: the answer is the call the recipe NAMES, never "the
+    // last one that finished". Under the pre-fix reading this is the summary's body, which is the
+    // wrong answer to the question the caller asked - `success: true`, no drift, no other symptom.
+    expect((result as Extract<ReplayResult, { outcome: 'ok' }>).data)
+      .toEqual({ items: [{ id: 1 }], from: 'cases' });
+    expect((result as Extract<ReplayResult, { outcome: 'ok' }>).calls[1]!.body)
+      .toEqual({ items: [{ id: 9 }], from: 'summary' });
   });
 
   it('does not fire for a recipe that names NO answer - there is no answer to be constant about', async () => {

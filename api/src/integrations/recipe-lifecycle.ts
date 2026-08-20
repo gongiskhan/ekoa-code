@@ -1,5 +1,6 @@
 /**
- * integrations/recipe-lifecycle.ts - the ONE way a compiled recipe is REMOVED.
+ * integrations/recipe-lifecycle.ts - the CLEAR, paired with its evidence, and the map of every
+ * other way a compiled recipe can go.
  *
  * ── THE INVARIANT ────────────────────────────────────────────────────────────────────────────
  *
@@ -10,14 +11,37 @@
  * `priorCaptureRef`, which reads the CURRENT recipe. Remove the recipe without dropping its
  * evidence and the pile is unreachable to every collector there is, permanently.
  *
- * The spine closed that leak twice - the evidence behind a REPLACED recipe, and the evidence behind
- * a recipe that never LANDED. Clearing is the third way a recipe can go and had no collector at all:
- * `IntegrationRecipeStore.clearRecipe` did return the dropped recipe, and its one caller narrowed it
- * to a boolean. It is routinely reachable (`arguments-uncovered` is the ordinary listener shape),
- * and two callers of one action using different argument sets repeat the learn/clear cycle, so the
- * orphaned piles accumulated without bound.
+ * ── THE REMOVAL PATHS, ENUMERATED FROM THE CODE ──────────────────────────────────────────────
  *
- * ── WHY IT IS A MODULE AND NOT A METHOD ──────────────────────────────────────────────────────
+ * An earlier revision of this header said "clearing is the THIRD way a recipe can go" and that
+ * `forgetRecipe` was reached by BOTH removal paths "so a future third cannot forget". Both counts
+ * were wrong, and the way they were wrong is the point: they were counted from what the author had
+ * in mind rather than from what removes a recipe. Grep `recipe` across `integrations/` and there
+ * are FOUR, each with the collector that closes it named:
+ *
+ *   1. THE CLEAR - `IntegrationRecipeStore.clearRecipe`, reached by the owner's DELETE route
+ *      (`routes/integrations.ts`) and by the run loop's refusal path
+ *      (`automation/service.ts` `clearRefusedRecipe`). Collector: `forgetRecipe` below, which is
+ *      why both callers go through it instead of each remembering to.
+ *   2. THE SUPERSEDE - `IntegrationRecipeStore.supersedeRecipe`, the self-heal write, which
+ *      REPLACES the recipe (and therefore its pointer). Collector: `learnFromRun`'s
+ *      `priorCaptureRef`, read BEFORE the write and discarded after it lands.
+ *   3. THE WRITE THAT NEVER LANDS - `learnFromRun` writes the evidence FIRST (the recipe carries
+ *      the pointer INTO it), so a write that answers `exists`/`notfound`, or THROWS at the store's
+ *      persistence-boundary proof, leaves a pile nothing names. Collector: that function's
+ *      `finally`, which is a `finally` precisely because the throw is a real exit.
+ *   4. THE ACTION SET REWRITTEN - `IntegrationDefinitionStore.create(..., onConflict: 'replace')`,
+ *      the ordinary builder save and `achieve`'s in-place write. `carryRecipesForward` re-attaches
+ *      each stored recipe BY ACTION NAME, so an action the incoming set no longer names (renamed,
+ *      removed - an ordinary edit, and what an agent re-authoring an integration does routinely)
+ *      loses its recipe. Collector: `discardEvidenceOfRemovedRecipes`, called there.
+ *
+ * Paths 2 and 4 remove a recipe as a SIDE EFFECT of a write that rewrote something else, and only
+ * the writer knows what it dropped - which is why the pairing itself is one function in
+ * `captured-calls-store.ts` (see its note) that all four reach, rather than one function here that
+ * two of them structurally could not call.
+ *
+ * ── WHY THE CLEAR IS A MODULE AND NOT A METHOD ───────────────────────────────────────────────
  *
  * It spans two stores with deliberately separate lifecycles (`recipe-store.ts` is "the ONE writer of
  * a compiled recipe"; `captured-calls-store.ts` owns evidence that is unbounded and short-lived),
@@ -33,7 +57,7 @@
  */
 import type { Actor } from '@ekoa/shared';
 import { integrationRecipeStore } from './recipe-store.js';
-import { capturedCallsStore, type CaptureKey } from './captured-calls-store.js';
+import { discardEvidenceOfRemovedRecipes, type CaptureKey } from './captured-calls-store.js';
 
 /** Which action's recipe, and on whose behalf. `visibleTo` is present for a PRINCIPAL caller (the
  *  route) and absent for a machine caller that already holds the verified owning org (the run loop). */
@@ -81,22 +105,17 @@ export async function forgetRecipe(
     scope.actionName,
     scope.visibleTo === undefined ? {} : { visibleTo: scope.visibleTo },
   );
-  if (!dropped?.capturedCallsRef) return { dropped: dropped ?? null, evidenceDiscarded: 0 };
+  if (!dropped) return { dropped: null, evidenceDiscarded: 0 };
 
-  const discardCapture = deps.discardCapture ?? ((key: CaptureKey) => capturedCallsStore.discardCapture(key));
-  try {
-    const evidenceDiscarded = await discardCapture({
-      orgId: scope.orgId,
-      integrationKey: scope.integrationKey,
+  // THE SHARED PAIRING, not a second copy of it: the same function paths 2 and 4 reach, so the
+  // failure posture and the key a discard is asked for cannot drift between the four.
+  const evidenceDiscarded = await discardEvidenceOfRemovedRecipes(
+    { orgId: scope.orgId, integrationKey: scope.integrationKey },
+    [{
       actionName: scope.actionName,
-      captureId: dropped.capturedCallsRef,
-    });
-    return { dropped, evidenceDiscarded };
-  } catch (err) {
-    console.warn(
-      `[integrations] the evidence ${dropped.capturedCallsRef} of ${scope.integrationKey}/${scope.actionName} `
-        + `outlived the recipe that named it: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    return { dropped, evidenceDiscarded: 0 };
-  }
+      ...(dropped.capturedCallsRef !== undefined ? { capturedCallsRef: dropped.capturedCallsRef } : {}),
+    }],
+    deps.discardCapture ? { discardCapture: deps.discardCapture } : {},
+  );
+  return { dropped, evidenceDiscarded };
 }
