@@ -54,8 +54,18 @@ import { collectionName } from '../data/collections-engine.js';
  *  unbounded array here would ride into a JSON response and a model's next prompt alike. */
 export const COMPOSE_MAX_ITEMS = 200;
 
-/** The most collection rows the join key set is built from. The reader lists a whole collection
- *  (that is all the engine can do), so the cap is stated here rather than pretended away. */
+/**
+ * The most collection rows the join key set is built from. The reader lists a whole collection
+ * (that is all the engine can do), so the cap is stated here rather than pretended away.
+ *
+ * A CAP ON THE KEY SET IS A CAP ON THE ANSWER, and that is why it is REPORTED rather than merely
+ * documented. `COMPOSE_MAX_ITEMS` truncates a list the caller can see is truncated - they asked for
+ * rows and got a page of them. This one truncates the QUESTION: the join silently considers a
+ * PREFIX of the collection, so an action row whose client sits past row 5000 is dropped from an
+ * answer presented as "the processes of clients under 40". A subset served as the whole is a wrong
+ * answer, not a partial one, so `collectionTruncated` travels on every composed result and the
+ * caller decides what to do about it.
+ */
 export const COMPOSE_MAX_COLLECTION_ROWS = 5_000;
 
 /**
@@ -221,6 +231,11 @@ export type ComposeRows =
  * The two-array case is the one that matters. Picking the longer, or the first, or the one whose
  * name looks right, would be this module inventing an interpretation of a third party's response -
  * and the caller would never know which array their answer came from.
+ *
+ * IT IS ONLY EVER ASKED ABOUT A SUCCESSFUL RESULT, and that is the caller's rule rather than this
+ * function's: a failed execute carries no `data`, so this would answer "the action returned no list
+ * to compose over" - true of the value, and a LIE about what happened, since what happened was a
+ * remote 500. `integration-achieve.ts` returns a failed execute verbatim before reaching here.
  */
 export function rowsOf(data: unknown): ComposeRows {
   if (Array.isArray(data)) {
@@ -248,7 +263,13 @@ export interface ComposeSummary {
   join: { resultField: string; collectionField: string };
   /** How many rows the ACTION returned. */
   scanned: number;
-  /** How many COLLECTION rows satisfied the predicate. */
+  /** How many COLLECTION rows the key set was built from - the number really considered, capped by
+   *  `COMPOSE_MAX_COLLECTION_ROWS`, never the number the collection holds. */
+  collectionScanned: number;
+  /** True when the collection held MORE rows than were considered: the key set is a PREFIX, and
+   *  `items` may be missing rows a full scan would have kept. See `COMPOSE_MAX_COLLECTION_ROWS`. */
+  collectionTruncated: boolean;
+  /** How many of the CONSIDERED collection rows satisfied the predicate. */
   matchedCollectionRows: number;
   /** How many action rows survived the join. */
   matched: number;
@@ -292,6 +313,12 @@ export function composeRows(input: {
       where: input.plan.where,
       join: input.plan.join,
       scanned,
+      collectionScanned: considered.length,
+      // Stated as "fewer rows reached the key set than the collection held", NOT as a comparison
+      // against the constant: delete the `slice` above and this reads `false`, which is exactly the
+      // reading a caller would then be entitled to. A flag derived from the cap instead of from the
+      // work done would keep claiming a truncation that no longer happens.
+      collectionTruncated: input.collectionRows.length > considered.length,
       matchedCollectionRows,
       matched: all.length,
       truncated: all.length > COMPOSE_MAX_ITEMS,

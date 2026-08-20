@@ -242,6 +242,56 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   S9. WHAT IS NOT: the Citius path itself is NOT claimed as proven by this slice, and a real session
   is still the only thing that can prove it.
 
+- **`the-reuse-ladder-made-a-working-call-worse`** (**FIXED 2026-08-20**, S4/S5 verification round
+  three, was MAJOR x2; see `docs/decisions.md` D-S4-2 / D-S5-2a). One rule broken twice: a ladder
+  may add cheaper ways to answer, and may never take away an answer the product already gave under a
+  standing human approval.
+  (a) PARAMETRIZE SUBTRACTED ANSWERS. A model plan that failed `verifyPlannedArgs` refused the whole
+  call (`parametrize_refused`) - so a call that had been executing with the caller's own arguments
+  stopped executing because a model wrote a bad one. It is the same defect round two fixed for the
+  compose rung and left standing here. FIXED: the plan is discarded (`verdict.args` is null, so not
+  one model value survives), the request goes out as the caller shaped it, and the rung is reported
+  `refused` WITH its `violations` on the ladder beside the answer. `parametrize_refused` is removed
+  from the refusal union - nothing emits it, and a code that cannot occur is a lie.
+  (b) COMPOSE SWALLOWED THE UPSTREAM FAILURE. A failed execute carries no `data`, so `rowsOf` read
+  `unshaped` and the caller was told "the action returned no list to compose over" instead of the
+  remote's own 500 - a less accurate story, naming the wrong system. FIXED: `!success` returns on the
+  `executed` arm verbatim, BEFORE the collection is read, with compose recorded `skipped`.
+  PROVEN BY MUTATION: restoring each pre-fix behaviour reds `achieve-reuse-ladder.test.ts` and
+  `contract/integrations-reuse-ladder.test.ts` (three tests, module + wire).
+
+- **`compose-max-collection-rows-truncated-the-join-silently-and-unpinned`** (**FIXED 2026-08-20**,
+  S4/S5 round three, was MAJOR; see `docs/decisions.md` D-S5-2b). Two defects in one constant.
+  (a) A SILENT WRONG ANSWER: the join built its key set from the first 5000 collection rows with
+  nothing on the wire to say so, so an action row whose client sits past row 5000 was dropped from an
+  answer presented as the whole. Distinct in kind from `COMPOSE_MAX_ITEMS`, which truncates a list
+  the caller can SEE is truncated. FIXED: `collectionScanned` + `collectionTruncated` on
+  `ComposeSummary`, on the shared `AchieveComposition` (additive; OpenAPI + cortex-cli regenerated in
+  the same commit), in the ladder detail and on the audit row.
+  (b) AN UNPINNED BOUND: deleting the cap left the estate green. FIXED: the flag is derived from the
+  WORK DONE (`collectionRows.length > considered.length`), not from the constant, so deleting the cap
+  reads `false` and reds; a boundary pair at exactly 5000 and 5001 rows with the only matching row
+  last, plus a literal value pin, reds on deletion, on a one-row drift and on the signal being
+  silenced. All three mutants run.
+
+- **`two-more-assertions-in-the-reuse-ladder-suite-could-not-fail`** (**FIXED 2026-08-20**, S4/S5
+  round three, LOW severity, process finding). Found by a 39-mutant sweep (34 scripted, 5 hand-applied for this
+  round's own fixes) over every safety-critical assertion in the four slice suites - each mutant applied to the SOURCE, run, restored and verified
+  byte-identical. Two survived and are now closed by tests:
+  (a) `argSlotsOf`'s "TARGETING WINS" rule was untested: no fixture had one name landing in BOTH the
+  path and the body, so making the body assignment unconditional stayed green. On a write that is a
+  real hole - a body template echoing `{{numero}}` would launder the path occurrence and make the
+  resource selector model-fillable. Closed by a both-slots fixture asserting `targeting` and a
+  `verifyPlannedArgs` refusal.
+  (b) `composeRows`' COLLECTION-side `String(k)` was untested: the only numeric-key case put the
+  number on the ACTION side, so dropping the collection-side coercion changed nothing. Closed by the
+  mirror direction.
+  A third survivor is recorded as a DISMISSAL rather than a hole: deleting the parametrize rung's
+  `binding.kind !== 'granted'` skip is safe (an empty allow-list fails closed in
+  `assertOriginAllowed`, so the plan is discarded anyway). What it costs is a model call paid for to
+  learn nothing, so the test that kills it asserts `turns() === 0`, which is the claim that is
+  actually true.
+
 - **`compose-rung-scoped-its-decisions-to-a-unit-app_data-does-not-have`** (**FIXED 2026-08-20**,
   S5 verification round two, was CRITICAL x2 + MAJOR x2; see `docs/decisions.md` D-S5-1). Four
   defects, one root cause: decisions taken per ARTIFACT, per PLAN or per SLOT-TABLE over things

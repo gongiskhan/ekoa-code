@@ -212,18 +212,25 @@ export interface AchieveContext extends CapabilityContext {
  * ADDED BY THE REUSE LADDER (additive - the wire carries `code` as a free string, so a client that
  * has never heard of these still reads them as refusals):
  *
- *   `parametrize_refused`   a model-filled ARGUMENT plan arrived and did not pass
- *                           `verifyPlannedArgs`. Nothing was sent. Includes the D1 case: an
- *                           argument that does not land in the body, on an action that can write.
- *   `compose_refused`       a composition arrived and did not pass `verifyComposePlan`.
+ *   `compose_refused`       a composition arrived and did not pass `verifyComposePlan`. Refusing is
+ *                           right HERE and only here: the plan is judged BEFORE anything runs, so
+ *                           refusing costs the caller a call they have not yet made. Nothing that
+ *                           already worked is taken away by it.
  *   `compose_unknown_collection`   the named collection is not one this caller holds.
  *   `compose_unshaped_result`      the action's answer carries no single list to compose over.
  *
- * THERE IS NO "COMPOSED WRITE" REFUSAL, and its absence is the point: the compose rung is not
- * entered for an action that can write, so a write cannot be refused by it. An earlier shape asked
- * a model first and refused afterwards, which took a call that ran under a standing human approval
- * and made it depend on a model's judgement to run at all. A rung that can only ADD an answer must
- * never be able to SUBTRACT one.
+ * THERE IS NO "COMPOSED WRITE" REFUSAL AND NO "PARAMETRIZE REFUSED", and both absences are the same
+ * rule: A RUNG THAT CAN ONLY ADD AN ANSWER MUST NEVER BE ABLE TO SUBTRACT ONE.
+ *
+ *   - the compose rung is not ENTERED for an action that can write, so a write cannot be refused by
+ *     it. An earlier shape asked a model first and refused afterwards, which took a call that ran
+ *     under a standing human approval and made it depend on a model's judgement to run at all.
+ *   - the parametrize rung DISCARDS a plan its suite rejects and lets the call proceed on the
+ *     caller's own arguments. An earlier shape refused the whole call, which is the same defect one
+ *     rung up: a request that executed before this slice - the caller's arguments, the caller's
+ *     action, a human's standing approval - stopped executing because a model wrote a bad argument.
+ *     The verdict is reported (`ladder`, verdict `refused`, with its `violations`) beside the answer
+ *     the product would have given anyway; it never replaces it.
  */
 export type AchieveRefusalCode =
   | 'ambiguous_goal'
@@ -239,7 +246,6 @@ export type AchieveRefusalCode =
   | 'authoring_failed'
   | 'verification_failed'
   | 'persist_failed'
-  | 'parametrize_refused'
   | 'compose_refused'
   | 'compose_unknown_collection'
   | 'compose_unshaped_result';
@@ -255,9 +261,15 @@ export type AchieveRung = 'reuse' | 'parametrize' | 'compose' | 'mint';
 export interface AchieveLadderStep {
   rung: AchieveRung;
   /** `taken` - this rung produced the answer. `skipped` - it did not apply (or its seam is absent).
-   *  `refused` - it applied, ran, and declined. */
+   *  `refused` - it applied, ran, and its deterministic suite threw its answer away.
+   *
+   *  A `refused` RUNG IS NOT A REFUSED CALL. On `parametrize` it means the model's arguments were
+   *  discarded and the request went out as the caller shaped it. */
   verdict: 'taken' | 'skipped' | 'refused';
   detail?: string;
+  /** `refused` - what the discarded answer got wrong, in the same words the top-level `violations`
+   *  uses. */
+  violations?: string[];
 }
 
 export type AchieveResult =
@@ -719,8 +731,13 @@ export async function achieveIntegrationGoal(
  *
  * EVERY RUNG DEGRADES TO THE ONE BELOW IT, and that is the Rule-7 promise: an absent seam, a
  * refused allowance, a model outage, a goal with nothing extra in it - each of those SKIPS a rung
- * and leaves the call behaving exactly as it did before the ladder existed. A rung only ever
- * REFUSES when it ran, got an answer, and the deterministic suite rejected that answer.
+ * and leaves the call behaving exactly as it did before the ladder existed.
+ *
+ * AND SO DOES A REJECTED PLAN. A rung whose deterministic suite threw the model's answer away is
+ * recorded `refused` and then degrades like any other: parametrize discards the arguments and the
+ * request goes out as the CALLER shaped it. Nothing on this ladder may take away an answer the
+ * product already gave under a standing human approval - not the compose gate (which is why a write
+ * never enters the rung at all), and not a bad argument plan.
  */
 async function runMatchedAction(
   ctx: AchieveContext,
@@ -799,35 +816,50 @@ async function runMatchedAction(
             allowedOrigins: binding?.kind === 'granted' ? binding.origins : [],
           });
           if (!verdict.passed || !verdict.args) {
-            return refused(
-              'parametrize_refused',
-              'the arguments proposed for this action did not pass the guardrails and nothing was sent',
-              {
-                violations: [
-                  ...turn.violations,
-                  ...verdict.checks.filter((c) => !c.ok).map((c) => c.detail ?? `${c.name} failed`),
-                ],
-                ladder: [...ladder, { rung: 'parametrize', verdict: 'refused' }],
-              },
-            );
+            // THE PLAN IS THROWN AWAY, THE CALL IS NOT.
+            //
+            // This used to `return refused('parametrize_refused', …)`, and that was the same defect
+            // the compose rung had one rung down: an `achieve` that EXECUTED before this slice -
+            // the caller's own arguments, an action a human trusted, a standing approval behind any
+            // write - stopped executing because a model proposed a bad argument. The rung was added
+            // to give MORE answers; a rung that can subtract one is a regression however good its
+            // reason.
+            //
+            // Nothing unsafe survives the discard: `verdict.args` is null, so not one model-supplied
+            // value reaches `args`, and the request that goes out is byte-for-byte the request the
+            // caller asked for. What the guardrails caught is REPORTED rather than acted on - the
+            // ladder step carries the violations, so a client sees "your arguments were not filled,
+            // here is why" BESIDE the answer rather than in place of it.
+            ladder.push({
+              rung: 'parametrize',
+              verdict: 'refused',
+              detail: 'the arguments proposed for this action did not pass the guardrails and were discarded; the call ran with the arguments you supplied',
+              violations: [
+                ...turn.violations,
+                ...verdict.checks.filter((c) => !c.ok).map((c) => c.detail ?? `${c.name} failed`),
+              ],
+            });
+            // `args` is deliberately UNTOUCHED - still exactly `callerArgs`. Execution continues
+            // below, on the rung underneath this one.
+          } else {
+            filledArgs = Object.keys(verdict.args).sort();
+            // THE CALLER'S OWN ARGUMENTS WIN, spread last.
+            //
+            // HONEST NOTE: this order is UNOBSERVABLE, and saying so is better than implying a
+            // second enforced rule. `verifyPlannedArgs`'s `declared_args` check refuses any plan
+            // naming a key the caller supplied, so `verdict.args` and `callerArgs` are disjoint by
+            // the time we get here and either spread order produces the same object. Reversing it
+            // is an equivalent mutant - no test can distinguish it, and none pretends to. What IS
+            // asserted is the invariant that makes it unobservable (see the `declared_args`
+            // overwrite case, and the disjointness assertion beside it); the order below is kept
+            // because it is the one that stays correct if that check is ever weakened.
+            args = { ...(verdict.args as Record<string, PlannedArgValue>), ...callerArgs };
+            ladder.push({
+              rung: 'parametrize',
+              verdict: filledArgs.length > 0 ? 'taken' : 'skipped',
+              detail: filledArgs.length > 0 ? `filled: ${filledArgs.join(', ')}` : 'the model determined no argument from the goal',
+            });
           }
-          filledArgs = Object.keys(verdict.args).sort();
-          // THE CALLER'S OWN ARGUMENTS WIN, spread last.
-          //
-          // HONEST NOTE: this order is UNOBSERVABLE, and saying so is better than implying a second
-          // enforced rule. `verifyPlannedArgs`'s `declared_args` check refuses any plan naming a key
-          // the caller supplied, so `verdict.args` and `callerArgs` are disjoint by the time we get
-          // here and either spread order produces the same object. Reversing it is an equivalent
-          // mutant - no test can distinguish it, and none pretends to. What IS asserted is the
-          // invariant that makes it unobservable (see the `declared_args` overwrite case, and the
-          // disjointness assertion beside it); the order below is kept because it is the one that
-          // stays correct if that check is ever weakened.
-          args = { ...(verdict.args as Record<string, PlannedArgValue>), ...callerArgs };
-          ladder.push({
-            rung: 'parametrize',
-            verdict: filledArgs.length > 0 ? 'taken' : 'skipped',
-            detail: filledArgs.length > 0 ? `filled: ${filledArgs.join(', ')}` : 'the model determined no argument from the goal',
-          });
         }
       }
     }
@@ -842,6 +874,40 @@ async function runMatchedAction(
   if (!out.ok) return out;
 
   if (composePlan.kind === 'plan') {
+    // THE COMPOSITION IS A POST-STAGE, NOT AN ERROR BOUNDARY.
+    //
+    // An execute that did not succeed is an ANSWER ABOUT THE REMOTE SYSTEM - a 500 with its status,
+    // its code and the provider's own message - and `POST …/execute` has always returned it whole.
+    // Wrapping it changed that story: with no `data`, `rowsOf` reads `unshaped` and the caller was
+    // told "the action returned no list to compose over" (or, if their collection name was also
+    // wrong, `compose_unknown_collection`) - a different, less accurate account of what went wrong
+    // than the same call gave before this rung existed, and one that names the WRONG SYSTEM as the
+    // one that failed.
+    //
+    // So the failure passes through untouched, on the `executed` arm, exactly as it would have if
+    // no composition had ever been planned. The route maps it as it always did: `unknown_action` to
+    // 404, `awaiting_consent` to the 403 envelope, everything else to the result body.
+    if (!out.value.success) {
+      ladder.push({
+        rung: 'compose',
+        verdict: 'skipped',
+        detail: `"${action.actionName}" did not succeed, so its own answer is returned unchanged rather than narrowed`,
+      });
+      // The REUSE rung is what answered - the same step the plain executed arm records. Without it
+      // a client reading the ladder finds no rung `taken` at all beside an `executed` outcome, and
+      // "which rung answered" is the one question the ladder exists to answer.
+      ladder.push({ rung: 'reuse', verdict: 'taken' });
+      return {
+        ok: true,
+        value: {
+          outcome: 'executed',
+          actionName: action.actionName,
+          result: out.value,
+          ladder,
+          ...(filledArgs.length > 0 ? { filledArgs } : {}),
+        },
+      };
+    }
     const collection = await (ctx.appCollections as AppCollections).read(ctx.actor, composePlan.plan.collection);
     if (collection.kind === 'unknown_collection') {
       return refused(
@@ -855,7 +921,16 @@ async function runMatchedAction(
       return refused('compose_unshaped_result', rows.detail, { ladder: [...ladder, { rung: 'compose', verdict: 'refused' }] });
     }
     const composed = composeRows({ plan: composePlan.plan, actionRows: rows.rows, collectionRows: collection.rows });
-    ladder.push({ rung: 'compose', verdict: 'taken', detail: `${composed.summary.matched} of ${composed.summary.scanned} rows kept` });
+    ladder.push({
+      rung: 'compose',
+      verdict: 'taken',
+      detail: `${composed.summary.matched} of ${composed.summary.scanned} rows kept`
+        // The caller is told in words as well as in the summary: an answer narrowed against a
+        // PREFIX of the collection is a subset of the answer they asked for.
+        + (composed.summary.collectionTruncated
+          ? `, matched against the first ${composed.summary.collectionScanned} rows of "${composed.summary.collection}" only`
+          : ''),
+    });
     await auditComposed(ctx, integrationKey, action.actionName, composed.summary);
     return {
       ok: true,
@@ -1059,6 +1134,11 @@ async function auditComposed(
         field: summary.where.field,
         op: summary.where.op,
         scanned: summary.scanned,
+        collectionScanned: summary.collectionScanned,
+        // On the audit row for the same reason it is on the wire: "the join saw part of the
+        // collection" is a fact about how somebody's answer was built, and an auditor asked later
+        // why a row is missing cannot reconstruct it from anything else here.
+        collectionTruncated: summary.collectionTruncated,
         matched: summary.matched,
         ...(ctx.principal ? { keyId: ctx.principal.keyId } : {}),
         ...(ctx.principal?.xClient ? { xClient: ctx.principal.xClient } : {}),

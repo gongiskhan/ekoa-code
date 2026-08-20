@@ -4531,6 +4531,12 @@
           "scanned": {
             "type": "number"
           },
+          "collectionScanned": {
+            "type": "number"
+          },
+          "collectionTruncated": {
+            "type": "boolean"
+          },
           "matchedCollectionRows": {
             "type": "number"
           },
@@ -4546,6 +4552,8 @@
           "where",
           "join",
           "scanned",
+          "collectionScanned",
+          "collectionTruncated",
           "matchedCollectionRows",
           "matched",
           "truncated"
@@ -4664,6 +4672,12 @@
           },
           "detail": {
             "type": "string"
+          },
+          "violations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [

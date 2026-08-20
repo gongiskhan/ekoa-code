@@ -4214,3 +4214,81 @@ gate. `docs/diagrams/05-data-model.excalidraw` - no store change to record (no n
 stored field, no new scope key: `usr.<owner>` is the one that already existed), but the WIRE shrinks
 by two refusal codes and `filledArgs` now appears on `composed`, so the earlier note's counts are
 superseded there.
+
+## 2026-08-20 - D-S4-2/D-S5-2: a rung may only ADD an answer, and a silent cap is a wrong answer
+
+Round three on `feat/s4-s5-reuse-ladder`. Both cross-tenant blockers were closed in round two; what
+this round fixes is three defects of a different family, and the first two are the same defect twice:
+**THE LADDER MADE A WORKING CALL WORSE.**
+
+**D-S4-2. A REJECTED ARGUMENT PLAN IS DISCARDED, NEVER FATAL.** The parametrize rung answered a
+failed `verifyPlannedArgs` with `return refused('parametrize_refused')` - so an `achieve` that
+EXECUTED before this slice (the caller's own arguments, an action the lexical matcher picked, a human
+approval standing behind any write) stopped executing because a model proposed a bad argument. That
+is exactly the regression round two fixed one rung down, where a model's compose plan could refuse a
+write; it was fixed there and left standing here. The rung now pushes `{ rung: 'parametrize', verdict:
+'refused', violations }` onto the ladder and FALLS THROUGH to the call that already worked. `args` is
+untouched - `verdict.args` is null on a failed verdict, so not one model-supplied value survives the
+discard, including any that would have passed on its own - and the request is byte-for-byte the one
+the caller asked for. The refusal code `parametrize_refused` is REMOVED from `AchieveRefusalCode`:
+nothing can emit it, and a code that cannot occur is documentation that lies. (The wire carries `code`
+as a free string, so this narrows no schema.)
+
+  THE RULE, stated once so the next rung inherits it: **a rung may only ever ADD an answer, never
+  SUBTRACT one.** The only refusals the ladder introduces are the `compose_*` codes, and every one is
+  decided BEFORE anything runs, about a call the caller has not yet made.
+
+**D-S5-2a. THE COMPOSITION IS A POST-STAGE, NOT AN ERROR BOUNDARY.** With a plan in hand, the wrapper
+ran the action and then read `out.value.data`. A failed execute carries NO `data` (`action-executor.ts`
+returns `{ success: false, status, code, error, details }` for a non-2xx), so `rowsOf` answered
+`unshaped` and the caller was told "the action returned no list to compose over" - or, if their
+collection name was also wrong, `compose_unknown_collection`, since the collection was read first. A
+remote 500 is an ANSWER ABOUT THE REMOTE SYSTEM and `POST …/execute` has always returned it whole;
+the wrapper replaced it with a different, less accurate story that named the wrong system as the one
+that failed. Now `!out.value.success` returns on the `executed` arm verbatim, before the collection is
+read, with the compose rung recorded `skipped`. The route maps it exactly as it always did.
+
+**D-S5-2b. `COMPOSE_MAX_COLLECTION_ROWS` IS SIGNALLED AND PINNED.** Two defects in one constant. (i)
+The join built its key set from `collectionRows.slice(0, 5000)` with nothing on the wire to say so: an
+action row whose client sits past row 5000 was dropped from an answer presented as "the processes of
+clients under 40". That is a SILENT WRONG ANSWER, not a partial one - a subset served as the whole -
+and it is a different class from `COMPOSE_MAX_ITEMS`, which truncates a list the caller can see is
+truncated. `ComposeSummary` and the shared `AchieveComposition` now carry `collectionScanned` and
+`collectionTruncated` (additive, Rule 7; OpenAPI and cortex-cli regenerated in the same commit), the
+ladder detail says "matched against the first N rows … only", and the audit row records it - an
+auditor asked later why a row is missing cannot reconstruct that fact from anything else. (ii) The cap
+was UNPINNED: deleting the `slice` left the whole estate green. `collectionTruncated` is deliberately
+derived as `collectionRows.length > considered.length` rather than from the constant, so deleting the
+cap makes it read `false` and reds; a boundary pair (exactly 5000 rows, then 5001, with the ONLY
+matching row last) plus a literal `expect(COMPOSE_MAX_COLLECTION_ROWS).toBe(5_000)` reds on deletion,
+on a drift of one, and on the signal being silenced. All three mutants were run.
+
+**THE MUTATION SWEEP, re-derived rather than trusted.** Every safety-critical assertion in the four
+slice suites was broken AT THE SOURCE and required to red - 39 mutants (34 scripted plus the 5 that
+prove this round's own three fixes), each restored and verified byte-identical afterwards. Two SURVIVED and are now closed by real tests, not by rewording:
+
+1. `argSlotsOf`'s **"targeting wins"** rule (`if (slots[n] === undefined)`) had no case where one name
+   lands in BOTH the path and the body. Making the body assignment unconditional left every suite
+   green - i.e. on a write, a body template that happened to echo `{{numero}}` would have LAUNDERED
+   the path occurrence and made the resource selector model-fillable. Closed by a both-slots fixture.
+2. `composeRows`' **collection-side `String(k)`** coercion. The only numeric-key case put the number on
+   the ACTION side and a string in the collection, so dropping the collection-side coercion changed
+   nothing. Closed by asserting the mirror direction (a Mongo row whose id really is a number).
+
+A third mutant - deleting the `binding.kind !== 'granted'` skip in the parametrize rung - survived and
+is NOT a safety hole (an empty allow-list fails closed inside `assertOriginAllowed`, so the plan would
+be discarded anyway). What it actually costs is a model call paid for to learn nothing, so the test
+that now kills it asserts exactly that (`turns() === 0` on a bare-templated baseUrl), rather than
+pretending to catch a leak.
+
+**THE CANONICAL TEST IS STILL NOT A CITIUS PROOF.** Restated a third time because it is the claim most
+likely to drift: `get-ongoing-processes` does not exist anywhere in this repo, the canonical case runs
+against a deterministic LOCAL FIXTURE of the same shape, and the Citius path is NOT claimed as proven
+by this slice. `docs/findings.md` holds the open finding, including the second half that survives
+creating the action - the lexical matcher's coverage rule makes that NAME unreachable from that GOAL.
+
+DIAGRAM CHECK (FIXED-12): both appended, append-only, `rawText` and `originalText` carried.
+`docs/diagrams/02-module-map.excalidraw` - the parametrize rung's rejected plan now falls through
+instead of refusing, and the compose rung's failure passthrough. `docs/diagrams/05-data-model.excalidraw`
+- the two new `AchieveComposition` counters and the ladder step's `violations`; still no store change
+(no new collection, no new scope key), the shape that moved is the WIRE's.

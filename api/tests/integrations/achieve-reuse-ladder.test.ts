@@ -34,6 +34,7 @@ import {
   verifyComposePlan,
   type AppCollections,
   COMPOSE_MAX_ITEMS,
+  COMPOSE_MAX_COLLECTION_ROWS,
 } from '../../src/integrations/action-compose.js';
 import { matchesSimpleQuery } from '../../src/data/simple-query.js';
 import type { CapabilityOutcome } from '../../src/integrations/integration-capability.js';
@@ -161,6 +162,9 @@ interface CtxOpts {
   collections?: AppCollections;
   /** What the automation seam answers - this is how a matched action produces rows. */
   data?: unknown;
+  /** A FAILED execute, in the shape the executor really returns one (`action-executor.ts`: a
+   *  non-2xx is `success: false` + `status` + `code` + `error`, and NO `data`). */
+  failure?: { status?: number; code?: string; error: string };
 }
 
 function ctxWith(userId: string, orgId: string, opts: CtxOpts = {}): { ctx: AchieveContext; calls: Array<{ args: Record<string, unknown> }> } {
@@ -172,6 +176,7 @@ function ctxWith(userId: string, orgId: string, opts: CtxOpts = {}): { ctx: Achi
     now: fixedNow,
     runAutomationBackedAction: async (input) => {
       calls.push({ args: input.args });
+      if (opts.failure) return { success: false, ...opts.failure } as never;
       return { success: true, data: opts.data ?? { ran: true } };
     },
     ...(opts.planner ? { planStep: opts.planner } : {}),
@@ -239,6 +244,20 @@ const arquivarProcesso: IntegrationAction = {
   mutates: true,
   automationBinding: { automationId: 'citius-1', automationTemplate: 'arquivar' },
   argsSchema: { type: 'object', properties: { numero: { type: 'string' }, motivo: { type: 'string' } } },
+};
+
+/**
+ * A READ ON A BARE-TEMPLATED BASE URL - the `unbound` egress class named in `credential-cofre.ts`.
+ * `originFromBaseUrl` cannot parse a host out of `{{api_base}}`, so the definition declares no
+ * literal origin, `resolveCredentialEgressBinding` answers `unbound`, and the render probe has no
+ * pre-image to check a filled argument against.
+ */
+const consultarRegional: IntegrationAction = {
+  actionName: 'consultar_regional',
+  description: 'Consulta regional',
+  mutates: false,
+  httpConfig: { method: 'GET', baseUrl: '{{api_base}}', path: '/processos/{{numero}}' },
+  argsSchema: { type: 'object', properties: { numero: { type: 'string' } } },
 };
 
 const CANONICAL_GOAL = 'todos os processos de clientes com menos de 40 anos';
@@ -431,6 +450,28 @@ describe('verifyPlannedArgs is the only check argsSchema ever gets', () => {
     expect(verdictOn(undeclared, { args: { numero: '1' } }).passed).toBe(false);
   });
 
+  it('D1: TARGETING WINS when one name lands in BOTH the path and the body', () => {
+    // A SURVIVING MUTANT until this existed (`slots[n] === undefined` -> unconditional `body` left
+    // every suite green). The body occurrence must not LAUNDER the path occurrence: a template that
+    // happens to echo `{{numero}}` into its body does not stop `{{numero}}` selecting which
+    // processo is written to, and the consent dialog still only ever showed `{{numero}}`.
+    const both: IntegrationAction = {
+      ...submeterPeca,
+      httpConfig: {
+        method: 'POST',
+        baseUrl: HOST,
+        path: '/processos/{{numero}}/pecas',
+        bodyTemplate: { titulo: '{{titulo}}', referencia: '{{numero}}' },
+      },
+    };
+    expect(argSlotsOf(both.httpConfig).numero).toBe('targeting');
+    const v = verdictOn(both, { args: { numero: '999/24.0T8LSB' } });
+    expect(v.passed).toBe(false);
+    expect(failed(v, 'targeting')).toBe(true);
+    // …and the argument that really is body-only is still fillable on the same action.
+    expect(verdictOn(both, { args: { titulo: 'Contestação' } }).passed).toBe(true);
+  });
+
   it('a header argument counts as targeting (the consent dialog never showed it either)', () => {
     const hdr: IntegrationAction = {
       ...submeterPeca,
@@ -571,18 +612,45 @@ describe('the parametrize rung fills arguments and then meets the same gate', ()
     expect(targeting?.detail).toContain('unknown');
   });
 
-  it('a plan that breaks the guardrails REFUSES the whole call and sends nothing', async () => {
-    await seed([consultarProcesso]);
-    // Two identical bad replies so the repair turn is exercised and still fails.
-    const { planner } = plannerEmitting([argsBlock({ numero: '1', extra: 'x' })]);
-    const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner });
+  /**
+   * THE RUNG SUBTRACTED AN ANSWER, and this is the test that stops it.
+   *
+   * The rung used to `return refused('parametrize_refused')` when its suite rejected the model's
+   * plan - so an `achieve` that EXECUTED before this slice (the caller's own arguments, an action a
+   * human trusted, a standing approval behind any write) stopped executing because a model wrote a
+   * bad argument. A ladder may add cheaper ways to answer; it may never take away an answer the
+   * product already gave.
+   *
+   * The fixture is the AUTOMATION-BACKED read on purpose: its execution lands on the seam in this
+   * file, so "the call still ran" and "not one model-chosen value reached the request" are both
+   * observable here without a network.
+   */
+  it('a plan that breaks the guardrails is DISCARDED - the call still runs, on the caller\'s own arguments', async () => {
+    await seed([{ ...processos, argsSchema: { type: 'object', properties: { tribunal: {} } } }]);
+    // `extra` is not declared by the action, so `declared_args` rejects the whole plan.
+    const { planner } = plannerEmitting([argsBlock({ tribunal: 'Coimbra', extra: 'x' })]);
+    const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner, data: { processos: PROCESS_ROWS } });
 
-    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'consultar processo urgente do cliente'));
-    if (res.outcome !== 'refused') throw new Error(`expected refused, got ${JSON.stringify(res)}`);
-    expect(res.code).toBe('parametrize_refused');
-    expect(res.violations?.join(' ')).toContain('extra');
-    expect(calls).toHaveLength(0);
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'processos do tribunal indicado'));
+
+    // IT RAN. Before the fix this was `refused` / `parametrize_refused` and nothing was sent.
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    expect(calls).toHaveLength(1);
+    // …and NOT ONE value the model proposed reached the request: the whole plan was thrown away,
+    // including the argument that would have passed on its own.
+    expect(calls[0]?.args).toEqual({});
+    expect(res.filledArgs).toBeUndefined();
+    // The verdict travels BESIDE the answer instead of replacing it, and says why.
+    const step = res.ladder?.find((s) => s.rung === 'parametrize');
+    expect(step?.verdict).toBe('refused');
+    expect(step?.violations?.join(' ')).toContain('extra');
+    expect(res.ladder?.find((s) => s.rung === 'reuse')?.verdict).toBe('taken');
   });
+
+  // The same rule on a WRITE a human has standing-approved - where cancelling the call is worst -
+  // needs a real request to be observable, so it lives in the contract suite, where the transport
+  // is the mocked edge: `api/tests/contract/integrations-reuse-ladder.test.ts`, "a discarded plan
+  // does not cancel an APPROVED write".
 
   it('the prompt names the arguments to supply and never a credential VALUE', async () => {
     await seed([submeterPeca]);
@@ -678,13 +746,25 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
     expect(out.items).toEqual([]);
   });
 
-  it('keys are compared as strings, so a numeric id from one side still joins', () => {
-    const out = composeRows({
+  it('keys are compared as strings, so a numeric id from EITHER side still joins', () => {
+    // A number on the ACTION side against a string in the collection.
+    const numericAction = composeRows({
       plan: CANONICAL_PLAN as never,
       actionRows: [{ numeroProcesso: 'p', clienteId: 7 }],
       collectionRows: [{ id: '7', idade: 20 }],
     });
-    expect(out.items).toHaveLength(1);
+    expect(numericAction.items).toHaveLength(1);
+
+    // …AND THE MIRROR IMAGE, which is the half that was missing. With only the case above, the
+    // collection side's own `String(k)` was a SURVIVING MUTANT: its key was already a string, so
+    // dropping the coercion changed nothing. This is the direction that catches it - a Mongo row
+    // whose id really is a number, joined against an API that returns ids as strings.
+    const numericCollection = composeRows({
+      plan: CANONICAL_PLAN as never,
+      actionRows: [{ numeroProcesso: 'p', clienteId: '7' }],
+      collectionRows: [{ id: 7, idade: 20 }],
+    });
+    expect(numericCollection.items).toHaveLength(1);
   });
 
   it('caps what it emits and says so', () => {
@@ -693,6 +773,54 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
     expect(out.items).toHaveLength(COMPOSE_MAX_ITEMS);
     expect(out.summary.matched).toBe(COMPOSE_MAX_ITEMS + 5);
     expect(out.summary.truncated).toBe(true);
+    // The OTHER cap did not fire: four collection rows is four collection rows.
+    expect(out.summary.collectionScanned).toBe(4);
+    expect(out.summary.collectionTruncated).toBe(false);
+  });
+
+  /**
+   * THE COLLECTION CAP IS A CAP ON THE QUESTION, not on the answer, and until this pair existed it
+   * was neither pinned nor visible: deleting `COMPOSE_MAX_COLLECTION_ROWS` left the whole suite
+   * green, and a join built from a PREFIX of the collection returned a subset presented as the
+   * whole - a silent wrong answer, with nothing on the wire to say so.
+   *
+   * The two cases differ by ONE ROW and are written as a pair on purpose. The boundary row is the
+   * only row keyed to the action row under test, so the cap - not the predicate, not the join - is
+   * the only thing that can decide the outcome, in either direction.
+   */
+  const capRows = (n: number): Record<string, unknown>[] =>
+    // Every row satisfies the predicate; only the LAST one keys to the action row below.
+    Array.from({ length: n }, (_, i) => ({ id: i === n - 1 ? 'target' : `filler${i}`, idade: 20 }));
+  const capAction = [{ numeroProcesso: 'p-target', clienteId: 'target' }];
+
+  it('the collection cap is exactly COMPOSE_MAX_COLLECTION_ROWS, and the last row inside it counts', () => {
+    // A PIN, in a literal. The cap is a promise about how big an answer can quietly be wrong, so
+    // changing it is a decision somebody takes here rather than a number that drifts.
+    expect(COMPOSE_MAX_COLLECTION_ROWS).toBe(5_000);
+
+    const out = composeRows({
+      plan: CANONICAL_PLAN as never,
+      actionRows: capAction,
+      collectionRows: capRows(COMPOSE_MAX_COLLECTION_ROWS),
+    });
+    expect(out.items.map((r) => r.numeroProcesso)).toEqual(['p-target']);
+    expect(out.summary.collectionScanned).toBe(COMPOSE_MAX_COLLECTION_ROWS);
+    expect(out.summary.collectionTruncated).toBe(false);
+  });
+
+  it('one row PAST the cap is not considered, and the answer SAYS it was narrowed against a prefix', () => {
+    const out = composeRows({
+      plan: CANONICAL_PLAN as never,
+      actionRows: capAction,
+      collectionRows: capRows(COMPOSE_MAX_COLLECTION_ROWS + 1),
+    });
+    // The row that would have kept `p-target` sits at index 5000 and was never read.
+    expect(out.items).toEqual([]);
+    expect(out.summary.collectionScanned).toBe(COMPOSE_MAX_COLLECTION_ROWS);
+    // THE WIRE SIGNAL. Without it the caller reads `[]` as "no client under 40 has a process",
+    // which is a different and untrue statement about their own data.
+    expect(out.summary.collectionTruncated).toBe(true);
+    expect(out.summary.matchedCollectionRows).toBe(COMPOSE_MAX_COLLECTION_ROWS);
   });
 
   it('rowsOf finds the one list, and REFUSES to guess between two', () => {
@@ -758,6 +886,9 @@ describe('CANONICAL: "todos os processos de clientes com menos de 40 anos"', () 
     expect(res.composition.join).toEqual({ resultField: 'clienteId', collectionField: 'id' });
     expect(res.composition.scanned).toBe(4);
     expect(res.composition.matched).toBe(2);
+    // The join saw the WHOLE collection, and says so - the caller is owed that either way.
+    expect(res.composition.collectionScanned).toBe(4);
+    expect(res.composition.collectionTruncated).toBe(false);
     expect(reads).toEqual(['clients']);
 
     // NOTHING WAS MINTED: the definition still carries exactly the action it was seeded with.
@@ -788,6 +919,31 @@ describe('CANONICAL: "todos os processos de clientes com menos de 40 anos"', () 
     // The goal text and the rows are NOT on the audit row.
     expect(JSON.stringify(meta)).not.toContain('menos de 40');
     expect(JSON.stringify(meta)).not.toContain('111/24.0T8LSB');
+  });
+
+  it('a TRUNCATED join says so on the answer, on the ladder and on the audit row', async () => {
+    // The same canonical call over a collection larger than the cap. The client that keys the one
+    // surviving process sits PAST the cap, so the honest answer is "here is what I found, and I
+    // only looked at the first 5000 rows" - never a silent `[]`.
+    await seed([processos]);
+    const { planner } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
+    const overCap = [
+      ...Array.from({ length: COMPOSE_MAX_COLLECTION_ROWS }, (_, i) => ({ id: `filler${i}`, idade: 20 })),
+      { id: 'c1', idade: 31 },
+    ];
+    const { seam } = collectionsOf({ clients: overCap });
+    const { ctx } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: { processos: PROCESS_ROWS } });
+
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
+    if (res.outcome !== 'composed') throw new Error(`expected composed, got ${JSON.stringify(res)}`);
+    // `c1`'s process is missing because the cap hid `c1`, and the answer does not pretend otherwise.
+    expect(res.items).toEqual([]);
+    expect(res.composition.collectionTruncated).toBe(true);
+    expect(res.composition.collectionScanned).toBe(COMPOSE_MAX_COLLECTION_ROWS);
+    expect(res.ladder?.find((s) => s.rung === 'compose')?.detail).toContain('first 5000 rows');
+
+    const rows = await activityLogs.find({ type: 'capability_achieve_compose' });
+    expect((rows[0] as { metadata?: Record<string, unknown> }).metadata?.collectionTruncated).toBe(true);
   });
 });
 
@@ -845,6 +1001,44 @@ describe('compose refuses rather than guesses', () => {
     expect(res.code).toBe('compose_unshaped_result');
   });
 
+  /**
+   * THE COMPOSITION IS A POST-STAGE, NOT AN ERROR BOUNDARY.
+   *
+   * A failed execute is an ANSWER ABOUT THE REMOTE SYSTEM, and `POST …/execute` has always returned
+   * it whole. The compose wrapper LOST it: with no `data`, `rowsOf` read `unshaped` and the caller
+   * was told "the action returned no list to compose over" - a different, less accurate story than
+   * the same call gave before this rung existed, and one that blames the wrong system.
+   */
+  it('an upstream FAILURE passes through verbatim - the compose wrapper is not an error boundary', async () => {
+    await seed([processos]);
+    const { planner } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
+    const { seam, reads } = collectionsOf({ clients: CLIENT_ROWS });
+    const { ctx } = ctxWith('ownerA', 'orgA', {
+      planner,
+      collections: seam,
+      failure: { status: 500, code: 'server_error', error: 'Citius respondeu 500: manutencao programada' },
+    });
+
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
+
+    // Before the fix this was `refused` / `compose_unshaped_result` and the 500 was gone.
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    expect(res.result.success).toBe(false);
+    expect(res.result.status).toBe(500);
+    expect(res.result.code).toBe('server_error');
+    expect(res.result.error).toContain('manutencao programada');
+    // …and the rung says why it stood down, instead of claiming the action answered badly.
+    const step = res.ladder?.find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('skipped');
+    expect(step?.detail).toContain('did not succeed');
+    // The ladder still names the rung that ANSWERED - the same step a plain execute records.
+    expect(res.ladder?.find((s) => s.rung === 'reuse')?.verdict).toBe('taken');
+    // Nobody's collection was read to decorate a failure.
+    expect(reads).toHaveLength(0);
+    const audits = await activityLogs.find({ type: 'capability_achieve_compose' });
+    expect(audits).toHaveLength(0);
+  });
+
   it('a malformed plan refuses with compose_refused, distinct from the write refusal', async () => {
     await seed([processos]);
     const { planner } = plannerEmitting([composeBlock({ compose: true, collection: 'clients' })]);
@@ -880,6 +1074,25 @@ describe('an unwired, unavailable or inapplicable rung leaves achieve exactly as
     if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
     expect(res.ladder?.find((s) => s.rung === 'parametrize')?.detail).toContain('unavailable');
     expect(calls).toHaveLength(0); // an http action; the automation seam is untouched
+  });
+
+  it('an UNBOUND credential skips the parametrize rung outright, and pays for no turn', async () => {
+    // The render probe needs a pre-image and this credential has none, so the rung stands down
+    // BEFORE the model is asked rather than after. Asserting `turns()` is what makes the guard real:
+    // remove the binding check and the plan is still discarded (an empty allow-list fails closed in
+    // `assertOriginAllowed`), but the caller has paid for a model call to learn nothing.
+    await seed([consultarRegional]);
+    const { planner, turns } = plannerEmitting([argsBlock({ numero: '111/24.0T8LSB' })]);
+    const { ctx } = ctxWith('ownerA', 'orgA', { planner });
+
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'consultar regional do cliente'));
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    expect(turns()).toBe(0);
+    const step = res.ladder?.find((s) => s.rung === 'parametrize');
+    expect(step?.verdict).toBe('skipped');
+    expect(step?.detail).toContain('unbound');
+    // Nothing reached a network: the executor refuses an unbound origin before it fetches.
+    expect(res.result.success).toBe(false);
   });
 
   it('a goal with no residue never pays for a compose turn', async () => {

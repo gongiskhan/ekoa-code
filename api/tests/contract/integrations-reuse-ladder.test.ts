@@ -42,6 +42,12 @@ import { AchieveIntegrationGoalResponse, ErrorEnvelope } from '@ekoa/shared';
  *     `argsSchema`, so "it was in `args`" and "it was interpolated" are different claims.
  *  3. THE WRITE GATE IS UNMOVED. A `mutates` action still answers the identical 403 +
  *     `awaiting_consent` envelope, whichever rung filled its arguments.
+ *  3b. A RUNG NEVER SUBTRACTS AN ANSWER, on the real wire. A rejected argument plan is DISCARDED
+ *     and the request still goes out - carrying the CALLER's targeting value, never the model's -
+ *     including on a write a human has standing-approved through the production approval doors.
+ *     And an upstream 500 comes back verbatim through a planned composition, rather than being
+ *     re-told as "the action returned no list". Both were the pre-fix behaviour, and restoring
+ *     either in the source reds this file.
  *  4. THE WIRE SHAPES. Every 2xx safeParses against `AchieveIntegrationGoalResponse` - including
  *     the new `composed` outcome and its `composition` block - and every non-2xx against the
  *     shared error envelope.
@@ -161,6 +167,25 @@ const tokenFor = async (u: string) => (await login(u, 'pw123456', false, deps)).
 const achieve = (auth: string, goal: string, args?: Record<string, unknown>) =>
   call(`/api/v1/integrations/${PROBE_INTEGRATION}/achieve`, auth, { method: 'POST', body: JSON.stringify({ goal, ...(args ? { args } : {}) }) });
 
+/**
+ * Bank a standing approval for a WRITE, through the PRODUCTION DOORS - the same two the dashboard
+ * uses: read the shape the human would be shown, then echo it back on the approval endpoint. A row
+ * inserted by hand would be a fixture of a shape only this file can produce, and the write gate
+ * keys on exactly the shape+target these two routes agree on.
+ */
+async function approveWrite(auth: string, actionName: string): Promise<void> {
+  const listed = await (await call(`/api/v1/integrations/${PROBE_INTEGRATION}/action-approvals`, auth)).json() as {
+    items: Array<{ actionName: string; shape: string }>;
+  };
+  const shape = listed.items.find((i) => i.actionName === actionName)?.shape;
+  expect(shape, `no approval row for ${actionName}`).toBeTruthy();
+  const res = await call(`/api/v1/integrations/${PROBE_INTEGRATION}/actions/${actionName}/approval`, auth, {
+    method: 'POST',
+    body: JSON.stringify({ shape, decision: 'always' }),
+  });
+  expect(res.status).toBe(200);
+}
+
 /** Every 2xx validates against its named shared schema; that is the contract half of this suite. */
 async function okBody(res: Response): Promise<Record<string, unknown>> {
   expect(res.status).toBe(200);
@@ -267,27 +292,48 @@ describe('the parametrize rung is wired, and its value reaches the request', () 
     expect(ladder.find((s) => s.rung === 'reuse')?.verdict).toBe('taken');
   });
 
-  it('a plan naming an argument the action does not declare refuses, and nothing is sent', async () => {
+  it('a plan naming an argument the action does not declare is DISCARDED, and the call still runs', async () => {
     await seedDefinition([processos]);
     plans.args = argsBlock({ tribunal: 'Porto', api_base: 'https://elsewhere.example' });
 
     const body = await okBody(await achieve(await tokenFor('ownerA'), 'processos do tribunal certo'));
-    expect(body.outcome).toBe('refused');
-    expect(body.code).toBe('parametrize_refused');
-    expect((body.violations as string[]).join(' ')).toContain('api_base');
-    expect(upstream.calls).toHaveLength(0);
+
+    // A rung that can only ADD an answer must never SUBTRACT one: this used to answer
+    // `refused` / `parametrize_refused`, which took away a call that ran before the slice.
+    expect(body.outcome).toBe('executed');
+    expect(body.filledArgs).toBeUndefined();
+    // THE LOAD-BEARING ASSERTION: the URL is the one the CALLER asked for, and carries neither the
+    // undeclared key nor the argument that would have passed on its own.
+    expect(upstream.calls).toHaveLength(1);
+    expect(upstream.calls[0]?.url).not.toContain('elsewhere.example');
+    expect(upstream.calls[0]?.url).not.toContain('tribunal=Porto');
+    const step = (body.ladder as Array<{ rung: string; verdict: string; violations?: string[] }>)
+      .find((s) => s.rung === 'parametrize');
+    expect(step?.verdict).toBe('refused');
+    expect(step?.violations?.join(' ')).toContain('api_base');
   });
 
-  it('D1 on the real wire: a model that fills the TARGETING argument of a write is refused', async () => {
+  it('D1 on the real wire: a discarded plan does not cancel an APPROVED write, and picks nothing in it', async () => {
     await seedDefinition([submeterPeca]);
-    // The model is only offered `titulo`; it answers with `numero` as well.
+    const token = await tokenFor('ownerA');
+    // A STANDING HUMAN APPROVAL, banked through the production doors. This is the call the old
+    // refusal took away: approved, targeted by the caller, executing for months.
+    await approveWrite(token, 'submeter_peca');
+    // The model is only offered `titulo`; it answers with `numero` - the TARGETING argument - too.
     plans.args = argsBlock({ titulo: 'Contestacao', numero: '999/24.0T8LSB' });
 
-    const body = await okBody(await achieve(await tokenFor('ownerA'), 'submeter peca de contestacao'));
-    expect(body.outcome).toBe('refused');
-    expect(body.code).toBe('parametrize_refused');
-    expect((body.violations as string[]).join(' ')).toContain('numero');
-    expect(upstream.calls).toHaveLength(0);
+    const body = await okBody(await achieve(token, 'submeter peca de contestacao', { numero: '111/24.0T8LSB' }));
+
+    expect(body.outcome).toBe('executed');
+    // IT WENT OUT, at the resource the HUMAN named - the model chose nothing.
+    expect(upstream.calls).toHaveLength(1);
+    expect(upstream.calls[0]?.url).toContain('/processos/111/24.0T8LSB/pecas');
+    expect(upstream.calls[0]?.url).not.toContain('999/24.0T8LSB');
+    expect(body.filledArgs).toBeUndefined();
+    const step = (body.ladder as Array<{ rung: string; verdict: string; violations?: string[] }>)
+      .find((s) => s.rung === 'parametrize');
+    expect(step?.verdict).toBe('refused');
+    expect(step?.violations?.join(' ')).toContain('numero');
   });
 
   it('the write gate is unmoved: a filled BODY argument still answers the identical 403 envelope', async () => {
@@ -331,6 +377,10 @@ describe('CANONICAL, through the real app: "todos os processos de clientes com m
     expect(composition.matchedCollectionRows).toBe(2);
     expect(composition.matched).toBe(2);
     expect(composition.truncated).toBe(false);
+    // Both caps reported, on the wire, on every composed answer: the caller is told how much of
+    // their own collection the join actually considered.
+    expect(composition.collectionScanned).toBe(4);
+    expect(composition.collectionTruncated).toBe(false);
     // The rungs considered, on the wire.
     const ladder = body.ladder as Array<{ rung: string; verdict: string }>;
     expect(ladder.find((s) => s.rung === 'compose')?.verdict).toBe('taken');
@@ -350,6 +400,34 @@ describe('CANONICAL, through the real app: "todos os processos de clientes com m
     const body = await okBody(await achieve(await tokenFor('ownerA'), CANONICAL_GOAL, { tribunal: 'Lisboa' }));
     expect(body.outcome).toBe('executed');
     expect(plans.turns).toBe(0);
+  });
+
+  /**
+   * A REMOTE 500 IS AN ANSWER ABOUT THE REMOTE SYSTEM, and `POST …/execute` has always returned it
+   * whole. Planning a composition must not change that story - the composition is a post-stage, not
+   * an error boundary. This is the E2E half: a real non-2xx off the real executor, with a real
+   * compose plan in hand and a real collection the caller does hold.
+   */
+  it('an upstream 500 survives the compose rung verbatim, on the same wire /execute would use', async () => {
+    await seedDefinition([processos]);
+    await seedClients();
+    plans.compose = composeBlock(COMPOSE_PLAN);
+    upstream.status = 500;
+    upstream.body = JSON.stringify({ error: 'manutencao programada' });
+
+    const body = await okBody(await achieve(await tokenFor('ownerA'), CANONICAL_GOAL));
+
+    // Before the fix this was `refused` / `compose_unshaped_result` - the caller was told their
+    // action returned no list, and the 500 never reached them.
+    expect(body.outcome).toBe('executed');
+    const result = body.result as { success: boolean; status?: number; error?: string };
+    expect(result.success).toBe(false);
+    expect(result.status).toBe(500);
+    expect(result.error).toContain('500');
+    expect(body.code).toBeUndefined();
+    const step = (body.ladder as Array<{ rung: string; verdict: string; detail?: string }>).find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('skipped');
+    expect(step?.detail).toContain('did not succeed');
   });
 
   it('a collection name the tenant does not hold is refused by name', async () => {

@@ -773,6 +773,12 @@ export type AuthoredActionVerification = z.infer<typeof AuthoredActionVerificati
  * did not apply (nothing was missing, no seam is wired, the model was unreachable, the goal asked
  * for nothing extra) and the call behaved exactly as it did before the ladder existed. A refused
  * rung ran, got an answer, and the deterministic suite rejected it.
+ *
+ * A REFUSED RUNG IS NOT A REFUSED CALL, and that is why the verdict travels BESIDE an answer rather
+ * than instead of one. When `parametrize` refuses, the model's arguments are discarded and the
+ * request goes out carrying exactly what the CALLER sent - which is the answer this product already
+ * gave before the rung existed. A rung that can only ADD an answer must never be able to SUBTRACT
+ * one; `violations` says what the discarded plan got wrong.
  */
 export const AchieveRung = z.enum(['reuse', 'parametrize', 'compose', 'mint']);
 export type AchieveRung = z.infer<typeof AchieveRung>;
@@ -781,6 +787,10 @@ export const AchieveLadderStep = z.object({
   rung: AchieveRung,
   verdict: z.enum(['taken', 'skipped', 'refused']),
   detail: z.string().optional(),
+  /** `refused` only - the deterministic guardrails the discarded answer did not meet, in the same
+   *  words the top-level `violations` uses. Present so a rung that was thrown away is diagnosable
+   *  from the answer it did NOT prevent. */
+  violations: z.array(z.string()).optional(),
 });
 export type AchieveLadderStep = z.infer<typeof AchieveLadderStep>;
 
@@ -800,10 +810,20 @@ export const AchieveComposition = z.object({
   join: z.object({ resultField: z.string(), collectionField: z.string() }),
   /** Rows the ACTION returned. */
   scanned: z.number(),
-  /** Collection rows that satisfied the predicate. */
+  /** How many COLLECTION rows the key set was actually built from. The reader lists a whole
+   *  collection (that is all the engine can do) and the join caps what it will scan, so this is the
+   *  number that was really considered - not the number the collection holds. */
+  collectionScanned: z.number(),
+  /** TRUE when the collection holds MORE rows than the join considered, i.e. the key set is a
+   *  PREFIX of the collection and `items` may be missing rows that a full scan would have kept.
+   *  A narrowed answer built from part of the key set is a different answer, and a caller told
+   *  nothing would read a subset as the whole - so it is said on the wire rather than inferred. */
+  collectionTruncated: z.boolean(),
+  /** Collection rows that satisfied the predicate, among the `collectionScanned` considered. */
   matchedCollectionRows: z.number(),
   /** Action rows that survived the join - may exceed `items.length` when `truncated`. */
   matched: z.number(),
+  /** TRUE when `matched` exceeded the emit cap and `items` is the head of the answer. */
   truncated: z.boolean(),
 });
 export type AchieveComposition = z.infer<typeof AchieveComposition>;

@@ -581,6 +581,8 @@ export interface components {
     schemas: {
         AchieveComposition: {
             collection: string;
+            collectionScanned: number;
+            collectionTruncated: boolean;
             join: {
                 collectionField: string;
                 resultField: string;
@@ -629,6 +631,7 @@ export interface components {
             rung: components["schemas"]["AchieveRung"];
             /** @enum {string} */
             verdict: "taken" | "skipped" | "refused";
+            violations?: string[];
         };
         /** @enum {string} */
         AchieveRung: "reuse" | "parametrize" | "compose" | "mint";

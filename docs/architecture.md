@@ -908,6 +908,9 @@ is inherited on the same terms every other rail meets it.
   BODY - the shape the human approved. Everything else on a write is withheld, including arguments
   of an action with no `httpConfig` at all, whose slot is `unknown` rather than `unused` because
   this platform cannot see where an automation-backed action's arguments land.
+  A plan the suite rejects is DISCARDED, never refused: `args` stays exactly what the caller sent,
+  the request goes out as it always did, and the rung is recorded `refused` with its `violations` on
+  the ladder BESIDE the answer. See the ladder invariant below.
 - **COMPOSE** (`integrations/action-compose.ts`) runs the matched trusted READ and narrows its rows
   against ONE of the caller's own `app_data` collections with a `SimpleQuery`-class predicate. There
   is no server-side join anywhere else in this repo (`CollectionsEngine` is list/get/write;
@@ -916,6 +919,22 @@ is inherited on the same terms every other rail meets it.
   row. READS ONLY, and the gate is at the ENTRY: an action that can write never enters the rung, so
   no model turn is paid for and - decisively - no answer a model gives can turn a call that was
   executing under a standing approval into a refusal.
+  The rung is a POST-STAGE, NOT AN ERROR BOUNDARY: an execute that did not succeed comes back on the
+  `executed` arm verbatim - the remote's status, code and message, exactly as `POST …/execute` would
+  have returned them - and the composition is simply not applied.
+  TWO CAPS, BOTH REPORTED. `COMPOSE_MAX_ITEMS` (200) caps what is EMITTED
+  (`composition.truncated`); `COMPOSE_MAX_COLLECTION_ROWS` (5000) caps how much of the collection
+  the join KEY SET is built from, which caps the QUESTION rather than the answer - a subset served
+  as the whole is a wrong answer, not a partial one, so `composition.collectionScanned` and
+  `composition.collectionTruncated` travel on every composed result, on the ladder detail and on the
+  audit row.
+
+THE LADDER INVARIANT, which those two paragraphs are instances of: **a rung may only ever ADD an
+answer, never SUBTRACT one.** `achieve` must not refuse a call that executed before the ladder
+existed on the strength of anything a model said - so a rejected argument plan is discarded rather
+than fatal, a write never enters the compose rung at all, and a failed execute is handed back
+untouched. The only refusals the ladder introduces are the `compose_*` codes, every one of them
+decided BEFORE anything runs, about a call the caller has not yet made.
 
 The predicate itself is ONE implementation, `data/simple-query.ts` (tier 2), shared with the recipe
 DSL's `store.query` - `integrations/` may not import `automation/`, and two copies of nine comparison
