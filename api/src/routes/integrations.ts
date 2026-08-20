@@ -167,6 +167,30 @@ function sendVisibility(res: Response, result: SetVisibilityResult): void {
 }
 
 /**
+ * The REFUSAL half of a `PublishResult`, mapped ONCE for the two routes that publish (S6 review
+ * MAJOR-2 folded `/definitions/:id/global`'s promotion into the same path, so there are two).
+ *
+ * The two doors answer different SUCCESS bodies — `/publish` reports the snapshot's stamp,
+ * `/global` reports the tier — so only the refusals are shared. They must be identical: the verdicts
+ * come from one gate (`publishPrecheck`/`publishSnapshot` → `visibilityWriteVerdict`), and two
+ * hand-written mappings of one gate is how a 404 becomes a 403 on one door and an existence oracle
+ * appears on the other.
+ *
+ * `model_pass_required` is unreachable unless the caller passed `requireModelPass` — it is mapped
+ * rather than asserted away because a default that changes later must not fall through a `!`.
+ */
+function sendPublishRefusal(res: Response, out: { verdict: 'notfound' | 'forbidden' | 'model_pass_required' }): void {
+  if (out.verdict === 'notfound') return notFound(res);
+  if (out.verdict === 'forbidden') return sendError(res, 'FORBIDDEN', 'Sem permissão.');
+  return sendError(
+    res,
+    'SECRET_GUARD_BLOCKED',
+    'A revisão automática do conteúdo não pôde ser concluída, por isso a publicação foi recusada. Tente novamente.',
+    { code: 'model_pass_required' },
+  );
+}
+
+/**
  * The SAME verdict mapping as `sendVisibility`, answering the publish-request echo instead - one
  * place for the submit and the withdraw, so the two can never drift.
  *
@@ -388,22 +412,62 @@ export function integrationsRouter(deps: {
 
   /**
    * POST /api/v1/integrations/definitions/:id/global -> { ok, visibility } (auth: super-admin).
-   * The cross-org publish toggle — the brief's human REVIEW GATE. `requireRole('super-admin')` is
-   * defense in depth, mirroring `artifacts.ts`'s featured-flag route: the store enforces the same
-   * bar on both directions, so a regression in either layer alone cannot publish a tenant's
-   * definition to every org.
+   *
+   * THE UN-PUBLISH DOOR, and — for `{global:true}` — an ALIAS OF THE PUBLISH DOOR. It is no longer a
+   * second way across the org boundary, and that change is the subject of S6 review MAJOR-2.
+   *
+   * WHAT IT WAS. `{global:true}` called `setVisibility(..., 'global')`: the row flipped to the
+   * cross-org tier and NO SNAPSHOT WAS WRITTEN. `publishedViewOf` then served every other
+   * organisation the AUTHOR'S LIVE ROW through the deterministic read-time floor — which is the
+   * exact state `publishSnapshot`'s CAS write exists to make impossible ("a `global` row whose
+   * snapshot is missing serves cross-org readers its LIVE content through the read-time floor"), and
+   * which costs three properties the publish path has: the chokepoint model pass never runs (the
+   * floor is layer one of two, and the second net is the one that catches a credential written as an
+   * English sentence); the artifact is not FROZEN, so the author's row keeps editing what every
+   * other tenant reads, with no reviewer in the loop after the first click; and nothing records
+   * `scrubbedAt`/`scrubbedBy`/`scrubVersion`/`supersedes`, so a published package has no provenance.
+   *
+   * HOW SLICE S6 MADE IT WORSE — this is the reachability half, and it is why the fix belongs in
+   * this slice rather than a later one. Before the submit door was mounted, NOTHING wrote
+   * `publishRequest` (`requestPublish` had no caller in `api/src/`), so
+   * `isDefinitionVisibleTo`'s review-window branch was dead: a super-admin outside the authoring org
+   * could not SEE another tenant's `org` row, and this route answered the uniform 404 for it. The
+   * only rows it could reach were its own org's, already-`global` ones, and the legacy sentinel's.
+   * Mounting `POST …/publish-request` brings that branch to life — deliberately, for review — and in
+   * doing so hands this unscrubbed door its first foreign tenant rows. The tenant asking for a
+   * reviewed, scrubbed publication is precisely what made the unreviewed one-line alternative
+   * reachable against it.
+   *
+   * THE DECISION: ONE WAY ACROSS THE BOUNDARY (docs/decisions.md). Not two doors with a documented
+   * reason, because the two had IDENTICAL ADMISSION — both land on
+   * `visibilityWriteVerdict(row, actor, 'global')`, the same call in the same store — and differed
+   * only in whether the scrub ran. A door with the same admission as another and weaker safety is
+   * not a second door, it is a bypass of the first, and there is no narrower principal to gate it to.
+   * So `{global:true}` now goes through `publishDefinition`, the same function `POST …/publish`
+   * calls. It gains no authority it did not have (that gate is literally the same predicate) and
+   * loses no availability (`publishDefinition` only refuses on a failed model pass when the caller
+   * asks for `requireModelPass`, and this door never does — a chokepoint outage still publishes the
+   * floor with the degradation recorded, exactly as before, but now with a snapshot).
+   *
+   * `{global:false}` IS WHY THE ROUTE STILL EXISTS. Un-publishing has no equivalent on the publish
+   * door, and the demotion writes no snapshot because it creates no cross-org reader. Its target is
+   * `org`, NOT `private`: `global` is a tier the authoring org's members were already reading, so
+   * dropping straight to `private` would additionally revoke the author's own org — a second,
+   * unasked-for change. `org` is the narrowest tier that only undoes the cross-org publication; the
+   * owner can then go `private` themselves through the tenant route above.
    */
   r.post('/definitions/:id/global', requireAuth, requireRole('super-admin'), async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, SetDefinitionGlobalRequest, req.body);
     if (!body) return;
-    // DEMOTION TARGET: un-publishing returns the row to `org`, NOT to `private`. `global` is a tier
-    // the authoring org's members were already reading, so dropping straight to `private` would
-    // additionally revoke the author's own org — a second, unasked-for change. `org` is the
-    // narrowest tier that only undoes the cross-org publication; the owner can then go `private`
-    // themselves through the tenant route above.
-    const target: DefinitionVisibility = body.global ? 'global' : 'org';
-    const result = await integrationDefinitionStore.setVisibility(req.params.id as string, actorOf(req), target);
-    sendVisibility(res, result);
+    if (!body.global) {
+      const target: DefinitionVisibility = 'org';
+      return sendVisibility(res, await integrationDefinitionStore.setVisibility(req.params.id as string, actorOf(req), target));
+    }
+    const out = await publishDefinition(actorOf(req), req.params.id as string);
+    if (out.verdict !== 'ok') return sendPublishRefusal(res, out);
+    // Echoed off the PERSISTED document, the same rule `sendVisibility` states: the response can
+    // only ever report the tier really stored.
+    res.json({ ok: true, visibility: out.doc.visibility });
   });
 
   // --- The PUBLISH DOORS (slice S6) ----------------------------------------------------------
@@ -522,7 +586,10 @@ export function integrationsRouter(deps: {
    * THE PUBLISH: scrub into a frozen snapshot and move to `global`, in ONE gated store write, so a
    * published row and its scrubbed artifact can never disagree. The gate is
    * `publishSnapshot` -> `visibilityWriteVerdict` - the same bar `/definitions/:id/global` meets, in
-   * both directions - and this handler adds no authority of its own.
+   * both directions - and this handler adds no authority of its own. Since S6 review MAJOR-2 that
+   * sameness is literal rather than parallel: `/definitions/:id/global` `{global:true}` calls
+   * `publishDefinition` too, so there is ONE way a definition crosses an org boundary and it always
+   * writes a snapshot. This door is the one that can also demand the model pass.
    *
    * SUPERSEDE IS THE NORMAL CASE. One snapshot field per definition means a re-publish REPLACES it
    * wholesale and stamps the replaced one's provenance into `supersedes`. That is the brief's
@@ -549,16 +616,7 @@ export function integrationsRouter(deps: {
       req.params.id as string,
       body.requireModelPass === true ? { requireModelPass: true } : {},
     );
-    if (out.verdict === 'notfound') return notFound(res);
-    if (out.verdict === 'forbidden') return sendError(res, 'FORBIDDEN', 'Sem permissão.');
-    if (out.verdict === 'model_pass_required') {
-      return sendError(
-        res,
-        'SECRET_GUARD_BLOCKED',
-        'A revisão automática do conteúdo não pôde ser concluída, por isso a publicação foi recusada. Tente novamente.',
-        { code: 'model_pass_required' },
-      );
-    }
+    if (out.verdict !== 'ok') return sendPublishRefusal(res, out);
     const snapshot = out.doc.publishedSnapshot!;
     res.json({
       ok: true,

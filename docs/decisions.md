@@ -3665,3 +3665,142 @@ construct, the second layer is documentation.
 `asbuilt-20260820j-s6-queue-runs-the-floor` - appended beneath the annotation whose "IT CARRIES NO
 CONTENT" claim it corrects; the original stays, since append-only means the record of what was
 believed survives. No module, seam, collection or wire shape changed, so 02 and 05 are unaffected.
+
+---
+
+## 2026-08-20 - S6 round three: the review window is a READ, and there is ONE way across an org boundary
+
+Two defects, both about doors OTHER than the five this slice mounted, and both made reachable BY
+mounting them. That is the shape worth recording: a slice can be correct in everything it writes and
+still be wrong, because what it makes REACHABLE is part of what it ships.
+
+### DEFECT 1 (MAJOR): `requestPublish` let a non-member platform admin author the tenant's submission
+
+`isDefinitionVisibleTo` opens a REVIEW WINDOW: a super-admin who is not a member of the authoring org
+can see an `org` row while that org is asking to publish it. That is deliberate and it is the whole
+reason the queue and the preview work. But `canWriteDefinition` grants a super-admin WRITE over
+anything they can SEE - so every write gated on `canWriteDefinition` alone widened at the same
+moment the window opened, and `requestPublish` was one of them.
+
+The consequence: a super-admin of org B could re-stamp org A's standing request - `requestedBy`
+becomes their own id, and the note that argues for publication becomes their own words. Silently,
+because `requestPublish` is idempotent by design, so the overwrite is a 200 that looks exactly like
+the author correcting their own note. **Administering the queue is not the same authority as
+authoring a tenant's submission.** The request is the org's record that it asked; only the org may
+write it or unwrite it.
+
+`withdrawPublishRequest` already carried the membership guard inline. `requestPublish` did not. The
+asymmetry WAS the defect - the two doors are one door in two directions.
+
+**DECIDED:** membership becomes a named term, `canWriteOwnPublishRequest` (writability AND
+`sameOrg`), used by BOTH doors and by both layers of each (pre-check and the E1-F4b in-mutator
+re-assert). Not a second inline `!==` beside the first: one rule in one place is what stops the
+asymmetry recurring, and it upgrades the withdraw's bare `!==` to the empty-string-safe `sameOrg` at
+the same time. `sameOrg` is RESTATED in `definition-store.ts` rather than imported from
+`definition-registry.ts`, which holds the twin - the registry imports the store, so the edge would
+close a cycle. That is the precedent `withoutRecipes` already sets in this file.
+
+**THE OTHER FOUR DOORS, CHECKED FOR THE SAME ASSUMPTION** rather than assumed clean:
+
+- `withdrawPublishRequest` - had it. Now shares the one predicate.
+- `previewPublish` (`getWritableForActor` -> `canWriteDefinition`) - a non-member reviewer CAN
+  preview a submitted row. KEPT: that is the point of the window, and the preview reveals strictly
+  less than the raw row. It is a READ, and it bills the chokepoint call to the reviewer
+  (`billeeUserId: actor.userId`), not to the tenant.
+- `listPublishRequests` - cross-org by construction, super-admin only. KEPT.
+- `publishSnapshot` / `setVisibility` - cross-org by design; only a platform super-admin publishes.
+  KEPT.
+- And the two writes NOT on this slice's list, checked because the window is new:
+  `PATCH …/visibility` is already closed to a non-member by `visibilityWriteVerdict`'s "a non-member
+  may only move a row between `org` and `global`" rule (E2); `saveAuthoredDefinition` and
+  `setLessons` address rows by `definitionIdFor(actor.orgId, key)` and by `canEditDefinitionRaw`
+  respectively, neither of which a non-member can satisfy.
+
+### DEFECT 2 (MAJOR): `POST /definitions/:id/global` was a second, unscrubbed way across the boundary
+
+That door called `setVisibility(..., 'global')`. The row reached the cross-org tier with NO
+`publishedSnapshot`, and `publishedViewOf` then served every other organisation the author's LIVE row
+through the deterministic read-time floor. That is precisely the state `publishSnapshot`'s single CAS
+write exists to make impossible, in its own words: *"a `global` row whose snapshot is missing serves
+cross-org readers its LIVE content through the read-time floor."*
+
+What it cost, derived from the code and not asserted generally:
+
+1. **The chokepoint model pass never ran.** `scrubForPublish` is floor THEN model pass;
+   `applyPublishFloor` alone is layer one of two. The second net exists for credential material
+   written as an English sentence that no regex can separate from documentation. A `/global`
+   promotion published without it, permanently.
+2. **No provenance, and a broken lineage.** `scrubbedAt` / `scrubbedBy` / `scrubVersion` /
+   `redactionCount` are the whole record of who approved a cross-org publication and under which
+   ruleset. Worse, it propagates: `publishQueueEntry.republish` is exactly
+   `publishedSnapshot !== undefined`, so a later reviewer of the same package is told this is a FIRST
+   publication, and `publishSnapshot` finds no prior and stamps no `supersedes`.
+3. **No pinned ruleset.** A snapshot records the `PUBLISH_SCRUB_VERSION` it was made under. A
+   snapshot-less `global` row is re-floored by whatever code is deployed at read time, so what
+   consuming orgs see can change with a floor change and no re-review, with nothing recording which
+   version any reader got.
+
+**HOW THIS SLICE MADE IT WORSE - the reachability half, and why the fix belongs here.** Before the
+submit door was mounted, NOTHING in `api/src/` wrote `publishRequest`: `requestPublish` had no
+non-test caller. So `isDefinitionVisibleTo`'s review-window branch was DEAD CODE, a super-admin
+outside the authoring org could not see another tenant's `org` row, and this route answered the
+uniform 404 for it. The only rows it could reach were its own org's, rows already `global`, and the
+legacy sentinel's. Mounting `POST …/publish-request` brings that branch to life - deliberately, for
+review - and in doing so hands the unscrubbed door its first FOREIGN TENANT rows. The tenant asking
+for a reviewed, scrubbed publication is exactly what made the unreviewed one-line alternative
+reachable against it.
+
+**DECIDED: ONE WAY ACROSS THE BOUNDARY.** `{global:true}` now calls `publishDefinition` - the same
+function `POST …/publish` calls. NOT the other option the review offered (gate it and document why
+two doors exist), and the reason is that the two had **identical admission**: both land on
+`visibilityWriteVerdict(row, actor, 'global')`, the same call in the same store, in both directions.
+A door with the same admission as another and weaker safety is not a second door, it is a bypass of
+the first - and there is no narrower principal left to gate it to. Two doors would have needed two
+different answers to "who may do this", and there was only ever one.
+
+Costs, weighed and accepted:
+
+- It now spends a chokepoint call and bills the acting publisher. That is the point: crossing the
+  boundary always pays for the scrub.
+- It does NOT gain a failure mode. `publishDefinition` refuses on a failed model pass only when the
+  caller passes `requireModelPass`, and this door never does - a chokepoint outage still publishes
+  the floor result with the degradation recorded, exactly as before, but now with a snapshot.
+- It is NOT a Rule 7 break. The request schema, the response schema (`DefinitionVisibilityResponse`)
+  and the descriptor are untouched; `{ok, visibility}` still answers, and every refusal maps
+  identically because it comes from the same gate. The observable change is strictly a strengthening:
+  the row now also carries the artifact. OpenAPI + cortex-cli regenerate to a zero diff.
+
+**`{global:false}` IS WHY THE ROUTE SURVIVES.** Un-publishing has no equivalent on the publish door,
+and it is the half that must stay: it writes no snapshot because it creates no cross-org reader, and
+it deliberately leaves the existing snapshot in place so the transition stays exactly reversible. Its
+target remains `org`, never `private` (E1 review F1).
+
+The refusal mapping for a `PublishResult` is now ONE function (`sendPublishRefusal`) shared by both
+doors, because the verdicts come from one gate and two hand-written mappings of one gate is how a 404
+becomes a 403 on one door and an existence oracle appears on the other.
+
+### The two-layer question, measured rather than argued
+
+The round-two rule ("a duplicated gate needs a test that can only be satisfied by the layer it
+names") was applied to this round's gates, and one result is negative and recorded as such.
+
+- **Both routes' `requireRole('super-admin')` are now separately killable.** `/definitions/:id/publish`
+  already was, via a missing id. `/definitions/:id/global` was NOT: after the fold, a non-super-admin
+  it refuses is one the store would also refuse, so the role loop stayed green without it. The
+  separator is the same one round two found - middleware answers BEFORE any row is read, so it
+  answers 403 for an id that names nothing where the store must answer 404. Asserted explicitly for
+  BOTH doors and in both `{global:true}` and `{global:false}` directions, with a super-admin's 404 as
+  the control that makes those 403s the role gate.
+- **The pre-check / in-mutator PAIR is NOT separable, and this is not a gap that can be closed.**
+  `canWriteOwnPublishRequest` is applied twice in each door (once before the CAS, once inside the
+  mutator). Deleting the RULE reddens five tests. Deleting either APPLICATION alone leaves the suite
+  green - measured, both directions, not inferred - because the surviving one produces the identical
+  verdict and identical row state; the only difference is a wasted round trip. That is an inherent
+  property of the F4b CAS pattern (the sibling `captured-calls-isolation` suite records the same
+  limit for the same reason). The mitigation is structural rather than another test: both
+  applications call ONE named predicate, so there is exactly one place the rule can be deleted from,
+  and deleting it is loud.
+
+**DIAGRAM CHECK (FIXED-12):** `12-org-tenancy` gains an append-only AS-BUILT correction block -
+the review window is a READ-only widening, and the `global` tier now has ONE writer. The prior
+annotations stay. No collection, module or wire shape changed, so 02 and 05 are unaffected.

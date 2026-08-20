@@ -356,6 +356,106 @@ describe('platform-authored provenance is projected before it crosses an org bou
 });
 
 // ---------------------------------------------------------------------------------------------
+// The REVIEW WINDOW is a READ, not a write - S6 review MAJOR-1
+// ---------------------------------------------------------------------------------------------
+
+describe('the review window admits a non-member reviewer to READ, and to nothing else', () => {
+  /**
+   * THE ASYMMETRY THIS PINS. Mounting the submit door brings `isDefinitionVisibleTo`'s review-window
+   * branch to life: a super-admin outside the authoring org can SEE a submitted `org` row. That is
+   * the design. But `canWriteDefinition` grants a super-admin WRITE over anything they can see, so
+   * every write gated on `canWriteDefinition` alone silently widened at the same moment - and the
+   * submit door was one of them. A platform role is not a membership.
+   *
+   * Driven at the STORE, with the actors the routes would pass, because that is the layer that owns
+   * the rule: `POST …/publish-request` carries no `requireRole` at all (any authenticated user), so
+   * there is no second layer here to hide behind - the store's guard is the only one, and this is
+   * where it is measured.
+   */
+  const foreignRoot: Actor = { userId: 'rootB', orgId: 'orgB', role: 'super-admin' };
+  const orgAdminA: Actor = { userId: 'adminA1', orgId: 'orgA', role: 'org-admin' };
+  const ownRoot: Actor = { userId: 'rootA', orgId: 'orgA', role: 'super-admin' };
+
+  it('a NON-MEMBER super-admin cannot open the window over a row of an org they are not in', async () => {
+    // Before any submission the row is invisible to them, so the refusal is the no-existence-oracle
+    // 404 rather than a 403 - a platform role must not become a read oracle over tenant drafts.
+    expect((await store.requestPublish(ID, foreignRoot, 'eu peco')).verdict).toBe('notfound');
+    expect((await store.getById(ID))!.publishRequest).toBeUndefined();
+  });
+
+  it('a NON-MEMBER super-admin cannot OVERWRITE a request the tenant has already made', async () => {
+    // THE DEFECT. Once the window is open they CAN see the row, `canWriteDefinition` says yes, and
+    // `requestPublish` is idempotent - so the overwrite succeeded and looked like the author
+    // correcting their own note.
+    expect((await store.requestPublish(ID, author, 'o argumento do autor')).verdict).toBe('ok');
+    expect((await store.getById(ID))!.publishRequest!.requestedBy).toBe('userA1');
+
+    // THE WINDOW REALLY IS OPEN - the non-vacuity half. Without this the refusal below could be the
+    // row being invisible rather than the write being refused, which is a different property and
+    // would keep passing if the membership guard were deleted.
+    expect((await store.getWritableForActor(ID, foreignRoot)).verdict).toBe('ok');
+
+    expect((await store.requestPublish(ID, foreignRoot, 'eu proprio peco')).verdict).toBe('forbidden');
+    const row = (await store.getById(ID))!;
+    expect(row.publishRequest!.requestedBy, 'the request stays the ORG\'s record').toBe('userA1');
+    expect(row.publishRequest!.note).toBe('o argumento do autor');
+  });
+
+  it('the withdraw refuses the same actor, so the window cannot be closed from outside either', async () => {
+    expect((await store.requestPublish(ID, author, 'nosso')).verdict).toBe('ok');
+    expect((await store.withdrawPublishRequest(ID, foreignRoot)).verdict).toBe('forbidden');
+    expect((await store.getById(ID))!.publishRequest!.requestedBy).toBe('userA1');
+  });
+
+  it('THE CONTROLS: membership is the term, not the role and not writability', async () => {
+    // Each of these would still pass if the guard were "super-admins may not submit" or "only the
+    // author may submit", so they are what pins the rule to MEMBERSHIP.
+    expect((await store.requestPublish(ID, orgAdminA, 'o admin do autor')).verdict).toBe('ok');
+    expect((await store.getById(ID))!.publishRequest!.requestedBy).toBe('adminA1');
+
+    // Org A's OWN super-admin is a member and may - so the refusal above is about the org boundary.
+    expect((await store.requestPublish(ID, ownRoot, 'a nossa plataforma')).verdict).toBe('ok');
+    expect((await store.getById(ID))!.publishRequest!.requestedBy).toBe('rootA');
+
+    // A same-org PEER who cannot write the row still cannot - membership is necessary, not enough.
+    const peer: Actor = { userId: 'userA2', orgId: 'orgA', role: 'user' };
+    expect((await store.requestPublish(ID, peer, 'nao sou eu')).verdict).toBe('forbidden');
+    expect((await store.getById(ID))!.publishRequest!.requestedBy).toBe('rootA');
+  });
+
+  it('an ORG-LESS actor is nobody here: it cannot claim an org-less row as its own', async () => {
+    // The membership term is `sameOrg`, not a bare `!==`, so two empty strings are not one tenant.
+    // Reachable through the review window, whose branch answers TRUE before `isDefinitionVisibleTo`
+    // reaches its own empty-string guard - which is why the guard has to be restated at this door.
+    //
+    // THE ROW IS PLANTED, not created, and that is the honest fixture rather than a convenience:
+    // `IntegrationDefinitionStore.create` REFUSES this shape outright ("a definition must name a
+    // real owning org and author"), so the only way an org-less document exists is one written
+    // before that gate or by a migration around it - which is the entire reason the read-side
+    // empty-string guards are there. The sibling `captured-calls-isolation` suite plants its
+    // adversarial rows the same way and for the same reason.
+    const orglessId = definitionIdFor('', KEY);
+    await integrationDefinitions.put({
+      _id: orglessId,
+      orgId: '', userId: '', key: KEY, visibility: 'org',
+      configSchema: [], actions: [], skillMd: '# orgless\n',
+      // The window's branch needs a standing request; an org-less row carrying one is exactly the
+      // shape that would let an org-less actor "correct" it.
+      publishRequest: { requestedBy: 'quemquer', requestedAt: '2026-08-01T00:00:00.000Z', note: 'original' },
+      createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
+    } as never);
+
+    const orgless: Actor = { userId: '', orgId: '', role: 'super-admin' };
+    expect((await store.requestPublish(orglessId, orgless, 'sou eu?')).verdict).not.toBe('ok');
+    expect((await store.getById(orglessId))!.publishRequest!.requestedBy).toBe('quemquer');
+    expect((await store.getById(orglessId))!.publishRequest!.note).toBe('original');
+    // The withdraw is closed to it too, so the record cannot be erased by a nobody.
+    expect((await store.withdrawPublishRequest(orglessId, orgless)).verdict).not.toBe('ok');
+    expect((await store.getById(orglessId))!.publishRequest).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
 // The publish-request note - the one new field mounting created that leaves the tenant
 // ---------------------------------------------------------------------------------------------
 

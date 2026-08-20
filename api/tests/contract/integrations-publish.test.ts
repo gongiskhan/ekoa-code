@@ -240,6 +240,32 @@ describe('S6 - submit for review, and withdraw', () => {
     expect((await storedDoc(DEF_ID))?.publishRequest?.requestedBy).toBe('ownerA');
   });
 
+  it('the PLATFORM REVIEWER cannot AUTHOR the org\'s request either - not only not delete it', async () => {
+    // S6 review MAJOR-1. The withdraw door carried the membership guard from the start; the submit
+    // door did not, and `canWriteDefinition` answers TRUE for ANY super-admin over a row they can
+    // merely SEE. Mounting the submit door is what lets rootB see this row at all (the review
+    // window), so the same act that opens the review opened a write on the thing being reviewed.
+    //
+    // WHAT THE DEFECT LOOKED LIKE: `requestPublish` is idempotent by design, so the overwrite is a
+    // 200 that reads exactly like the author correcting their own note - while `requestedBy` becomes
+    // the reviewer and the prose arguing for publication becomes the reviewer's own words.
+    await seedDefinition('org');
+    await submit(await tokenFor('ownerA'), DEF_ID, 'o argumento do autor');
+
+    await expectEnvelope(await submit(await tokenFor('rootB'), DEF_ID, 'eu proprio peco'), 403, 'FORBIDDEN');
+
+    // THE ROW IS UNCHANGED, which is the property: a 403 answered after the write had landed would
+    // be worse than no 403 at all.
+    const row = (await storedDoc(DEF_ID))!;
+    expect(row.publishRequest?.requestedBy).toBe('ownerA');
+    expect(row.publishRequest?.note).toBe('o argumento do autor');
+
+    // THE CONTROL, and it is what stops this reading as "a super-admin may not submit" or as a test
+    // of a role gate (this route has none): org A's OWN super-admin, over org A's row, may.
+    await expectSchema(await submit(await tokenFor('rootA'), DEF_ID, 'nosso'), DefinitionPublishRequestResponse);
+    expect((await storedDoc(DEF_ID))?.publishRequest?.requestedBy).toBe('rootA');
+  });
+
   it('a note longer than the contract cap is a 400 envelope, and nothing is stored', async () => {
     await seedDefinition('org');
     const res = await submit(await tokenFor('ownerA'), DEF_ID, 'x'.repeat(PUBLISH_REQUEST_NOTE_MAX_CHARS + 1));
@@ -568,6 +594,193 @@ describe('S6 - the publish, and what another org then reads', () => {
     const ok = await expectSchema<PublishDefinitionResponse>(await publish(await tokenFor('rootA'), DEF_ID), PublishDefinitionResponse);
     expect(ok.modelPass.status).toBe('failed');
     expect((await storedDoc(DEF_ID))!.publishedSnapshot?.modelPass.status).toBe('failed');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// 4b. The OTHER door onto the global tier - S6 review MAJOR-2
+// ---------------------------------------------------------------------------------------------
+
+describe('S6 - `POST /definitions/:id/global` is not a second, unscrubbed way across the boundary', () => {
+  const setGlobal = (t: string | null, id: string, global: boolean) =>
+    api(`/api/v1/integrations/definitions/${id}/global`, t, { method: 'POST', body: JSON.stringify({ global }) });
+
+  it('THE REACHABILITY THIS SLICE CREATED: before a submission, the door cannot see the row at all', async () => {
+    // The half of MAJOR-2 that makes it THIS slice's defect rather than a pre-existing one. Nothing
+    // in `api/src/` wrote `publishRequest` before the submit door was mounted, so
+    // `isDefinitionVisibleTo`'s review-window branch was dead and a foreign super-admin got the
+    // uniform 404 here. Asserted as the BYTES against a genuinely missing id, then shown to flip.
+    await seedDefinition('org');
+    const t = await tokenFor('rootB');
+    const closed = await setGlobal(t, DEF_ID, true);
+    const missing = await setGlobal(t, MISSING_ID, true);
+    expect(closed.status).toBe(404);
+    expect(await closed.text()).toBe(await missing.text());
+    expect((await storedDoc(DEF_ID))?.visibility).toBe('org');
+
+    // The submission - the tenant's own act - is what opens this door onto their row.
+    await submit(await tokenFor('ownerA'), DEF_ID, 'ready');
+    expect((await setGlobal(await tokenFor('rootB'), DEF_ID, true)).status).toBe(200);
+  });
+
+  it('a promotion through THIS door writes the snapshot, and org B reads the SCRUBBED artifact', async () => {
+    // THE DEFECT: this door called `setVisibility(..., "global")`, so the row reached the cross-org
+    // tier with NO snapshot and `publishedViewOf` served every other org the author's LIVE row
+    // through the read-time floor - the state `publishSnapshot`'s single CAS write exists to make
+    // impossible. It now calls `publishDefinition`, the same function `POST …/publish` calls.
+    await seedDefinition('org', { lessons: `nota interna, chave ${PLANTED_SECRET}` });
+    await submit(await tokenFor('ownerA'), DEF_ID, 'ready');
+
+    const res = await setGlobal(await tokenFor('rootA'), DEF_ID, true);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, visibility: 'global' });
+
+    const doc = (await storedDoc(DEF_ID))!;
+    expect(doc.visibility).toBe('global');
+    // THE ASSERTION THE OLD DOOR COULD NOT PASS. Every field of it: a tier without an artifact is
+    // exactly what this fix removes.
+    expect(doc.publishedSnapshot, 'the global tier and the frozen artifact land together').toBeTruthy();
+    expect(doc.publishedSnapshot!.scrubbedBy).toBe('rootA');
+    expect(doc.publishedSnapshot!.scrubVersion).toBeTruthy();
+    expect(doc.publishedSnapshot!.skillMd).toContain('[REDACTED]');
+    // The author's live row is untouched - publishing freezes a copy.
+    expect(doc.skillMd).toContain(PLANTED_SECRET);
+
+    const seen = (await (await api('/api/v1/integrations', await tokenFor('userB'))).json()) as { items: Array<{ key: string }> };
+    expect(seen.items.map((d) => d.key)).toContain(KEY);
+    expect(JSON.stringify(seen)).not.toContain(PLANTED_SECRET);
+  });
+
+  it('a publication through this door is RECORDED, so the next reviewer is not told it is the first', async () => {
+    // THE SECOND HALF OF THE DEFECT, and the one that outlives the promotion itself. The whole
+    // provenance of a cross-org publication lives on `publishedSnapshot`: WHO approved it
+    // (`scrubbedBy`), WHEN, under WHICH scrub (`scrubVersion`), and WHAT it replaced (`supersedes`).
+    // A door that promotes without writing one leaves no record that the package was ever live in
+    // every tenant - so `publishQueueEntry.republish`, which is exactly `publishedSnapshot !==
+    // undefined`, tells the NEXT reviewer this is a first publication, and `publishSnapshot` stamps
+    // no `supersedes` because it finds no prior. The reviewer is deciding without the one fact the
+    // field exists to give them.
+    await seedDefinition('org');
+    const owner = await tokenFor('ownerA');
+    const root = await tokenFor('rootA');
+    await submit(owner, DEF_ID, 'v1');
+
+    expect((await setGlobal(root, DEF_ID, true)).status).toBe(200);
+    const firstStamp = (await storedDoc(DEF_ID))!.publishedSnapshot!.scrubbedAt;
+
+    // Un-publish, revise, ask again - the one sequence that puts an already-published row back in
+    // the queue (the `republish` case above establishes it).
+    expect((await setGlobal(root, DEF_ID, false)).status).toBe(200);
+    await submit(owner, DEF_ID, 'v2, please re-review');
+
+    const again = await expectSchema<{ items: Array<{ republish: boolean }> }>(await queue(root), IntegrationPublishQueueResponse);
+    expect(again.items).toHaveLength(1);
+    expect(again.items[0]!.republish, 'the reviewer must be told this REPLACES something').toBe(true);
+
+    // And the lineage survives the second approval, whichever door performs it.
+    const receipt = await expectSchema<PublishDefinitionResponse>(await publish(root, DEF_ID), PublishDefinitionResponse);
+    expect(receipt.supersedes?.scrubbedAt).toBe(firstStamp);
+    expect(receipt.supersedes?.scrubbedBy).toBe('rootA');
+  });
+
+  it('the DEMOTION still lands on `org`, writes no new artifact, and keeps the reviewed one', async () => {
+    // `{global:false}` is why this route still exists at all: the publish door has no un-publish.
+    // It writes no snapshot because it creates no cross-org reader, and it deliberately leaves the
+    // existing one in place so the transition stays exactly reversible.
+    await seedDefinition('org');
+    await submit(await tokenFor('ownerA'), DEF_ID, 'ready');
+    const root = await tokenFor('rootA');
+    expect((await setGlobal(root, DEF_ID, true)).status).toBe(200);
+    const stamp = (await storedDoc(DEF_ID))!.publishedSnapshot!.scrubbedAt;
+
+    const down = await setGlobal(root, DEF_ID, false);
+    expect(down.status).toBe(200);
+    expect(await down.json()).toEqual({ ok: true, visibility: 'org' });
+    const after = (await storedDoc(DEF_ID))!;
+    // `org`, never `private`: demoting to `private` would additionally revoke the author's own org.
+    expect(after.visibility).toBe('org');
+    expect(after.publishedSnapshot!.scrubbedAt).toBe(stamp);
+
+    // And it is off the cross-org surface again.
+    const seen = (await (await api('/api/v1/integrations', await tokenFor('userB'))).json()) as { items: Array<{ key: string }> };
+    expect(seen.items.map((d) => d.key)).not.toContain(KEY);
+  });
+
+  it('THE INVARIANT, over both doors: nothing reaches the global tier without an artifact', async () => {
+    // Stated once, over every mounted route that can write `visibility`, so a SIXTH door added later
+    // is caught by this rather than by someone remembering. The tenant visibility route is included
+    // precisely because its schema is supposed to make `global` unsayable.
+    const root = await tokenFor('rootA');
+    const owner = await tokenFor('ownerA');
+    const promote: Array<[string, () => Promise<Response>]> = [
+      ['publish', async () => publish(root, DEF_ID)],
+      ['global', async () => setGlobal(root, DEF_ID, true)],
+      ['visibility', async () => api(`/api/v1/integrations/definitions/${DEF_ID}/visibility`, owner, {
+        method: 'PATCH',
+        body: JSON.stringify({ visibility: 'global' }),
+      })],
+    ];
+    for (const [name, call] of promote) {
+      await integrationDefinitions.deleteMany({});
+      await seedDefinition('org');
+      await submit(owner, DEF_ID, 'ready');
+      await call();
+      const doc = (await storedDoc(DEF_ID))!;
+      if (doc.visibility === 'global') {
+        expect(doc.publishedSnapshot, `${name} promoted without writing an artifact`).toBeTruthy();
+      }
+      // Non-vacuity: at least one door in this loop must actually reach `global`, or the `if` above
+      // makes the whole case true by never running.
+      if (name !== 'visibility') expect(doc.visibility, `${name} must reach the global tier`).toBe('global');
+      else expect(doc.visibility, 'the tenant route must not be able to say `global` at all').toBe('org');
+    }
+  });
+
+  it('the door adds no authority: the same refusals as the publish, from the same gate', async () => {
+    // Both doors land on `visibilityWriteVerdict(row, actor, "global")` - literally the same call -
+    // so folding one into the other must not have moved any bar. Asserted pairwise rather than
+    // restated, so a change to either mapping shows up as a disagreement rather than as two
+    // independently-drifting lists of expected statuses.
+    await seedDefinition('org');
+    await submit(await tokenFor('ownerA'), DEF_ID, 'ready');
+    for (const who of ['ownerA', 'adminA', 'peerA', 'userB']) {
+      const t = await tokenFor(who);
+      const viaGlobal = await setGlobal(t, DEF_ID, true);
+      const viaPublish = await publish(t, DEF_ID);
+      expect(viaGlobal.status, `${who} must meet the same bar at both doors`).toBe(viaPublish.status);
+      expect((await storedDoc(DEF_ID))!.visibility, `${who} must not have published`).toBe('org');
+    }
+    // A PRIVATE row is refused at both, for the launch-pad rule rather than the role.
+    await integrationDefinitions.deleteMany({});
+    await seedDefinition('private');
+    expect((await setGlobal(await tokenFor('rootA'), DEF_ID, true)).status)
+      .toBe((await publish(await tokenFor('rootA'), DEF_ID)).status);
+    expect((await storedDoc(DEF_ID))!.visibility).toBe('private');
+  });
+
+  it('BOTH doors keep their OWN `requireRole`, told apart from the store gate by WHEN it answers', async () => {
+    // THE TWO-LAYER TRAP, stated for this pair the way round two stated it for the publish door
+    // alone. `requireRole('super-admin')` on the route and `visibilityWriteVerdict`'s super-admin
+    // term in the store both refuse the same principals, so for a row the caller can SEE they answer
+    // the same 403 and either could be deleted with a role-loop still green.
+    //
+    // WHAT SEPARATES THEM IS WHEN. `requireRole` is middleware: it refuses BEFORE the handler runs,
+    // and therefore before any row is read - so it answers 403 even for an id that names NOTHING,
+    // where the store, once reached, must answer the no-existence-oracle 404. A non-super-admin
+    // against a missing id is the one probe only the route gate can satisfy, and it is asserted for
+    // each door separately because each mounts its own copy.
+    expect(await storedDoc(MISSING_ID), 'the id must really name nothing').toBeNull();
+    for (const who of ['ownerA', 'adminA', 'peerA', 'userB']) {
+      const t = await tokenFor(who);
+      await expectEnvelope(await setGlobal(t, MISSING_ID, true), 403, 'FORBIDDEN');
+      await expectEnvelope(await setGlobal(t, MISSING_ID, false), 403, 'FORBIDDEN');
+      await expectEnvelope(await publish(t, MISSING_ID), 403, 'FORBIDDEN');
+    }
+    // THE CONTROL that makes those 403s the ROLE gate and not a blanket refusal: a super-admin
+    // passes the middleware and is answered by the store, which reports the missing row as a 404.
+    const root = await tokenFor('rootA');
+    expect((await setGlobal(root, MISSING_ID, true)).status).toBe(404);
+    expect((await publish(root, MISSING_ID)).status).toBe(404);
   });
 });
 

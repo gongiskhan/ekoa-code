@@ -6611,3 +6611,71 @@ re-implemented a live control had it trusted this heading over the code.
   that stream's next commit. Recorded so the red gate is a known red rather than ambient noise.
   (`gate:secrets` is not in `ci:lane`, so this is not blocking a PR today; `gate:ledger` is likewise
   red on main for unrelated web unit suites marked due/unrun at G9.)
+
+- **`s6-a-non-member-super-admin-could-author-the-tenants-publish-request`** (CLOSED 2026-08-20,
+  HIGH, cross-org write). `requestPublish` admitted on `canWriteDefinition` alone, which answers TRUE
+  for ANY super-admin over a row they can merely SEE. Mounting the submit door brought
+  `isDefinitionVisibleTo`'s review-window branch to life, so a super-admin OUTSIDE the authoring org
+  can now see a submitted `org` row - and could therefore re-stamp it: `publishRequest.requestedBy`
+  became their own user id and the note arguing for publication became their own words. Silent,
+  because re-submission is idempotent by design, so the overwrite answered 200 and read exactly like
+  the author correcting their own note. `withdrawPublishRequest` already carried the membership guard
+  inline; the SUBMIT door had none, and that asymmetry was the defect. Closed by a named term,
+  `canWriteOwnPublishRequest` (writability AND `sameOrg`), used by both doors and both layers of each
+  - one rule in one place rather than a second inline `!==`, which also upgrades the withdraw's bare
+  comparison to the empty-string-safe form. Verified by mutation: deleting the `sameOrg` term reddens
+  5 tests across `tests/contract/integrations-publish.test.ts` and
+  `tests/security/publish-doors-isolation.test.ts`, including the pre-existing withdraw case. The
+  other four mounted doors were checked for the same assumption and are correct as they stand
+  (`previewPublish` admits the non-member reviewer deliberately - it is a READ that reveals strictly
+  less than the raw row, and it bills the reviewer, not the tenant); so are `PATCH …/visibility`,
+  `saveAuthoredDefinition` and `setLessons`, which the new window does not widen.
+
+- **`s6-the-old-global-door-published-cross-org-with-no-snapshot`** (CLOSED 2026-08-20, HIGH,
+  cross-org read + bypass of the slice's own publish path). `POST /definitions/:id/global`
+  `{global:true}` called `setVisibility(..., 'global')`: the row reached the cross-org tier with NO
+  `publishedSnapshot`, and `publishedViewOf` then served every other organisation the author's LIVE
+  row through the deterministic read-time floor - the exact state `publishSnapshot`'s single CAS
+  write documents itself as existing to prevent. Three concrete costs, each derived from the code:
+  the chokepoint MODEL PASS never ran (the floor is layer one of two, and the second net is the one
+  that catches credential material written as prose); no provenance was recorded, which propagates,
+  since `publishQueueEntry.republish` is `publishedSnapshot !== undefined` and so tells the NEXT
+  reviewer this is a first publication while `publishSnapshot` stamps no `supersedes`; and no
+  `PUBLISH_SCRUB_VERSION` is pinned, so what consuming orgs read is re-floored by whatever code is
+  deployed, with no record of which ruleset any reader got.
+
+  THIS SLICE MADE IT WORSE, which is why it is closed here rather than deferred. Before the submit
+  door was mounted nothing in `api/src/` wrote `publishRequest`, so the review-window branch was dead
+  code and this route answered the uniform 404 for another tenant's `org` row. Mounting
+  `POST …/publish-request` brings the branch to life - deliberately - and thereby hands the
+  unscrubbed door its first foreign-tenant rows. Closed by routing `{global:true}` through
+  `publishDefinition`, the same function `POST …/publish` calls, so there is ONE way a definition
+  crosses an org boundary and it always writes a snapshot. Not gated-and-documented as a second door,
+  because both doors had IDENTICAL admission (`visibilityWriteVerdict(row, actor, 'global')`, the
+  same call), leaving no narrower principal to gate to; the reasoning is in `docs/decisions.md`.
+  `{global:false}` keeps the route alive - un-publishing has no equivalent on the publish door.
+  Verified by mutation: reverting the promotion to `setVisibility` reddens 4 contract cases,
+  including the invariant that walks every mounted door that can write `visibility`.
+
+- **`s6-round-two-test-quality-fixes-re-verified`** (CLOSED 2026-08-20, informational). The three
+  tests round two rewrote were re-measured from scratch this round, each by mutating the source and
+  restoring it byte-identically: dropping the store's `.slice` note cap reddens 1; dropping
+  `requireRole` from `POST …/publish` reddens 3 (round two's missing-id case plus this round's two
+  new pairwise cases); deleting `listPublishRequests`' `role !== 'super-admin'` filter reddens 1.
+  All three are genuinely failable. A FOURTH gate of the same class was found unpinned in the same
+  sweep and closed: `POST /definitions/:id/global`'s own `requireRole('super-admin')` was a surviving
+  mutant after the fold, because every non-super-admin it refuses is one the store would refuse too.
+  It is now told apart the same way the publish door's is - middleware answers before any row is
+  read, so it answers 403 for an id that names NOTHING where the store must answer 404 - asserted for
+  both doors, in both directions of `{global}`, with a super-admin's 404 as the control.
+
+- **`f4b-cas-pairs-are-not-separable-by-any-test`** (OPEN 2026-08-20, informational, a recorded LIMIT
+  rather than a defect). `canWriteOwnPublishRequest` is applied twice per door - once as a pre-check,
+  once inside the CAS mutator (the E1-review F4b re-assert). Deleting the RULE reddens 5 tests.
+  Deleting either APPLICATION alone leaves the suite green: measured, in both directions, not
+  inferred. The surviving application produces the identical verdict and identical row state, so the
+  mutants are equivalent in effect and no test can distinguish them - the only difference is a wasted
+  database round trip. The sibling `tests/security/captured-calls-isolation.test.ts` records the same
+  limit for the same pattern. Recorded so a future reader knows the question was asked and where the
+  answer runs out; the mitigation is structural, not another test - both applications call ONE named
+  predicate, so there is exactly one place the rule can be deleted from.

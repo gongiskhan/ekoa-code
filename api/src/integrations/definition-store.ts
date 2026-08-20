@@ -385,6 +385,41 @@ export function canWriteDefinition(doc: VisibilityView, actor: Actor): boolean {
 }
 
 /**
+ * "Same tenant", with the empty-string hazard closed. RESTATED here rather than imported from
+ * `definition-registry.ts`, which holds the twin: the registry imports THIS file, so the edge would
+ * close a cycle — the same reason `withoutRecipes` is restated here (see this file's header). Both
+ * bodies are the one rule: an org-less actor (a seam that defaulted `orgId` to `''`, a malformed
+ * row) must never become "same org" as an org-less document.
+ */
+function sameOrg(docOrgId: string, actorOrgId: string): boolean {
+  return docOrgId !== '' && actorOrgId !== '' && docOrgId === actorOrgId;
+}
+
+/**
+ * May `actor` write THE TENANT'S OWN PUBLICATION REQUEST on this row — the `publishRequest` stamp
+ * that opens and closes the review window?
+ *
+ * `canWriteDefinition` IS NOT ENOUGH HERE, and that is the whole reason this predicate exists (S6
+ * review MAJOR-1). It answers TRUE for ANY super-admin over a row they can merely SEE, and since
+ * the submit door went live a super-admin who is not a member of the authoring org CAN see an `org`
+ * row — that is exactly what `isDefinitionVisibleTo`'s review window is for. So on the submit door
+ * `canWriteDefinition` alone let a NON-MEMBER PLATFORM ADMIN overwrite the tenant's own submission:
+ * re-stamp `requestedBy` with their own id and replace the note that argues for it. Administering
+ * the queue is not the same authority as AUTHORING a tenant's submission; the request is the org's
+ * record that it asked, and only the org may write or unwrite it.
+ *
+ * MEMBERSHIP IS THEREFORE A SEPARATE TERM from writability, and it is ONE term used by BOTH doors
+ * and by BOTH layers of each (the pre-check and the E1-F4b in-mutator re-assert), so submit and
+ * withdraw cannot drift apart and neither layer can hold a rule the other has lost.
+ *
+ * `withdrawPublishRequest` already carried this guard inline; `requestPublish` did not. The
+ * asymmetry was the defect — the two doors are the same door in two directions.
+ */
+function canWriteOwnPublishRequest(doc: VisibilityView, actor: Actor): boolean {
+  return canWriteDefinition(doc, actor) && sameOrg(doc.orgId, actor.orgId);
+}
+
+/**
  * The actor-scoped definition store. Wraps the `integrationDefinitions` collection; every tenant-safe
  * read goes through `getForActor` / `listForActor`. `getById` is the RAW primitive (unscoped by
  * design, the analogue of `OrgScoped.getAnyOrg`) that A2 uses to follow `origin.sourceDefinitionId`
@@ -720,6 +755,15 @@ export class IntegrationDefinitionStore {
    * definition cross-org. This is the ONLY door that puts a tenant row in front of a non-member
    * super-admin, and it is opened from inside the tenant.
    *
+   * "FROM INSIDE THE TENANT" IS ENFORCED, not merely described (S6 review MAJOR-1). The admission is
+   * `canWriteOwnPublishRequest` — writability AND membership of the authoring org — because
+   * `canWriteDefinition` on its own admits any super-admin over a row they can see, and once this
+   * door is mounted a non-member super-admin CAN see a submitted `org` row through the review
+   * window. Without the membership term the reviewer could re-stamp `requestedBy` as themselves and
+   * rewrite the note they are about to read: the platform authoring the tenant's request to the
+   * platform. Idempotent re-submission is what makes it silent — the write looks like the author
+   * correcting their own note.
+   *
    * The row must already be `org`: the same launch pad `visibilityWriteVerdict` requires for the
    * publish itself, so a submission can never expose a `private` draft that the author's own
    * colleagues cannot see. Re-submitting an already-submitted row re-stamps it (idempotent, and the
@@ -738,12 +782,12 @@ export class IntegrationDefinitionStore {
   async requestPublish(id: string, actor: Actor, note?: string): Promise<SetVisibilityResult> {
     const row = await this.store.get(id);
     if (!row || !isDefinitionVisibleTo(row, actor)) return { verdict: 'notfound' };
-    if (!canWriteDefinition(row, actor) || row.visibility !== 'org') return { verdict: 'forbidden' };
+    if (!canWriteOwnPublishRequest(row, actor) || row.visibility !== 'org') return { verdict: 'forbidden' };
     const capped = note === undefined ? undefined : note.slice(0, PUBLISH_REQUEST_NOTE_MAX_CHARS);
     let raced = false;
     const updated = await this.store.update(id, (cur) => {
       const doc = cur as IntegrationDefinitionDoc;
-      if (!canWriteDefinition(doc, actor) || doc.visibility !== 'org') { raced = true; return cur; }
+      if (!canWriteOwnPublishRequest(doc, actor) || doc.visibility !== 'org') { raced = true; return cur; }
       return {
         ...cur,
         publishRequest: { requestedBy: actor.userId, requestedAt: this.nowIso(), ...(capped !== undefined ? { note: capped } : {}) },
@@ -764,14 +808,17 @@ export class IntegrationDefinitionStore {
     const row = await this.store.get(id);
     if (!row || !isDefinitionVisibleTo(row, actor)) return { verdict: 'notfound' };
     // Only a member of the authoring org may withdraw — a platform reviewer must not be able to
-    // remove the org's own request (and thereby its record that the org ever asked).
-    if (!canWriteDefinition(row, actor) || row.orgId !== actor.orgId || row.visibility === 'global') {
+    // remove the org's own request (and thereby its record that the org ever asked). The membership
+    // term is now `canWriteOwnPublishRequest`, shared with `requestPublish` (S6 review MAJOR-1):
+    // this door had the guard inline and the submit door had none, and one rule in one place is what
+    // stops that asymmetry recurring. It also closes the empty-string hazard the inline `!==` had.
+    if (!canWriteOwnPublishRequest(row, actor) || row.visibility === 'global') {
       return { verdict: 'forbidden' };
     }
     let raced = false;
     const updated = await this.store.update(id, (cur) => {
       const doc = cur as IntegrationDefinitionDoc;
-      if (!canWriteDefinition(doc, actor) || doc.orgId !== actor.orgId || doc.visibility === 'global') { raced = true; return cur; }
+      if (!canWriteOwnPublishRequest(doc, actor) || doc.visibility === 'global') { raced = true; return cur; }
       const { publishRequest: _dropped, ...rest } = doc;
       return { ...rest, updatedAt: this.nowIso() };
     });
