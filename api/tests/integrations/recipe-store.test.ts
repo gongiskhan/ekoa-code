@@ -122,6 +122,60 @@ describe('version + supersede', () => {
     expect(stored?.supersedes).toEqual({ version: 2, reason: 'endpoint moved' });
   });
 
+  // ===========================================================================================
+  // CLEAR: the third way a recipe can go, and the only one that hands its evidence back.
+  //
+  // The dropped recipe is the ONLY thing that names its `capturedCallsRef`. A caller that throws it
+  // away orphans that pile forever: the next learn's `priorCaptureRef` reads the CURRENT recipe,
+  // which is now absent, so neither of `discardCapture`'s other callers can reach it and the
+  // collection has no TTL. `recipe-lifecycle.forgetRecipe` is what pairs the two; this pins that the
+  // STORE gives it something to pair with.
+  // ===========================================================================================
+  it('clear ANSWERS with the recipe it dropped - version, evidence pointer and all', async () => {
+    await recipes.putRecipe('orgA', 'citius', 'list_processos', recipeDraft('v1'));
+    await recipes.supersedeRecipe('orgA', 'citius', 'list_processos', {
+      ...recipeDraft('v2'), capturedCallsRef: 'cap-v2', reason: 'endpoint moved',
+    });
+
+    const dropped = await recipes.clearRecipe('orgA', 'citius', 'list_processos');
+    expect(dropped?.version).toBe(2);
+    expect(dropped?.goal).toBe('v2');
+    // THE FIELD THE WHOLE COLLECTION HANGS OFF. A boolean carries the first fact and loses this one.
+    expect(dropped?.capturedCallsRef).toBe('cap-v2');
+    // The action is back to never-having-learned, and the row's own actions are untouched.
+    expect(await recipes.getRecipe('orgA', 'citius', 'list_processos')).toBeNull();
+    expect((await row()).actions.map((a) => a.actionName)).toEqual(['list_processos', 'abrir_processo']);
+  });
+
+  it('clear is IDEMPOTENT: nothing to clear is `null`, never an error', async () => {
+    expect(await recipes.clearRecipe('orgA', 'citius', 'list_processos')).toBeNull();
+    expect(await recipes.clearRecipe('orgA', 'citius', 'no_such_action')).toBeNull();
+    expect(await recipes.clearRecipe('orgB', 'citius', 'list_processos')).toBeNull();
+  });
+
+  it('a clear on behalf of an ACTOR refuses a peer\'s PRIVATE definition, and the recipe survives', async () => {
+    // `visibleTo` is the gate the machine-facing signature has no need of. Without it the owner
+    // surface would let any same-org principal drop a colleague's private learning.
+    await integrationDefinitions.update(ID(), (cur) => ({ ...cur, visibility: 'private' }));
+    await recipes.putRecipe('orgA', 'citius', 'list_processos', { ...recipeDraft('v1'), capturedCallsRef: 'cap-1' });
+
+    const peer: Actor = { userId: 'peerA', orgId: 'orgA', role: 'user' };
+    expect(await recipes.clearRecipe('orgA', 'citius', 'list_processos', { visibleTo: peer })).toBeNull();
+    expect(await recipes.getRecipe('orgA', 'citius', 'list_processos')).not.toBeNull();
+
+    // THE CONTROL: the OWNER, same call, same row - so the refusal above is about the actor and not
+    // about a store that cannot clear a private row at all.
+    expect((await recipes.clearRecipe('orgA', 'citius', 'list_processos', { visibleTo: author }))?.version).toBe(1);
+    expect(await recipes.getRecipe('orgA', 'citius', 'list_processos')).toBeNull();
+  });
+
+  it('a clear whose actor belongs to ANOTHER org is refused before the row is even derived', async () => {
+    await recipes.putRecipe('orgA', 'citius', 'list_processos', recipeDraft('v1'));
+    const foreign: Actor = { userId: 'userB1', orgId: 'orgB', role: 'org-admin' };
+    expect(await recipes.clearRecipe('orgA', 'citius', 'list_processos', { visibleTo: foreign })).toBeNull();
+    expect(await recipes.getRecipe('orgA', 'citius', 'list_processos')).not.toBeNull();
+  });
+
   it('refuses a supersede with nothing to supersede, and one with no stated reason', async () => {
     expect(
       await recipes.supersedeRecipe('orgA', 'citius', 'list_processos', { ...recipeDraft('v2'), reason: 'drift' }),

@@ -182,7 +182,9 @@ describe('runAutomationForAction - the replay-first mount', () => {
   it('write-gate CLEARS the offending recipe and runs the action, instead of bricking it', async () => {
     const replay = vi.fn<Replay>(async () => ({ outcome: 'write-gate', blocked: 'POST https://portal.example/api/cases', recipeVersion: 2 }));
     const run = vi.fn<Run>(async () => ({ runId: 'r-1', status: 'completed', summary: 'ok' }) as never);
-    const clearRecipe = vi.fn(async () => true);
+    // The store answers with the recipe it DROPPED - see `ActionRunDeps.clearRecipe`. This one
+    // names no evidence, so this case is about the clear alone; the evidence pairing has its own.
+    const clearRecipe = vi.fn(async () => ({ version: 2 }));
     const result = await runAutomationForAction(base, { replay, run, clearRecipe });
 
     // THE ACTION STILL WORKS - it runs its authored steps, which are what the owner approved,
@@ -465,6 +467,57 @@ describe('runAutomationForAction - drift routes the compile through the SUPERSED
     expect(discardCapture).not.toHaveBeenCalled();
   });
 
+  // ===========================================================================================
+  // …AND THE THIRD REMOVAL PATH: A CLEARED RECIPE.
+  //
+  // The two above are both WRITE paths. Clearing is the third way a recipe can go and it had no
+  // collector at all: `clearRecipe` returned the dropped recipe and the mount narrowed it to a
+  // boolean, so `capturedCallsRef` was never read. Nothing else can reach that pile afterwards -
+  // the next learn's `priorCaptureRef` reads the CURRENT recipe, which is now absent - and the
+  // collection has no TTL. It is routinely reachable: `arguments-uncovered` is the ordinary
+  // listener shape, so two callers of one action with different argument sets orphan a fresh pile
+  // on every cycle.
+  // ===========================================================================================
+  it('discards the evidence of the recipe it CLEARS, on the refusal path', async () => {
+    const { deps, discardCapture } = storeSpies();
+    await runAutomationForAction(base, {
+      ...deps,
+      // The narrow-recipe refusal: the ordinary listener shape, and the commonest way here.
+      replay: async () => ({ outcome: 'arguments-uncovered', reason: 'no hole for since', recipeVersion: 3 }),
+      run: runObserving([]),
+      clearRecipe: async () => ({ version: 3, capturedCallsRef: 'cap-cleared' }),
+    });
+    expect(discardCapture).toHaveBeenCalledOnce();
+    expect(discardCapture.mock.calls[0]![0]).toEqual({
+      orgId: 'o1', integrationKey: 'portal', actionName: 'list_cases', captureId: 'cap-cleared',
+    });
+  });
+
+  it('…and discards NOTHING when the recipe it cleared named no evidence', async () => {
+    // THE CONTROL, and it is what stops the assertion above from being "the discard fires on every
+    // clear". A recipe compiled by a build before `capturedCallsRef` existed names no pile, and
+    // deleting a capture id that is not there would be a delete this code cannot justify.
+    const { deps, discardCapture } = storeSpies();
+    await runAutomationForAction(base, {
+      ...deps,
+      replay: async () => ({ outcome: 'arguments-uncovered', reason: 'no hole for since', recipeVersion: 3 }),
+      run: runObserving([]),
+      clearRecipe: async () => ({ version: 3 }),
+    });
+    expect(discardCapture).not.toHaveBeenCalled();
+  });
+
+  it('…and discards nothing when there was no recipe to clear at all', async () => {
+    const { deps, discardCapture } = storeSpies();
+    await runAutomationForAction(base, {
+      ...deps,
+      replay: async () => ({ outcome: 'write-gate', blocked: 'POST /x', recipeVersion: 3 }),
+      run: runObserving([]),
+      clearRecipe: async () => null,
+    });
+    expect(discardCapture).not.toHaveBeenCalled();
+  });
+
   it('a FIRST compile that writes is not stored either - neither route may author a write', async () => {
     const write = { ...EXCHANGE, method: 'POST', requestBody: '{"ref":"2024-1"}' };
     const { deps, put, supersede } = storeSpies();
@@ -533,7 +586,7 @@ describe('runAutomationForAction - a recipe may not be a SUBSET of its action', 
 
   it('CLEARS a read-only recipe it finds on a writing action and runs the action instead', async () => {
     const { deps } = storeSpies();
-    const clearRecipe = vi.fn(async () => true);
+    const clearRecipe = vi.fn(async () => ({ version: 4 }));
     const run = runObserving([]);
     const result = await runAutomationForAction(
       { ...base, mutates: true, writeAssent: true },
@@ -558,7 +611,7 @@ describe('runAutomationForAction - a recipe may not be a SUBSET of its action', 
       { ...base, mutates: true, writeAssent: true },
       {
         ...deps,
-        clearRecipe: async () => true,
+        clearRecipe: async () => ({ version: 4 }),
         run: runObserving(READS_ONLY),
         replay: async () => ({ outcome: 'does-not-cover', reason: 'no write in it', recipeVersion: 4 }),
       },
@@ -573,7 +626,7 @@ describe('runAutomationForAction - a recipe may not be a SUBSET of its action', 
       { ...base, mutates: false },
       {
         ...deps,
-        clearRecipe: async () => true,
+        clearRecipe: async () => ({ version: 4 }),
         run: runObserving(READS_ONLY),
         replay: async () => ({ outcome: 'does-not-cover', reason: 'no write in it', recipeVersion: 4 }),
       },
@@ -1052,6 +1105,48 @@ describe('runAutomationForAction - the recipe records WHICH call is the answer',
     expect(put).not.toHaveBeenCalled();
     // …and nothing durable is left behind for a recipe that was never written.
     expect(appendCapturedCall).not.toHaveBeenCalled();
+  });
+
+  /**
+   * THE SUMMARY: a constant endpoint serving the SAME document as the filtered search.
+   *
+   * Not contrived - a portal's dashboard/default-view endpoint, or a detail pane showing the row
+   * the search just returned. Because the bodies are identical `isTheRunsAnswer` matches BOTH, and
+   * last-match-wins names this one, which has no hole at all.
+   */
+  const CONSTANT_SUMMARY = { ...EXCHANGE, url: 'https://portal.example/api/summary' };
+
+  it('REFUSES to learn when the ANSWER-BEARING call cannot carry this run\'s arguments', async () => {
+    // `ref` IS placed - by the search - so the recipe-wide coverage rule saw nothing missing and the
+    // compile stored `answersWith.callIndex = 1`. Every later caller was then handed the 2024-1
+    // document as the answer to their own question, under `success: true, replayed: true`, with no
+    // drift (both calls still 200 with an unchanged shape) and nothing that would ever clear it.
+    const { deps, put, appendCapturedCall } = storeSpies();
+    const result = await runAutomationForAction(
+      base,
+      { ...deps, replay: noRecipe, run: runAnswering([EXCHANGE, CONSTANT_SUMMARY], { items: [{ id: 41 }] }) },
+    );
+
+    expect(result.success).toBe(true); // the RUN is fine; only the learning is declined
+    expect(put).not.toHaveBeenCalled();
+    expect(appendCapturedCall).not.toHaveBeenCalled();
+  });
+
+  it('…and DOES learn the same two calls when the answer is the one carrying the argument', async () => {
+    // THE CONTROL. Same pass, same arguments, same hole-free summary; the only difference is that
+    // the summary now has a body of its own, so the answer is unambiguously the search.
+    const { deps, put } = storeSpies();
+    const distinctSummary = { ...CONSTANT_SUMMARY, responseBody: '{"open":3}' };
+    await runAutomationForAction(
+      base,
+      { ...deps, replay: noRecipe, run: runAnswering([EXCHANGE, distinctSummary], { items: [{ id: 41 }] }) },
+    );
+
+    expect(put).toHaveBeenCalledOnce();
+    const draft = put.mock.calls[0]![3];
+    // The hole-free summary is still IN the recipe - this rule is about the answer, not a filter.
+    expect(draft.injectedCalls).toHaveLength(2);
+    expect(draft.answersWith).toEqual({ callIndex: 0, matchedBy: 'run-output-identity' });
   });
 });
 

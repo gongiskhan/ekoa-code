@@ -5350,3 +5350,60 @@ the fifth is recorded OPEN because the complete fix belongs in a file this slice
   acceptance's "a MISSING argument refuses the replay" passed `{unrelated:'x'}` - so all three were
   green on the coverage rule while claiming to test another. Each now passes the argument set that
   reaches the refusal it is named for, with a comment saying why.
+
+- **`p2-a-recipes-answer-could-be-constant-with-respect-to-its-argument`** (CLOSED 2026-08-20,
+  HIGH, silent wrong answer). `compileInjectedCalls` refused an argument it could not locate, on the
+  stated ground that "the compiled call would be a constant that returns this run's data for every
+  later caller" - but it checked `placed`, a UNION over every compiled call, while `answerCallIndex`
+  names ONE, and the two were never compared. `answerOf` returns exactly that call's body and nothing
+  chains one replayed call into the next (every template is filled from the run's arguments alone),
+  so an argument absent from the answer-bearing call cannot change what the action returns.
+  THE REACHABLE SHAPE, and it is ordinary: a page fetches `GET /api/cases?ref=2024-1` and a
+  `GET /api/summary` serving the same document (a default view, a dashboard, a one-off page state).
+  The learning run's answer identity-matches BOTH, so the compile's LAST-MATCH-WINS tie-break named
+  the summary - which carries no hole at all - while `ref` was placed by call 0, so nothing refused.
+  Replay with `{ref: '2025-9'}` then passed coverage (recipe-wide there too), fetched
+  `?ref=2025-9` correctly on call 0, sent call 1 unchanged, and handed the caller the 2024-1 document
+  under `success: true, replayed: true` - no drift (both calls still 200 with an unchanged shape),
+  nothing that would ever clear it, no other symptom anywhere. Closed with one comparison at each
+  end: the compile refuses unless the call at `answerCallIndex` carries every hole, and
+  `argumentCoverage` runs the same check at REPLAY (as `arguments-uncovered`, so the caller clears
+  it) because refusing only at compile time leaves every recipe an older build stored - which is
+  every recipe this slice wrote before this round. The RECIPE-WIDE rule stays and is still right: it
+  is the only rule there is when a recipe names no answer, and a per-call reading of it would refuse
+  an ordinary multi-hop recipe whose opening hop takes no argument. Verified at both ends by
+  restoring the union reading and watching the compile, mount, replay and acceptance cases go red.
+  The tie-break's own comment claimed the choice "is only about which template is recorded, never
+  about what the caller gets back"; that was the false premise, and it is corrected in place.
+
+- **`p2-a-cleared-recipe-orphaned-its-capture-evidence-forever`** (CLOSED 2026-08-20, HIGH, unbounded
+  retention of the most sensitive data this pipeline holds). The spine had twice closed the family
+  "nothing durable outlives the thing it is evidence for" - the evidence behind a REPLACED recipe and
+  the evidence behind one that never LANDED. `clearRecipe` is the third way a recipe can go and had
+  no collector: it DID return the dropped recipe (its own comment said so - "a caller clearing a
+  recipe wants to log the version it dropped") and `automation/service.ts` narrowed it to a boolean,
+  so `capturedCallsRef` was never read and `discardCapture` was never called on that path. Nothing
+  can reach the pile afterwards - the next learn's `priorCaptureRef` reads the CURRENT recipe, which
+  is now absent - and `integration_captured_calls` has no TTL. It is routinely reachable:
+  `arguments-uncovered` is the ordinary listener shape, so two callers of one action with different
+  argument sets repeat the learn/clear cycle and orphan a fresh pile of full redacted request and
+  response bodies every time. Closed by widening `clearRecipe` to answer with the recipe it dropped
+  and putting the pairing in ONE tier-3 module, `integrations/recipe-lifecycle.ts` (`forgetRecipe`),
+  which both removal paths - the run loop's refusal and the owner's new route - go through, so a
+  future third path cannot forget to collect. Verified against the REAL captures collection: the
+  acceptance's `arguments-uncovered` clear (real default `clearRecipe`) and the contract suite's
+  DELETE both assert the documents GONE, and both redden when the store's answer is hollowed out.
+
+- **`p2-a-wrongly-answering-recipe-was-unclearable-by-its-owner`** (CLOSED 2026-08-20, MEDIUM,
+  permanent silent degradation with no operator control). `clearRecipe`'s docblock called itself "the
+  escape hatch that stops a bad recipe becoming a permanent property of an action", and its only
+  caller fired on the three replay outcomes that visibly REFUSE (write-gate, does-not-cover,
+  arguments-uncovered). A recipe that keeps answering `ok` and answers WRONGLY - learned from a
+  one-off page state, or the constant-answer shape above - reached none of them: `putRecipe` refuses
+  to overwrite by design, `supersedeRecipe` needs a drift that cannot fire while the calls keep
+  returning 200 with an unchanged shape, nothing expires it, and there was no route, descriptor entry
+  or UI. Closed with two `auth: 'user'` endpoints - `GET /api/v1/integrations/recipes` (tenant-wide,
+  a SUMMARY projection) and `DELETE /api/v1/integrations/:key/actions/:actionName/recipe` (idempotent,
+  and it takes the evidence with it). DELIBERATELY NARROW, journaled in `docs/decisions.md`: not
+  `user-or-key` on either, and NO dashboard surface in this slice. The list route is also what finally
+  gives `recipe-store.listRecipesForActor` a caller; it had none.

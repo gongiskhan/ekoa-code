@@ -541,8 +541,18 @@ describe('replayCompiledAction - what an ARGUMENT may not decide', () => {
   });
 
   it('accepts an argument honoured by ONE call of several - coverage is the RECIPE\'s, not one call\'s', async () => {
-    // `TWO_ORIGIN_RECIPE`'s second call has no hole at all. A per-call reading of this rule would
-    // refuse a perfectly ordinary multi-hop recipe, so the union is the unit and this pins it.
+    // `TWO_ORIGIN_RECIPE`'s FIRST call has no hole at all (the second carries `ref` - read the
+    // fixture, not this comment's previous version, which had them the wrong way round). A per-call
+    // reading of this rule would refuse a perfectly ordinary multi-hop recipe: the opening hop of a
+    // flow routinely takes no argument. So the union is the unit for "can this argument reach the
+    // wire", and this pins it.
+    //
+    // STILL THE RIGHT RULE, RE-READ. It is now one of TWO rules, and the reason both are needed is
+    // visible in this very fixture: the answer-bearing call here is the SECOND one, which does carry
+    // `ref`, so the recipe is sound and replays. What the union cannot answer - and what the case
+    // below asks - is whether the call the caller actually SEES the body of can carry the argument.
+    // Widening this rule to "every call must carry every hole" would refuse this fixture, which is a
+    // perfectly good recipe; narrowing it away entirely would let the constant-answer recipe through.
     const browser = session({ status: 200, bodyText: '{"items":[{"id":1}]}' });
     const result = await replayCompiledAction(
       { ...base, args: { ref: '2024-1' }, browser, classify: always(ADVERSARIAL) },
@@ -553,6 +563,93 @@ describe('replayCompiledAction - what an ARGUMENT may not decide', () => {
       'https://portal.example/api/cases',
       'https://cdn.other.example/api/docs?ref=2024-1',
     ]);
+    // The hole-free call is the one this recipe does NOT answer with. That is the whole difference
+    // between this case and the next, so it is asserted rather than left to the fixture's default.
+    expect((TWO_ORIGIN_RECIPE as { answersWith: { callIndex: number } }).answersWith.callIndex).toBe(1);
+  });
+
+  // ===========================================================================================
+  // …AND THE UNION IS NOT THE UNIT FOR THE ANSWER.
+  //
+  // `answerOf` hands the caller exactly ONE call's body, and nothing chains one replayed call into
+  // the next - every template is filled from `args` alone. So an argument the ANSWER-BEARING call
+  // has no hole for cannot change what this action returns, however faithfully the other calls
+  // carry it: the caller asking about 2025-9 gets the body the recipe was compiled around, under
+  // `success: true, replayed: true`, with no drift (the calls still 200 with an unchanged shape)
+  // and no other symptom.
+  //
+  // The compile refuses to LEARN this (`network-capture.ts`). This is the same refusal at the
+  // replay, which is where a recipe written by an OLDER BUILD arrives - including every build of
+  // this slice before the rule existed, whose recipes are sitting in the store right now.
+  // ===========================================================================================
+  it('REFUSES when the ANSWER-BEARING call has no hole for an argument another call carries', async () => {
+    const browser = session({ status: 200, bodyText: '{"items":[{"id":1}]}' });
+    // The mirror image of `TWO_ORIGIN_RECIPE`: the filtered search FIRST, a constant summary
+    // second, and the recipe answers with the SUMMARY - which is exactly what the compile's
+    // last-match-wins tie-break produced when a page served the same document from both.
+    const constantAnswer = recipe({
+      injectedCalls: [
+        { method: 'GET', urlTemplate: 'https://portal.example/api/cases?ref={{input.ref}}', headerNames: [], idempotent: true },
+        { method: 'GET', urlTemplate: 'https://portal.example/api/summary', headerNames: [], idempotent: true },
+      ],
+      answersWith: { callIndex: 1, matchedBy: 'run-output-identity' },
+    });
+    const result = await replayCompiledAction(
+      { ...base, args: { ref: '2025-9' }, browser, classify: always(ADVERSARIAL) },
+      { loadRecipe: async () => constantAnswer },
+    );
+
+    // `arguments-uncovered`, so the caller DROPS it (proved at the mount) and the next pass learns
+    // one whose answer can be filtered. `no-recipe` would leave it in the action's only slot.
+    expect(result.outcome).toBe('arguments-uncovered');
+    expect((result as { reason: string }).reason).toMatch(/answers with has no hole for argument\(s\) ref\b/);
+    // THE CONSEQUENCE, which is the whole point: nothing went out. Without the refusal both calls
+    // are made and the caller is handed `/api/summary`'s body as the answer about 2025-9.
+    expect(browser.calls).toHaveLength(0);
+  });
+
+  it('…and the SAME two calls replay when the recipe answers with the one that carries the hole', async () => {
+    // THE CONTROL. Identical calls, identical argument; the only difference is which call the
+    // recipe names as the answer. Without it "nothing was sent" above would also hold for a
+    // fixture whose calls cannot be sent at all.
+    const browser = session({ status: 200, bodyText: '{"items":[{"id":1}]}' });
+    const soundAnswer = recipe({
+      injectedCalls: [
+        { method: 'GET', urlTemplate: 'https://portal.example/api/cases?ref={{input.ref}}', headerNames: [], idempotent: true },
+        { method: 'GET', urlTemplate: 'https://portal.example/api/summary', headerNames: [], idempotent: true },
+      ],
+      answersWith: { callIndex: 0, matchedBy: 'run-output-identity' },
+    });
+    const result = await replayCompiledAction(
+      { ...base, args: { ref: '2025-9' }, browser, classify: always(ADVERSARIAL) },
+      { loadRecipe: async () => soundAnswer },
+    );
+    expect(result.outcome).toBe('ok');
+    expect((browser.calls as Array<{ url: string }>).map((c) => c.url)).toEqual([
+      'https://portal.example/api/cases?ref=2025-9',
+      'https://portal.example/api/summary',
+    ]);
+  });
+
+  it('does not fire for a recipe that names NO answer - there is no answer to be constant about', async () => {
+    // A browser-only automation's recipe: the run it was learned from answered nothing, so the
+    // replay answers nothing. Demanding a hole in a call nobody reads would refuse every one of
+    // them, which is every automation this repo ships.
+    const browser = session({ status: 200, bodyText: '{"items":[{"id":1}]}' });
+    const answerless = recipe({
+      injectedCalls: [
+        { method: 'GET', urlTemplate: 'https://portal.example/api/cases?ref={{input.ref}}', headerNames: [], idempotent: true },
+        { method: 'GET', urlTemplate: 'https://portal.example/api/summary', headerNames: [], idempotent: true },
+      ],
+      answersWith: null,
+    });
+    const result = await replayCompiledAction(
+      { ...base, args: { ref: '2025-9' }, browser, classify: always(ADVERSARIAL) },
+      { loadRecipe: async () => answerless },
+    );
+    expect(result.outcome).toBe('ok');
+    expect((result as { data: unknown }).data).toBeUndefined();
+    expect(browser.calls).toHaveLength(2);
   });
 
   it('counts a hole in the BODY as coverage - a POST search parameterises there, not in the URL', async () => {

@@ -192,6 +192,31 @@ export interface CompiledCalls {
  * strictly worse than no recipe at all. So the compile refuses. Refusing to learn is a cost;
  * learning something that ignores its input is a defect that never surfaces.
  *
+ * ── …AND SO DOES AN ARGUMENT THAT REACHES THE WIRE BUT NOT THE ANSWER ────────────────────────
+ *
+ * The check above is over the WHOLE recipe: an argument placed by ANY compiled call passes it. That
+ * is the right unit for "can this argument reach the wire at all", and it is the WRONG unit for the
+ * only question a caller can see the answer to. `answerCallIndex` names ONE call, `answerOf`
+ * (`executors/injected-call.ts`) hands back THAT call's body, and nothing chains one replayed call
+ * into the next: every template is filled from the run's arguments alone. So an argument absent from
+ * the answer-bearing call cannot change what this action RETURNS, however faithfully the other calls
+ * carry it.
+ *
+ * The shape is ordinary. A page fetches `GET /api/cases?ref=2024-1` and a `GET /api/summary` whose
+ * body is the same document (a default view, a dashboard endpoint, a one-off page state), the run's
+ * answer identity-matches both, LAST MATCH WINS names the summary - and the summary has no hole at
+ * all. Every check passed: `ref` was placed by call 0, so the recipe-wide rule saw nothing missing,
+ * and the replay's coverage rule was recipe-wide too. A later caller asking about `2025-9` then got
+ * the 2024-1 document under `success: true, replayed: true`, with no drift (the calls still 200 with
+ * the same shape), nothing to clear it, and no other symptom anywhere.
+ *
+ * So when a compile names an answer-bearing call, THAT call must carry every hole, or the compile
+ * refuses. The two rules are one rule at two units and both are needed: the recipe-wide one is the
+ * only one there is when the run answered nothing (no pointer, nothing to be wrong about), and the
+ * answer-call one is the only one that speaks about the answer. `argumentCoverage`
+ * (`executors/injected-call.ts`) now runs the same pair at REPLAY, because refusing only here leaves
+ * every recipe an older build already stored - which is where this defect's population lives.
+ *
  * A non-scalar argument (an object, an array) refuses for the same reason and one more: there is no
  * verbatim form of it to look for, so "it was honoured" is not a claim this compile can make.
  * Secret-shaped names are neither holed nor required to be found - see `inputHoles`.
@@ -238,10 +263,19 @@ export function compileInjectedCalls(
   const indexByKey = new Map<string, number>();
   const out: InjectedCall[] = [];
   const placed = new Set<string>();
+  /** What each KEPT call placed, by its index in `out`; `placed` is the union of these. Recorded
+   *  per call because the answer-bearing one is judged on its own (see the header) - and the union
+   *  cannot answer a question about one member of it. */
+  const placedByCall: Array<Set<string>> = [];
   const max = opts.max ?? MAX_COMPILED_CALLS;
   /** The compiled call whose captured body IS the run's answer. LAST match wins, the same "last
-   *  meaningful output" rule the run's own answer is read by - and with identical bodies the choice
-   *  is only about which template is recorded, never about what the caller gets back. */
+   *  meaningful output" rule the run's own answer is read by.
+   *
+   *  IT IS NOT AN ARBITRARY CHOICE AMONG EQUALS, which is what this comment used to claim ("with
+   *  identical bodies the choice is only about which template is recorded, never about what the
+   *  caller gets back"). Two calls with the same body TODAY are two different calls tomorrow: one
+   *  may carry the caller's argument and the other may be a constant. Which is why the check below
+   *  exists - the tie is broken here, and then the winner has to prove it can carry the arguments. */
   let answerCallIndex: number | undefined;
 
   for (const exchange of internalApiCalls(exchanges)) {
@@ -273,6 +307,9 @@ export function compileInjectedCalls(
         indexByKey.set(key, index);
         for (const name of templated.placed) placed.add(name);
         for (const name of bodyPlaced) placed.add(name);
+        // The same names again, kept APART by call. `placedByCall[index]` is pushed in lockstep
+        // with `out`, so the two stay aligned for the answer-call check below.
+        placedByCall.push(new Set([...templated.placed, ...bodyPlaced]));
         const expectShape = expectShapeOf(exchange);
         out.push(
           injectedCallFromExchange({
@@ -312,6 +349,25 @@ export function compileInjectedCalls(
         'the run answered with something none of the captured calls returned, so a replay of them could only ever '
         + 'answer with a different call\'s body - refusing to learn a recipe that changes this action\'s answer',
     };
+  }
+  // ── …AND THE CALL THAT CARRIES IT MUST CARRY THE ARGUMENTS TOO ───────────────────────────
+  // `missed` above is the RECIPE's coverage; this is the ANSWER's. Nothing chains one replayed
+  // call into the next, so an argument the answer-bearing call has no hole for cannot change what
+  // this action returns - the replay would hand every later caller this run's answer. See the
+  // header: that is the same silent-wrong-answer failure the rule above refuses, at the one unit
+  // the caller can actually observe.
+  if (answerCallIndex !== undefined) {
+    const answerPlaced = placedByCall[answerCallIndex] ?? new Set<string>();
+    const constant = holes.filter((h) => !answerPlaced.has(h.name)).map((h) => h.name);
+    if (constant.length > 0) {
+      return {
+        calls: [],
+        refusedBecause:
+          `argument(s) ${[...new Set(constant)].sort().join(', ')} reach the wire but not the call that produced this `
+          + 'run\'s answer, so every later caller would be handed this run\'s answer whatever they asked for '
+          + '- refusing to learn it',
+      };
+    }
   }
   return { calls: out, ...(answerCallIndex !== undefined ? { answerCallIndex } : {}) };
 }

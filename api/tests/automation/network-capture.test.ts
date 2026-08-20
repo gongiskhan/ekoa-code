@@ -276,6 +276,82 @@ describe('compileInjectedCalls - an unlocatable argument refuses the whole compi
   });
 });
 
+// =============================================================================================
+// …AND THE UNION IS NOT THE UNIT FOR THE ANSWER.
+//
+// The rule above is satisfied by an argument placed in ANY compiled call. `answerCallIndex` names
+// ONE, `answerOf` hands back THAT call's body, and nothing chains one replayed call into the next -
+// so an argument absent from the answer-bearing call cannot change what the action RETURNS however
+// faithfully the other calls carry it. The two were never compared, and the gap is reachable by an
+// ordinary page: a filtered search plus a constant "summary" endpoint serving the same document.
+// =============================================================================================
+describe('compileInjectedCalls - the ANSWER-BEARING call must carry the arguments too', () => {
+  /** The filtered search: carries `ref`, and its body IS the run's answer. */
+  const SEARCH = capture({ url: 'https://portal.example/api/cases?ref=2024-1' });
+  /** A constant endpoint serving the SAME document - a default view, a dashboard, a one-off page
+   *  state. Same body, so `isTheRunsAnswer` matches it too and LAST MATCH WINS names this one. */
+  const CONSTANT_SUMMARY = capture({ url: 'https://portal.example/api/summary' });
+  const ANSWER = { items: [{ id: 1, ref: '2024-1' }], total: 1 };
+
+  it('REFUSES when the answer-bearing call has no hole for an argument another call carries', () => {
+    const out = compileInjectedCalls(
+      redactCaptures([SEARCH, CONSTANT_SUMMARY]),
+      { inputs: { ref: '2024-1' }, runOutput: ANSWER },
+    );
+    // Nothing is stored. Without this rule the recipe stored `answersWith.callIndex = 1` - the
+    // summary - and every later caller was handed the 2024-1 document under `success: true`.
+    expect(out.calls).toEqual([]);
+    expect(out.answerCallIndex).toBeUndefined();
+    expect(out.refusedBecause).toContain('ref');
+    // Anchored on the phrase this rule owns, so it cannot be satisfied by the RECIPE-wide refusal
+    // above ("appear nowhere in what this pass captured"), which is a different fact.
+    expect(out.refusedBecause).toContain('not the call that produced this run\'s answer');
+  });
+
+  it('…and ACCEPTS the same two calls when the ANSWER is the one that carries the argument', () => {
+    // THE CONTROL. Same two endpoints, same argument, same hole-free summary - and the ONLY
+    // difference is which captured body the run's answer is identical to. Give the summary a body
+    // of its own and the last-match tie disappears: the answer is the SEARCH, which carries `ref`,
+    // so the recipe is sound and is stored. Without this case "nothing was compiled" above would
+    // also hold for a fixture these exchanges simply cannot be compiled from.
+    const distinctSummary = capture({ url: 'https://portal.example/api/summary', responseBody: '{"open":3}' });
+    const out = compileInjectedCalls(
+      redactCaptures([SEARCH, distinctSummary]),
+      { inputs: { ref: '2024-1' }, runOutput: ANSWER },
+    );
+    expect(out.refusedBecause).toBeUndefined();
+    expect(out.calls.map((c) => c.urlTemplate)).toEqual([
+      'https://portal.example/api/cases?ref={{input.ref}}',
+      'https://portal.example/api/summary',
+    ]);
+    // The hole-free summary is still IN the recipe - this rule is about the answer, not a filter.
+    expect(out.answerCallIndex).toBe(0);
+  });
+
+  it('leaves a run that answered NOTHING alone - there is no answer to be constant about', () => {
+    // Every browser-only automation this repo ships. No pointer, so the replay answers nothing
+    // either, and the recipe-wide rule is the only one there is.
+    const out = compileInjectedCalls(
+      redactCaptures([SEARCH, CONSTANT_SUMMARY]),
+      { inputs: { ref: '2024-1' }, runOutput: undefined },
+    );
+    expect(out.refusedBecause).toBeUndefined();
+    expect(out.calls).toHaveLength(2);
+    expect(out.answerCallIndex).toBeUndefined();
+  });
+
+  it('does not demand a hole the compile never writes - a SECRET-SHAPED argument name', () => {
+    // `inputHoles` skips these on both counts, so demanding one here would refuse every recipe
+    // learned by a run that resolved a credential. Read through the compile's own vocabulary.
+    const out = compileInjectedCalls(
+      redactCaptures([SEARCH, CONSTANT_SUMMARY]),
+      { inputs: { ref: '2024-1', api_key: 'never-in-a-url' }, runOutput: ANSWER },
+    );
+    expect(out.refusedBecause).toContain('ref');
+    expect(out.refusedBecause).not.toContain('api_key');
+  });
+});
+
 describe('deriveLessons - what a later reader would otherwise have to re-derive', () => {
   it('names the header the session travels on, by NAME', () => {
     const lessons = deriveLessons(redactCaptures([capture()]));

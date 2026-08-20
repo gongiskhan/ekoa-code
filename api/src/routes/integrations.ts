@@ -15,8 +15,9 @@
  *
  * HOW THE TWO TIERS ARE KEPT APART, and why the ordering below is load-bearing: express matches in
  * registration order, so `GET /:key` (tier 1) is registered AFTER the dashboard's literal-segment
- * routes (`/active`, `/configs`, `/refresh`, `/definitions/…`) — otherwise it would swallow them —
- * and the router-wide `requireAuth` blanket sits BELOW it, covering every remaining `:key` route.
+ * routes (`/active`, `/configs`, `/refresh`, `/definitions/…`, `/recipes`) - otherwise it would
+ * swallow them - and the router-wide `requireAuth` blanket sits BELOW it, covering every remaining
+ * `:key` route.
  * That blanket is the SAFE DEFAULT for anything appended later. The routes above it each carry
  * their admission EXPLICITLY, and `api/tests/contract/integrations-capability.test.ts` walks this
  * router's own stack and probes every route it finds: unauthenticated must be 401, and every route
@@ -70,6 +71,9 @@ import {
   type SetVisibilityResult,
 } from '../integrations/definition-store.js';
 import { readLessons, writeLessons } from '../integrations/definition-lessons.js';
+import { integrationRecipeStore } from '../integrations/recipe-store.js';
+import { forgetRecipe } from '../integrations/recipe-lifecycle.js';
+import type { IntegrationActionRecipe } from '../integrations/definitions.js';
 import { provisionIntegrationAutomations, sessionActionRows, type ProvisionBinding } from '../automation/index.js';
 import { requestAttendedCeremony } from '../bridge/attended.js';
 import { advertisesCapability, getConnectionByOwner } from '../bridge/registry.js';
@@ -98,6 +102,31 @@ async function automationBindings(actor: Actor, key: string): Promise<ProvisionB
       templateKey: a.automationBinding!.automationTemplate!,
       template: integrationAutomationTemplate(key, a.automationBinding!.automationTemplate!),
     }));
+}
+
+/**
+ * One stored recipe, projected onto the OWNER's view of it (`IntegrationActionRecipeSummary`).
+ *
+ * A PROJECTION, not the document. `headerNames`, `bodyTemplate`, `expectShape`, `scriptedSteps` and
+ * `capturedCallsRef` are all dropped here: the owner's question is "what did this learn to call, and
+ * which call answers", and everything else is either the internals of a request they did not author
+ * or a pointer into a collection with its own lifecycle. Written as a whitelist for exactly the
+ * reason `publish-scrub` is - a field added to the stored shape later must be OPTED IN to a wire
+ * response, never carried onto one by a spread nobody re-read.
+ */
+function recipeSummary(key: string, actionName: string, recipe: IntegrationActionRecipe) {
+  return {
+    key,
+    actionName,
+    version: recipe.version,
+    compiledAt: recipe.compiledAt,
+    calls: recipe.injectedCalls.map((c) => `${c.method} ${c.urlTemplate}`),
+    ...(recipe.answersWith !== undefined ? { answersWithCallIndex: recipe.answersWith.callIndex } : {}),
+    lessons: [...recipe.lessons],
+    ...(recipe.supersedes !== undefined
+      ? { supersedes: { version: recipe.supersedes.version, reason: recipe.supersedes.reason } }
+      : {}),
+  };
 }
 
 const CreateConfig = z.object({ integrationKey: z.string(), configValues: z.record(z.unknown()), name: z.string().optional() });
@@ -337,6 +366,29 @@ export function integrationsRouter(deps: {
     res.json(configSummary(result.config!));
   });
 
+  // --- Learned replay recipes: the READ half (slice P2) ---------------------------------------
+  //
+  // Literal first segment, so it MUST precede the `/:key` routes below or `:key` swallows it - the
+  // same positional rule the configs block above states. `requireAuth` explicitly, because it sits
+  // above the router-wide blanket: this is `auth: 'user'`, never key-reachable (see the descriptor
+  // for why).
+
+  /**
+   * GET /api/v1/integrations/recipes -> { items: IntegrationActionRecipeSummary[] }.
+   *
+   * Every action of this tenant that has LEARNED to replay itself, so its owner can see what the
+   * machine decided on their behalf and recognise one that learned the wrong thing. Tenant-wide
+   * rather than per-integration: an owner looking for a bad recipe is precisely someone who cannot
+   * name it yet.
+   *
+   * Scoped twice by the store: resolved inside the actor's own org, then re-filtered by the
+   * definition read predicate, so a same-org peer's PRIVATE definition never appears here.
+   */
+  r.get('/recipes', requireAuth, async (req: AuthedRequest, res: Response) => {
+    const rows = await integrationRecipeStore.listRecipesForActor(actorOf(req));
+    res.json({ items: rows.map(({ key, actionName, recipe }) => recipeSummary(key, actionName, recipe)) });
+  });
+
   // ===========================================================================================
   // TIER 1 (part 2) — the PUBLIC CAPABILITY surface's `:key` routes (slice D1).
   //
@@ -564,6 +616,40 @@ export function integrationsRouter(deps: {
       req.params.actionName as string,
     );
     res.json({ ok: true, revoked });
+  });
+
+  /**
+   * DELETE /api/v1/integrations/:key/actions/:actionName/recipe -> { ok, version?, evidenceDiscarded }.
+   *
+   * THE OWNER'S VETO over what the machine learned. Below the `requireAuth` blanket like the three
+   * consent routes above it, and for the same reason: a recipe is learned FOR a user, and the
+   * decision to throw one away is the human's.
+   *
+   * IDEMPOTENT: an action with no recipe answers `ok` with no `version`. The caller asked for a
+   * state, not for a row, and that state holds - the same reading `revokeActionApproval` above has.
+   * A 404 would additionally be an existence oracle over whether an action has ever been discovered.
+   *
+   * TENANCY is the store's: `clearRecipe` derives the row id from the actor's own org (so no other
+   * tenant's row is reachable at all) and is handed the actor, so a same-org peer's PRIVATE
+   * definition answers exactly as a missing one does - re-asserted inside the CAS, not only before
+   * it. The EVIDENCE pairing is `forgetRecipe`'s, shared with the run loop's refusal path so the two
+   * removal paths cannot drift apart.
+   */
+  r.delete('/:key/actions/:actionName/recipe', async (req: AuthedRequest, res: Response) => {
+    const params = IntegrationActionParams.safeParse(req.params);
+    if (!params.success) return sendError(res, 'VALIDATION_FAILED', 'Parâmetros inválidos.', { issues: params.error.issues });
+    const actor = actorOf(req);
+    const { dropped, evidenceDiscarded } = await forgetRecipe({
+      orgId: actor.orgId,
+      integrationKey: params.data.key,
+      actionName: params.data.actionName,
+      visibleTo: actor,
+    });
+    res.json({
+      ok: true,
+      ...(dropped?.version !== undefined ? { version: dropped.version } : {}),
+      evidenceDiscarded,
+    });
   });
 
   /**

@@ -2462,3 +2462,102 @@ DIAGRAM CHECK (FIXED-12): the STORED SHAPE changed (`IntegrationActionRecipe.ans
 replay's outcome union gained a member, so `docs/diagrams/02-module-map.excalidraw` gains an
 as-built `(f)` annotation covering the envelope, the answer pointer, the new outcome and the three
 bounds. Appended as a new element, as `(b)`-`(e)` were, so no existing element is rewritten.
+
+## 2026-08-20 - P2 round seven: the answer must move with the argument, and a removed recipe takes its evidence
+
+Three defects, and the first two are the same mistake at two scales: a rule was written at the unit
+that was easy to compute rather than the unit the caller can observe.
+
+**THE ANSWER-BEARING CALL MUST CARRY EVERY HOLE, OR THE COMPILE REFUSES.** The located-argument rule
+was checked over the WHOLE recipe (`placed`, a union over every compiled call) while
+`answerCallIndex` names ONE, and the two were never compared. `answerOf` hands the caller exactly
+that call's body and nothing chains one replayed call into the next - every template is filled from
+the run's arguments alone - so an argument absent from the answer-bearing call cannot change what
+the action RETURNS however faithfully the other calls carry it. The reachable shape is ordinary: a
+page fetches `GET /api/cases?ref=2024-1` and a `GET /api/summary` whose body is the same document (a
+default view, a dashboard, a one-off page state); the run's answer identity-matches both; LAST MATCH
+WINS names the summary, which has no hole at all. Every existing check passed - `ref` was placed by
+call 0 - and a later caller asking about `2025-9` was handed the 2024-1 document under
+`success: true, replayed: true`, with no drift (both calls still 200 with an unchanged shape),
+nothing that would ever clear it, and no other symptom anywhere. DECISION: when a compile names an
+answer-bearing call, that call must carry every hole or nothing is stored; and the same comparison
+runs at the REPLAY (`argumentCoverage`), where a recipe of that shape written by an older build -
+which means every build of this slice before this round - arrives already stored. The replay's
+refusal is `arguments-uncovered`, so the caller clears it and the next pass learns a sound one.
+
+The comment on the last-match-wins tie-break claimed the choice "is only about which template is
+recorded, never about what the caller gets back". That was the false premise the defect lived in,
+and it is corrected in place: two calls with the same body today are two different calls tomorrow,
+one of which may be a constant.
+
+RE-READ, AS ASKED: `injected-call-replay.test.ts`'s "coverage is the RECIPE's, not one call's" is
+STILL THE RIGHT RULE, and it is now one of two. Its fixture's FIRST call is hole-free (the opening
+hop of a flow routinely takes no argument), so a per-call reading of the recipe-wide rule would
+refuse a perfectly good recipe; and that fixture's ANSWER is its second call, which does carry the
+hole, so it passes the new rule too. The union answers "can this argument reach the wire"; only the
+answer-call rule answers "can it change what the caller is handed". Neither subsumes the other -
+with no answer pointer (every browser-only automation this repo ships) the union is the only rule
+there is. The one thing the old comment got wrong was which call of its own fixture was hole-free;
+the code won and the comment is fixed.
+
+ACCEPTED COST: a multi-hop flow whose answer legitimately depends on a SERVER-SIDE effect of an
+earlier call (a search that sets a selection, a summary that reads it) is no longer learnable. That
+dependency is not something this compile can observe or prove, the failure it hides is silent and
+permanent, and the fallback is the action running its authored steps at full cost - correctly.
+
+**A CLEARED RECIPE TAKES ITS EVIDENCE WITH IT, AND THERE IS NOW ONE PLACE THAT SAYS SO.** The spine
+had closed the same family twice on the invariant "nothing durable outlives the thing it is evidence
+for": the evidence behind a REPLACED recipe, and the evidence behind a recipe that never LANDED.
+`clearRecipe` is the third way a recipe can go and had no collector at all - it returned the dropped
+recipe and its one caller narrowed it to a boolean, discarding the only pointer into
+`integration_captured_calls`. Nothing can reach that pile afterwards (the next learn's
+`priorCaptureRef` reads the CURRENT recipe, which is now absent) and the collection has no TTL. It
+is routinely reachable: `arguments-uncovered` is the ordinary listener shape, so two callers of one
+action with different argument sets orphan a fresh pile of full redacted request and response bodies
+on every learn/clear cycle. DECISION: `clearRecipe` answers with the recipe it dropped, and the
+pairing lives in ONE tier-3 module, `integrations/recipe-lifecycle.ts` (`forgetRecipe`), reached by
+both removal paths - the run loop's refusal and the owner's route below. A removal path that has to
+REMEMBER to collect is a removal path that will one day be added without doing so; this one was.
+FAILURE POSTURE, asymmetric and deliberate: a discard that throws is swallowed and logged (a leaked
+capture is untidy), a clear that throws is not (an owner must know their veto did not take).
+
+**THE OWNER GETS A CONTROL OVER A RECIPE THAT ANSWERS WRONGLY.** Three of a recipe's failure modes
+clear themselves because the replay visibly REFUSES. A recipe that keeps answering `ok` and answers
+wrongly had no exit at all: `putRecipe` refuses to overwrite by design, a supersede needs a drift
+that cannot fire while the calls keep returning 200 with an unchanged shape, nothing expires it, and
+there was no route, descriptor or surface. DECISION: two endpoints, both `auth: 'user'` -
+`GET /api/v1/integrations/recipes` (tenant-wide, because an owner hunting a bad recipe is precisely
+someone who cannot name it yet) and
+`DELETE /api/v1/integrations/:key/actions/:actionName/recipe`. The read is a SUMMARY projection
+(`METHOD urlTemplate` per call, the answer index, the lessons, the lineage) written as a whitelist:
+no header names, no body templates, no `capturedCallsRef`. The delete is IDEMPOTENT - an action that
+has learned nothing answers `ok`, never a 404, which would be an existence oracle over whether
+somebody else's action has ever been discovered.
+
+DELIBERATELY NARROW, and recorded as such: (1) `auth: 'user'` and not `user-or-key` on both, for the
+`approveAction`/`setLessons` reason - a recipe is learned FOR a user and the veto is the human's,
+and neither endpoint adds a capability an agent lacks (`executeAction` runs the action either way).
+Widening an auth class later is additive (Rule 7); narrowing one is not. (2) NO DASHBOARD SURFACE
+ships in this slice. The control is the API, contract-tested; a UI is a separate unit of work and
+claiming one here would be claiming a surface nobody built. (`web/lib/api/index.ts` derives its
+typed client from the descriptor maps, so `api.integrations.listRecipes` / `forgetRecipe` already
+exist for whoever builds that UI - no further contract work.) (3) No per-recipe disable, no TTL, no
+"pin this version": one veto, and re-learning is what replaces it.
+
+WHAT REMAINS UNPROVABLE WITHOUT A DISPLAY OR A LIVE TARGET (restated, and narrowed by this round to
+exactly three things): the daemon half - `api/**` may not import `clients/**`, so the acceptance's
+machine is a STAND-IN at the frame boundary and the real inheritance is proved against a real
+Chromium in `clients/bridge/test/browser/`; no lane anywhere exercises a real third-party portal, a
+real Cofre credential, or a headed display; and no test exercises a shipped browser-only automation
+producing a structured answer, because none of them can (see
+`citius-notificacoes-automation-produces-no-output` in `docs/findings.md`) - so the answer
+correlation and both of this round's answer-call refusals are proved at the mount over a real run
+record typed as the engine's own `StepOutput`, plus a planted stored recipe end to end through
+`executeUserIntegrationAction`, while the acceptance proves the negative case (the run answered
+nothing; so does the replay) against a real HTTP server.
+
+DIAGRAM CHECK (FIXED-12): a NEW MODULE (`api/src/integrations/recipe-lifecycle.ts`, tier 3) and two
+new endpoints, so `docs/diagrams/02-module-map.excalidraw` gains an as-built `(g)` annotation.
+Appended as a new element, as `(b)`-`(f)` were, so no existing element is rewritten. No stored shape
+changed this round - `answersWith` and `capturedCallsRef` are read, not altered - so
+`05-data-model.excalidraw` is untouched, and that is the check being recorded rather than skipped.

@@ -223,14 +223,35 @@ export class IntegrationRecipeStore {
    * expected outcome of discovery, since a site is free to serve a read over POST.
    *
    * IT IS NOT A DELETE OF ANYTHING ELSE. The action, its binding and the row are untouched; the
-   * action goes on working by the path it worked by before it ever learned. `false` means there was
+   * action goes on working by the path it worked by before it ever learned. `null` means there was
    * nothing to clear, which is the ordinary idempotent case and never an error.
+   *
+   * IT ANSWERS WITH THE RECIPE IT DROPPED, and that is not a convenience. The recipe is the only
+   * thing that names its `capturedCallsRef` - the pile of full redacted request and response bodies
+   * in `integration_captured_calls`, which has no TTL and no other index back to it. A caller that
+   * threw this away (the mount did, by narrowing it to a boolean) orphaned that pile permanently:
+   * the next learn's `priorCaptureRef` reads the CURRENT recipe, which is now absent, so neither of
+   * `discardCapture`'s other two callers can ever reach it. `integrations/recipe-lifecycle.ts` is
+   * the ONE place that pairs the two, and every caller goes through it.
+   *
+   * `visibleTo` is the ACTOR gate, for the surfaces a principal reaches (`routes/integrations.ts`).
+   * Absent for a machine caller that already holds the owning org. It is applied INSIDE the CAS as
+   * well as before it, exactly like the `orgId` re-assert beside it and for the same reason.
    */
-  async clearRecipe(orgId: string, key: string, actionName: string): Promise<boolean> {
-    const result = await this.writeRecipe(orgId, key, actionName, (current) =>
-      current ? { clear: true } : { refuse: { verdict: 'notfound' } },
+  async clearRecipe(
+    orgId: string,
+    key: string,
+    actionName: string,
+    opts: { visibleTo?: Actor } = {},
+  ): Promise<IntegrationActionRecipe | null> {
+    const result = await this.writeRecipe(
+      orgId,
+      key,
+      actionName,
+      (current) => (current ? { clear: true } : { refuse: { verdict: 'notfound' } }),
+      opts,
     );
-    return result.verdict === 'ok';
+    return result.verdict === 'ok' ? result.recipe : null;
   }
 
   // ------------------------------------------------------------------------------------------
@@ -246,13 +267,19 @@ export class IntegrationRecipeStore {
       | { recipe: IntegrationActionRecipe; refuse?: undefined; clear?: undefined }
       | { clear: true; recipe?: undefined; refuse?: undefined }
       | { refuse: RecipeWriteResult; recipe?: undefined; clear?: undefined },
+    opts: { visibleTo?: Actor } = {},
   ): Promise<RecipeWriteResult> {
     // An org-less caller can never own a row (`isDefinitionVisibleTo` refuses an org-less document
     // for the same reason): refuse before deriving an id that would collide on the empty tenant.
     if (orgId === '' || key === '' || actionName === '') return { verdict: 'notfound' };
+    // AN ACTOR MAY ONLY EVER ACT INSIDE ITS OWN ORG. The row id is derived from `orgId`, so a
+    // mismatch here would mean the visibility predicate was being asked about one tenant's row on
+    // another tenant's behalf. Refused rather than reconciled.
+    if (opts.visibleTo && opts.visibleTo.orgId !== orgId) return { verdict: 'notfound' };
     const id = definitionIdFor(orgId, key);
     const row = await this.store.get(id);
     if (!row || row.orgId !== orgId || !findAction(row, actionName)) return { verdict: 'notfound' };
+    if (opts.visibleTo && !isDefinitionVisibleTo(row, opts.visibleTo)) return { verdict: 'notfound' };
 
     let refused: RecipeWriteResult | null = null;
     let written: IntegrationActionRecipe | null = null;
@@ -268,6 +295,13 @@ export class IntegrationRecipeStore {
       // cannot - a row whose `orgId` does not match the id it is stored under (a hand-written or
       // migrated document). Cheap, and it fails closed.
       if (doc.orgId !== orgId) {
+        refused = { verdict: 'notfound' };
+        return cur;
+      }
+      // THE ACTOR RE-ASSERT, for the same reason the tenancy one above is re-asserted here:
+      // `Store.update` re-reads its document, so the row finally written may not be the one whose
+      // visibility was checked before the CAS (a peer could have flipped it to `private` between).
+      if (opts.visibleTo && !isDefinitionVisibleTo(doc, opts.visibleTo)) {
         refused = { verdict: 'notfound' };
         return cur;
       }

@@ -268,6 +268,17 @@ const COVERED = new Set<string>([
   'schedules.list', 'schedules.create', 'schedules.listAllRuns', 'schedules.completeRun',
   'schedules.preview', 'schedules.get', 'schedules.patch', 'schedules.remove',
   'schedules.runNow', 'schedules.listRuns',
+  // 2026-08-20 (P2 round seven) - the OWNER'S CONTROL over what the machine learned
+  // (integrations-recipes.test.ts, through the real app: the list body against
+  // IntegrationRecipeListResponse and the delete body against ForgetIntegrationRecipeResponse; the
+  // SUMMARY projection asserted by the ABSENCE of the stored document's internals; the tenancy of
+  // both routes against a same-org peer of a PRIVATE definition, an org-admin and another org, each
+  // with the owner as its control; the delete's idempotence; the malformed-segment 400 and the
+  // unauthenticated 401 on both; and - the reason the delete is not a one-liner - the raw evidence
+  // asserted GONE against `integration_captured_calls` itself. Admission is covered by
+  // integrations-capability.test.ts's stack walk, which probes every route this router mounts.)
+  // TWO NEW descriptors, two COVERED entries: the pinned EXPECTED_PENDING_COUNT below is UNCHANGED.
+  'integrations.listRecipes', 'integrations.forgetRecipe',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

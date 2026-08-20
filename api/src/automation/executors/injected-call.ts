@@ -55,6 +55,12 @@
  * by an older build, and every caller that starts passing a new argument, replaying a constant
  * (`argumentCoverage`, whose two refusals are two OUTCOMES - see it for why they differ).
  *
+ * AT TWO UNITS, because the caller only ever sees ONE body. The check above is over the whole recipe
+ * (an argument may legitimately be honoured by the third call and by no other); the ANSWER is one
+ * call, named by `answersWith`, and nothing chains one replayed call into the next - so a hole in
+ * some other call cannot make the answer respond to the argument. Both are asked, and both are the
+ * same refusal: `arguments-uncovered`, which drops the recipe.
+ *
  * ── THE RECIPE IS READ THROUGH `recipe-store`, NEVER THROUGH `resolveDefinition` ──────────────
  *
  * The definition read projection deliberately STRIPS recipes (`actionsWithoutRecipes`) so a
@@ -817,6 +823,15 @@ function renderBodyTemplate(bodyTemplate: string, args: Record<string, unknown>)
  * (`unlocatable`): there is no verbatim form of an object to have templated, so no recipe can be
  * shown to honour one - and if a hole DID happen to bear its name, `String(value)` would put
  * `[object Object]` on the wire. Both readings say refuse.
+ *
+ * ── AND THE UNION IS NOT THE UNIT FOR THE ANSWER ─────────────────────────────────────────────
+ *
+ * Everything above is a question about the RECIPE: can this argument reach the wire in any of these
+ * calls. The caller only ever sees ONE of the bodies (`answerOf`, via `answersWith`), and nothing
+ * chains one replayed call into the next, so an argument absent from THAT call cannot change the
+ * action's answer no matter how many other calls carry it. That second question is asked separately
+ * below, and its refusal is `uncovered` for the same reason the first one's is: a recipe whose
+ * answer is constant with respect to an argument must go, and a wider one is learnable.
  */
 type ArgumentCoverage =
   | { covered: true }
@@ -826,13 +841,11 @@ type ArgumentCoverage =
   | { covered: false; kind: 'uncovered'; reason: string };
 
 function argumentCoverage(recipe: CompiledRecipe, args: Record<string, unknown>): ArgumentCoverage {
-  const holes = new Set<string>();
-  for (const call of recipe.injectedCalls) {
-    for (const name of inputHolesOf(call.urlTemplate)) holes.add(name);
-    if (call.bodyTemplate !== undefined) for (const name of inputHolesOf(call.bodyTemplate)) holes.add(name);
-  }
+  const holes = holesOf(recipe.injectedCalls);
   const unusable: string[] = [];
   const ignored: string[] = [];
+  /** The arguments a recipe could be asked to honour at all - the two exemptions already applied. */
+  const askable: string[] = [];
   for (const [name, value] of Object.entries(args)) {
     if (SECRET_SHAPED_INPUT_NAME.test(name)) continue;
     if (value === null || value === undefined) continue;
@@ -840,6 +853,7 @@ function argumentCoverage(recipe: CompiledRecipe, args: Record<string, unknown>)
       unusable.push(name);
       continue;
     }
+    askable.push(name);
     if (!holes.has(name)) ignored.push(name);
   }
   // Reported separately because they are different facts about the run, and both the operator's fix
@@ -861,7 +875,43 @@ function argumentCoverage(recipe: CompiledRecipe, args: Record<string, unknown>)
         + 'data it was compiled around whatever this caller asked for - refusing to replay it',
     };
   }
+  // ── AND THE ANSWER-BEARING CALL MUST CARRY THEM ALL ───────────────────────────────────────
+  //
+  // The union above answers "can this argument reach the wire", which is the right question for a
+  // recipe and the wrong one for its ANSWER. `answerOf` hands back exactly ONE call's body and
+  // nothing chains one replayed call into the next - every template is filled from `args` alone -
+  // so an argument the answer-bearing call has no hole for cannot change what this action returns.
+  // The caller asking about `2025-9` is handed the recipe's own compile-time answer under
+  // `success: true`, which is the one failure shape nothing downstream can see.
+  //
+  // `compileInjectedCalls` refuses to LEARN this (network-capture.ts), and refusing it only there
+  // leaves it wide open here, for exactly the population this whole function exists for: a recipe
+  // written by an older build - including every build of this slice before the rule existed.
+  // `uncovered`, so the caller DROPS it and the next pass learns one whose answer can be filtered.
+  if (recipe.answersWith !== undefined) {
+    const answerCall = recipe.injectedCalls[recipe.answersWith.callIndex];
+    const answerHoles = holesOf(answerCall === undefined ? [] : [answerCall]);
+    const constant = askable.filter((name) => !answerHoles.has(name));
+    if (constant.length > 0) {
+      return {
+        covered: false,
+        kind: 'uncovered',
+        reason: `the call this recipe answers with has no hole for argument(s) ${constant.sort().join(', ')}, so it `
+          + 'would answer with the data it was compiled around whatever this caller asked for - refusing to replay it',
+      };
+    }
+  }
   return { covered: true };
+}
+
+/** Every `{{input.*}}` name these calls name, across both templates. */
+function holesOf(calls: readonly InjectedCall[]): Set<string> {
+  const holes = new Set<string>();
+  for (const call of calls) {
+    for (const name of inputHolesOf(call.urlTemplate)) holes.add(name);
+    if (call.bodyTemplate !== undefined) for (const name of inputHolesOf(call.bodyTemplate)) holes.add(name);
+  }
+  return holes;
 }
 
 /**

@@ -59,6 +59,7 @@ import {
   type RecipeDraft,
   type RecipeWriteResult,
 } from '../integrations/recipe-store.js';
+import { forgetRecipe } from '../integrations/recipe-lifecycle.js';
 import { secretRegistryFromValues, type SecretRegistry } from '../security/redaction.js';
 import { screenshotUrlFromPath, runLogsFromSteps } from './persistence.js';
 import type { Automation, Step, StepType, RunRecord, StepRecord } from './types.js';
@@ -1343,8 +1344,18 @@ export interface ActionRunDeps {
   supersedeRecipe?: HealDeps['supersedeRecipe'];
   /** The recipe read, used only to find the evidence a new recipe supersedes. Default: the store. */
   getRecipe?: (orgId: string, key: string, actionName: string) => Promise<{ capturedCallsRef?: string } | null>;
-  /** Drop an action's recipe. The escape hatch for a recipe the replay's write gate refuses. */
-  clearRecipe?: (orgId: string, key: string, actionName: string) => Promise<boolean>;
+  /**
+   * Drop an action's recipe. The escape hatch for a recipe the replay's write gate refuses.
+   *
+   * It answers with the recipe it DROPPED (null ⇒ there was none), because that recipe is the only
+   * thing that names its `capturedCallsRef` - see `integrations/recipe-lifecycle.ts`. It used to be
+   * a boolean, and the narrowing is what orphaned a pass's evidence on every clear.
+   */
+  clearRecipe?: (
+    orgId: string,
+    key: string,
+    actionName: string,
+  ) => Promise<{ version?: number; capturedCallsRef?: string } | null>;
   /** Where the raw evidence lands - and, on a supersede, where the old evidence is dropped from. */
   captures?: Pick<CapturedCallsStore, 'appendCapturedCall'> & Partial<Pick<CapturedCallsStore, 'discardCapture'>>;
   captureId?: () => string;
@@ -1898,22 +1909,26 @@ async function priorCaptureRef(input: ActionRunInput, deps: ActionRunDeps): Prom
 }
 
 /**
- * Drop one capture's evidence. Best effort and loud on failure - see the two callers.
+ * Drop one capture's evidence, answering how many documents went. Best effort and loud on failure.
  *
- * ONE FUNCTION FOR BOTH ENDS OF THE LIFECYCLE: the evidence behind a recipe that has been REPLACED,
- * and the evidence behind a recipe that never LANDED. They are the same operation on the same
- * collection with the same failure posture, and a second copy would be a second thing to forget.
+ * ONE FUNCTION FOR EVERY END OF THE LIFECYCLE: the evidence behind a recipe that has been REPLACED,
+ * the evidence behind a recipe that never LANDED, and - through `forgetRecipe`, which takes this as
+ * its discard seam - the evidence behind a recipe that was CLEARED. They are the same operation on
+ * the same collection with the same failure posture, and a second copy would be a second thing to
+ * forget. It is also the ONE place `deps.captures` is read for a discard, so a suite that injects a
+ * captures store without `discardCapture` gets the same no-op on all three paths.
  */
-async function discardEvidence(key: CaptureKey, deps: ActionRunDeps): Promise<void> {
+async function discardEvidence(key: CaptureKey, deps: ActionRunDeps): Promise<number> {
   const captures = deps.captures ?? capturedCallsStore;
-  if (typeof captures.discardCapture !== 'function') return;
+  if (typeof captures.discardCapture !== 'function') return 0;
   try {
-    await captures.discardCapture(key);
+    return await captures.discardCapture(key);
   } catch (err) {
     console.warn(
       `[automation] the evidence ${key.captureId} of ${key.integrationKey}/${key.actionName} ` +
         `was not discarded: ${err instanceof Error ? err.message : String(err)}`,
     );
+    return 0;
   }
 }
 
@@ -1929,11 +1944,27 @@ async function discardEvidence(key: CaptureKey, deps: ActionRunDeps): Promise<vo
  * Loud, because this is the system throwing away something it learned: the owner's action is fine
  * and keeps working, but a capability the product advertises (this action replays deterministically)
  * is not available for it, and the reason is worth a line in the log rather than a silent downgrade.
+ *
+ * AND THE EVIDENCE GOES WITH IT. Not here - `forgetRecipe` (`integrations/recipe-lifecycle.ts`) is
+ * the one implementation of that pairing, shared with the owner's own clear on the route, because a
+ * removal path that has to REMEMBER to collect is a removal path that will one day be added without
+ * doing so. This one was: it narrowed the dropped recipe to a boolean, which discarded the only
+ * pointer into the pass's stored request and response bodies (see that module's header).
  */
 async function clearRefusedRecipe(input: ActionRunInput, reason: string, deps: ActionRunDeps): Promise<void> {
-  const clearRecipe = deps.clearRecipe ?? ((o, k, a) => integrationRecipeStore.clearRecipe(o, k, a));
   try {
-    const dropped = await clearRecipe(input.orgId, input.integrationKey!, input.actionName!);
+    const { dropped } = await forgetRecipe(
+      { orgId: input.orgId, integrationKey: input.integrationKey!, actionName: input.actionName! },
+      {
+        ...(deps.clearRecipe
+          ? { clearRecipe: (o: string, k: string, a: string) => deps.clearRecipe!(o, k, a) }
+          : {}),
+        // The SAME evidence seam the two other discard paths use, so a suite that injects a
+        // captures store sees this discard on it too, and one that injects a store WITHOUT
+        // `discardCapture` gets the same no-op it gets there.
+        discardCapture: (key: CaptureKey) => discardEvidence(key, deps),
+      },
+    );
     console.warn(
       `[automation] the learned recipe for ${input.integrationKey}/${input.actionName} ` +
         `${dropped ? 'has been discarded' : 'was already gone'}: ${reason}. ` +

@@ -245,6 +245,63 @@ export const RevokeIntegrationActionApprovalResponse = z.object({
 });
 export type RevokeIntegrationActionApprovalResponse = z.infer<typeof RevokeIntegrationActionApprovalResponse>;
 
+/* --- LEARNED REPLAY RECIPES (slice P2) ------------------------------------------------------- */
+
+/**
+ * ONE action's compiled recipe, as its OWNER sees it - a summary, deliberately not the document.
+ *
+ * WHY THIS SURFACE EXISTS AT ALL. A recipe is learned by the machine, from one pass, with no human
+ * in the loop, and it then answers that action on every later run. Three of its failure modes clear
+ * themselves because the replay visibly REFUSES (the write gate, the two coverage refusals) - but a
+ * recipe that keeps answering `ok` and answers WRONGLY has no such exit: `putRecipe` refuses to
+ * overwrite by design, a supersede needs a drift that cannot fire while the calls keep returning
+ * 200 with an unchanged shape, and nothing expires it. Without a control the owner can neither see
+ * such a recipe nor remove it. So: this read, and the delete below.
+ *
+ * WHAT IS AND IS NOT ON IT. `calls` is `METHOD urlTemplate` per replayed call, in the recipe's own
+ * order - enough to recognise a recipe that learned the wrong endpoint, which is the whole point.
+ * There are no header names, no body templates and no `capturedCallsRef`: the first two are the
+ * shape of a request the owner did not author, and the third is a pointer into raw evidence with its
+ * own lifecycle. A recipe carries no VALUES at all (`recipe-store.assertCarriesNoValues` refuses one
+ * that does, at the write), so nothing here can be a credential.
+ */
+export const IntegrationActionRecipeSummary = z.object({
+  key: z.string(),
+  actionName: z.string(),
+  /** Monotonic, store-owned. `> 1` means this recipe replaced an earlier one - see `supersedes`. */
+  version: z.number().int().positive(),
+  compiledAt: IsoTimestamp,
+  /** `GET https://portal.example/api/cases?ref={{input.ref}}`, one per replayed call, in order. */
+  calls: z.array(z.string()),
+  /**
+   * Index into `calls` of the one whose body becomes this action's ANSWER. ABSENT means the run it
+   * was learned from answered nothing structured, so the replay answers nothing either - which is
+   * every browser-only automation, and is the honest reproduction rather than a gap.
+   */
+  answersWithCallIndex: z.number().int().nonnegative().optional(),
+  lessons: z.array(z.string()),
+  /** One-hop lineage: which version this replaced and why (a drift the self-heal acted on). */
+  supersedes: z.object({ version: z.number().int().positive(), reason: z.string() }).optional(),
+});
+export type IntegrationActionRecipeSummary = z.infer<typeof IntegrationActionRecipeSummary>;
+
+export const IntegrationRecipeListResponse = itemsResponse(IntegrationActionRecipeSummary);
+export type IntegrationRecipeListResponse = z.infer<typeof IntegrationRecipeListResponse>;
+
+/**
+ * IDEMPOTENT BY CONTRACT. Clearing an action that has no recipe is `ok` with no `version`, never a
+ * 404: the caller asked for a state ("this action has not learned anything") and that state holds.
+ * `evidenceDiscarded` counts the raw captured calls that went with it - a recipe is the only index
+ * back into that collection, so the two are removed together or the evidence is orphaned forever.
+ */
+export const ForgetIntegrationRecipeResponse = z.object({
+  ok: z.literal(true),
+  /** The version that was dropped. Absent ⇒ there was nothing to clear. */
+  version: z.number().int().positive().optional(),
+  evidenceDiscarded: z.number().int().nonnegative(),
+});
+export type ForgetIntegrationRecipeResponse = z.infer<typeof ForgetIntegrationRecipeResponse>;
+
 /* --- Per-integration LESSONS (slice C3) ------------------------------------------------------ */
 
 /**
@@ -715,6 +772,45 @@ export const integrationsEndpoints = {
     params: IntegrationKeyParams,
     request: SetIntegrationLessonsRequest,
     response: IntegrationLessonsView,
+  },
+
+  /* --- LEARNED REPLAY RECIPES (slice P2) ---------------------------------------------------- */
+
+  /**
+   * WHAT THIS TENANT'S ACTIONS HAVE LEARNED, and the control that un-learns one.
+   *
+   * `auth: 'user'` on BOTH, and NOT `user-or-key`, for the reason `approveAction` and `setLessons`
+   * are `user`: a recipe is learned FOR a user by the machine, and the delete is the human's veto
+   * over what the machine decided. A key-bearing agent that could clear a recipe could also make
+   * the next call expensive again on every action it touches; a key-bearing agent that could read
+   * one could enumerate a tenant's private portal endpoints over an API. Neither adds a capability
+   * an agent lacks - `executeAction` runs the action either way - and narrow is the reversible
+   * direction (widening an auth class later is additive, Rule 7).
+   *
+   * THE LIST IS TENANT-WIDE and not per-integration: the question an owner has is "what has been
+   * learned for me", and an action they cannot name is exactly the one they need to find. Scoped by
+   * the actor's own org AND re-filtered by the definition read predicate, so a peer's private
+   * definition never appears (`recipe-store.listRecipesForActor`).
+   */
+  listRecipes: {
+    method: 'GET',
+    path: '/api/v1/integrations/recipes',
+    auth: 'user',
+    response: IntegrationRecipeListResponse,
+  },
+  /**
+   * FORGET one action's recipe: it stops replaying and runs its authored steps, exactly as it did
+   * before it ever learned. IDEMPOTENT - clearing an action with no recipe is `ok`, not a 404.
+   *
+   * The raw evidence goes with it. That pairing is `integrations/recipe-lifecycle.ts`'s and is
+   * shared with the run loop's own refusal path, so the two removal paths cannot disagree.
+   */
+  forgetRecipe: {
+    method: 'DELETE',
+    path: '/api/v1/integrations/:key/actions/:actionName/recipe',
+    auth: 'user',
+    params: IntegrationActionParams,
+    response: ForgetIntegrationRecipeResponse,
   },
 
   /* --- The PUBLIC capability surface (slice D1) ---------------------------------------------- */

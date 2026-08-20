@@ -635,8 +635,14 @@ describe('ACCEPTANCE: learned on the run that was going to happen, replayed dete
     // `success: true` either way, so the only place the difference is visible is the wire.
     setDaemonConnectionResolver(() => daemonForFixture());
     await runTheAction();
-    expect((await recipes.getRecipe(actor.orgId, KEY, ACTION))!.injectedCalls[0]!.urlTemplate)
-      .toBe(`${origin}/api/cases?ref={{input.ref}}`);
+    const learned = (await recipes.getRecipe(actor.orgId, KEY, ACTION))!;
+    expect(learned.injectedCalls[0]!.urlTemplate).toBe(`${origin}/api/cases?ref={{input.ref}}`);
+    // The pile of full redacted request AND response bodies this recipe was distilled from. It is
+    // here BEFORE the clear, which is what makes the assertion after it mean something.
+    const evidenceKey = {
+      orgId: actor.orgId, integrationKey: KEY, actionName: ACTION, captureId: learned.capturedCallsRef!,
+    };
+    expect((await captures.listCapture(evidenceKey)).length).toBeGreaterThan(0);
 
     transport = resetAgentState({ oneShotText: RESOLVER_JSON });
     const machine = daemonForFixture();
@@ -666,6 +672,19 @@ describe('ACCEPTANCE: learned on the run that was going to happen, replayed dete
     // row - while every run went on paying for the doomed replay attempt first.
     expect(await recipes.getRecipe(actor.orgId, KEY, ACTION)).toBeNull();
 
+    // ── …AND ITS EVIDENCE WENT WITH IT ─────────────────────────────────────────────────────
+    //
+    // Asserted against the REAL captures collection, on the REAL default clear (this suite injects
+    // `putRecipe`, `supersedeRecipe`, `captures` and `captureId` - never `clearRecipe`, so the path
+    // under test is `integrationRecipeStore.clearRecipe` through `forgetRecipe`).
+    //
+    // The recipe is the ONLY index back into that collection: `priorCaptureRef` reads the CURRENT
+    // recipe, which is now absent, so neither of `discardCapture`'s other two callers could ever
+    // reach these documents again and the collection has no TTL. Clearing narrowed the dropped
+    // recipe to a boolean, so this pile - a whole pass's request and response bodies - was orphaned
+    // permanently, on the most routine refusal the spine has.
+    expect(await captures.listCapture(evidenceKey)).toEqual([]);
+
     // AND IT SETTLES. This run's own pass could not compile a replacement (`status` appears nowhere
     // in what the page fetched, so the compile refuses a recipe that would ignore it) - so the
     // action is simply back to un-learned, and the next ordinary run learns one again and the one
@@ -683,6 +702,76 @@ describe('ACCEPTANCE: learned on the run that was going to happen, replayed dete
     expect((replayed.data as { replayed?: boolean }).replayed).toBe(true);
     expect(control.injectFrames.map((f) => f.url)).toEqual([`${origin}/api/cases?ref=2024-1`]);
     expect(modelCalls()).toBe(0);
+  }, 60_000);
+
+  /**
+   * A RECIPE WHOSE ANSWER IS A CONSTANT IS REFUSED, CLEARED, AND ITS EVIDENCE COLLECTED.
+   *
+   * HOW ONE GETS COMPILED, since this case plants rather than learns one: the page fetches a
+   * filtered search AND some second internal call whose body happens to be identical to the run's
+   * own answer (a "summary" endpoint serving the same document, a detail pane showing the row the
+   * search just returned). `isTheRunsAnswer` matches BOTH and last-match-wins names the second -
+   * which carries no hole at all. Every check passed, because `ref` was placed by the search and
+   * the coverage rules were recipe-wide on both sides.
+   *
+   * THE RECIPE PLANTED HERE IS THAT SHAPE, in its plainest form: the search carries `{{input.ref}}`
+   * and the ANSWER is the constant `/api/badge`. Replaying it hands every caller `{"unread":7}` as
+   * this action's answer whatever they asked for, under `success: true, replayed: true`, with no
+   * drift (both calls still 200 with an unchanged shape) and no other symptom anywhere.
+   *
+   * The compile now refuses to LEARN that shape. This case is the OTHER half: one already stored -
+   * an older build's, i.e. every build of this slice before the rule existed - planted through the
+   * REAL store, so what the replay reads is a real stored recipe.
+   */
+  it('a stored recipe whose ANSWER is a constant is refused, cleared, and its evidence goes with it', async () => {
+    const CONSTANT_CAPTURE = 'cap-constant-answer';
+    await captures.appendCapturedCall(
+      { orgId: actor.orgId, integrationKey: KEY, actionName: ACTION, captureId: CONSTANT_CAPTURE },
+      0,
+      { method: 'GET', url: `${origin}/api/badge`, requestHeaderNames: ['accept'], responseBody: '{"unread":7}' },
+    );
+    await recipes.putRecipe(actor.orgId, KEY, ACTION, {
+      goal: `replay of ${KEY}/${ACTION}`,
+      injectedCalls: [
+        { method: 'GET', urlTemplate: `${origin}/api/cases?ref={{input.ref}}`, headerNames: ['x-csrf-token'], idempotent: true },
+        { method: 'GET', urlTemplate: `${origin}/api/badge`, headerNames: [], idempotent: true },
+      ],
+      // THE DEFECT, stored: the action answers with the call that has no hole at all.
+      answersWith: { callIndex: 1, matchedBy: 'run-output-identity' },
+      scriptedSteps: [],
+      lessons: [],
+      capturedCallsRef: CONSTANT_CAPTURE,
+    }, {});
+
+    transport = resetAgentState({ oneShotText: RESOLVER_JSON });
+    const machine = daemonForFixture();
+    setDaemonConnectionResolver(() => machine);
+    const runsBefore = (await automationRuns.find({})).length;
+
+    // THE ARGUMENT'S VALUE IS IRRELEVANT HERE, and deliberately so: the refusal is a fact about the
+    // recipe's SHAPE - its answer-bearing call has no hole for `ref` at any value - decided before
+    // anything is sent. The fixture page fetches `?ref=2024-1`, so passing that keeps the re-learn
+    // in play and lets this case assert the SETTLE as well as the refusal.
+    const result = await runTheAction({ ref: '2024-1' });
+
+    // NOT REPLAYED, and nothing went out. Without the refusal both calls are made and the caller is
+    // handed `{"unread":7}` as this action's answer, whatever they asked for.
+    expect(result.success).toBe(true);
+    expect((result.data as { replayed?: boolean }).replayed).toBeUndefined();
+    expect(machine.injectFrames).toEqual([]);
+    // THE ACTION RAN INSTEAD, so the caller's answer is still correct - only the optimisation is lost.
+    expect((await automationRuns.find({})).length).toBe(runsBefore + 1);
+    // THE CONSTANT-ANSWER RECIPE IS GONE. What is stored now is the one THIS pass learned: one call,
+    // and no answer pointer (a browser-only automation answers nothing, so its replay must too).
+    const now = (await recipes.getRecipe(actor.orgId, KEY, ACTION))!;
+    expect(now.injectedCalls.map((c) => c.urlTemplate)).toEqual([`${origin}/api/cases?ref={{input.ref}}`]);
+    expect(now.answersWith).toBeUndefined();
+    expect(now.capturedCallsRef).not.toBe(CONSTANT_CAPTURE);
+    // …AND SO IS ITS EVIDENCE. Nothing else could ever have reached it once the recipe naming it
+    // was gone (`priorCaptureRef` reads the CURRENT recipe, which is now this pass's).
+    expect(await captures.listCapture({
+      orgId: actor.orgId, integrationKey: KEY, actionName: ACTION, captureId: CONSTANT_CAPTURE,
+    })).toEqual([]);
   }, 60_000);
 });
 

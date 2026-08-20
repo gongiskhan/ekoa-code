@@ -561,6 +561,33 @@ a hole-free recipe, while every tick after it calls with `{since: cursor}` - lef
 action's ONE slot for the life of the row: `putRecipe` refuses to overwrite and a supersede needs a
 drift that can never fire, because the replay never runs.
 
+AND THE COVERAGE RULE HAS TWO UNITS, because the caller only ever sees ONE body. The rules above are
+about the RECIPE - can this argument reach the wire in any of these calls - and that is the right
+unit for a multi-hop flow whose opening hop takes no argument. It is the wrong unit for the ANSWER:
+`answerOf` hands back exactly the call `answersWith` names, and nothing chains one replayed call into
+the next (every template is filled from the run's arguments alone), so an argument that call has no
+hole for cannot change what the action RETURNS however faithfully the others carry it. A page serving
+the same document from a filtered search and from a constant `/api/summary` produced precisely that:
+identical bodies, so the compile's last-match tie-break named the constant, and the caller asking a
+different question was handed the learning run's answer under `success: true, replayed: true`. So the
+call at `answerCallIndex` must carry EVERY hole or `compileInjectedCalls` refuses, and
+`argumentCoverage` runs the same comparison at replay - as `arguments-uncovered`, so the recipe is
+cleared - because refusing only at compile time leaves every recipe an older build already stored.
+
+A RECIPE'S REMOVAL IS ONE OPERATION, AND IT TAKES THE EVIDENCE WITH IT.
+`integrations/recipe-lifecycle.ts` (`forgetRecipe`) is the only way a recipe is dropped: it clears,
+then discards the capture the dropped recipe named. It exists because `capturedCallsRef` is the ONLY
+index back into `integration_captured_calls` - `priorCaptureRef` reads the CURRENT recipe - so a
+clear that discarded the pointer orphaned a whole pass's request and response bodies permanently, in
+a collection with no TTL. Both removal paths go through it: the run loop's refusal path
+(`clearRefusedRecipe`) and the OWNER's own control, `DELETE /api/v1/integrations/:key/actions/
+:actionName/recipe` with `GET /api/v1/integrations/recipes` beside it. That pair is the only exit a
+recipe that keeps answering `ok` and answers WRONGLY has - the three refusal outcomes clear
+themselves, but nothing refuses a recipe that succeeds. Both are `auth: 'user'`: a recipe is learned
+FOR a user and the veto is the human's, and neither adds a capability a key-bearing agent lacks. The
+delete is idempotent (an action that learned nothing answers `ok`, never a 404, which would be an
+existence oracle) and the read is a summary projection written as a whitelist.
+
 ## Integrations
 
 `integrations/` connects external systems: OAuth flows (Google, Microsoft, Adobe), AES-encrypted
