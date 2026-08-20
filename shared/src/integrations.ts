@@ -761,11 +761,63 @@ export const AuthoredActionVerification = z.object({
 export type AuthoredActionVerification = z.infer<typeof AuthoredActionVerification>;
 
 /**
- * What `achieve` did. THREE outcomes, and the split matters to a client's control flow:
+ * THE REUSE LADDER, as a value on the wire.
+ *
+ * `achieve` answers on one of four rungs - reuse an action as it stands, PARAMETRIZE it (fill
+ * arguments it declares that the caller left out), COMPOSE (run a read and narrow its rows against
+ * one of the tenant's own collections), or MINT a new action. A client reading only `outcome`
+ * cannot tell which rung answered, nor what the ones above it decided, and "why did it not
+ * parametrize" is the first question anybody asks of a rung that quietly did not fire.
+ *
+ * `skipped` and `refused` are DIFFERENT and the difference is the Rule-7 promise: a skipped rung
+ * did not apply (nothing was missing, no seam is wired, the model was unreachable, the goal asked
+ * for nothing extra) and the call behaved exactly as it did before the ladder existed. A refused
+ * rung ran, got an answer, and the deterministic suite rejected it.
+ */
+export const AchieveRung = z.enum(['reuse', 'parametrize', 'compose', 'mint']);
+export type AchieveRung = z.infer<typeof AchieveRung>;
+
+export const AchieveLadderStep = z.object({
+  rung: AchieveRung,
+  verdict: z.enum(['taken', 'skipped', 'refused']),
+  detail: z.string().optional(),
+});
+export type AchieveLadderStep = z.infer<typeof AchieveLadderStep>;
+
+/**
+ * WHAT A COMPOSED ANSWER WAS BUILT FROM, in full, because a caller handed a narrowed list is owed
+ * the narrowing. Names and counts only: which collection, which field compared how, how many rows
+ * each side contributed. No row and no compared VALUE from anybody's data travels here - the value
+ * is the model's, but the rows it selected are the tenant's.
+ */
+export const AchieveComposition = z.object({
+  collection: z.string(),
+  where: z.object({
+    field: z.string(),
+    op: z.enum(['eq', 'neq', 'lt', 'lte', 'gt', 'gte', 'contains', 'starts_with', 'ends_with']),
+    value: z.unknown(),
+  }),
+  join: z.object({ resultField: z.string(), collectionField: z.string() }),
+  /** Rows the ACTION returned. */
+  scanned: z.number(),
+  /** Collection rows that satisfied the predicate. */
+  matchedCollectionRows: z.number(),
+  /** Action rows that survived the join - may exceed `items.length` when `truncated`. */
+  matched: z.number(),
+  truncated: z.boolean(),
+});
+export type AchieveComposition = z.infer<typeof AchieveComposition>;
+
+/**
+ * What `achieve` did. FOUR outcomes, and the split matters to a client's control flow:
  *
  *   `executed` — an existing TRUSTED action satisfied the goal and was run through the same gated
  *                executor every other rail uses. `result` is the ordinary execute body, including a
  *                failed one (a remote 500 is an answer about the remote system).
+ *   `composed` - a trusted READ was run and its rows narrowed against one of the caller's own
+ *                collections. NOTHING WAS MINTED and nothing was written: `items` is a subset of
+ *                what the action itself returned, and `composition` says exactly how it was
+ *                narrowed. Only ever reachable for an action whose `mutates` is a literal `false`.
  *   `authored` — nothing satisfied it, so one action was written, VERIFIED and persisted as
  *                PROVISIONAL. It has NOT run and cannot run yet: `requiresApproval` is always true
  *                for it, and a person must promote it (`POST …/trust`) before `achieve` will pick
@@ -775,9 +827,12 @@ export type AuthoredActionVerification = z.infer<typeof AuthoredActionVerificati
  *                `code`. Distinct from a 404 (not addressable) and from a 403 write-gate refusal
  *                (which is the same `awaiting_consent` envelope the execute endpoint returns, so a
  *                client handles the gate in ONE place rather than two).
+ *
+ * RULE 7: `composed` and the four optional fields below are ADDITIVE. Every field an older client
+ * reads is produced exactly as it was, on exactly the outcomes it was produced on before.
  */
 export const AchieveIntegrationGoalResponse = z.object({
-  outcome: z.enum(['executed', 'authored', 'refused']),
+  outcome: z.enum(['executed', 'composed', 'authored', 'refused']),
   /** The action that ran, or the action that was written. Absent on a refusal. */
   actionName: z.string().optional(),
   /** `executed` only — the same body `POST …/execute` returns. */
@@ -792,8 +847,19 @@ export const AchieveIntegrationGoalResponse = z.object({
   message: z.string().optional(),
   /** `verification_failed` — the guardrails that were not met, in words a caller can act on. */
   violations: z.array(z.string()).optional(),
-  /** `ambiguous_goal` / `provisional_match` — the actions the goal could have meant. */
+  /** `ambiguous_goal` / `provisional_match` - the actions the goal could have meant;
+   *  `compose_ambiguous_collection` - the places the named collection was found in. */
   candidates: z.array(z.string()).optional(),
+  /** `composed` only - the rows that survived the narrowing, capped. */
+  items: z.array(z.record(z.unknown())).optional(),
+  /** `composed` only - how they were narrowed. */
+  composition: AchieveComposition.optional(),
+  /** Which rung answered, and what the ones above it decided. Present on every outcome the ladder
+   *  reached; absent on the refusals that happen before a rung is entered at all. */
+  ladder: z.array(AchieveLadderStep).optional(),
+  /** `executed` - the argument NAMES a model supplied because the caller left them out. Names
+   *  only: the values are in the request that was sent, and this is not a second copy of them. */
+  filledArgs: z.array(z.string()).optional(),
 });
 export type AchieveIntegrationGoalResponse = z.infer<typeof AchieveIntegrationGoalResponse>;
 

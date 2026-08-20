@@ -94,6 +94,23 @@ import {
 // of S1's footprint in this file.
 import { actionEvidenceStore } from './action-evidence-store.js';
 import {
+  argsOutputContractFor,
+  missingDeclaredArgs,
+  parseArgsPlan,
+  slotOf,
+  verifyPlannedArgs,
+  type PlannedArgValue,
+} from './action-parametrize.js';
+import {
+  composeOutputContract,
+  composeRows,
+  parseComposePlan,
+  rowsOf,
+  verifyComposePlan,
+  type AppCollections,
+  type ComposeSummary,
+} from './action-compose.js';
+import {
   executeIntegrationCapabilityAction,
   resolveCapabilityDefinition,
   type CapabilityContext,
@@ -126,9 +143,40 @@ export type ActionDraftTurn =
   | { status: 'authored'; text: string; draft: AuthoredActionDraft | null; violations: string[]; attempts: number }
   | { status: 'unavailable'; reason: 'transport' | 'empty' | 'aborted'; detail: string; cause?: unknown; attempts: number };
 
+/**
+ * THE PLANNING SEAM (the reuse ladder's two upper rungs) - the THIRD `authorWithRepair`
+ * specialisation, beside `ActionDrafter` and the automation planner's own. Deliberately ONE seam
+ * serving both rungs rather than two: the rungs differ only in the output contract and the parser,
+ * which are exactly the two things the authoring core already takes as arguments, so a second
+ * binding would be a second thing to forget to wire and nothing else.
+ *
+ * `draft` is `unknown` on purpose. The core hands back whatever the caller's own `parse` produced,
+ * and each rung's DETERMINISTIC suite (`verifyPlannedArgs`, `verifyComposePlan`) is what turns it
+ * into something typed - model output is never made trustworthy by being received.
+ */
+export type PlanDrafter = (input: {
+  contentSections: readonly string[];
+  outputContract: string;
+  userText: (violations: readonly string[] | null) => string;
+  decision: RouterDecision;
+  attribution: LlmAttribution;
+  parse: (text: string) => { draft: unknown; violations: string[] };
+  repairs?: number;
+}) => Promise<PlanDraftTurn>;
+
+export type PlanDraftTurn =
+  | { status: 'authored'; text: string; draft: unknown; violations: string[]; attempts: number }
+  | { status: 'unavailable'; reason: 'transport' | 'empty' | 'aborted'; detail: string; cause?: unknown; attempts: number };
+
 export interface AchieveContext extends CapabilityContext {
   /** The authoring seam. Absent ⇒ `achieve` executes but cannot author (see the module header). */
   draftAction?: ActionDrafter;
+  /** The planning seam. Absent ⇒ BOTH upper rungs are skipped and `achieve` behaves exactly as it
+   *  did before they existed - an honest default, never a silent degradation. */
+  planStep?: PlanDrafter;
+  /** The tenant's own collections (the compose rung's data side). Absent ⇒ that rung is skipped.
+   *  Bound ORG-SCOPED by the composition root; this module never reaches a store itself. */
+  appCollections?: AppCollections;
   /** Injected clock, so the persisted timestamps are deterministic under test. */
   now?: () => number;
 }
@@ -159,6 +207,20 @@ export interface AchieveContext extends CapabilityContext {
  *   `verification_failed`   a draft arrived and did NOT pass the guardrail suite. Nothing stored.
  *   `persist_failed`        the verified action could not be written (a concurrent write, a store
  *                           gate). Never silent — an unpersisted action is not an authored one.
+ *
+ * ADDED BY THE REUSE LADDER (additive - the wire carries `code` as a free string, so a client that
+ * has never heard of these still reads them as refusals):
+ *
+ *   `parametrize_refused`   a model-filled ARGUMENT plan arrived and did not pass
+ *                           `verifyPlannedArgs`. Nothing was sent. Includes the D1 case: an
+ *                           argument that selects the resource, on an action that can write.
+ *   `composed_write_refused` a COMPOSITION was proposed over an action that is not a literal read.
+ *                           The rung's first move is to RUN the action, so it never begins.
+ *   `compose_refused`       a composition arrived and did not pass `verifyComposePlan`.
+ *   `compose_unknown_collection`   the named collection is not one this tenant holds.
+ *   `compose_ambiguous_collection` the tenant holds that collection in more than one place, and
+ *                           choosing between them is a coin flip about whose data is answered with.
+ *   `compose_unshaped_result`      the action's answer carries no single list to compose over.
  */
 export type AchieveRefusalCode =
   | 'ambiguous_goal'
@@ -173,11 +235,44 @@ export type AchieveRefusalCode =
   | 'billing_blocked'
   | 'authoring_failed'
   | 'verification_failed'
-  | 'persist_failed';
+  | 'persist_failed'
+  | 'parametrize_refused'
+  | 'composed_write_refused'
+  | 'compose_refused'
+  | 'compose_unknown_collection'
+  | 'compose_ambiguous_collection'
+  | 'compose_unshaped_result';
+
+/**
+ * THE LADDER, as a value. `achieve` is now four rungs (reuse -> parametrize -> compose -> mint) and
+ * a caller reading only `outcome` cannot tell which of them answered, nor what the ones above it
+ * decided. Recorded on every answer and on every refusal, because "why did it not parametrize" is
+ * the first question anyone asks of a rung that silently did not fire.
+ */
+export type AchieveRung = 'reuse' | 'parametrize' | 'compose' | 'mint';
+
+export interface AchieveLadderStep {
+  rung: AchieveRung;
+  /** `taken` - this rung produced the answer. `skipped` - it did not apply (or its seam is absent).
+   *  `refused` - it applied, ran, and declined. */
+  verdict: 'taken' | 'skipped' | 'refused';
+  detail?: string;
+}
 
 export type AchieveResult =
   /** An existing TRUSTED action satisfied the goal and was run through the gated executor. */
-  | { outcome: 'executed'; actionName: string; result: ExecuteIntegrationActionResult }
+  | { outcome: 'executed'; actionName: string; result: ExecuteIntegrationActionResult; ladder?: AchieveLadderStep[]; filledArgs?: string[] }
+  /**
+   * A trusted READ was run and its rows JOINED against one of the tenant's own collections. NOTHING
+   * WAS MINTED and nothing was written: `items` is a subset of what the action itself returned.
+   */
+  | {
+      outcome: 'composed';
+      actionName: string;
+      items: Record<string, unknown>[];
+      composition: ComposeSummary;
+      ladder?: AchieveLadderStep[];
+    }
   /** No action satisfied it; one was authored, verified and persisted as PROVISIONAL. */
   | {
       outcome: 'authored';
@@ -188,10 +283,15 @@ export type AchieveResult =
       verification: AuthoredActionVerification;
       /** Always true: a provisional action is stored `mutates: true`, so it is gated. */
       requiresApproval: true;
+      ladder?: AchieveLadderStep[];
     }
-  | { outcome: 'refused'; code: AchieveRefusalCode; message: string; violations?: string[]; candidates?: string[] };
+  | { outcome: 'refused'; code: AchieveRefusalCode; message: string; violations?: string[]; candidates?: string[]; ladder?: AchieveLadderStep[] };
 
-function refused(code: AchieveRefusalCode, message: string, extra: { violations?: string[]; candidates?: string[] } = {}): CapabilityOutcome<AchieveResult> {
+function refused(
+  code: AchieveRefusalCode,
+  message: string,
+  extra: { violations?: string[]; candidates?: string[]; ladder?: AchieveLadderStep[] } = {},
+): CapabilityOutcome<AchieveResult> {
   return { ok: true, value: { outcome: 'refused', code, message, ...extra } };
 }
 
@@ -462,9 +562,7 @@ export async function achieveIntegrationGoal(
         { candidates: [match.action.actionName] },
       );
     }
-    const out = await executeIntegrationCapabilityAction(ctx, integrationKey, match.action.actionName, args);
-    if (!out.ok) return out;
-    return { ok: true, value: { outcome: 'executed', actionName: match.action.actionName, result: out.value } };
+    return runMatchedAction(ctx, integrationKey, goal, match.action, args, definition, config);
   }
 
   // --- AUTHOR ------------------------------------------------------------------------------
@@ -591,6 +689,360 @@ export async function achieveIntegrationGoal(
       requiresApproval: true,
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// The reuse ladder - reuse -> parametrize -> compose
+// ---------------------------------------------------------------------------
+
+/**
+ * WHAT HAPPENS TO A MATCHED, TRUSTED ACTION. Three rungs, in one linear body, ending in the ONE
+ * call this module makes to the gated executor.
+ *
+ * THE PICK IS NOT ON THIS LADDER. `matchActionForGoal` chose the action, deterministically and
+ * lexically, before any of this ran - and nothing below can change that choice, widen it, or reach
+ * a second action. Every model turn here is downstream of a pick a human already trusted.
+ *
+ * THE ORDER IS LOAD-BEARING:
+ *   1. PARAMETRIZE fills arguments the action DECLARES and the caller LEFT OUT. Its output changes
+ *      what the one request carries, so it must be settled before the request exists.
+ *   2. COMPOSE decides whether the answer needs a join. Its output changes nothing about the
+ *      request - it decides what happens to the ROWS afterwards - but it is planned BEFORE the
+ *      execute so that `composed_write_refused` can refuse without having run anything.
+ *   3. EXECUTE, once, through `executeIntegrationCapabilityAction`. C2's write gate sits inside it,
+ *      before any credential is read, exactly as on every other rail. Neither rung reaches past it,
+ *      neither rung re-implements it, and a `mutates` action still answers `awaiting_consent` here
+ *      no matter which rung filled its arguments.
+ *
+ * EVERY RUNG DEGRADES TO THE ONE BELOW IT, and that is the Rule-7 promise: an absent seam, a
+ * refused allowance, a model outage, a goal with nothing extra in it - each of those SKIPS a rung
+ * and leaves the call behaving exactly as it did before the ladder existed. A rung only ever
+ * REFUSES when it ran, got an answer, and the deterministic suite rejected that answer.
+ */
+async function runMatchedAction(
+  ctx: AchieveContext,
+  integrationKey: string,
+  goal: string,
+  action: IntegrationAction,
+  callerArgs: Record<string, unknown>,
+  definition: IntegrationDefinition,
+  config: Parameters<typeof resolveCredentialEgressBinding>[1],
+): Promise<CapabilityOutcome<AchieveResult>> {
+  const ladder: AchieveLadderStep[] = [];
+  let args = callerArgs;
+  let filledArgs: string[] = [];
+
+  // --- RUNG 2: PARAMETRIZE ------------------------------------------------------------------
+  const missing = missingDeclaredArgs(action, callerArgs);
+  // D1, applied BEFORE the model is asked rather than after: an argument that selects the resource
+  // on an action that can write is never OFFERED to the model. Not asking is cheaper than refusing,
+  // and it keeps a write whose targeting the caller omitted behaving exactly as it does today
+  // (the request goes out as the caller shaped it) instead of turning into a new refusal.
+  const isRead = action.mutates === false;
+  const fillable = missing.filter((name) => isRead || slotOf(action.httpConfig, name) !== 'targeting');
+  const withheld = missing.filter((name) => !fillable.includes(name));
+
+  if (missing.length === 0) {
+    ladder.push({ rung: 'parametrize', verdict: 'skipped', detail: 'the caller supplied every argument the action declares' });
+  } else if (fillable.length === 0) {
+    ladder.push({
+      rung: 'parametrize',
+      verdict: 'skipped',
+      detail: `every missing argument selects which resource is acted on and "${action.actionName}" can write, so a person supplies them: ${withheld.sort().join(', ')}`,
+    });
+  } else if (!ctx.planStep) {
+    ladder.push({ rung: 'parametrize', verdict: 'skipped', detail: 'the planning seam is not wired in this deployment' });
+  } else {
+    // THE RENDER PROBE NEEDS A PRE-IMAGE, AND ONLY AN HTTP ACTION HAS ONE. An automation-backed
+    // action addresses no URL from this module, so `assertOriginAllowed` has nothing to say about
+    // it either way, and requiring a granted binding would disable the rung for a whole backing
+    // type on the strength of a check that does not apply to it.
+    const binding = action.httpConfig ? await resolveCredentialEgressBinding(ctx.actor, config, integrationKey) : null;
+    if (binding !== null && binding.kind !== 'granted') {
+      // No pre-image to probe the rendered URL against. Skipping is right rather than refusing:
+      // this is the executor's own `unbound` branch, and the request the caller already asked for
+      // is unchanged by our declining to add to it.
+      ladder.push({ rung: 'parametrize', verdict: 'skipped', detail: `this credential has no bound host to check a filled argument against (${binding.kind})` });
+    } else {
+      const allowance = await checkAllowance(ctx.actor.userId);
+      if (!allowance.ok) {
+        ladder.push({ rung: 'parametrize', verdict: 'skipped', detail: 'billing' });
+      } else {
+        const turn = await ctx.planStep({
+          contentSections: parametrizeSections(definition, action, fillable, withheld, callerArgs),
+          outputContract: argsOutputContractFor(action, fillable),
+          userText: repairableUserText(`Supply the arguments this action needs for the goal:\n\n${goal}`),
+          decision: decideForTask(goal, undefined, 'WORKHORSE'),
+          attribution: authoringAttribution(ctx.actor),
+          parse: parseArgsPlan,
+          // ONE repair turn, the author arm's rule: a generic retry produces identical garbage, and
+          // the violations are what make a retry fix anything.
+          repairs: 1,
+        });
+        if (turn.status === 'unavailable') {
+          // An outage is not a refusal. The call proceeds with the caller's own arguments, which is
+          // precisely what it did before this rung existed.
+          ladder.push({ rung: 'parametrize', verdict: 'skipped', detail: `the planning model was unavailable (${turn.reason})` });
+        } else {
+          const verdict = verifyPlannedArgs({
+            action,
+            definition,
+            planned: turn.draft,
+            callerArgs,
+            allowedOrigins: binding?.kind === 'granted' ? binding.origins : [],
+          });
+          if (!verdict.passed || !verdict.args) {
+            return refused(
+              'parametrize_refused',
+              'the arguments proposed for this action did not pass the guardrails and nothing was sent',
+              {
+                violations: [
+                  ...turn.violations,
+                  ...verdict.checks.filter((c) => !c.ok).map((c) => c.detail ?? `${c.name} failed`),
+                ],
+                ladder: [...ladder, { rung: 'parametrize', verdict: 'refused' }],
+              },
+            );
+          }
+          filledArgs = Object.keys(verdict.args).sort();
+          // THE CALLER'S OWN ARGUMENTS WIN, spread last. `verifyPlannedArgs` already refuses a plan
+          // that names one of them, so this is the second of two statements of the same rule rather
+          // than the only one.
+          args = { ...(verdict.args as Record<string, PlannedArgValue>), ...callerArgs };
+          ladder.push({
+            rung: 'parametrize',
+            verdict: filledArgs.length > 0 ? 'taken' : 'skipped',
+            detail: filledArgs.length > 0 ? `filled: ${filledArgs.join(', ')}` : 'the model determined no argument from the goal',
+          });
+        }
+      }
+    }
+  }
+
+  // --- RUNG 3: COMPOSE (planned before anything runs) ---------------------------------------
+  const composePlan = await planComposition(ctx, goal, action, ladder);
+  if (composePlan.kind === 'refused') return composePlan.outcome;
+
+  // --- RUNG 1: REUSE - the ONE gated execute, whatever the rungs above decided ---------------
+  const out = await executeIntegrationCapabilityAction(ctx, integrationKey, action.actionName, args);
+  if (!out.ok) return out;
+
+  if (composePlan.kind === 'plan') {
+    const collection = await (ctx.appCollections as AppCollections).read(ctx.actor, composePlan.plan.collection);
+    if (collection.kind === 'unknown_collection') {
+      return refused(
+        'compose_unknown_collection',
+        `there is no "${composePlan.plan.collection}" collection in your organisation to narrow this by`,
+        { ladder: [...ladder, { rung: 'compose', verdict: 'refused' }] },
+      );
+    }
+    if (collection.kind === 'ambiguous_collection') {
+      return refused(
+        'compose_ambiguous_collection',
+        `your organisation holds "${composePlan.plan.collection}" in more than one place - name the one you mean`,
+        { candidates: collection.sources, ladder: [...ladder, { rung: 'compose', verdict: 'refused' }] },
+      );
+    }
+    const rows = rowsOf(out.value.data);
+    if (rows.kind === 'unshaped') {
+      return refused('compose_unshaped_result', rows.detail, { ladder: [...ladder, { rung: 'compose', verdict: 'refused' }] });
+    }
+    const composed = composeRows({ plan: composePlan.plan, actionRows: rows.rows, collectionRows: collection.rows });
+    ladder.push({ rung: 'compose', verdict: 'taken', detail: `${composed.summary.matched} of ${composed.summary.scanned} rows kept` });
+    await auditComposed(ctx, integrationKey, action.actionName, composed.summary);
+    return {
+      ok: true,
+      value: {
+        outcome: 'composed',
+        actionName: action.actionName,
+        items: composed.items,
+        composition: composed.summary,
+        ladder,
+      },
+    };
+  }
+
+  ladder.push({ rung: 'reuse', verdict: 'taken' });
+  return {
+    ok: true,
+    value: {
+      outcome: 'executed',
+      actionName: action.actionName,
+      result: out.value,
+      ladder,
+      ...(filledArgs.length > 0 ? { filledArgs } : {}),
+    },
+  };
+}
+
+/**
+ * PLAN THE JOIN, or decline to. Returns before anything has executed, so the write refusal below is
+ * a refusal to BEGIN rather than a comment on what already happened.
+ *
+ * THE PRE-FILTER IS DETERMINISTIC AND FREE. The model is consulted only when the goal carries
+ * tokens the action's own name and description do not account for - i.e. when the caller asked for
+ * something more than the action is named for. "processos" against an action called `processos`
+ * has no residue and costs nothing; "todos os processos de clientes com menos de 40 anos" has
+ * `clientes`, `menos`, `40`, `anos` left over, and that residue is the whole question.
+ */
+async function planComposition(
+  ctx: AchieveContext,
+  goal: string,
+  action: IntegrationAction,
+  ladder: AchieveLadderStep[],
+): Promise<
+  | { kind: 'none' }
+  | { kind: 'plan'; plan: NonNullable<ReturnType<typeof verifyComposePlan>['plan']> }
+  | { kind: 'refused'; outcome: CapabilityOutcome<AchieveResult> }
+> {
+  const accounted = new Set([...goalTokens(action.actionName), ...goalTokens(action.description ?? '')]);
+  const residue = goalTokens(goal).filter((t) => !accounted.has(t));
+  if (residue.length === 0) {
+    ladder.push({ rung: 'compose', verdict: 'skipped', detail: 'the goal asks for nothing the action is not already named for' });
+    return { kind: 'none' };
+  }
+  if (!ctx.planStep || !ctx.appCollections) {
+    ladder.push({ rung: 'compose', verdict: 'skipped', detail: 'the compose seams are not wired in this deployment' });
+    return { kind: 'none' };
+  }
+  const collections = await ctx.appCollections.list(ctx.actor);
+  if (collections.length === 0) {
+    ladder.push({ rung: 'compose', verdict: 'skipped', detail: 'your organisation holds no collections to narrow a result by' });
+    return { kind: 'none' };
+  }
+  const allowance = await checkAllowance(ctx.actor.userId);
+  if (!allowance.ok) {
+    ladder.push({ rung: 'compose', verdict: 'skipped', detail: 'billing' });
+    return { kind: 'none' };
+  }
+
+  const turn = await ctx.planStep({
+    contentSections: composeSections(action, collections),
+    outputContract: composeOutputContract(),
+    userText: repairableUserText(`Decide whether this goal needs one of those collections:\n\n${goal}`),
+    decision: decideForTask(goal, undefined, 'WORKHORSE'),
+    attribution: authoringAttribution(ctx.actor),
+    parse: parseComposePlan,
+    repairs: 1,
+  });
+  if (turn.status === 'unavailable') {
+    ladder.push({ rung: 'compose', verdict: 'skipped', detail: `the planning model was unavailable (${turn.reason})` });
+    return { kind: 'none' };
+  }
+
+  const verdict = verifyComposePlan({ action, planned: turn.draft });
+  if (!verdict.passed) {
+    // The read-only refusal gets its OWN code, because it is the one refusal on this rung that is
+    // about the ACTION rather than about the plan's shape.
+    const readOnly = verdict.checks.find((c) => c.name === 'read_only' && !c.ok);
+    const violations = [
+      ...turn.violations,
+      ...verdict.checks.filter((c) => !c.ok).map((c) => c.detail ?? `${c.name} failed`),
+    ];
+    return {
+      kind: 'refused',
+      outcome: refused(
+        readOnly ? 'composed_write_refused' : 'compose_refused',
+        readOnly
+          ? `"${action.actionName}" can change data, and narrowing its result would mean running it first - ask for the reading you want, or run the action on its own`
+          : 'the way this goal would have been narrowed did not pass the guardrails and nothing ran',
+        { violations, ladder: [...ladder, { rung: 'compose', verdict: 'refused' }] },
+      ),
+    };
+  }
+  if (!verdict.plan) {
+    ladder.push({ rung: 'compose', verdict: 'skipped', detail: 'no collection narrows this goal' });
+    return { kind: 'none' };
+  }
+  return { kind: 'plan', plan: verdict.plan };
+}
+
+/** The repair wording both rungs use. Identical in shape to the author arm's, and for its reason:
+ *  the violations are what make a retry fix anything; a generic retry produces identical garbage. */
+function repairableUserText(base: string): (violations: readonly string[] | null) => string {
+  return (violations) =>
+    violations && violations.length > 0
+      ? ['Your previous answer was refused. Fix exactly these problems and re-emit the whole block:', ...violations.map((v) => `- ${v}`), '', base].join('\n')
+      : base;
+}
+
+/** Facts the parametrize turn is given. NAMES ONLY - no credential value exists in this module to
+ *  leak, and the argument values the CALLER supplied are named, never quoted, because they are the
+ *  caller's data and the model is being asked about the ones they did NOT supply. */
+function parametrizeSections(
+  definition: IntegrationDefinition,
+  action: IntegrationAction,
+  fillable: readonly string[],
+  withheld: readonly string[],
+  callerArgs: Record<string, unknown>,
+): string[] {
+  const where = action.httpConfig ? `${action.httpConfig.method} ${action.httpConfig.baseUrl}${action.httpConfig.path}` : '(not an HTTP action)';
+  const supplied = Object.keys(callerArgs).sort();
+  return [
+    [
+      '# The action a person already confirmed, and that you are NOT choosing',
+      `integration: ${definition.displayName ?? definition.key}`,
+      `action: ${action.actionName}`,
+      `what it does: ${action.description}`,
+      `request: ${where}`,
+      `changes data: ${action.mutates === false ? 'no' : 'yes'}`,
+    ].join('\n'),
+    `# Arguments it declares\n${JSON.stringify(action.argsSchema ?? {}, null, 2)}`,
+    `# Arguments you are asked to supply\n${fillable.map((n) => `- ${n}`).join('\n')}`,
+    ...(supplied.length > 0 ? [`# Arguments the person already supplied (do not restate them)\n${supplied.map((n) => `- ${n}`).join('\n')}`] : []),
+    ...(withheld.length > 0
+      ? [`# Arguments only a person may supply for this action (do not supply them)\n${withheld.map((n) => `- ${n}`).join('\n')}`]
+      : []),
+  ];
+}
+
+/** Facts the compose turn is given: the action, and the NAMES of the tenant's collections. No row
+ *  of anybody's data is put in a prompt to decide whether to look at that data. */
+function composeSections(action: IntegrationAction, collections: readonly string[]): string[] {
+  return [
+    [
+      '# The action that will run (already chosen and confirmed by a person)',
+      `action: ${action.actionName}`,
+      `what it does: ${action.description}`,
+      `changes data: ${action.mutates === false ? 'no' : 'yes'}`,
+    ].join('\n'),
+    `# Collections this organisation holds\n${collections.map((c) => `- ${c}`).join('\n')}`,
+  ];
+}
+
+/**
+ * ONE activity row per COMPOSE. An execute already logs itself inside the executor; what is new
+ * here is that a SECOND data source was read and used to narrow somebody's answer, and "which
+ * collection, filtered how" is exactly what an audit has to be able to answer afterwards.
+ * NOT recorded: the goal text, the rows, or any value the join keyed on.
+ */
+async function auditComposed(
+  ctx: AchieveContext,
+  integrationKey: string,
+  actionName: string,
+  summary: ComposeSummary,
+): Promise<void> {
+  try {
+    await logActivity(
+      { userId: ctx.actor.userId, username: ctx.username ?? ctx.actor.userId, orgId: ctx.actor.orgId },
+      'integrations',
+      'capability_achieve_compose',
+      ctx.deps,
+      {
+        integrationKey,
+        actionName,
+        collection: summary.collection,
+        field: summary.where.field,
+        op: summary.where.op,
+        scanned: summary.scanned,
+        matched: summary.matched,
+        ...(ctx.principal ? { keyId: ctx.principal.keyId } : {}),
+        ...(ctx.principal?.xClient ? { xClient: ctx.principal.xClient } : {}),
+      },
+    );
+  } catch (err) {
+    console.warn(`[integration-achieve] compose audit write failed for ${integrationKey}.${actionName}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 const AUTHORING_TARGET_MESSAGES: Record<'published_row' | 'baseline_package' | 'not_writable', string> = {

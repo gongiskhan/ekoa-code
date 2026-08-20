@@ -176,6 +176,11 @@ usage-updated notifier (`billing/` -> `events/`), automation run-event emitter (
 `automation/`), trigger delivery targets (`events/` -> `automation/` run start, `apps/` backend
 invoke), artifact-backend notify (`apps/` -> `events/`).
 
+`achieve` adds two more of the same shape (S4/S5): `planStep` (`integrations/` -> `agents/`'s shared
+authoring core, the third specialisation of `authorWithRepair`) and `appCollections` (`integrations/`
+-> the tenant's `app_data`, org-scoped at the binding by the platform's own visibility predicate).
+Both are ABSENT-MEANS-SKIP: without them `achieve` behaves exactly as it did before the reuse ladder.
+
 ## Agent execution surface
 
 `agents/` runs user work through the Agent SDK. Agent kinds: **coding** (app builds), **chat** (chat
@@ -879,6 +884,43 @@ event and no lineage. `setVisibility` now takes the shadowed siblings down with 
 org`, never `private`), so each must be published again to come back. `oldestGlobalFirst` is therefore
 a deterministic tiebreak for rows the doors did not write, not an ownership rule; ownership is what
 the doors express.
+
+### The `achieve` reuse ladder (S4 + S5)
+
+`POST /api/v1/integrations/:key/achieve` answers on one of four rungs - REUSE an action as it stands,
+PARAMETRIZE it, COMPOSE over it, or MINT a new one - and the ladder is reported on the wire
+(`ladder: AchieveLadderStep[]`) so a caller can see which rung answered and what the ones above it
+decided.
+
+THE PICK IS NOT ON THE LADDER. `matchActionForGoal` chooses the action deterministically and
+lexically, exactly as it did before the rungs existed, and neither new rung is handed
+`definition.actions`. Every model turn here is downstream of a pick a human already trusted, and
+`integration-achieve.ts` still reaches the gated executor through exactly ONE call, so C2's write gate
+is inherited on the same terms every other rail meets it.
+
+- **PARAMETRIZE** (`integrations/action-parametrize.ts`) proposes VALUES for arguments the action
+  itself declares and the caller left out. `argsSchema` is documentation everywhere else in this repo
+  - the executor never reads it, and `buildVars` merges every key of `args` into the one `{{name}}`
+  namespace the templates interpolate from - so `verifyPlannedArgs` is the only check there is.
+  Decision D1 lives in its `targeting` check: an argument landing in the request BODY is covered by
+  the standing shape+destination approval; one landing in the resolved TARGET (path, query, or a
+  header) selects the resource under an approval whose dialog only ever showed `{{arg}}`, so it is
+  model-fillable only on a literal `mutates: false`.
+- **COMPOSE** (`integrations/action-compose.ts`) runs the matched trusted READ and narrows its rows
+  against ONE of the tenant's `app_data` collections with a `SimpleQuery`-class predicate. There is no
+  server-side join anywhere else in this repo (`CollectionsEngine` is list/get/write; `store.query` is
+  list plus an in-memory single-field filter), so the stage IS the addition: the model names the
+  collection, the field, the comparison and the join keys, and TypeScript moves every row. Reads only;
+  a composed write is refused before anything runs.
+
+The predicate itself is ONE implementation, `data/simple-query.ts` (tier 2), shared with the recipe
+DSL's `store.query` - `integrations/` may not import `automation/`, and two copies of nine comparison
+semantics drift.
+
+Both rungs arrive as seams bound once in `server.ts` (`planStep`, a third `authorWithRepair`
+specialisation; `appCollections`, org-scoped through `listArtifacts(actor)`), and an absent seam,
+a refused allowance, a model outage or a goal with no residual intent SKIPS the rung rather than
+failing the call - so `achieve` degrades to exactly its pre-ladder behaviour (Rule 7).
 
 ## Billing
 

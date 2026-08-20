@@ -170,7 +170,8 @@ import {
   collectRunEvidence,
   type RunEventEmitter,
 } from './automation/index.js';
-import { type ActionDrafter } from './integrations/integration-achieve.js';
+import { type ActionDrafter, type PlanDrafter } from './integrations/integration-achieve.js';
+import type { AppCollections } from './integrations/action-compose.js';
 import { type CapabilityContext } from './integrations/integration-capability.js';
 import { platformStatus } from './integrations/platform-oauth.js';
 import {
@@ -210,6 +211,7 @@ import {
 import { AppDataAccess } from './apps/app-data-access.js';
 import { listEmailIntegrations, sendAppEmail, type AppEmailDeps, type AppEmailContext } from './integrations/app-email.js';
 import { getArtifactById, projectDirFor } from './apps/app-paths.js';
+import { listArtifacts } from './apps/artifacts-service.js';
 import { listVisibleMemories } from './memory/index.js';
 import { getSharedBrowser } from './services/browser-pool.js';
 import type { Browser } from 'playwright';
@@ -1252,6 +1254,47 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   // `emptyReply: 'unavailable'` is the planner's rule rather than the builder's: an empty reply to
   // "write me an action" is a transport failing quietly, never an action.
   const draftAction: ActionDrafter = (input) => authorWithRepair({ ...input, emptyReply: 'unavailable' });
+  // S4/S5: the PLANNING seam - the reuse ladder's two upper rungs (parametrize, compose). The SAME
+  // authoring core, on the same `emptyReply` rule, and ONE LINE for the same reason the line above
+  // is one: the output contracts, the parsers and BOTH deterministic guardrail suites live in
+  // `integrations/action-parametrize.ts` and `integrations/action-compose.ts`, so nothing that
+  // decides what a model may fill in - or what may be joined against whose data - sits in a lambda
+  // here.
+  const planStep: PlanDrafter = (input) => authorWithRepair({ ...input, emptyReply: 'unavailable' });
+  // The compose rung's DATA side, and the ONE place its tenancy is decided.
+  //
+  // `listArtifacts(actor)` is the tenancy filter, and it is deliberately the platform's OWN
+  // visibility predicate rather than an `orgId` comparison written here: an artifact this actor may
+  // not see does not appear, so its collections are neither named in a prompt nor readable, and the
+  // rule cannot drift from the one `/api/v1/artifacts` answers with. (Deleting it - listing every
+  // artifact instead - is what `api/tests/security/achieve-compose-isolation.test.ts` mutates to
+  // prove the suite is a gate and not a decoration.)
+  //
+  // The per-artifact scope is `sharedScope(artifactId, ownerUserId)`, byte-identical to the
+  // `setAppDataStore` binding above, so the compose rung reads exactly the rows the recipe DSL's
+  // `store.list` reads for the same app and no others.
+  const achieveCollections: AppCollections = {
+    list: async (actor) => {
+      const names = new Set<string>();
+      for (const art of (await listArtifacts(actor)).items) {
+        for (const c of await automationAppData.listCollections(sharedScope(art._id, art.userId))) names.add(c);
+      }
+      return [...names].sort();
+    },
+    // AMBIGUITY IS AN ANSWER. `app_data` is keyed per ARTIFACT, so one org can legitimately hold a
+    // `clients` collection in two apps; answering from the first would silently pick whose data the
+    // caller was told about. The refusal names the artifacts and asks.
+    read: async (actor, collection) => {
+      const hits: Array<{ artifactId: string; rows: Record<string, unknown>[] }> = [];
+      for (const art of (await listArtifacts(actor)).items) {
+        const rows = await automationAppData.list(sharedScope(art._id, art.userId), collection);
+        if (rows.length > 0) hits.push({ artifactId: art._id, rows });
+      }
+      if (hits.length === 0) return { kind: 'unknown_collection' };
+      if (hits.length > 1) return { kind: 'ambiguous_collection', sources: hits.map((h) => h.artifactId).sort() };
+      return { kind: 'rows', rows: (hits[0] as { rows: Record<string, unknown>[] }).rows };
+    },
+  };
   // The PLATFORM seam for the public capability rail. The org comes from the VERIFIED principal
   // the route already built (never from the request), and the acting user is forwarded so the
   // platform write gate has an approval to look up - the same reason the automation seam above
@@ -1288,6 +1331,8 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
         collectRunEvidence: executorDeps.collectRunEvidence!,
       },
       draftAction,
+      planStep,
+      appCollections: achieveCollections,
       callPlatform,
       platformConnected,
     }),

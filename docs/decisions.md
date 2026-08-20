@@ -4008,3 +4008,111 @@ commits this branch's own rewrite orphaned), so deleting the backup ref really d
 **DIAGRAM CHECK (FIXED-12):** `12-org-tenancy` gains an append-only block for the two publish
 refusals, the consumed request and the demotion taking its siblings - the cross-org resolution edge is
 the one it already draws. No collection, module or wire shape changed, so 02 and 05 are unaffected.
+
+---
+
+## 2026-08-20 - S4 + S5: the reuse ladder (parametrize + compose) on `achieve`
+
+`achieve` was a two-rung lexical fork: reuse an action exactly as it stands, or mint a new one. Two
+rungs land between them. Everything below is what was DECIDED, with the code that disagreed with the
+plan named where it did.
+
+**THE PICK STAYS DETERMINISTIC, AND THAT IS THE WHOLE SAFETY ARGUMENT.** `matchActionForGoal` is
+untouched. Its own text - "the thing being picked may be a WRITE … 'the model thought you meant
+`delete_invoice`' is not a sentence this product should be able to say" - still governs. Neither new
+rung is handed `definition.actions`, and both are strictly downstream of a pick a human already
+trusted. Pinned statically (`api/tests/integrations/achieve-reuse-ladder.test.ts`): one declaration
+and exactly one call site of `matchActionForGoal`, one call site of
+`executeIntegrationCapabilityAction`, and neither new module contains the executor, the consent
+check, or `approveAction` at all.
+
+**D1 IS IMPLEMENTED AS DECIDED, AND EXTENDED ONCE.** A model-filled argument landing in the request
+BODY is covered by the human's standing shape+destination approval exactly as a caller-supplied
+argument is today. An argument landing in the resolved TARGET selects the RESOURCE under an approval
+whose dialog only ever showed `{{arg}}`. So: body always; target only on a literal `mutates === false`
+(`action-consent.ts`'s fail-closed reading, restated nowhere - the rung reads the same literal).
+THE EXTENSION: a HEADER counts as targeting. D1's text names path and query, but the consent dialog
+shows the method and the resolved URL and nothing else, so `X-Account-Id: {{acct}}` selects a resource
+under exactly the same blindness `/accounts/{{acct}}` does. Recorded here rather than left implicit.
+D1 is applied TWICE, and the two placements answer different questions: BEFORE the model call the
+rung simply does not OFFER a targeting argument on a write (so such a call behaves exactly as it does
+today rather than newly refusing - the Rule-7 half), and AFTER it `verifyPlannedArgs` refuses the
+whole plan if one arrives anyway.
+
+**`argsSchema` IS DOCUMENTATION EVERYWHERE ELSE, SO THE NEW VERIFIER IS THE ONLY CHECK.** Grepped:
+`argsSchema` appears in `definitions.ts` (the type), in `achieve`'s authoring prompt, in
+`action-consent.ts`'s list of fields deliberately EXCLUDED from the approval fingerprint, and in a
+catalog summary. THE EXECUTOR NEVER READS IT - `action-executor.ts` does
+`buildVars(input.args, resolvedFields)`, which merges every key of `args` into the one `{{name}}`
+namespace the request templates interpolate from. `verifyPlannedArgs`'s `declared_args` check is
+therefore not a schema nicety but the only thing standing between a model-invented key and a
+placeholder nobody declared for it. It also refuses a key naming a `configSchema` field (inert today
+only because `buildVars` merges credentials OVER args - refusing is refusing to depend on another
+module's merge order) and a key the caller already supplied (a human's argument is not re-decided).
+
+**THE RENDER PROBE IS DEFENCE IN DEPTH, AND IS RECORDED AS SUCH.** `action-executor.ts` already calls
+`assertOriginAllowed` on the resolved URL before the request goes out, so the probe is not the only
+line. What it adds is WHEN and WHAT: a coded refusal the caller can act on, before the write gate is
+consulted and before any credential is decrypted, rather than an unsendable plan discovered by trying
+to send it. The escape it catches is real (a path argument of `@evil.example` re-authorities the URL),
+and the test asserts the observable difference - `outcome: 'refused'` with `parametrize_refused`,
+versus an executed result carrying a transport error.
+
+**COMPOSE IS NOT A PROMPT SLICE - VERIFIED, NOT ASSUMED.** Both halves of the claim hold in the code:
+`CollectionsEngine` exposes `list`/`get`/`create`/`importCreate`/`upsert`/`delete` and nothing that
+queries or joins; `store.query` (`automation/platform-primitives.ts`) is `list` followed by an
+in-memory SINGLE-FIELD filter. So the smallest honest addition is a deterministic post-stage: run the
+matched trusted READ, then filter one tenant collection with a `SimpleQuery`-class predicate and join
+on one field of each side. The model names the collection, the field, the comparison and the join
+keys; every row that moves is moved by TypeScript. READS ONLY in v1, and `composed_write_refused` is a
+refusal to BEGIN (the stage's first move is to run the action), reachable because the rung is entered
+for writes too.
+
+**RULE 1: ONE PREDICATE, NOT TWO.** `evalQuery`'s nine comparison semantics moved to
+`api/src/data/simple-query.ts` (tier 2) so the compose rung could share them -
+`integrations/` (tier 3) may not import `automation/` (tier 5), and a second copy of nine comparisons
+is a drift waiting to happen. Semantics carried verbatim, coercion edges included (strict `eq`, NaN
+orderings, `String(field ?? '')`). A grep of the estate at that moment found NO test anywhere
+exercising `store.query`, so `api/tests/automation/store-query-predicate.test.ts` landed with the
+refactor rather than after it.
+
+**RULE 5: THE TENANCY IS AT THE BINDING, AND IT IS THE PLATFORM'S OWN PREDICATE.** The compose rung is
+a new READ PATH into `app_data`, so it takes an `AppCollections` seam and the composition root binds
+it through `listArtifacts(actor)` (→ `OwnerVisibilityScoped.listVisible`) rather than an `orgId`
+comparison written at the root - the rule cannot drift from the one `/api/v1/artifacts` answers with.
+Per-artifact scope is `sharedScope(artifactId, ownerUserId)`, byte-identical to the `setAppDataStore`
+binding. AMBIGUITY IS AN ANSWER: a collection name two of the org's artifacts both hold refuses rather
+than picking one. Isolation suite: `api/tests/security/achieve-compose-isolation.test.ts`, proven a
+gate by replacing the filter with an unscoped `artifacts.find({})` - all four cases go red and nothing
+else in the estate notices.
+
+**RULE 7: EVERY RUNG DEGRADES TO THE ONE BELOW IT.** An absent seam, a refused allowance, a model
+outage, a goal with no residual intent, a tenant with no collections - each SKIPS a rung and leaves
+the call behaving exactly as it did before the ladder existed. A rung only REFUSES when it ran, got an
+answer, and the deterministic suite rejected that answer. The shared change is additive: `outcome`
+gains `'composed'`, five optional fields appear that no older outcome produces, and `code` is already
+a free string on the wire. OpenAPI + `cortex-cli` regenerated in the same commit.
+
+**THE CANONICAL TEST, AND TWO THINGS THE PLAN GOT WRONG ABOUT IT.** "todos os processos de clientes
+com menos de 40 anos" is committed, resolves as a trusted READ plus a join against the tenant's
+`clients` collection, MINTS NOTHING, and the answer carries the planner's decision
+(`outcome: 'composed'` with the rungs considered). But:
+
+1. `get-ongoing-processes` DOES NOT EXIST. `grep -ri 'ongoing.process|processos em curso'` over
+   `api/`, `shared/` and `web/` returns nothing - VERIFICATION.md blocker 5 still holds, and the
+   Citius path is NOT claimed as proven. The canonical case is built against a deterministic local
+   fixture of the same shape.
+2. EVEN IF IT EXISTED, THE GOAL COULD NOT REACH IT. `matchActionForGoal` requires the goal to name
+   EVERY token of the action's name, and `get` is a stopword, so `get-ongoing-processes` tokenises to
+   `{ongoing, processes}` - neither of which the Portuguese goal contains. The action a goal like this
+   CAN reach is one the goal covers. Pinned in the suite (`matchActionForGoal(CANONICAL_GOAL,
+   [get-ongoing-processes]) === {kind: 'none'}`) so the finding survives in code, not only in a report.
+
+**BILLING.** `checkAllowance` first on both rungs, `user_work` billed to the caller, `integration-builder`
+tag - `achieve`'s own attribution, reused rather than a new tag in `llm/attribution.ts` (the
+chokepoint) for a call that is not a new kind of work.
+
+DIAGRAM CHECK (FIXED-12): `docs/diagrams/02-module-map.excalidraw` (two new tier-3 modules, one new
+tier-2 module, one new runtime edge, two new seams and their bindings) and
+`docs/diagrams/05-data-model.excalidraw` (no new collection and no new stored field - the check made,
+plus the additive wire shape and the one new activity type). Both appended, both append-only.

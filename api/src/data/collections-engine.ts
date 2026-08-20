@@ -252,6 +252,20 @@ export class CollectionsEngine {
     return res.deletedCount === 1;
   }
 
+  /**
+   * WHICH logical collections this scope holds - the names, never a row.
+   *
+   * Read-only, additive, and built on the SAME single query-binding point every other read uses
+   * (`appId: scope.scopeKey`), so it cannot reach a scope the other reads cannot. It exists because
+   * `achieve`'s compose rung has to NAME the tenant's collections in a prompt, and discovering them
+   * by listing every row of each and looking at what came back would be a read of everybody's data
+   * to answer a question about labels.
+   */
+  async listCollections(scope: Scope): Promise<string[]> {
+    const names = await col().distinct('collection', { appId: scope.scopeKey });
+    return names.filter((n): n is string => typeof n === 'string').sort();
+  }
+
   private checkSize(rule: z.infer<typeof collectionRule> | undefined, item: Record<string, unknown>): void {
     const max = rule?.maxItemBytes ?? 262_144;
     if (Buffer.byteLength(JSON.stringify(item), 'utf8') > max) {

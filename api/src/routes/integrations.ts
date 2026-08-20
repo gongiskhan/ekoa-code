@@ -76,8 +76,11 @@ import {
 import {
   achieveIntegrationGoal,
   trustAuthoredAction,
+  type AchieveContext,
   type ActionDrafter,
+  type PlanDrafter,
 } from '../integrations/integration-achieve.js';
+import type { AppCollections } from '../integrations/action-compose.js';
 import {
   integrationDefinitionStore,
   type DefinitionVisibility,
@@ -337,10 +340,12 @@ function capabilityCtxOf(
     runAutomationBackedAction?: AutomationBackedHandler;
     executorEvidence?: CapabilityContext['executorEvidence'];
     draftAction?: ActionDrafter;
+    planStep?: PlanDrafter;
+    appCollections?: AppCollections;
     callPlatform?: CapabilityContext['callPlatform'];
     platformConnected?: CapabilityContext['platformConnected'];
   },
-): CapabilityContext & { draftAction?: ActionDrafter } {
+): AchieveContext {
   const p = res.locals.apiKeyPrincipal as ApiKeyPrincipal | undefined;
   return {
     actor: actorOf(req),
@@ -354,6 +359,11 @@ function capabilityCtxOf(
     // D3: the AUTHORING seam, bound once by the composition root exactly like the automation one.
     // Absent, `achieve` still executes and refuses to author (`authoring_unavailable`).
     ...(deps.draftAction ? { draftAction: deps.draftAction } : {}),
+    // S4/S5: the PLANNING seam and the tenant's own collections, bound once by the composition root
+    // exactly like the authoring one. Absent, the two upper rungs of the reuse ladder are SKIPPED
+    // and `achieve` behaves precisely as it did before they existed.
+    ...(deps.planStep ? { planStep: deps.planStep } : {}),
+    ...(deps.appCollections ? { appCollections: deps.appCollections } : {}),
     // Bound once by the composition root, same as the two seams above. Its ABSENCE is meaningful:
     // a platform action then falls through to the user-credential rail and is refused there, which
     // is the correct closed answer rather than a silent cross-custody read.
@@ -386,6 +396,10 @@ export function integrationsRouter(deps: {
   executorEvidence?: CapabilityContext['executorEvidence'];
   /** The AUTHORING seam (D3): one drafting turn on D2's shared authoring core. */
   draftAction?: ActionDrafter;
+  /** The PLANNING seam (the reuse ladder's two upper rungs): the same core, a different contract. */
+  planStep?: PlanDrafter;
+  /** The tenant's own collections, ORG-SCOPED by the composition root (the compose rung's data). */
+  appCollections?: AppCollections;
   /** The PLATFORM seam: google-workspace / microsoft-365 run on org-scoped OAuth custody. */
   callPlatform?: CapabilityContext['callPlatform'];
   /** Its read-side counterpart, so the catalog's `connected` agrees with that rail. */
@@ -913,7 +927,16 @@ export function integrationsRouter(deps: {
           { code: 'awaiting_consent', consentRequest: wire.consentRequest },
         );
       }
-      return res.json({ outcome: 'executed', actionName: result.actionName, result: wire.body });
+      return res.json({
+        outcome: 'executed',
+        actionName: result.actionName,
+        result: wire.body,
+        // The ladder travels on the executed arm too: "it just ran the action" and "it filled two
+        // arguments and then ran the action" are different events, and only one of them is worth
+        // a person's attention.
+        ...(result.ladder ? { ladder: result.ladder } : {}),
+        ...(result.filledArgs ? { filledArgs: result.filledArgs } : {}),
+      });
     }
     res.json(result);
   });

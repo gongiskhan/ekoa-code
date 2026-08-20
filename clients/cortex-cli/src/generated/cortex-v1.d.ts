@@ -579,6 +579,23 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        AchieveComposition: {
+            collection: string;
+            join: {
+                collectionField: string;
+                resultField: string;
+            };
+            matched: number;
+            matchedCollectionRows: number;
+            scanned: number;
+            truncated: boolean;
+            where: {
+                field: string;
+                /** @enum {string} */
+                op: "eq" | "neq" | "lt" | "lte" | "gt" | "gte" | "contains" | "starts_with" | "ends_with";
+                value?: unknown;
+            };
+        };
         AchieveIntegrationGoalRequest: {
             args?: {
                 [key: string]: unknown;
@@ -589,10 +606,16 @@ export interface components {
             actionName?: string;
             candidates?: string[];
             code?: string;
+            composition?: components["schemas"]["AchieveComposition"];
+            filledArgs?: string[];
             forked?: boolean;
+            items?: {
+                [key: string]: unknown;
+            }[];
+            ladder?: components["schemas"]["AchieveLadderStep"][];
             message?: string;
             /** @enum {string} */
-            outcome: "executed" | "authored" | "refused";
+            outcome: "executed" | "composed" | "authored" | "refused";
             /** @constant */
             requiresApproval?: true;
             result?: components["schemas"]["ExecuteIntegrationActionResponse"];
@@ -601,6 +624,14 @@ export interface components {
             verification?: components["schemas"]["AuthoredActionVerification"];
             violations?: string[];
         };
+        AchieveLadderStep: {
+            detail?: string;
+            rung: components["schemas"]["AchieveRung"];
+            /** @enum {string} */
+            verdict: "taken" | "skipped" | "refused";
+        };
+        /** @enum {string} */
+        AchieveRung: "reuse" | "parametrize" | "compose" | "mint";
         ApprovedCommand: {
             createdAt?: components["schemas"]["IsoTimestamp"];
             description?: string;

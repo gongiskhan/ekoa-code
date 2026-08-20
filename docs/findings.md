@@ -219,6 +219,29 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   reconstruction of who resolves what today. **NOT by widening the erasure back to every owner in the
   org.**
 
+- **`the-canonical-ongoing-processes-action-is-unreachable-from-the-canonical-goal`** (OPEN
+  2026-08-20, S5, MEDIUM, a plan/code mismatch found while building the compose rung; blocks the S9
+  Citius reference case as written). TWO separate facts, and the second survives fixing the first.
+  (a) `get-ongoing-processes` DOES NOT EXIST: `grep -ri 'ongoing.process|processos em curso'` over
+  `api/`, `shared/` and `web/` returns nothing, and the nearest identifiers are the two DECLARATIVE
+  Citius actions (`consultar_processo`, `fetch_documentos_processo`, both singular-by-number, both
+  natural-language browser-step templates with zero TypeScript). VERIFICATION.md blocker 5 still
+  holds unchanged.
+  (b) EVEN ONCE IT EXISTS, THAT NAME CANNOT BE REACHED BY THAT GOAL. `matchActionForGoal` requires
+  the goal to name EVERY token of the action's name; `get` is a stopword, so `get-ongoing-processes`
+  tokenises to `{ongoing, processes}`, and "todos os processos de clientes com menos de 40 anos"
+  contains neither. The action a Portuguese goal can reach is one whose name the goal covers
+  (`processos`, `processos_em_curso` only if the goal says "em curso", and so on). This is a NAMING
+  constraint the lexical planner imposes on every action the product ships, not a defect in it -
+  the coverage rule is the deliberate safety property - but it means S9 must name the Citius action
+  in the language and words its callers will actually use, or callers must name it exactly.
+  WHAT IS CLOSED ALREADY: the compose rung's canonical test is committed against a deterministic
+  local fixture of the same shape and says so in its own header, and the naming fact is pinned as an
+  assertion (`matchActionForGoal(CANONICAL_GOAL, [get-ongoing-processes]) === {kind:'none'}`) in
+  `api/tests/integrations/achieve-reuse-ladder.test.ts`, so it cannot be forgotten between here and
+  S9. WHAT IS NOT: the Citius path itself is NOT claimed as proven by this slice, and a real session
+  is still the only thing that can prove it.
+
 - **`resolve-step-origin-runs-twice-per-gated-browser-step`** (**FIXED 2026-08-19**, round seven;
   see the round-seven fixed section). The walk still runs two to three times per gated browser step -
   that is inherent to resolving locality before the gate and re-resolving after it - but its

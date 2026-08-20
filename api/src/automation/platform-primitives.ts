@@ -20,14 +20,18 @@ import { dirname, join } from 'node:path';
 // ADR-001 (real-path checked, symlink-escape proof, write-safe for not-yet-created leaves).
 import { resolveContained, PathContainmentError } from '../security/path-containment.js';
 import { loadAutomationConfig } from './config.js';
+import { matchesSimpleQuery, type SimpleQuery } from '../data/simple-query.js';
 
 export type TemplateRef = string; // "{{inputs.email}}" or "{{captured.clientId}}"
 
-export interface SimpleQuery {
-  field: string;
-  op: 'eq' | 'neq' | 'lt' | 'lte' | 'gt' | 'gte' | 'contains' | 'starts_with' | 'ends_with';
-  value: unknown;
-}
+/**
+ * The `store.query` predicate. Its nine comparison semantics live in `data/simple-query.ts` since
+ * `achieve`'s compose rung needed the SAME vocabulary over the same `app_data` rows and could not
+ * import this module (tier 3 may not import tier 5) - one implementation rather than two copies
+ * free to drift. What stays HERE is the recipe-only half: resolving a `{{captured.x}}` template
+ * ref into `value` before the comparison runs.
+ */
+export type { SimpleQuery } from '../data/simple-query.js';
 
 export interface ConditionExpr {
   left: TemplateRef;
@@ -287,20 +291,11 @@ function renderObjectRefs(obj: Record<string, unknown>, ctx: EkoaActionContext):
   return out;
 }
 
+/** The recipe-only half: resolve a `{{captured.x}}` ref into the compared value, then apply the
+ *  ONE predicate (`data/simple-query.ts`). The comparison semantics are not restated here. */
 function evalQuery(item: Record<string, unknown>, q: SimpleQuery, ctx: EkoaActionContext): boolean {
-  const field = item[q.field];
-  const queryValue = typeof q.value === 'string' && q.value.includes('{{') ? renderRef(q.value, ctx) : q.value;
-  switch (q.op) {
-    case 'eq':  return field === queryValue;
-    case 'neq': return field !== queryValue;
-    case 'lt':  return Number(field) < Number(queryValue);
-    case 'lte': return Number(field) <= Number(queryValue);
-    case 'gt':  return Number(field) > Number(queryValue);
-    case 'gte': return Number(field) >= Number(queryValue);
-    case 'contains':    return String(field ?? '').includes(String(queryValue ?? ''));
-    case 'starts_with': return String(field ?? '').startsWith(String(queryValue ?? ''));
-    case 'ends_with':   return String(field ?? '').endsWith(String(queryValue ?? ''));
-  }
+  const value = typeof q.value === 'string' && q.value.includes('{{') ? renderRef(q.value, ctx) : q.value;
+  return matchesSimpleQuery(item, { field: q.field, op: q.op, value });
 }
 
 function evalCondition(c: ConditionExpr, ctx: EkoaActionContext): boolean {

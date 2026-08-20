@@ -4478,6 +4478,80 @@
       }
     },
     "schemas": {
+      "AchieveComposition": {
+        "type": "object",
+        "properties": {
+          "collection": {
+            "type": "string"
+          },
+          "where": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "neq",
+                  "lt",
+                  "lte",
+                  "gt",
+                  "gte",
+                  "contains",
+                  "starts_with",
+                  "ends_with"
+                ]
+              },
+              "value": {}
+            },
+            "required": [
+              "field",
+              "op"
+            ],
+            "additionalProperties": false
+          },
+          "join": {
+            "type": "object",
+            "properties": {
+              "resultField": {
+                "type": "string"
+              },
+              "collectionField": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "resultField",
+              "collectionField"
+            ],
+            "additionalProperties": false
+          },
+          "scanned": {
+            "type": "number"
+          },
+          "matchedCollectionRows": {
+            "type": "number"
+          },
+          "matched": {
+            "type": "number"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "collection",
+          "where",
+          "join",
+          "scanned",
+          "matchedCollectionRows",
+          "matched",
+          "truncated"
+        ],
+        "additionalProperties": false
+      },
       "AchieveIntegrationGoalRequest": {
         "type": "object",
         "properties": {
@@ -4503,6 +4577,7 @@
             "type": "string",
             "enum": [
               "executed",
+              "composed",
               "authored",
               "refused"
             ]
@@ -4544,12 +4619,67 @@
             "items": {
               "type": "string"
             }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": {}
+            }
+          },
+          "composition": {
+            "$ref": "#/components/schemas/AchieveComposition"
+          },
+          "ladder": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AchieveLadderStep"
+            }
+          },
+          "filledArgs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
           "outcome"
         ],
         "additionalProperties": false
+      },
+      "AchieveLadderStep": {
+        "type": "object",
+        "properties": {
+          "rung": {
+            "$ref": "#/components/schemas/AchieveRung"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "taken",
+              "skipped",
+              "refused"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "rung",
+          "verdict"
+        ],
+        "additionalProperties": false
+      },
+      "AchieveRung": {
+        "type": "string",
+        "enum": [
+          "reuse",
+          "parametrize",
+          "compose",
+          "mint"
+        ]
       },
       "ApprovedCommand": {
         "type": "object",
