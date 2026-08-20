@@ -176,8 +176,13 @@ function sendVisibility(res: Response, result: SetVisibilityResult): void {
  * hand-written mappings of one gate is how a 404 becomes a 403 on one door and an existence oracle
  * appears on the other.
  *
- * `model_pass_required` is unreachable unless the caller passed `requireModelPass` — it is mapped
- * rather than asserted away because a default that changes later must not fall through a `!`.
+ * `model_pass_required` is unreachable unless the caller passed `requireModelPass`, and of the two
+ * doors ONLY `POST …/publish` ever does — `POST …/global` deliberately never asks, so that a
+ * chokepoint outage cannot block the promotion half of a tier toggle whose other half is an
+ * un-publish. From the `/global` door this branch is therefore DEAD CODE, and that is DISCLOSED here
+ * rather than claimed to be tested: no fixture reaches it through that route, and the only way to
+ * make one is to change that route. It is still mapped rather than asserted away, because a default
+ * that changes later must not fall through a `!`.
  */
 function sendPublishRefusal(res: Response, out: { verdict: 'notfound' | 'forbidden' | 'model_pass_required' }): void {
   if (out.verdict === 'notfound') return notFound(res);
@@ -455,6 +460,18 @@ export function integrationsRouter(deps: {
    * dropping straight to `private` would additionally revoke the author's own org — a second,
    * unasked-for change. `org` is the narrowest tier that only undoes the cross-org publication; the
    * owner can then go `private` themselves through the tenant route above.
+   *
+   * IT REMAINS A TIER TOGGLE, WHICH MEANS IT IS IDEMPOTENT (S6 review round four, MINOR-1). The fold
+   * above changed WHAT `{global:true}` does, and on an already-`global` row it changed the answer
+   * too: `visibilityWriteVerdict` permits `global -> global` on purpose (that is how a published
+   * artifact is refreshed at all), so a bare `publishDefinition` here would have made a RETRY — after
+   * a timeout, or a reviewer re-asserting a tier they believe is set — a full unreviewed re-scrub of
+   * the author's CURRENT live row, replacing the reviewed artifact in every consuming org and
+   * stamping `supersedes`, with no preview in the loop. The route's own contract never said that:
+   * `{global:boolean}` answers `{ok, visibility}`, and before the fold this call was a no-op. So the
+   * door asks for a PROMOTION (`promoteOnly`) and a genuine re-publish is `POST …/publish`, the door
+   * whose body IS the snapshot stamp and whose caller has just read a preview. A `global` row with no
+   * snapshot is still published here, because repairing that state is what the fold is for.
    */
   r.post('/definitions/:id/global', requireAuth, requireRole('super-admin'), async (req: AuthedRequest, res: Response) => {
     const body = parseBody(res, SetDefinitionGlobalRequest, req.body);
@@ -463,8 +480,10 @@ export function integrationsRouter(deps: {
       const target: DefinitionVisibility = 'org';
       return sendVisibility(res, await integrationDefinitionStore.setVisibility(req.params.id as string, actorOf(req), target));
     }
-    const out = await publishDefinition(actorOf(req), req.params.id as string);
-    if (out.verdict !== 'ok') return sendPublishRefusal(res, out);
+    const out = await publishDefinition(actorOf(req), req.params.id as string, { promoteOnly: true });
+    if (out.verdict !== 'ok' && out.verdict !== 'already-published') return sendPublishRefusal(res, out);
+    // The two success verdicts answer IDENTICALLY, and that is the idempotence: this door reports the
+    // TIER, and the tier is `global` whether this call promoted the row or found it already there.
     // Echoed off the PERSISTED document, the same rule `sendVisibility` states: the response can
     // only ever report the tier really stored.
     res.json({ ok: true, visibility: out.doc.visibility });
@@ -616,6 +635,13 @@ export function integrationsRouter(deps: {
       req.params.id as string,
       body.requireModelPass === true ? { requireModelPass: true } : {},
     );
+    // `already-published` CANNOT arrive here: it is the answer to `promoteOnly`, and this door never
+    // asks for it, because SUPERSEDING IS THIS DOOR'S JOB (see above). Mapped to `INTERNAL` rather
+    // than cast away, and `INTERNAL` rather than a plausible-looking 403: it would mean the server
+    // reached a state this handler does not model, which is not something to dress up as a refusal
+    // the caller could act on. Same discipline as `sendPublishRefusal`'s `model_pass_required` arm —
+    // a default that changes later must not fall through into `publishedSnapshot!`.
+    if (out.verdict === 'already-published') return sendError(res, 'INTERNAL', 'Erro interno.');
     if (out.verdict !== 'ok') return sendPublishRefusal(res, out);
     const snapshot = out.doc.publishedSnapshot!;
     res.json({

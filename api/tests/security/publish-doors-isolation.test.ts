@@ -7,6 +7,7 @@ import { PUBLISH_REQUEST_NOTE_MAX_CHARS, type Actor } from '@ekoa/shared';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { integrationDefinitions, users } from '../../src/data/stores.js';
+import { Store, type Doc } from '../../src/data/store.js';
 import { setActivation, __resetActivationForTests } from '../../src/data/activation.js';
 import { __resetRevocationsForTests } from '../../src/auth/revocation.js';
 import { login } from '../../src/auth/service.js';
@@ -99,6 +100,21 @@ const deps = { now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` 
 const cfg: Config = { port: 0, jwtSecret: 's', encryptionKey: 'k', nodeEnv: 'test', llmChokepointBaseUrl: 'x', llm: defaultLlmConfig() };
 let clock = 0;
 const store = new IntegrationDefinitionStore(integrationDefinitions, () => new Date(1_800_000_000_000 + clock++));
+
+/**
+ * The REAL store, with every `find` recorded on the way through - not a fake, not a stub. `super.find`
+ * runs the real query against the real collection and its real result is returned unchanged; the only
+ * addition is the row count, which is the one thing the return value cannot tell you and the whole
+ * subject of the scan-width case at the bottom of this file.
+ */
+class RecordingStore extends Store<Doc> {
+  readonly reads: Array<{ filter: Record<string, unknown>; returned: number }> = [];
+  override async find(filter: Record<string, unknown> = {}, sort?: Record<string, 1 | -1>): Promise<Doc[]> {
+    const rows = await super.find(filter, sort);
+    this.reads.push({ filter, returned: rows.length });
+    return rows;
+  }
+}
 
 /**
  * THE PLANTED BATTERY: every field name the evidence store (S1) or the feedback store (S3) could
@@ -594,5 +610,56 @@ describe('the review queue is not a WIDER read of tenant content than the publis
         `${who.role} in ${who.orgId} must get nothing from the store itself`,
       ).toEqual([]);
     }
+  });
+
+  it('the queue asks the DATABASE for submitted rows, not for every org row in every tenant', async () => {
+    // THE SCAN WIDTH, not the result set (S6 review round four, MINOR-2). This is the widest read in
+    // the process - cross-tenant by design - and its filter used to be `{visibility:'org'}` at the
+    // database with `publishRequest !== undefined` applied in JS afterwards. So every org-visibility
+    // definition of every tenant was pulled into this process WITH its skillMd, lessons, action
+    // bodies and config schema attached, purely to be thrown away. Any authenticated user can add to
+    // the submitted subset, so the discarded majority grows with the tenant base.
+    //
+    // OBSERVED AT THE STORE READ, because that is the only place the property exists: the items
+    // RETURNED are identical either way, which is exactly how a correct-looking answer hid an
+    // unbounded scan. `RecordingStore` is the real `Store` - every call delegates to it and runs the
+    // real query against the real collection - with the row count each `find` brought back recorded
+    // beside it. Nothing is faked, stubbed or substituted; one method is observed on the way through.
+    const recording = new RecordingStore('integration_definitions');
+    const observed = new IntegrationDefinitionStore(recording, () => new Date(1_800_000_000_000 + clock++));
+
+    // ONE submitted row, and NOISE that must never be read: unsubmitted `org` rows, in this org and
+    // in three others, each carrying free text the old scan would have dragged across with it.
+    expect((await observed.requestPublish(ID, author)).verdict).toBe('ok');
+    for (const [i, orgId] of ['orgA', 'orgB', 'orgC', 'orgD'].entries()) {
+      await observed.create(
+        {
+          orgId,
+          userId: `noise${i}`,
+          visibility: 'org',
+          key: `noise-${i}`,
+          displayName: `Noise ${i}`,
+          description: 'never submitted, never reviewed',
+          configSchema: [],
+          actions: [],
+          skillMd: `# noise ${i}\n\n${'x'.repeat(2000)}\n`,
+        },
+        { actor: { userId: `noise${i}`, orgId, role: 'user' }, onConflict: 'replace' },
+      );
+    }
+
+    recording.reads.length = 0;
+    const items = await observed.listPublishRequests(reviewer);
+
+    // THE CONTROL FIRST: the queue still answers with the submission, so a scan narrowed to nothing
+    // would fail here rather than read as a win.
+    expect(items.map((d) => d._id), 'the submitted row is still returned').toEqual([ID]);
+    // AND THE PROPERTY: one query, and it brought back ONE document - not the five that
+    // `{visibility:'org'}` on its own matches.
+    expect(recording.reads.length, 'the queue is one query').toBe(1);
+    expect(
+      recording.reads[0]!.returned,
+      'the queue must not materialise rows it is about to discard',
+    ).toBe(1);
   });
 });

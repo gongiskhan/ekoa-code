@@ -3804,3 +3804,70 @@ names") was applied to this round's gates, and one result is negative and record
 **DIAGRAM CHECK (FIXED-12):** `12-org-tenancy` gains an append-only AS-BUILT correction block -
 the review window is a READ-only widening, and the `global` tier now has ONE writer. The prior
 annotations stay. No collection, module or wire shape changed, so 02 and 05 are unaffected.
+
+## 2026-08-20 — S6 review round four: the doors are right, the gate was not
+
+**MAJOR — a gate, not a defect. `gitleaks detect` SCANS HISTORY, so a follow-up commit is not a fix.**
+The branch introduced a `stripe-access-token` finding: the S6 contract suite wrote its planted
+credential as a literal. Round three composed it at runtime, saw a clean working tree and reported the
+gate closed. It was not: `npm run gate:secrets` and the `security-gates` CI job both run
+`gitleaks detect`, which reads `git log -p`, so the literal stayed reachable in the commit that
+introduced it and the job stayed red on the PR. MEASURED both ways -
+`gitleaks detect --log-opts="main..HEAD"` reported the finding while a working-tree scan reported
+none of it, which is exactly how a round can believe it has closed this. Closed by REPLAYING the
+branch's commits with the fixture composed from the start; safe because the branch has no upstream.
+**Explicitly not closed with an allowlist entry.** `scripts/gitleaks.toml` already carries seven
+values and its own warning that each is a deliberate act; an eighth, added to quiet a fixture its
+author controls, is how a gate becomes decoration. **The standing rule, because it will recur:** for
+any history-scanning gate, fixing the working tree is half the fix - the other half is whether the
+literal is still reachable from a ref, INCLUDING a backup ref kept for safety, which keeps the local
+gate red for a secret that was deliberately removed.
+
+**`POST /definitions/:id/global` `{global:true}` is a PROMOTION, and a promotion is idempotent.**
+Round three's fold was right and created a smaller defect at the other end of the same call.
+`visibilityWriteVerdict` permits `global -> global` deliberately (E2 narrowed the launch pad to
+`=== 'private'` so a published artifact can be refreshed at all), so a REPEAT of `{global:true}`
+became a full supersede: a re-scrub of the author's current live row over the reviewed artifact, in
+every consuming org, with no preview in the loop. A retry after a timeout is enough to trigger it.
+The route's contract never said that - it answers `{ok, visibility}` and reads as a toggle. Decided:
+`promoteOnly` on the publish call, and a distinct `already-published` verdict rather than an `ok`
+carrying `redactions: []` and a synthesised `modelPass`, because no scrub ran and there is no honest
+value for either field. Judged AFTER the pre-check, so the door gains no existence oracle; judged
+from the SAME read the gate used, so no second fetch can disagree with the one that authorised the
+call. A deliberate re-publish is `POST .../publish`, whose response IS the snapshot stamp. A `global`
+row with no snapshot is still published here, because that is the state the fold exists to end.
+
+**A behaviour change is not landed until the CANONICAL doc and the CONTRACT say so.** The fold lived
+in `decisions.md`, `findings.md` and one diagram; `docs/architecture.md` still said "Five routes" and
+the `setGlobal` descriptor still called the route a publish toggle. Both now state what the route
+does, that it stays idempotent, and what the "nothing reaches the global tier without an artifact"
+invariant does NOT cover. **Review rule:** when a route's BEHAVIOUR changes under an unchanged
+schema, the descriptor comment is part of the change - an unchanged schema is what makes it additive
+under Rule 7, and it is also what hides it from every reader who only reads schemas.
+
+**Every model call through the chokepoint carries a deadline.** `chokepointModelPass` had none, while
+`llm/gateway.ts`'s classifier arms an AbortController for a far smaller call. `scrubForPublish`
+degrades on a THROW, and a provider that accepts the connection and never answers is not a throw.
+`MODEL_PASS_BUDGET_MS` closes it, and a timeout stays a DEGRADATION - the floor is the control, and
+the artifact records `modelPass: {status:'failed'}`. Only `requireModelPass: true` turns it into a
+refusal.
+
+**A read whose RESULT is correct can still be a defect, and the test has to look where the defect
+is.** The review queue's returned items were identical before and after narrowing its scan, so no
+assertion over the response could ever have caught that it materialised every org-visibility row of
+every tenant to discard almost all of them. The property lives at the query, so the test observes the
+query - through a `RecordingStore` that SUBCLASSES the real `Store` and adds only a row count, never
+a substitute for it. Pagination is RECORDED rather than half-done: a cursor is a Rule 7 change.
+
+**Three claims corrected rather than defended.** (1) The E1-F4b pre-check / in-mutator pair was
+RE-MEASURED this round: each application deleted alone leaves the suite green. It is carried as a
+disclosure and never as two proofs. (2) `sendPublishRefusal`'s `model_pass_required` arm is dead from
+the `/global` door; the docblock names that door instead of implying a test reaches it. (3) "Nothing
+reaches the global tier without an artifact" walks the MOUNTED routes only - `legacy-runtime-import.ts`
+and a direct `create({visibility:'global'})` are outside it. Retitled, and recorded as a residual.
+The general rule: a test title is a claim, and an over-wide title is the cheapest way to lose a real
+gap.
+
+**DIAGRAM CHECK (FIXED-12):** `12-org-tenancy` gains an append-only block for the promotion door's
+idempotence - the one behavioural edge this round changes on a diagrammed flow. No collection, module
+or wire shape changed, so 02 and 05 are unaffected.

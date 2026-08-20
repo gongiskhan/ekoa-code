@@ -826,12 +826,32 @@ export class IntegrationDefinitionStore {
     return updated ? { verdict: 'ok', doc: updated } : { verdict: 'notfound' };
   }
 
-  /** The platform REVIEW QUEUE: every `org` row whose tenant has asked for cross-org publication.
-   *  Super-admin only, and deliberately NOT folded into `listForActor` — the review queue is its own
-   *  surface, and a submitted row must never masquerade as a definition the reviewer's org holds. */
+  /**
+   * The platform REVIEW QUEUE: every `org` row whose tenant has asked for cross-org publication.
+   * Super-admin only, and deliberately NOT folded into `listForActor` — the review queue is its own
+   * surface, and a submitted row must never masquerade as a definition the reviewer's org holds.
+   *
+   * BOTH TERMS ARE THE DATABASE'S (S6 review round four, MINOR-2). This read is the widest one in the
+   * process: it is CROSS-TENANT by design, and its filter used to be `{visibility:'org'}` alone with
+   * `publishRequest !== undefined` applied in JS afterwards — so every org-visibility definition of
+   * every tenant was materialised into this process, with whole `skillMd`, `lessons`, action bodies
+   * and config schemas attached, in order to throw almost all of them away. Submitted rows are a
+   * small subset of that and any authenticated user can add one, so the discarded majority grew with
+   * the tenant base. `$exists` matches exactly what the JS predicate matched (a stored `null` and a
+   * stored value both satisfy `!== undefined`), so this is a narrowing of the SCAN and not of the
+   * result — and it is the query rather than a second JS pass precisely so that there is one place
+   * the rule lives.
+   *
+   * STILL UNBOUNDED, AND RECORDED AS SUCH: no limit, no cursor. The response carries every open
+   * submission, so its size still grows with the number of tenants that have asked at once, and
+   * `publishQueueEntry` runs a full publish floor per row. Bounding it means a cursor on
+   * `IntegrationPublishQueueResponse`, which is a Rule 7 contract change with an OpenAPI and
+   * cortex-cli regeneration behind it; it is its own slice, and it is in `docs/findings.md` rather
+   * than half-done here.
+   */
   async listPublishRequests(actor: Actor): Promise<IntegrationDefinitionDoc[]> {
     if (actor.role !== 'super-admin') return [];
-    return (await this.store.find({ visibility: 'org' })).filter((row) => row.publishRequest !== undefined);
+    return this.store.find({ visibility: 'org', publishRequest: { $exists: true } });
   }
 
   /**

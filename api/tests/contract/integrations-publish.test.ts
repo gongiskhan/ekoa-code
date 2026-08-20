@@ -706,10 +706,71 @@ describe('S6 - `POST /definitions/:id/global` is not a second, unscrubbed way ac
     expect(seen.items.map((d) => d.key)).not.toContain(KEY);
   });
 
-  it('THE INVARIANT, over both doors: nothing reaches the global tier without an artifact', async () => {
-    // Stated once, over every mounted route that can write `visibility`, so a SIXTH door added later
-    // is caught by this rather than by someone remembering. The tenant visibility route is included
-    // precisely because its schema is supposed to make `global` unsayable.
+  it('a SECOND `{global:true}` is a NO-OP, not a silent unreviewed re-publish of the live row', async () => {
+    // THE COST OF THE FOLD, and the thing its own contract never said (S6 review round four,
+    // MINOR-1). `visibilityWriteVerdict` permits `global -> global` deliberately - E2 narrowed the
+    // launch-pad rule to `=== 'private'` so a published artifact can be refreshed at all - so once
+    // `{global:true}` became `publishDefinition`, a REPEAT of it stopped being the no-op it had
+    // always been and became a full supersede: re-scrub the author's CURRENT live row, replace the
+    // reviewed artifact in every consuming org, stamp `supersedes`, with no preview in the loop. The
+    // trigger is not exotic - it is a retry after a timeout, or a reviewer re-asserting a tier they
+    // believe is already set. This door answers `{ok, visibility}` and reads as a toggle, so it must
+    // behave like one.
+    await seedDefinition('org');
+    const owner = await tokenFor('ownerA');
+    const root = await tokenFor('rootA');
+    await submit(owner, DEF_ID, 'ready');
+    expect((await setGlobal(root, DEF_ID, true)).status).toBe(200);
+
+    const reviewed = (await storedDoc(DEF_ID))!.publishedSnapshot!;
+    expect(reviewed.supersedes, 'the control: a FIRST publication supersedes nothing').toBeUndefined();
+
+    // THE AUTHOR MOVES ON, through the writer production uses for an edit: `saveAuthoredDefinition`
+    // saves with `create(..., onConflict:'replace')`, which carries `publishedSnapshot` forward
+    // untouched. Without a content change the two snapshots could differ only by a `scrubbedAt` clock
+    // tick, and a re-publish inside the same millisecond would read as a no-op.
+    const AFTER_REVIEW = 'ADDED AFTER THE REVIEW, never seen by a reviewer';
+    await integrationDefinitionStore.create(
+      {
+        orgId: 'orgA', userId: 'ownerA', visibility: 'global', key: KEY,
+        displayName: 'S6 Publish Probe', description: 'A probe package.',
+        configSchema: [], actions: [], skillMd: `# probe\n\n${AFTER_REVIEW}\n`,
+      },
+      { actor: { userId: 'rootA', orgId: 'orgA', role: 'super-admin' }, onConflict: 'replace' },
+    );
+    expect((await storedDoc(DEF_ID))!.skillMd, 'the live row really did change').toContain(AFTER_REVIEW);
+
+    // THE RETRY.
+    const again = await setGlobal(root, DEF_ID, true);
+    expect(again.status, 'a retry is not a refusal either - the tier is what it asked for').toBe(200);
+    expect(await again.json()).toEqual({ ok: true, visibility: 'global' });
+
+    const after = (await storedDoc(DEF_ID))!;
+    expect(after.visibility).toBe('global');
+    // BYTE-FOR-BYTE, not "it still has a snapshot": a re-scrub would leave one of those too.
+    expect(after.publishedSnapshot, 'the reviewed artifact is untouched').toEqual(reviewed);
+    expect(JSON.stringify(after.publishedSnapshot), 'nothing written after the review crossed').not.toContain(AFTER_REVIEW);
+
+    // AND THE NON-VACUITY HALF: the publish door, asked for the same row in the same state, DOES
+    // supersede. So the assertions above pin idempotence on THIS door rather than an inability to
+    // re-publish at all - which would be a different defect, and the one E2 removed on purpose.
+    const receipt = await expectSchema<PublishDefinitionResponse>(await publish(root, DEF_ID), PublishDefinitionResponse);
+    expect(receipt.supersedes?.scrubbedAt, 'the publish door still replaces the artifact').toBe(reviewed.scrubbedAt);
+    expect((await storedDoc(DEF_ID))!.publishedSnapshot!.skillMd).toContain(AFTER_REVIEW);
+  });
+
+  it('THE INVARIANT, over the three MOUNTED doors: no ROUTE reaches the global tier without an artifact', async () => {
+    // SCOPED IN THE TITLE, because the scope is the honest part (S6 review round four). This walks
+    // the three mounted HTTP routes that can write `visibility`, and nothing else. It is NOT the
+    // claim "nothing reaches the global tier without an artifact": `legacy-runtime-import.ts` writes
+    // rows directly, and so does any in-process `IntegrationDefinitionStore.create({visibility:
+    // 'global'})` - neither is on a route this loop can call, and both are recorded in
+    // docs/findings.md. What makes those safe rather than correct is the READ-PATH fail-safe: a
+    // `global` row with no snapshot is served through the deterministic floor, never raw.
+    //
+    // Stated once over every mounted route, so a door added later is caught by this rather than by
+    // someone remembering. The tenant visibility route is included precisely because its schema is
+    // supposed to make `global` unsayable.
     const root = await tokenFor('rootA');
     const owner = await tokenFor('ownerA');
     const promote: Array<[string, () => Promise<Response>]> = [

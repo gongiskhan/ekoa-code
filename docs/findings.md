@@ -6615,6 +6615,18 @@ re-implemented a live control had it trusted this heading over the code.
   added to quiet a fixture the author controls is how a gate turns into decoration. The pre-rewrite
   tip is kept at `backup/s6-pre-secret-scrub` until the branch lands.
 
+  AND THAT BACKUP REF IS ITSELF THE TRAP THIS ENTRY IS ABOUT - recorded rather than left to be
+  rediscovered. `gitleaks detect` scans `--all` refs, so `backup/s6-pre-secret-scrub` keeps the
+  pre-rewrite commits, and therefore the literal, reachable: `npm run gate:secrets` still exits 1 on
+  any box that holds it. CI is unaffected (the ref is never pushed, and the job scans the PR ref), so
+  this is a LOCAL red only - which is exactly the shape of red that teaches people to stop reading
+  the gate. MEASURED, all three scopes, 2026-08-20: `--log-opts="main..HEAD"` exits 0; the default
+  all-refs run exits 1 with two findings; scoped to `main feat/s6-publish-doors` it exits 1 with ONE,
+  the pre-existing `PAGE_STATE_TOKEN` on main below. **DELETE THE BACKUP REF BEFORE LANDING** - the
+  replay is verified equivalent (`git diff <replayed-tip> backup/s6-pre-secret-scrub` is the fixture
+  block and nothing else) and the reflog still holds the old tip. It was left in place only because
+  it is another session's safety net and deleting it was not this round's call to make.
+
 - **`gitleaks-flags-a-deliberately-non-credential-viewstate-fixture`** (OPEN 2026-08-20, LOW, not
   this stream's file). `npm run gate:secrets` also reports `generic-api-key` at
   `api/tests/automation/discovery-replay-acceptance.test.ts:112` - `PAGE_STATE_TOKEN`, a 38-char
@@ -6694,3 +6706,87 @@ re-implemented a live control had it trusted this heading over the code.
   limit for the same pattern. Recorded so a future reader knows the question was asked and where the
   answer runs out; the mitigation is structural, not another test - both applications call ONE named
   predicate, so there is exactly one place the rule can be deleted from.
+
+- **`s6-the-global-doors-retry-became-a-silent-unreviewed-republish`** (CLOSED 2026-08-20, MEDIUM,
+  cross-org content replacement created by this slice's own fix). Folding `POST /definitions/:id/global`
+  `{global:true}` into `publishDefinition` (MAJOR-2) closed one defect and opened a smaller one at the
+  other end of the same call. `visibilityWriteVerdict` permits `global -> global` DELIBERATELY - E2
+  narrowed the launch-pad rule from `!== 'org'` to `=== 'private'` precisely so a published artifact
+  could be refreshed at all - so a REPEAT of `{global:true}` stopped being the no-op it had always
+  been and became a full supersede: re-scrub the author's CURRENT live row, replace the reviewed
+  artifact in every consuming org, stamp `supersedes`, with no preview and no reviewer in the loop.
+  The trigger is not exotic; it is a retry after a timeout, or a reviewer re-asserting a tier they
+  believe is already set. Authority was unchanged - the same principal could have called `/publish` -
+  but the route's own contract never said this: `{global:boolean}` answers `{ok, visibility}` and
+  reads as a tier toggle. Closed with `PublishScrubOptions.promoteOnly` and a distinct
+  `already-published` verdict, judged AFTER the pre-check (so the door gains no existence oracle) and
+  from the SAME read the gate used (so no second fetch can disagree with the one that authorised the
+  call). It is its own verdict rather than an `ok` carrying `redactions: []` and a synthesised
+  `modelPass`, because no scrub ran and there is no honest value for either field. A `global` row
+  with NO snapshot is still published here - that state is exactly what MAJOR-2 exists to end.
+  Verified by mutation: dropping `promoteOnly` reddens the byte-for-byte snapshot comparison.
+
+- **`s6-the-fold-was-not-in-the-canonical-architecture-doc-or-the-contract`** (CLOSED 2026-08-20, LOW,
+  documentation drift on a change of behaviour). MAJOR-2 changed what a mounted route DOES, and said
+  so only in `docs/decisions.md`, `docs/findings.md` and the 12-org-tenancy diagram. The architecture
+  paragraph still read "Five routes now mount them" and enumerated five; the `setGlobal` descriptor -
+  the API contract a client reads - still described "the other super-admin-only publish toggle". A
+  reader consulting either canonical source got the pre-fold answer. Closed in both, together with
+  the idempotence rule above and an explicit statement of what the "nothing reaches the global tier
+  without an artifact" invariant does NOT cover.
+
+- **`s6-the-publish-model-pass-had-no-deadline`** (CLOSED 2026-08-20, LOW-MEDIUM, availability;
+  pre-existing exposure WIDENED by this slice, stated plainly). `chokepointModelPass` called
+  `completeFast` with no `signal` and no per-call budget, where `llm/gateway.ts`'s `CLASSIFY_BUDGET_MS`
+  arms an AbortController for a far smaller call. `scrubForPublish` degrades to the floor when the
+  pass THROWS - but a provider that accepts the connection and then never answers is not a throw, so
+  there was nothing to catch and the publish waited for as long as the socket stayed open, with a
+  super-admin's request held behind it. This was already true of `POST .../publish`; what made it
+  worth arming now is that the fold put `POST .../global` `{global:true}` - previously a single store
+  write - behind the same call. Closed with `MODEL_PASS_BUDGET_MS` (30 s, generous next to the
+  classifier's 3.5 s because this pass reads up to 60 000 characters and emits spans). A timeout is a
+  degradation, never a refusal: the floor is the control and `modelPass: {status:'failed'}` is
+  recorded on the artifact. Verified by mutation: dropping the signal reddens 3, making the timer a
+  no-op reddens 3.
+
+- **`s6-the-review-queue-is-an-unpaginated-cross-tenant-scan`** (PARTLY CLOSED 2026-08-20, LOW; the
+  scan narrowed, the pagination RECORDED). `listPublishRequests` filtered `{visibility:'org'}` at the
+  database and `publishRequest !== undefined` in JS, so the widest read in the process materialised
+  every org-visibility definition of every tenant - with skillMd, lessons, action bodies and config
+  schemas attached - to discard almost all of them; and `publishQueueEntry` then runs a full publish
+  floor per surviving row. Any authenticated user can add to the submitted subset, so the discarded
+  majority grew with the tenant base. The scan half is closed: both terms are now the database's
+  (`$exists` matches exactly what the JS predicate matched), and the test observes the SCAN WIDTH -
+  the returned items are identical either way, which is how a correct-looking answer hid it - through
+  a `RecordingStore` that subclasses the real `Store` and adds only the row count. STILL OPEN: the
+  response has no limit and no cursor, so its size grows with the number of tenants that have asked
+  at once. Not fixed here because a cursor on `IntegrationPublishQueueResponse` is a Rule 7 contract
+  change with an OpenAPI and cortex-cli regeneration behind it; it needs its own slice rather than a
+  half-done bound. Verified by mutation: restoring the JS filter reddens 1 (5 rows read where 1 is).
+
+- **`s6-the-global-tier-invariant-was-scoped-to-routes-and-did-not-say-so`** (OPEN 2026-08-20, LOW,
+  residual - recorded, not fixed). "Nothing reaches the global tier without an artifact" was the title
+  of a test that walks the MOUNTED HTTP routes and nothing else. Two in-process paths sit outside it:
+  `legacy-runtime-import.ts`, which writes rows directly, and any in-process
+  `IntegrationDefinitionStore.create({visibility:'global'})`. Neither is reachable from the loop, so
+  the invariant as stated was wider than the thing proved. The title and the architecture paragraph
+  now say what the scope is. NOT closed by widening the invariant to the store, because a `global`
+  row with no snapshot is a legitimate legacy state that the READ-PATH fail-safe already handles -
+  such a row is served through the deterministic floor, never raw - so forbidding it at the store
+  would break the import path rather than fix anything. What is missing is a positive test of that
+  fail-safe from the import side, and it belongs to whoever owns `legacy-runtime-import.ts`.
+
+- **`s6-round-three-and-four-test-quality-re-verified`** (CLOSED 2026-08-20, informational; a
+  RE-MEASUREMENT, not a claim carried forward). The three tests round two made failable were
+  re-checked from a clean tree in round four, each mutation restored and md5-verified: the note cap
+  (dropping the store's `.slice` reddens 1, 1500 vs 1000), `POST .../publish`'s `requireRole`
+  (dropping it reddens 3, at the 404-vs-403 ordering assertion), and `listPublishRequests`' own
+  `role !== 'super-admin'` filter (DELETING it reddens 1 - the Rule 5 proof). The fourth gate of that
+  class, `POST .../global`'s `requireRole`, reddens 2. AND THE ONE THAT DID NOT HOLD UP IS RECORDED AS
+  A DISCLOSURE RATHER THAN DEFENDED: the E1-F4b pre-check / in-mutator pair was re-measured here and
+  is genuinely NOT separable - deleting the pre-check application alone leaves 50/50 green, and
+  deleting the in-mutator application alone leaves 50/50 green, because the survivor reaches the
+  identical verdict and row state. The mitigation is structural (both applications call ONE named
+  predicate, so there is one place to delete from) and no test is claimed for it. Separately,
+  `sendPublishRefusal`'s `model_pass_required` arm is DEAD from the `/global` door, which never asks
+  for `requireModelPass`; the docblock now names that door rather than implying coverage.

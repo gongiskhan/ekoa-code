@@ -499,6 +499,14 @@ const MODEL_PASS_SYSTEM = [
 ].join(' ');
 
 /**
+ * The deadline on ONE chokepoint model pass. Generous next to `llm/gateway.ts`'s
+ * `CLASSIFY_BUDGET_MS` (3.5 s) because this pass reads up to `MODEL_PASS_CHAR_BUDGET` of free text
+ * and emits spans, where the classifier reads a turn and emits one word. It bounds a HANG; it is not
+ * a latency target and must not be tightened into one.
+ */
+export const MODEL_PASS_BUDGET_MS = 30_000;
+
+/**
  * The default model pass — ONE FAST-tier call through the llm/ chokepoint.
  *
  * `completeFast` is the chokepoint's Messages entry: FAST by TYPE (its options cannot express a
@@ -506,6 +514,18 @@ const MODEL_PASS_SYSTEM = [
  * Attribution is `user_work` / `integration-builder` billed to the acting publisher: publishing is
  * an authoring action the user initiated, and the `classifier` vocabulary is a closed union owned by
  * `llm/attribution.ts`, which this slice does not own and must not widen (docs/decisions.md).
+ *
+ * IT IS DEADLINED (S6 review round four, MINOR-3). `scrubForPublish` degrades to the floor when this
+ * pass THROWS — but a provider that accepts the connection and then never answers is not a throw, and
+ * without a deadline the publish waits on it for as long as the socket stays open. That exposure
+ * predates this slice on `POST …/publish`; what made it worth arming now is that S6 folded
+ * `POST …/global` `{global:true}` into the same path, so a door that used to be a single store write
+ * came to sit behind an un-deadlined network call. The budget is armed the same way
+ * `llm/gateway.ts`'s `CLASSIFY_BUDGET_MS` arms the classifier's — an `AbortController` handed to
+ * `completeFast`, which rejects with `LlmAbortedError` — and the rejection lands in
+ * `scrubForPublish`'s catch, so a timeout publishes the FLOOR with `modelPass: {status:'failed'}`
+ * recorded on the artifact. It is never a refusal, because the floor is the control and the model is
+ * the second net; only `requireModelPass: true` turns a degraded pass into a refusal.
  */
 export const chokepointModelPass: PublishModelPass = async (input) => {
   const total = input.fields.reduce((n, f) => n + f.text.length, 0);
@@ -514,11 +534,17 @@ export const chokepointModelPass: PublishModelPass = async (input) => {
     throw new Error(`free text is ${total} chars, over the ${MODEL_PASS_CHAR_BUDGET}-char single-pass budget`);
   }
   const prompt = input.fields.map((f) => `### ${f.path}\n${f.text}`).join('\n\n');
-  const res = await completeFast(
-    { messages: [{ role: 'user', content: prompt }], system: MODEL_PASS_SYSTEM, maxTokens: 2048 },
-    { kind: 'user_work', agentType: 'integration-builder', billeeUserId: input.billeeUserId },
-  );
-  return { spans: parseModelSpans(res.text) };
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), MODEL_PASS_BUDGET_MS);
+  try {
+    const res = await completeFast(
+      { messages: [{ role: 'user', content: prompt }], system: MODEL_PASS_SYSTEM, maxTokens: 2048, signal: ac.signal },
+      { kind: 'user_work', agentType: 'integration-builder', billeeUserId: input.billeeUserId },
+    );
+    return { spans: parseModelSpans(res.text) };
+  } finally {
+    clearTimeout(timer);
+  }
 };
 
 /** Parse the model's reply. Anything unparseable THROWS, which the caller records as a failed pass
@@ -561,6 +587,27 @@ export interface PublishScrubOptions {
   requireModelPass?: boolean;
   /** Billee for the chokepoint call. Defaults to the acting actor's user id at the callers below. */
   billeeUserId?: string;
+  /**
+   * THIS CALL IS A PROMOTION, NOT A RE-PUBLISH (S6 review round four, MINOR-1). A row that is
+   * already at the `global` tier AND already holds an artifact is already promoted, so
+   * `publishDefinition` answers `already-published` and leaves the stored snapshot byte-untouched
+   * instead of re-scrubbing the author's CURRENT live row over it.
+   *
+   * WHY IT EXISTS. `visibilityWriteVerdict` deliberately permits `global -> global` (E2 narrowed the
+   * launch-pad rule to `=== 'private'` so a published artifact can be refreshed at all), so a bare
+   * `publishDefinition` on a published row is a full supersede. That is correct for `POST …/publish`,
+   * whose whole contract is the snapshot stamp and whose caller has just read a preview. It is NOT
+   * what `POST …/global` `{global:true}` means: that door answers `{ok, visibility}`, reads as a tier
+   * toggle, and was a no-op on an already-`global` row before S6 folded it into the publish path. A
+   * reviewer retrying it after a timeout, or re-asserting a tier they believe is set, would otherwise
+   * replace the reviewed artifact in every consuming org with an unreviewed re-scrub, stamped
+   * `supersedes`, with no preview in the loop.
+   *
+   * A `global` row with NO snapshot is NOT already published and IS promoted here — that state is
+   * exactly what MAJOR-2 exists to end (a legacy-runtime import, or a row flipped by the pre-fold
+   * route, served cross-org through the read-time floor), so this door repairing it is the point.
+   */
+  promoteOnly?: boolean;
 }
 
 function readFreeText(content: PublishableContent, path: string): string | undefined {
@@ -802,6 +849,14 @@ export type PublishPreviewResult = PublishPreview | { verdict: 'notfound' } | { 
 
 export type PublishResult =
   | { verdict: 'ok'; doc: IntegrationDefinitionDoc; redactions: PublishRedaction[]; modelPass: PublishModelPassRecord }
+  /**
+   * NOTHING WAS WRITTEN, and the row was already where the caller wanted it — the `promoteOnly`
+   * answer above. Deliberately its OWN verdict rather than an `ok` carrying `redactions: []` and a
+   * synthesised `modelPass`: no scrub ran, so there is no honest value for either field, and a
+   * caller that recorded a fabricated `{status:'skipped'}` would be recording an inspection that
+   * never happened. It carries the row so a door reporting the TIER can answer from the document.
+   */
+  | { verdict: 'already-published'; doc: IntegrationDefinitionDoc }
   | { verdict: 'notfound' }
   | { verdict: 'forbidden' }
   | { verdict: 'model_pass_required'; reason: string };
@@ -852,6 +907,15 @@ export async function publishDefinition(
 ): Promise<PublishResult> {
   const pre = await store.publishPrecheck(id, actor);
   if (pre.verdict !== 'ok') return pre;
+
+  // ALREADY PROMOTED, SO NOTHING TO DO — see `PublishScrubOptions.promoteOnly`. Judged AFTER the
+  // pre-check, never before it: the admission answer must be identical whatever this option says, or
+  // the door would gain an existence oracle (a caller who may not see the row must still get the
+  // uniform 404, not a cheap "already published"). Judged from the SAME read the gate used, so no
+  // second fetch can disagree with the one that authorised the call.
+  if (opts.promoteOnly && pre.doc.visibility === 'global' && pre.doc.publishedSnapshot !== undefined) {
+    return { verdict: 'already-published', doc: pre.doc };
+  }
 
   const res = await scrubForPublish(publishableContentOf(pre.doc), { billeeUserId: actor.userId, ...opts });
   if (opts.requireModelPass && res.modelPass.status !== 'applied') {

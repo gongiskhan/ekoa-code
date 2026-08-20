@@ -829,6 +829,29 @@ prose crosses an org boundary while the trust semantics - `state`, `shape`, `dec
 verification verdict - survive intact. Keeping `state` is load-bearing: an ABSENT record reads as
 human-written and therefore trusted. See `docs/decisions.md` 2026-08-20.
 
+AND A SIXTH ROUTE BECAME AN ALIAS OF THE PUBLISH DOOR. `POST /definitions/:id/global` is no longer a
+visibility toggle for `{global:true}`. It used to call `setVisibility(..., 'global')`, which moved a
+row across the org boundary while writing NO snapshot - so every other tenant read the author's LIVE
+row through the read-time floor, with no chokepoint model pass, nothing frozen, and no
+`scrubbedAt`/`scrubbedBy`/`scrubVersion` provenance. That door became reachable against FOREIGN
+tenant rows only because this slice mounted the submit window, so the fix belongs here:
+`{global:true}` now calls `publishDefinition`, the same function `POST …/publish` calls, and there is
+ONE way a definition crosses an org boundary. It gains no authority - both land on the same
+`visibilityWriteVerdict(row, actor, 'global')` - and `{global:false}` still exists because
+un-publishing has no equivalent on the publish door. Request and response schemas are unchanged,
+which is what makes the change additive under Rule 7; what changed is that the call now runs a scrub
+and writes an artifact. It stays IDEMPOTENT: on a row already `global` that already holds a snapshot
+it writes nothing and reports the tier, so a retry cannot replace a reviewed artifact in every
+consuming org with an unreviewed re-scrub of the author's current row. A deliberate re-publish is
+`POST …/publish`, whose response IS the snapshot stamp.
+
+WHAT THAT INVARIANT DOES NOT COVER. "Nothing reaches the `global` tier without an artifact" is
+enforced and tested over the MOUNTED HTTP routes only. Two in-process paths sit outside it:
+`legacy-runtime-import.ts`, which imports rows directly, and a direct
+`IntegrationDefinitionStore.create({visibility:'global'})`. Both are recorded in `docs/findings.md`.
+What makes them safe rather than correct is the read-path fail-safe: a `global` row with no snapshot
+is served through the deterministic floor at read time, never raw.
+
 ## Billing
 
 Four tiers (`config.ts`, env-overridable models/efforts/weights): FAST (`claude-haiku-4-5-20251001`,
