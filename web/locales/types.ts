@@ -312,6 +312,95 @@ export interface Translations {
         staleShape: string;
         failed: string;
       };
+
+      /**
+       * THE INTEGRATION DETAIL PAGE (slice S2) - `/integrations/[key]`: what each action is, what
+       * it did the last time it worked, when it is scheduled to run, and the control that runs it
+       * now. The LIST page keeps connection + consent management; this page is everything else.
+       */
+      detail: {
+        /** The link from a list card into this page. */
+        open: string;
+        loading: string;
+        back: string;
+        notFoundTitle: string;
+        notFoundDescription: string;
+        /** A read that FAILED, which is not the same as an integration that is not there. */
+        loadErrorTitle: string;
+        actionsTitle: string;
+        /** No actions on the package at all - a real empty, never shown for a failed read. */
+        actionsEmpty: string;
+        /** `api-call` / `browser-steps` / `bash-cli`, in the reader's own words. */
+        backing: {
+          apiCall: string;
+          browserSteps: string;
+          bashCli: string;
+          invalid: string;
+        };
+        /** The action reads; nothing it does needs authorising. */
+        readOnly: string;
+        /** The action writes, and a human has / has not approved it. */
+        writeApproved: string;
+        writeNeedsApproval: string;
+        /** Written by the platform and not yet confirmed by a person. */
+        provisional: string;
+        /** A person promoted it, so `achieve` may run it unattended. */
+        trusted: string;
+        stepsTitle: string;
+        /** The api-call request the definition declares, placeholders and all. */
+        requestTitle: string;
+        /** The sample of the last validated run. */
+        evidenceTitle: string;
+        evidenceAt: (when: string) => string;
+        /** The samples read is still OUTSTANDING - not the same as "there is none". */
+        evidenceLoading: string;
+        evidenceNone: string;
+        /** The sample was recorded against a DIFFERENT version of this action. */
+        evidenceStale: string;
+        evidenceError: string;
+        evidenceRequest: string;
+        evidenceResponse: (status: number) => string;
+        evidenceTruncated: string;
+        stepsLoading: string;
+        stepsError: string;
+        stepsEmpty: string;
+        stepScreenshot: (index: number) => string;
+        /**
+         * The samples FIT these steps but nothing proves they were RECORDED against them: an
+         * evidence row numbers its steps into the plan as it was when the run happened, and the
+         * only identity available (its run id, found in this automation's own history) was not.
+         */
+        stepSamplesOlder: string;
+        historyTitle: string;
+        historyLoading: string;
+        historyEmpty: string;
+        historyError: string;
+        /** A run with neither a start nor a finish stamp - queued, and not begun. */
+        historyNoStamp: string;
+        lastRun: string;
+        schedulesTitle: string;
+        schedulesEmpty: string;
+        schedulesError: string;
+        runNow: string;
+        running: string;
+        runStarted: string;
+        runFailed: string;
+        /**
+         * A failed run the server named with a CODE and no prose, in words a person can act on.
+         *
+         * TWO VOCABULARIES, and they do not collide: the executor's own lower_snake outcome tokens
+         * (`upstream_error`, `not_connected`, …) and the transport's UPPER_SNAKE envelope codes
+         * (`NETWORK_ERROR`, …). Open by design - an unmapped token falls back to `runFailed`
+         * rather than being shown as it stands, because a machine token in a toast names something
+         * inside the system and nothing the reader can do anything about.
+         */
+        runCodes: Record<string, string>;
+        /** Why run-now is not offered - stated instead of a control that would be refused. */
+        cannotRunNotConnected: string;
+        cannotRunNeedsApproval: string;
+        /** Where the user goes to authorise it: the list page owns consent. */
+        manageOnList: string;
+      };
     };
 
     // ============================================

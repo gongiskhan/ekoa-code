@@ -3650,6 +3650,142 @@ silently absorbed into a ledger note):
   disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
   `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
 
+## Recently fixed - 2026-08-22 S2 review round (one blocker, five majors, six minors)
+
+The integration detail slice (`f262e09`, branch `feat/s2-s3-detail-surface`) went through the review
+gate before merge; 21 findings were confirmed with file:line evidence, and they deduplicate to one
+root cause plus eleven distinct defects. All are fixed in the amended commit.
+
+- **`s2-authored-against-the-retired-org-shared-evidence-key`** (**FIXED 2026-08-22**, BLOCKER, and
+  the root of six findings: F1, F5, F6, F14, F18, plus the doc/contract half F7/F15/F17/F19). The
+  whole slice - the view module, the route docblock, the shared contract's normative docblocks, the
+  `docs/decisions.md` entry, the architecture section and BOTH new suites - was written against an
+  org-only evidence key that an earlier round of this same unmerged branch had already replaced, then
+  rebased forward without being reconciled. Three consequences, each on its own enough:
+  **(a) IT DID NOT COMPILE AND THE READ WAS DEAD.** `action-evidence-view.ts` called
+  `listForIntegration(actor.orgId, integrationKey)` against
+  `listForIntegration(orgId, ownerUserId, integrationKey)` - one TS2554 from `npx tsc --noEmit`, and
+  typecheck is in `ci:lane`, so CI was red. Vitest transpiles without typechecking, which is why the
+  suites ran at all: at runtime the integration key bound to `ownerUserId`, `integrationKey` arrived
+  `undefined`, the store's emptiness guard does not catch `undefined`, and the filter matched
+  nothing. Every authorized caller would have been answered `{ items: [] }`.
+  **(b) THE RULE 5 SUITE LANDED RED AND ITS MUTATION CLAIMS WERE UNFALSIFIABLE.** Both suites seeded
+  `recordEvidence` with a three-term key and no `ownerUserId` - a shape `assertKey` only lets through
+  because it compares against `''` and `undefined` slips past, so the seeds wrote a row the
+  production writer can never emit. 7 of the 13 cases were red on the UNMUTATED tree; the six that
+  passed are exactly the ones that cannot see a broken collection read. "Deleting the visible-action
+  filter reddens 2, measured" could not have been measured here, and `SUITE_LEDGER.json` carried the
+  same numbers.
+  **(c) THE JOURNAL RECORDED THE TENANCY HAZARD AS THE DESIGN.** Four texts asserted "two members of
+  one org share a row per action - deliberate, not in question", contradicting the round-eight entry
+  on the same journal that re-keyed the collection *"so every call site is a compile error rather
+  than a silent org-wide read"*. An editor following the S2 docs would have widened the read back to
+  org scope - which is what the module header explicitly invited, and it would have handed one org
+  member a colleague's real request and real response bodies.
+  FIXED as the NARROW correction: the read passes `actor.userId` and stays OWNER-scoped, and the
+  header, the route docblock, the shared docblocks, the decisions entry and the architecture section
+  are corrected in place (same unmerged commit) to say so. The definition filter is KEPT and
+  re-justified against the owner-keyed store - a row is addressed by an action NAME while the package
+  naming it is a separate document, so a caller's own rows outlive it: an action re-authored out of
+  the package, or a narrower `private` package resolving ahead of a wider `org` one, leaves a sample
+  for an action the caller can no longer see, run or name.
+  PROVEN BY MUTATION on this tree: reverting the owner argument reds 9 across the two suites (6 in
+  the isolation suite, every positive control among them); deleting the resolution gate reds 5.
+
+- **`s2-the-isolation-suites-headline-cases-could-not-fail`** (**FIXED 2026-08-22**, MAJOR, F20 - the
+  finding that survives the blocker's fix, and the reason the suite was rebuilt rather than
+  repaired). The two headline cases made their point with a CROSS-USER fixture: a same-org peer must
+  not receive the owner's private-action sample. Against an owner-keyed store the store refuses that
+  one layer down, so once the owner term was threaded the visible-action filter could be DELETED with
+  the suite green - measured. The filter's case is now SAME-OWNER: one owner, two rows of their own,
+  a package carrying only one of the two actions, with a control seeding the identical rows against
+  the wide package so the withheld row is provably reachable. The divergent-resolution scenario stays
+  as the OWNER-term regression, with the peer holding a row of their own so their answer is "theirs"
+  rather than "nothing".
+  PROVEN BY MUTATION: deleting `visible.has(row.actionName)` reds exactly those two cases.
+
+- **`s2-fetchsteps-and-fetchruns-had-no-stale-key-guard`** (**FIXED 2026-08-22**, MAJOR, F2/F8).
+  `load` and `fetchEvidence` re-check `requestedKey` after their await; `fetchSteps` and `fetchRuns`
+  did not, and their state maps are keyed by ACTION NAME while the unit of the decision is
+  `(integrationKey, actionName)`. Two integrations routinely declare the same action name, so a slow
+  answer for integration A's `consultar_processo` commits under integration B's - and it STICKS,
+  because the component's lazy effect only fetches a section still UNSET and `reset()` cannot cancel
+  a promise. `runNow`'s post-success `fetchRuns` had the same hole. Both capture the key at dispatch
+  and drop a late answer now.
+  PROVEN BY MUTATION: removing the guard from `fetchSteps` reds 2, from `fetchRuns` reds 1.
+
+- **`s2-evidence-step-samples-were-joined-by-index-onto-whatever-plan-is-bound-today`**
+  (**FIXED 2026-08-22**, MAJOR, F3). The sample's steps were laid over the fetched plan purely by
+  `stepIndex`, with no check that the evidence run executed THAT plan. The sample's unit is
+  `(runId, stepIndex)` of the plan as it was when the run happened; the plan on screen is the one the
+  binding names TODAY. Editing the bound automation on `/automations` moves neither the binding nor
+  `actionShape` (which fingerprints the binding, not the steps), so `staleEvidence` stayed false and
+  an old run's step-3 screenshot rendered inline under a new, different step 3 - presented as that
+  step's evidence, with no signal at all. FIXED with an explicit gate (`stepSampleFit`) on the
+  strongest identity the data carries, which is the RUN: the row's `runId` found in the history
+  fetched for THIS automation proves the run executed this automation. Nothing carries a plan hash -
+  not `RunRecord`, not the row - so run identity is the ceiling and the code says so. Where it cannot
+  be established the samples join only if they still ADDRESS these steps (every index in range,
+  lengths agreeing or the sample flagged a truncated prefix) and the page says they may be from an
+  earlier version of these steps; where they do not, nothing joins, because a partial join is the
+  same misalignment with fewer symptoms.
+  PROVEN BY MUTATION: joining regardless of the verdict reds the out-of-range case.
+
+- **`s2-no-e2e-spec-for-the-new-detail-surface`** (**FIXED 2026-08-22**, MAJOR, F9). A new
+  user-visible dashboard surface landed with no Playwright spec, and the commit message said so
+  rather than recording a dismissal here - which the QA process allows under neither reading. The two
+  vitest halves mock the typed client, so they prove the rendering rules and cannot see that the list
+  card's anchor routes here, that the four reads reach endpoints that answer at all, or that the
+  dashboard takes no console error while it does. `web/e2e/integration-detail.spec.ts` covers the
+  list-to-detail anchor, the actions list with both action shapes, one action opened with its request
+  template, every fetching section SETTLED, and the `?action=` deep link - on the shipped `slack`
+  package, read-only, LLM-free, registered in `SUITE_LEDGER.json` band 4.
+
+- **`s2-the-stale-shape-warning-survived-its-always-on-mutant`** (**FIXED 2026-08-22**, MAJOR, F21).
+  The rule was pinned in the positive direction only, so widening it to
+  `evidence?.shape !== undefined` - every healthy sample flagged as recorded-before-the-edit, a
+  user-visible lie about every action that ever ran - left all 29 web cases green. The ledger's "17
+  mutants and no survivor" was true of the 17 chosen mutants and of nothing else. The negative case
+  (matching shape must NOT warn, with a non-vacuous control that the sample rendered) is added; that
+  mutant now reds 2.
+
+- **`s2-schedules-counted-one-target-kind-while-history-counted-the-other`** (**FIXED 2026-08-22**,
+  MINOR, F4). The section kept only `kind: 'integration_action'` rows, but a `kind: 'automation'`
+  schedule aimed at the action's bound automation fires the very runs the same page's history
+  attributes to the action - so "Esta ação não está agendada." was rendered over an action that runs
+  every morning. Both kinds count now, which is what the page's own copy claims.
+
+- **`s2-evidence-and-schedules-failures-had-no-retry`** (**FIXED 2026-08-22**, MINOR, F10). The
+  component header promised "a failed read says so and offers a retry" for its fetching sections and
+  two of the four shipped without one, leaving a full page reload as the only recovery. Both carry it
+  now - the samples through the store, the schedules through the page that owns the list.
+
+- **`s2-store-invented-portuguese-copy-and-leaked-a-machine-token-to-a-toast`**
+  (**FIXED 2026-08-22**, MINOR, F11). Four hardcoded PT fallbacks meant an en-locale user saw
+  Portuguese on any error whose envelope message was empty, and `result.error || result.code || ...`
+  put the executor's own outcome token (`upstream_error`) into `toast.error` as if it were an
+  explanation. The store now carries the FACT plus at most the server's own prose and hands the code
+  over as `errorCode`; the page translates it through a new `runCodes` table (en/pt/types in
+  lockstep) and falls back to the generic sentence for a token nobody has copy for. The posture
+  `shared/src/run-errors.ts` established for run errors, applied to the executor's vocabulary.
+
+- **`s2-action-deep-link-was-read-only-at-mount`** (**FIXED 2026-08-22**, MINOR, F12). `?action=` was
+  read once into `useState`, so an in-app navigation from `?action=a` to `?action=b` - same route, no
+  remount - left the previous action expanded and the link the user had just followed did nothing,
+  which is precisely the case the param exists for. Synced on change, and only on change, so a
+  manually opened panel is never undone by a re-render.
+
+- **`s2-run-row-with-neither-stamp-rendered-a-blank`** (**FIXED 2026-08-22**, MINOR, F13). A queued
+  run has neither `startedAt` nor `finishedAt`, and `formatStamp` answers `''` for an absent one, so
+  the row rendered a gap beside a badge saying the run is queued. It says "Ainda não começou" now.
+
+- **`s2-no-wire-level-403-envelope-case-for-the-new-endpoint`** (**FIXED 2026-08-22**, MINOR, F16).
+  `GET /:key/evidence` can answer 403 (`refuseCapability` maps the view's `no_tenant` to FORBIDDEN)
+  and the contract suite validated the envelope for 401/400/404 only, with the refusal pinned at
+  module level where it cannot see a status code, an envelope, or that the route reaches
+  `refuseCapability` at all. The wire case is added, and the resolution-gate mutation now reds it
+  alongside the module-level ones.
+
 ## Recently fixed - 2026-08-22 the estate verification could not fail, twice over
 
 - **`estate-run-raced-its-own-build-and-the-tail-swallowed-the-red`** (**FIXED 2026-08-22**, MEDIUM,

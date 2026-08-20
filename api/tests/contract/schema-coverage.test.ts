@@ -307,6 +307,18 @@ const COVERED = new Set<string>([
   // FIVE new descriptors, five COVERED entries: the pinned EXPECTED_PENDING_COUNT below is UNCHANGED.
   'integrations.requestPublish', 'integrations.withdrawPublish', 'integrations.listPublishRequests',
   'integrations.previewPublish', 'integrations.publishDefinition',
+
+  // 2026-08-20 (slice S2) - WHAT EACH ACTION DID THE LAST TIME IT WORKED
+  // (integrations-action-evidence.test.ts, through the real app: the 2xx body against
+  // IntegrationActionEvidenceListResponse for BOTH evidence kinds; the storage envelope asserted
+  // ABSENT from every item; the malformed-segment 400 and the unauthenticated 401; an unknown key
+  // as the house 404. Tenancy + the definition-read-predicate filter live in
+  // security/action-evidence-view-isolation.test.ts (Rule 5 class), where the cross-org refusal and
+  // the same-org PRIVATE-action filter each get their own deliberate-red mutation. Admission is
+  // covered by integrations-capability.test.ts's stack walk, which probes every route this router
+  // mounts and requires a gateway key to be refused outside the capability set.)
+  // ONE NEW descriptor, one COVERED entry: the pinned EXPECTED_PENDING_COUNT below is UNCHANGED.
+  'integrations.listActionEvidence',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

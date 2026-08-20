@@ -585,6 +585,19 @@ function IntegrationCard({
                 onEdit();
               }}
             />
+            {/* THE ROW'S NAVIGATION (slice S2), and it is a REAL LINK rather than a handler on the
+                card: an anchor is keyboard-reachable, middle-clickable, openable in a new tab and
+                announced as a link by a screen reader, none of which a div with an onClick is. The
+                card body's own click stays with the EDIT dialog (connection + consent management
+                lives on this page), so the two are stopPropagation'd apart. */}
+            <Link
+              href={`/integrations/${encodeURIComponent(skill.integrationKey)}`}
+              onClick={(e) => e.stopPropagation()}
+              className="focus-ring ml-auto rounded px-1.5 py-1 text-[11px] font-medium text-teal-600 underline-offset-2 hover:text-teal-700 hover:underline"
+              data-testid={`integration-open-detail-${skill.integrationKey}`}
+            >
+              {t.detail.open}
+            </Link>
           </div>
         </div>
       </div>

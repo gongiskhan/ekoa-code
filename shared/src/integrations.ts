@@ -574,6 +574,126 @@ export const SetIntegrationLessonsRequest = z.object({
 });
 export type SetIntegrationLessonsRequest = z.infer<typeof SetIntegrationLessonsRequest>;
 
+/* --- ACTION EVIDENCE (slice S2, over the S1 collection) -------------------------------------- */
+
+/**
+ * ONE step of an automation-backed run, as the evidence row POINTS at it.
+ *
+ * `screenshotUrl` is a path into the AUTHENTICATED screenshot plane
+ * (`GET /automation-screenshots/:automationId/:runId/:file`), never image bytes: the reader still
+ * has to present a token and still has to pass that plane's org + owner check to see a single
+ * byte. Publishing the pointer therefore grants nothing the plane does not already grant, which is
+ * the whole reason S1 stored a pointer instead of a copy.
+ */
+export const IntegrationActionEvidenceStep = z.object({
+  stepIndex: z.number().int().nonnegative(),
+  /** The step's resolved kind (`local_command`, `api_call`, …) when the run recorded one. */
+  stepType: z.string().optional(),
+  /**
+   * The step's own status word, as the run recorded it (`succeeded` | `failed` | …).
+   *
+   * NAMED `status` BECAUSE THAT IS WHAT IT HOLDS, and named that way here because that is the name
+   * the WRITER uses: `RunStepEvidence.status` in the store and `CollectedStepEvidence.status` in
+   * `api/src/automation/action-evidence.ts`, both filled from `StepRecord.status`. The first cut of
+   * the collection called it `title`, which is not a title of anything - `StepRecord` has none, so
+   * every step of every sample rendered as "succeeded" - and a contract still declaring `title`
+   * would be worse than the original defect: zod strips unknown keys, so the field would simply
+   * arrive `undefined` on every wire read with nothing anywhere going red.
+   */
+  status: z.string().optional(),
+  screenshotUrl: z.string().optional(),
+  /** Capped, redacted excerpt of the step's output (a `local_command`'s stdout/stderr). */
+  excerpt: z.string().optional(),
+  /** The excerpt was cut at the cap. Recorded rather than silent, so a reader knows. */
+  truncated: z.boolean().optional(),
+});
+export type IntegrationActionEvidenceStep = z.infer<typeof IntegrationActionEvidenceStep>;
+
+/**
+ * The `api-call` sample: the executor's OWN redacted `requestSummary` plus a capped response body.
+ *
+ * Nothing here is assembled for this endpoint. It is the identical object the executor already
+ * builds on every call through `redactSecretsDeep` + `redactHeaders` + `redactUrl` and already
+ * persists verbatim on the FAILURE path - so if this redaction were wrong, the failure path would
+ * have been leaking the same bytes since C2. The store additionally re-checks the WHOLE document
+ * against the run's live secret registry and refuses to write a row that still carries a value.
+ */
+export const IntegrationApiCallEvidence = z.object({
+  kind: z.literal('api-call'),
+  request: z.object({
+    method: z.string(),
+    url: z.string(),
+    headers: z.record(z.string()),
+    body: z.string().optional(),
+    /**
+     * The REQUEST body was cut at the cap - a separate fact from the response's own flag below,
+     * and on the wire because the store records it. Omitting it would let an already-shortened
+     * request render as the whole request, which is the silence the cap was written against.
+     */
+    truncated: z.boolean().optional(),
+  }),
+  response: z.object({
+    status: z.number().int(),
+    body: z.string().optional(),
+    bodyIsJson: z.boolean().optional(),
+    truncated: z.boolean().optional(),
+  }),
+});
+export type IntegrationApiCallEvidence = z.infer<typeof IntegrationApiCallEvidence>;
+
+/** The `browser-steps` / `bash-cli` sample: pointers into a run the engine already recorded. */
+export const IntegrationAutomationEvidence = z.object({
+  kind: z.literal('automation'),
+  /** The run these pointers address - also the retention PIN that keeps its screenshots alive. */
+  runId: z.string(),
+  status: z.string().optional(),
+  steps: z.array(IntegrationActionEvidenceStep),
+  /** The run had more steps than the row may pin. */
+  truncated: z.boolean().optional(),
+});
+export type IntegrationAutomationEvidence = z.infer<typeof IntegrationAutomationEvidence>;
+
+/**
+ * WHAT ONE ACTION DID THE LAST TIME IT WORKED - the durable, human-facing sample slice S1 records
+ * on every validated run, projected for the integration detail page.
+ *
+ * EXACTLY ONE ROW PER ACTION PER OWNER, by construction: the stored `_id` is derived from
+ * `(orgId, ownerUserId, integrationKey, actionName)` and nothing else, so each validated run
+ * SUPERSEDES that owner's previous one rather than accumulating beside it. There is no history here
+ * and that is deliberate; the run HISTORY of an automation-backed action is the automations run
+ * feed, which already exists.
+ *
+ * AND THE OWNER TERM IS WHY THIS LIST IS THE READER'S OWN. Two members of one org hold SEPARATE
+ * rows for the same action, each the record of the third-party account THAT person ran it with, so
+ * this endpoint answers a caller their own samples and never a colleague's. A row carries one real
+ * request and one real response body of a portal session; an org-wide read would hand one member
+ * another member's actual client data, and no filter over the answer can un-read that.
+ *
+ * THE STORAGE ENVELOPE STOPS AT THE PROJECTION. `_id`, `orgId` and `ownerUserId` are not on this
+ * shape: the row is addressed by `(key, actionName)`, which the caller already knows, and both
+ * identity terms are the caller's own by construction (the route resolves the definition under the
+ * verified actor and reads with that actor's own org and user id).
+ *
+ * `shape` is the action FINGERPRINT the run exercised. It is on the wire because it is what makes
+ * the sample honest: an action re-authored after this run reads as a different shape, and a client
+ * showing the sample beside the action's current shape can say so rather than presenting last
+ * month's request as evidence for today's action. It is the same token `approveAction` keys on and
+ * carries no content of the action - a hash, not a body.
+ */
+export const IntegrationActionEvidence = z.object({
+  actionName: z.string(),
+  /** `api-call` | `browser-steps` | `bash-cli` - how the action ran when it produced this. */
+  backingType: z.string(),
+  shape: z.string().optional(),
+  /** When the validated run happened. The graduation prerequisite reads the same field. */
+  validatedAt: IsoTimestamp,
+  evidence: z.discriminatedUnion('kind', [IntegrationApiCallEvidence, IntegrationAutomationEvidence]),
+});
+export type IntegrationActionEvidence = z.infer<typeof IntegrationActionEvidence>;
+
+export const IntegrationActionEvidenceListResponse = itemsResponse(IntegrationActionEvidence);
+export type IntegrationActionEvidenceListResponse = z.infer<typeof IntegrationActionEvidenceListResponse>;
+
 /* --- The PUBLIC capability surface (slice D1) ------------------------------------------------ */
 
 /**
@@ -1347,6 +1467,41 @@ export const integrationsEndpoints = {
     auth: 'user',
     params: IntegrationActionParams,
     response: ForgetIntegrationRecipeResponse,
+  },
+
+  /* --- ACTION EVIDENCE (slice S2) ----------------------------------------------------------- */
+
+  /**
+   * WHAT EACH OF THIS INTEGRATION'S ACTIONS DID THE LAST TIME IT WORKED - the read behind the
+   * integration detail page's steps view.
+   *
+   * `auth: 'user'` and emphatically NOT `user-or-key`, on the `listRecipes` reasoning applied to a
+   * strictly more sensitive artefact. A recipe is a tenant's learned MAP of a portal's private API
+   * and that alone was enough to keep it off the key surface; an evidence row is one tenant's real
+   * REQUEST and real RESPONSE BODY - client names, processo numbers, invoice totals. A key-bearing
+   * agent that could read this could walk every action of every integration its user holds and pull
+   * the tenant's actual portal data out over an API, while gaining no capability it lacks:
+   * `executeAction` runs the action either way. Narrow is the reversible direction - widening an
+   * auth class later is additive under Rule 7, narrowing one is not.
+   *
+   * PER-INTEGRATION, and scoped TWICE. First by IDENTITY: the collection is keyed by
+   * `(orgId, ownerUserId, integrationKey, actionName)` and the read passes the verified actor's own
+   * org and user id, so what comes back is the caller's own samples - a colleague's row for the
+   * very same action is not addressable, which is the only scoping a real request/response body of
+   * somebody's portal session can safely have. Then by DEFINITION: the route resolves the
+   * definition under that same actor (the `resolveCapabilityDefinition` the capability read and
+   * `achieve` use), so an integration the caller may not see answers the house 404 rather than a
+   * row, and it keeps only the rows whose `actionName` is on THAT definition - a row outlives the
+   * package that named its action, so an action re-authored out of the package, or a narrower
+   * package resolving ahead of a wider one, must not keep rendering a sample for an action the
+   * caller can no longer see, run or name.
+   */
+  listActionEvidence: {
+    method: 'GET',
+    path: '/api/v1/integrations/:key/evidence',
+    auth: 'user',
+    params: IntegrationKeyParams,
+    response: IntegrationActionEvidenceListResponse,
   },
 
   /* --- The PUBLIC capability surface (slice D1) ---------------------------------------------- */

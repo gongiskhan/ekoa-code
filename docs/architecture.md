@@ -1070,6 +1070,56 @@ against the exit code the built binary really produces. In human mode a `compose
 action's OWN answer whole, above the narrowed rows: `items` alone cannot carry a `nextPage` cursor,
 so a paginated 200 read as a complete answer to the one reader who cannot go and look it up.
 
+### The integration detail surface (slice S2)
+
+`GET /api/v1/integrations/:key/evidence` (`auth: 'user'`) is the READ side of that collection, and
+`web/app/(dashboard)/integrations/[key]/page.tsx` is what renders it: per action, the backing and
+consent state the capability view already carries, the read-only steps (an api-call action's method +
+URL template; a browser-steps / bash-cli action's bound automation plan with the evidence run's
+screenshot and output resolved onto each step by index, where the run is identified as a run of that
+plan), the run history, the schedules aimed at that action - by either target kind - and run-now. The
+LIST page keeps connection and consent management and links into the detail.
+
+`auth: 'user'`, not `user-or-key`, and the reasoning is `listRecipes`' applied to a more sensitive
+artefact: a recipe is a tenant's learned MAP of a portal's private API, and an evidence row is that
+tenant's real request and real RESPONSE BODY. A key that could read it could walk every action of
+every integration its user holds and pull the tenant's own portal data out over an API, while gaining
+no capability it lacks - `executeAction` runs the action either way. The endpoint is therefore absent
+from `docs/openapi/cortex.v1.json` by construction (the generator's one filter rule is
+`auth === 'user-or-key'`), which is why this slice regenerates the spec and the CLI client to no
+change.
+
+`integrations/action-evidence-view.ts` scopes the read TWICE. First by IDENTITY: S1's collection is
+keyed by `(orgId, ownerUserId, integrationKey, actionName)`, so a row is one person's record of one
+third-party session, and the module passes the verified actor's own org and user id to
+`listForIntegration` - never an id off a request. Two members of one org therefore see different
+evidence for the same action, each their own, which is the only scoping a real request and real
+response body of somebody's portal session can safely have. Second by DEFINITION, which the store's
+key does not give: a row is addressed by an action NAME and the package naming that action is a
+separate document, so a caller's own rows outlive the definition that produced them - an action
+re-authored out of the package, or `getForActor` answering a narrower `private` row ahead of a wider
+`org` one, leaves a sample for an action the caller can no longer see, run or name. The module
+resolves the definition first, under the caller's actor, through the same
+`resolveCapabilityDefinition` the capability read uses, and keeps only rows whose action is on THAT
+definition - `recipe-store.listRecipesForActor`'s rule applied to the sibling collection. Suite:
+`api/tests/security/action-evidence-view-isolation.test.ts`.
+
+Client-side, `stores/integration-detail.ts` keeps FIVE failure channels because they render in five
+places: the page's own read (kept as the `ApiError`, so a 404 reads as absent and a 500/403/network as
+failed-to-load), the samples, one action's steps, one action's history, and a run the user just asked
+for. Every channel carries the FACT plus, at most, the server's own prose - the copy is the surface's,
+from `locales/`, and `runNow` hands over the executor's `code` as a token to translate rather than as
+text to print. Every read captures the key it was dispatched for and re-checks it after its await,
+because the per-action maps are keyed by action name while the unit of the decision is
+`(integrationKey, actionName)`. `runNow` reports the outcome a naive caller loses - the execute
+endpoint answers 200 with `success: false` for everything that happened to the routed call - and
+run-now is rendered only where the server would admit it (`connected`, plus
+`requiresApproval`/`approved`), never as a control that exists to be refused. The evidence run's step
+samples are laid over the plan only where the run is identified (its `runId` in this automation's own
+history) or, failing that, where they at least address the steps on screen - and there the page says
+so, because nothing in `RunRecord` or the row fingerprints a PLAN. Spec:
+`web/e2e/integration-detail.spec.ts`.
+
 ## Billing
 
 Four tiers (`config.ts`, env-overridable models/efforts/weights): FAST (`claude-haiku-4-5-20251001`,

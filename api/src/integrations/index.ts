@@ -50,6 +50,14 @@ export {
   resolveOwnerActionSurface,
   type OwnerActionSurface,
 } from './action-resolution.js';
+
+// Slice S2: the READ side of that same collection - the integration detail page's steps view,
+// scoped by the definition read predicate on top of the store's own org scope.
+export {
+  listActionEvidenceFor,
+  type ActionEvidenceView,
+  type ActionEvidenceReader,
+} from './action-evidence-view.js';
 // The live integration pre-fetch (ch05 §5.5.2 layer 3) — the IntegrationPrefetchFn seam impl.
 export { integrationPrefetch, __resetPrefetchCacheForTests, type PrefetchDeps } from './prefetch.js';
 // Config custody + the definitions registry (the composition root binds these to the

@@ -88,6 +88,10 @@ import {
   type SetVisibilityResult,
 } from '../integrations/definition-store.js';
 import { readLessons, writeLessons } from '../integrations/definition-lessons.js';
+// Slice S2: the detail page's evidence read. A sibling module of the capability core rather than a
+// member of it - evidence is `auth: 'user'` and must not become reachable by a key through a view
+// the capability core already serves.
+import { listActionEvidenceFor } from '../integrations/action-evidence-view.js';
 import { integrationRecipeStore } from '../integrations/recipe-store.js';
 import { forgetRecipe } from '../integrations/recipe-lifecycle.js';
 // Slice S1: the owner's erasure control over their own action evidence. The ONE store method a
@@ -1247,6 +1251,34 @@ export function integrationsRouter(deps: {
       });
     }
     res.json(result.view);
+  });
+
+  /**
+   * GET /api/v1/integrations/:key/evidence -> { items: IntegrationActionEvidence[] } (auth: user).
+   *
+   * WHAT EACH ACTION DID THE LAST TIME IT WORKED - the read the integration detail page's steps
+   * view renders (slice S2, over the collection slice S1 records into).
+   *
+   * BELOW THE `requireAuth` BLANKET, and that position IS the admission: a gateway key never
+   * reaches this. An evidence row is one tenant's real request and real response body, so a key
+   * that could read it could pull the tenant's actual portal data out over an API while gaining no
+   * capability it lacks - `executeAction` runs the action either way. The descriptor states the
+   * reasoning; this route inherits it by sitting here rather than restating it.
+   *
+   * NOTHING IS DECIDED HERE. `listActionEvidenceFor` reads with the verified actor's OWN org and
+   * user id (the collection is keyed per owner, so the answer is the caller's own samples and never
+   * a colleague's), resolves the definition under that same actor (so an integration they cannot
+   * see answers the house 404, byte-identical with one that does not exist), and keeps only rows
+   * whose action is on that definition (so a row that outlived the package naming its action stops
+   * rendering a sample the caller can no longer see, run or name). This handler validates the
+   * segment, calls once, and shapes the answer.
+   */
+  r.get('/:key/evidence', async (req: AuthedRequest, res: Response) => {
+    const params = IntegrationKeyParams.safeParse(req.params);
+    if (!params.success) return sendError(res, 'VALIDATION_FAILED', 'Parâmetros inválidos.', { issues: params.error.issues });
+    const out = await listActionEvidenceFor(actorOf(req), params.data.key);
+    if (!out.ok) return refuseCapability(res, out.refusal);
+    res.json({ items: out.value });
   });
 
 
