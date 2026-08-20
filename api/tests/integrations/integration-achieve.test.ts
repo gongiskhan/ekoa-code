@@ -492,9 +492,9 @@ describe('PROMOTION is a human act, and it is what makes the state load-bearing'
    * so a case that is NOT about the evidence gate cannot pass by accident and cannot fail for a
    * reason it is not about.
    */
-  async function validateRun(action: IntegrationAction, orgId = 'orgA'): Promise<void> {
+  async function validateRun(action: IntegrationAction, orgId = 'orgA', ownerUserId = 'ownerA'): Promise<void> {
     await actionEvidenceStore.recordEvidence(
-      { orgId, integrationKey: PROBE_INTEGRATION, actionName: action.actionName },
+      { orgId, ownerUserId, integrationKey: PROBE_INTEGRATION, actionName: action.actionName },
       {
         backingType: 'api-call',
         shape: actionShape(PROBE_INTEGRATION, action),
@@ -522,7 +522,7 @@ describe('PROMOTION is a human act, and it is what makes the state load-bearing'
     // A run really happened for this action name - but of other bytes. The author/run/re-author
     // sequence must not be able to launder an old proof onto new content.
     await actionEvidenceStore.recordEvidence(
-      { orgId: 'orgA', integrationKey: PROBE_INTEGRATION, actionName: 'arquivar_processo' },
+      { orgId: 'orgA', ownerUserId: 'ownerA', integrationKey: PROBE_INTEGRATION, actionName: 'arquivar_processo' },
       {
         backingType: 'api-call',
         shape: 'sha256-of-the-action-this-used-to-be',
@@ -602,6 +602,43 @@ describe('PROMOTION is a human act, and it is what makes the state load-bearing'
     await integrationDefinitionStore.setVisibility(definitionIdFor('orgA', PROBE_INTEGRATION), actor('ownerA', 'orgA'), 'org');
     expect(await trustAuthoredAction(actor('peerA', 'orgA'), PROBE_INTEGRATION, 'arquivar_processo', authored.authoring!.shape)).toEqual({ verdict: 'forbidden' });
     expect(await trustAuthoredAction(actor('ownerB', 'orgB'), PROBE_INTEGRATION, 'arquivar_processo', authored.authoring!.shape)).toEqual({ verdict: 'notfound' });
+  });
+
+  /**
+   * SLICE S1, VERIFICATION ROUND TWO - THE GRADUATION PROOF IS THE PROMOTER'S OWN RUN.
+   *
+   * With the first cut's org-keyed evidence, `trustAuthoredAction` read a row any member of the org
+   * could have written. An `org`-visible definition resolves ONE package but not one credential:
+   * `findConfigForOwner` resolves per (orgId, ownerUserId), so a colleague's run went against a
+   * DIFFERENT third-party account. The org-admin (who may write the row) could therefore promote an
+   * action to `trusted` - and thereby make it auto-runnable by `achieve` - on the strength of a run
+   * they had never seen, against an account they do not hold.
+   */
+  it('an ORG-ADMIN cannot promote on a run somebody ELSE made under their own credential', async () => {
+    const authored = await authorOne();
+    await integrationDefinitionStore.setVisibility(definitionIdFor('orgA', PROBE_INTEGRATION), actor('ownerA', 'orgA'), 'org');
+    // The AUTHOR ran it. Their sample lives under their own owner id.
+    await validateRun(authored, 'orgA', 'ownerA');
+
+    // The admin may WRITE the row (`canWriteDefinition` admits a same-org admin), so nothing but the
+    // evidence gate can produce this verdict.
+    const admin = { ...actor('adminA', 'orgA'), role: 'org-admin' as const };
+    expect(await trustAuthoredAction(admin, PROBE_INTEGRATION, 'arquivar_processo', authored.authoring!.shape, integrationDefinitionStore, fixedNow))
+      .toEqual({ verdict: 'unvalidated' });
+    expect((await storedActions('orgA', PROBE_INTEGRATION)).find((a) => a.actionName === 'arquivar_processo')!.authoring?.state)
+      .toBe('provisional');
+  });
+
+  it('…and the SAME admin promotes once they have run it themselves', async () => {
+    // THE CONTROL, so the case above is a gate and not a ban: the prerequisite is satisfiable by
+    // the ordinary sequence (approve, run once, promote), just not by somebody else's run.
+    const authored = await authorOne();
+    await integrationDefinitionStore.setVisibility(definitionIdFor('orgA', PROBE_INTEGRATION), actor('ownerA', 'orgA'), 'org');
+    const admin = { ...actor('adminA', 'orgA'), role: 'org-admin' as const };
+    await validateRun(authored, 'orgA', 'adminA');
+
+    expect(await trustAuthoredAction(admin, PROBE_INTEGRATION, 'arquivar_processo', authored.authoring!.shape, integrationDefinitionStore, fixedNow))
+      .toMatchObject({ verdict: 'ok', state: 'trusted' });
   });
 
   it('a provisional action shows up as such in the CAPABILITY view, and trusted after promotion', async () => {

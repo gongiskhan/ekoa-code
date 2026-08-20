@@ -101,8 +101,8 @@ const run = (fetchImpl: FetchLike, actionName = readAction.actionName, orgId = O
     { fetchImpl, ...evidenceDeps },
   );
 
-const evidenceOf = async (orgId = ORG, actionName = readAction.actionName) =>
-  actionEvidenceStore.getEvidence({ orgId, integrationKey: KEY, actionName });
+const evidenceOf = async (orgId = ORG, actionName = readAction.actionName, ownerUserId = OWNER) =>
+  actionEvidenceStore.getEvidence({ orgId, ownerUserId, integrationKey: KEY, actionName });
 
 /**
  * The stored body, parsed.
@@ -229,7 +229,7 @@ describe('one live row per action, superseded wholesale', () => {
     await run(fetchReturning(200, '{"n":1}'));
     await run(fetchReturning(200, '{"n":2}'));
 
-    const rows = await actionEvidenceStore.listForIntegration(ORG, KEY);
+    const rows = await actionEvidenceStore.listForIntegration(ORG, OWNER, KEY);
     expect(rows).toHaveLength(1);
     expect(bodyJson(rows[0]!.evidence as ApiCallEvidence)).toEqual({ n: 2 });
   });

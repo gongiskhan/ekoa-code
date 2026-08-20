@@ -47,7 +47,9 @@ const MAX_STEPS = 50;
 export interface CollectedStepEvidence {
   stepIndex: number;
   stepType?: string;
-  title?: string;
+  /** `StepRecord.status`. Named for what it holds - see `RunStepEvidence.status`, which this must
+   *  stay structurally assignable to (`server.ts` is where the two meet). */
+  status?: string;
   screenshotUrl?: string;
   excerpt?: string;
   truncated?: boolean;
@@ -88,7 +90,7 @@ function stepEvidence(step: StepRecord): CollectedStepEvidence {
   return {
     stepIndex: step.index,
     ...(step.resolvedAction?.kind !== undefined ? { stepType: step.resolvedAction.kind } : {}),
-    ...(step.status !== undefined ? { title: step.status } : {}),
+    ...(step.status !== undefined ? { status: step.status } : {}),
     ...(screenshotUrl !== undefined ? { screenshotUrl } : {}),
     ...(raw !== undefined ? { excerpt: truncated ? raw.slice(0, MAX_EXCERPT_CHARS) : raw } : {}),
     ...(truncated ? { truncated: true } : {}),

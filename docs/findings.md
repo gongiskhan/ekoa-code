@@ -41,12 +41,18 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
   CONSEQUENCE IF NOT CLOSED: this product cannot answer a GDPR erasure request over automation
   screenshots at all, and for evidence-pinned runs it cannot even wait one out.
-  CLOSE BY: giving `deleteRunScreenshots` its real callers (run delete, user delete, org delete) and
-  making evidence removal release the pin - `actionEvidenceStore.discardEvidence` already exists and
-  is the natural hook - then pinning each binding with a test that reddens when the binding is
-  deleted, which is the only check that would have caught this one. Not done in S1: an erasure path
-  that spans run/user/org deletion is its own slice with its own blast radius, and half-wiring it
-  would produce a fifth instance of exactly this class.
+  CLOSE BY: giving `deleteRunScreenshots` its real callers (run delete, user delete, org delete),
+  then pinning each binding with a test that reddens when the binding is deleted, which is the only
+  check that would have caught this one. Not done in S1: an erasure path that spans run/user/org
+  deletion is its own slice with its own blast radius, and half-wiring it would produce a fifth
+  instance of exactly this class.
+
+  **2026-08-20 (S1 round two), HALF OF THE CLOSE-BY IS DONE, AND THE OTHER HALF IS UNCHANGED.** The
+  "make evidence removal release the pin" half was not a nicety - S1 as it first landed had NO
+  removal path at all for `integration_action_evidence`, so a pinned run was exempt from the age
+  sweep FOREVER (see `action-evidence-had-no-removal-path` below). That is now closed: the pin is
+  released when the action is dropped. The erasure half stands exactly as written above: there is
+  still no request-driven erasure over this tree, and S1 still claims none.
 
 - **`resolve-step-origin-runs-twice-per-gated-browser-step`** (**FIXED 2026-08-19**, round seven;
   see the round-seven fixed section). The walk still runs two to three times per gated browser step -
@@ -3186,6 +3192,126 @@ silently absorbed into a ledger note):
   `sales-crm.png` ("Página não encontrada" 404 instead of the dashboard) - `booking-system` is
   disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
   `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
+
+## Recently fixed - 2026-08-20 action evidence round two (blocker + three majors + three minors)
+
+The S1 verification pass. All seven are closed by landed fixes with mutation-verified tests; the
+counts below are MEASURED (each mutation applied to the source, the named suites re-run, the source
+restored and checksummed) rather than asserted.
+
+- **`action-evidence-had-no-removal-path`** (2026-08-20, **BLOCKER, FIXED**). `ActionEvidenceStore.discardEvidence`
+  had **zero production callers**, and its docblock named two it did not have: *"Reached when the
+  action itself is gone (a definition write that dropped it), and by the erasure path"*. Both false -
+  the fifth instance of the dead-binding class in this repo, and the second in this very slice.
+
+  REPRODUCED END TO END: a definition with actions `[doomed, survivor]`; evidence recorded for
+  `doomed` whose excerpt carries client PII (`Processo 1234/24.5T8LSB - Cliente: Maria Silva`); then
+  the ordinary builder save (`create(..., onConflict: 'replace')` with `[survivor]` only) - the SAME
+  call site that already discards the sibling collection's evidence via
+  `discardEvidenceOfRemovedRecipes(recipesDroppedBy(...))`. Result: the action gone, `getEvidence`
+  still returning the row, the PII still in it, and `pinnedRunIdsForRetention()` still naming the
+  run - so its screenshots of an authenticated client-portal session were exempt from the 7-day
+  sweep PERMANENTLY, because the pin releases only on supersede or discard and neither could ever
+  happen again. S1 converted a bounded retention into an unbounded one through the most ordinary
+  edit there is.
+
+  FIXED by enumerating the removal paths FROM THE CODE the way `recipe-lifecycle.ts` does, in
+  `action-evidence-store.ts`'s own header. Grepping the writers of the definition document finds
+  `IntegrationDefinitionStore.create` and `IntegrationRecipeStore`, and the recipe store only `map`s
+  the existing `actions` array, so it can never drop an action: there is exactly ONE path, and no
+  definition-delete path exists at all. `discardEvidenceOfRemovedActions` is called on that branch
+  beside the recipe collector, and it crosses OWNERS (an action belongs to the definition, so it is
+  dropped for everyone at once) while staying org-scoped. `actionsDroppedBy` is a SEPARATE predicate
+  from `recipesDroppedBy` on purpose - the latter filters to actions carrying a compiled recipe,
+  which would have skipped the commonest evidence-bearing action there is, a plain `api-call`.
+
+  SUITE: `api/tests/integrations/action-evidence-removal.test.ts`, entered at the REAL
+  `saveAuthoredDefinition` and the REAL `create(..., 'replace')`, never at the collector, and
+  counting DOCUMENTS. MUTATION-VERIFIED: deleting the collector call reddens 6; making
+  `actionsDroppedBy` filter on `recipe !== undefined` (the plausible copy-paste) reddens 6; dropping
+  the `orgId` term from `discardEvidenceForAction` reddens 4.
+
+- **`action-evidence-keyed-per-org-while-credentials-are-per-owner`** (2026-08-20, **MAJOR, FIXED**).
+  `actionEvidenceIdFor` hashed `(orgId, integrationKey, actionName)` with no owner, while
+  `findConfigForOwner` resolves a credential per `(orgId, ownerUserId)` and `action-consent.ts`'s
+  `idFor` keys an approval on `(orgId, scope.userId, ...)`.
+
+  REPRODUCED: one `org`-visible definition, two users in orgA each with their own `api_key` config.
+  The owner runs the action and the row holds the OWNER's private data; the peer runs the same
+  action under the PEER's credential and the single row now holds the peer's data and no longer the
+  owner's. Two live consequences: the peer silently destroys the owner's sample, AND
+  `trustAuthoredAction` reads this collection - so user A could promote an action to `trusted`, and
+  thereby make it auto-runnable by `achieve`, on the strength of a run user B made against B's OWN
+  third-party account.
+
+  The module's docblock argued only that a sample must not cross ORGS and never considered that
+  WITHIN an org the sample is the owner's. Its claim that "a pointer inherits the rule that already
+  exists" holds for the PNG behind the screenshot plane's org+owner check and NOT for the excerpt
+  copied into the org-keyed row beside it.
+
+  FIXED by keying the evidence the way the credential and the consent are keyed:
+  `(orgId, ownerUserId, integrationKey, actionName)`, both terms in the `_id`, both stored, both
+  query terms, both re-checked on every fetched document. `trustAuthoredAction` now reads the
+  PROMOTING actor's own row. MUTATION-VERIFIED: dropping `ownerUserId` from the `_id` reddens 12
+  across three suites; dropping `getEvidence`'s owner re-check reddens 2 (and its org re-check 1);
+  making `trustAuthoredAction` read the definition AUTHOR's evidence instead of the actor's reddens
+  2 in the achieve suite. The two `listForIntegration` owner terms are EQUIVALENT MUTANTS - each
+  alone survives, both together redden 4 - which the store docblock records.
+
+- **`screenshot-pin-binding-was-a-surviving-mutant`** (2026-08-20, **MAJOR, FIXED**). Dropping
+  `pinnedRunIds` from the `sweepExpiredScreenshots` call in `bootState` left 46/46 green: both
+  halves were pinned in isolation and nothing joined them, because `bootState` was invoked by no
+  test at all. Had that mutant shipped, every automation-backed evidence row would silently point at
+  swept directories after 7 days.
+
+  FIXED twice over, because neither alone is enough. STRUCTURALLY: `sweepExpiredScreenshots`'s
+  `pinnedRunIds` is now a REQUIRED option, so dropping or renaming it stops compiling. BY TEST:
+  `api/tests/automation/composition-root-screenshot-pins.test.ts` enters at the REAL `bootState`
+  against the real collection and a real screenshot tree, with both run dirs sharing one long-ago
+  mtime so only the pin can produce the result, and with an empty-evidence control proving the sweep
+  is alive. The composition was named and exported as `sweepScreenshotsSparingPinnedEvidence` and
+  `bootState` now AWAITS it (it was fire-and-forget, which is why no caller could wait on it).
+  MUTATION-VERIFIED: passing `new Set()` instead of the real pins reddens 3; removing the pin read's
+  `.catch` degrade reddens 1.
+
+- **`automation-action-evidence-shipped-with-no-suite`** (2026-08-20, **MAJOR, FIXED**).
+  `api/src/automation/action-evidence.ts` - 123 lines - had no test file and no ledger row. Three
+  surviving mutants were measured, including one making `excerptOf` return
+  `JSON.stringify(step.error.details)`: precisely the exclusion the module's own docblock names
+  ("NOTE WHAT IS NOT READ: `StepRecord.error.details` (an arbitrary debug payload with no redaction
+  contract)"), and the one field no redaction leg governs. A stated safety decision with no test is
+  one the next edit undoes silently.
+
+  FIXED by `api/tests/automation/action-evidence.test.ts` (24 cases), which asserts the exclusions
+  BY CONSEQUENCE - a marker planted only in `error.details` / `logTail` / `visionReasoning` must not
+  appear anywhere in the collected evidence, with a control proving the excerpt that IS read still
+  arrives. MUTATION-VERIFIED: reading `error.details` reddens 2, reading `logTail` reddens 1,
+  slicing the LAST steps instead of the first reddens 1.
+
+- **`run-step-evidence-title-held-the-step-status`** (2026-08-20, MINOR, FIXED).
+  `RunStepEvidence.title` was populated with `StepRecord.status`, and `StepRecord` has no title, so
+  every step on the S2 detail page would have been titled with its status. Nothing asserted `title`
+  at all. The field is now named `status`, which is what it holds. MUTATION-VERIFIED: renaming it
+  back reddens 3 across the collector suite and the composition-root seam suite.
+
+- **`api-call-request-body-was-truncated-silently`** (2026-08-20, MINOR, FIXED). `capEvidence`
+  called `capText` on the api-call REQUEST body and discarded the `truncated` half, and
+  `ApiCallEvidence.request` had no `truncated` field - contradicting the module's stated property
+  that truncation is recorded and never silent. Worse in the specific: the executor's
+  `truncateForDisplay` appends a "… [truncated, N more bytes]" marker at the END, which this cap
+  then sliced off, so the stored sample looked like a complete body that simply stopped. FIXED, with
+  a fits-comfortably control. MUTATION-VERIFIED: dropping the flag again reddens 1.
+
+- **`isolation-suite-empty-org-case-had-three-unfailable-legs`** (2026-08-20, MINOR, FIXED). The
+  empty-org case ran five assertions of which only one could fail: with no row stored under the
+  empty org, the point read, the list read and the discard all answered empty whether or not
+  `isTenantScoped` existed, while the header claimed the guard was proved. The case now PLANTS rows
+  under the empty org and the empty owner before asking, and is split so each leg fails on its own
+  filter. MUTATION-VERIFIED: dropping the guard from `getEvidence` reddens 1 and from
+  `listForIntegration` reddens 1 - and `discardEvidence`'s own guard is HONESTLY RECORDED AS MASKED
+  (it calls `getEvidence`, whose guard fires first, so it survives alone and only the pair reddens
+  the discard leg, 2 cases). The suite header and the store docblock both say so rather than
+  implying otherwise.
 
 ## Recently fixed - 2026-08-19 neutrality stops being the fall-through (round seven)
 

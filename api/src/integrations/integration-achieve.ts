@@ -802,10 +802,22 @@ export async function trustAuthoredAction(
   //
   // Promotion used to prove SHAPE and never BEHAVIOUR - an action could graduate to `trusted`, and
   // so become auto-runnable by `achieve`, having never run once. The LAST VALIDATED RUN is now the
-  // prerequisite: `integration_action_evidence` holds one live row per (org, integration, action),
-  // written by the executor on a successful run and stamped with the action shape that run
+  // prerequisite: `integration_action_evidence` holds one live row per (org, OWNER, integration,
+  // action), written by the executor on a successful run and stamped with the action shape that run
   // exercised. `promoteToTrusted` refuses when it is missing or names different bytes.
-  const evidence = await actionEvidenceStore.getEvidence({ orgId: actor.orgId, integrationKey, actionName });
+  //
+  // THE EVIDENCE READ IS THE PROMOTING ACTOR'S OWN, and the owner term is what makes that true. A
+  // definition shared at `org` visibility is run by different people under DIFFERENT credentials
+  // (`findConfigForOwner` resolves per owner) against different third-party accounts, so with an
+  // org-only key user A could promote an action to `trusted` - and thereby make it auto-runnable by
+  // `achieve` - on the strength of a run user B made against B's OWN account. The gate now asks
+  // whether the person granting the trust has themselves seen this action work.
+  const evidence = await actionEvidenceStore.getEvidence({
+    orgId: actor.orgId,
+    ownerUserId: actor.userId,
+    integrationKey,
+    actionName,
+  });
   const promoted = promoteToTrusted(integrationKey, action, actor, evidence, now);
   if (!promoted.ok) {
     if (promoted.reason === 'not_authored') return { verdict: 'not_authored' };

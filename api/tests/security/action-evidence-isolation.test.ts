@@ -17,34 +17,38 @@ import {
  * `integration_action_evidence` ISOLATION suite (slice S1) - the Rule 5 suite every tenant-scoped
  * store ships, of the class of `memvault-isolation.test.ts`.
  *
- * WHAT IT ATTACKS. Evidence is one tenant's REAL request and REAL response body - client names,
- * processo numbers, invoice totals - captured from a live third-party call. Cross-tenant bleed here
- * is a data breach, not an inconvenience, so tenancy is attacked directly rather than assumed:
+ * WHAT IT ATTACKS. Evidence is one PERSON's REAL request and REAL response body - client names,
+ * processo numbers, invoice totals - captured from a live call against THEIR third-party account.
+ * Bleed here is a data breach, not an inconvenience, so both terms of the tenancy are attacked
+ * directly rather than assumed:
  *
  *   - two orgs holding evidence for the SAME (integration, action) never see each other's, on the
  *     point read OR the list read;
- *   - a row whose stored `orgId` disagrees with the id it lives under fails CLOSED (the migrated /
- *     hand-written document case, which the deterministic id alone does not cover);
- *   - an empty-string org - the "actor with no tenant" shape - reads nothing and writes nothing;
+ *   - TWO USERS OF ONE ORG likewise. This is the leg the first cut did not have: the key was
+ *     (org, integration, action) while the credential (`findConfigForOwner`) and the approval
+ *     (`action-consent.ts`'s `idFor`) are both keyed per owner, so a peer's run overwrote the
+ *     owner's sample with the peer's own private data - and `trustAuthoredAction`, which reads this
+ *     collection, would then let one user promote an action to `trusted` on another user's run;
+ *   - a row whose stored `orgId` / `ownerUserId` disagrees with the id it lives under fails CLOSED
+ *     (the migrated / hand-written document case the deterministic id alone does not cover) -
+ *     including the SHAPE A MIGRATED PRE-OWNER ROW HAS, which carries no `ownerUserId` at all;
+ *   - an empty-string org or owner - the "actor with no tenant" and system-actor shapes - reads
+ *     nothing and writes nothing, and every leg of that case is proved against a planted row so
+ *     none of them is unfailable;
  *   - the LAST GATE refuses a row that still carries a live credential value after redaction, and
  *     refuses it by NOT WRITING it;
  *   - the one deliberately cross-tenant reader (`pinnedRunIdsForRetention`) hands back run
  *     IDENTIFIERS and nothing else.
  *
  * THE TENANCY FILTERS ARE PROVED REMOVABLE, and where they are NOT individually provable this
- * suite says so instead of implying otherwise. Measured by reverting each in turn:
+ * suite says so instead of implying otherwise. Every count below is MEASURED by reverting the named
+ * filter in `action-evidence-store.ts` and re-running THIS file - see the ledger entry.
  *
- *   - `getEvidence`'s stored-`orgId` re-check          -> 1 case red
- *   - the empty-org guard (`isTenantScoped`)           -> 1 case red
- *   - the `orgId` term of the deterministic `_id`      -> 6 cases red
- *   - the last gate (`assertNoLiveSecret`)             -> 2 cases red
- *   - `listForIntegration`'s query term, ALONE         -> GREEN (survives)
- *   - `listForIntegration`'s post-filter, ALONE        -> GREEN (survives)
- *   - both list terms together                         -> 3 cases red
- *
- * The two list terms enforce the SAME predicate on the SAME field, so each masks the other and
- * neither is individually observable - they are equivalent mutants, not an untested filter. The
- * store's own docblock records why both are kept. No test below claims to prove one of them alone.
+ * A NOTE ON WHAT "1 case red" USED TO HIDE. The first cut's empty-org case ran five assertions and
+ * only ONE of them could ever fail: with no row stored under `orgId: ''`, `getEvidence`, the list
+ * read and `discardEvidence` all answer empty whether or not the guard exists, so deleting
+ * `isTenantScoped` from three of the four methods was invisible. The case now PLANTS a row under
+ * the empty org and the empty owner first, so each leg fails on its own filter.
  */
 let mem: MongoMemoryServer;
 
@@ -71,6 +75,9 @@ const store = new ActionEvidenceStore();
 
 const KEY = 'probe-integration';
 const ACTION = 'consultar_processos';
+/** The owner in orgA, and their SAME-ORG PEER - two people, two credentials, one shared definition. */
+const OWNER = 'u-owner';
+const PEER = 'u-peer';
 
 function apiCall(marker: string): ActionEvidence {
   return {
@@ -80,9 +87,9 @@ function apiCall(marker: string): ActionEvidence {
   };
 }
 
-async function seed(orgId: string, marker: string, actionName = ACTION): Promise<void> {
+async function seed(orgId: string, marker: string, actionName = ACTION, ownerUserId = OWNER): Promise<void> {
   await store.recordEvidence(
-    { orgId, integrationKey: KEY, actionName },
+    { orgId, ownerUserId, integrationKey: KEY, actionName },
     { backingType: 'api-call', shape: `shape-${marker}`, evidence: apiCall(marker) },
   );
 }
@@ -94,13 +101,13 @@ describe('tenancy: two orgs, the same integration and the same action', () => {
   });
 
   it('the deterministic id puts the two tenants in different documents', () => {
-    expect(actionEvidenceIdFor({ orgId: 'orgA', integrationKey: KEY, actionName: ACTION }))
-      .not.toBe(actionEvidenceIdFor({ orgId: 'orgB', integrationKey: KEY, actionName: ACTION }));
+    expect(actionEvidenceIdFor({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION }))
+      .not.toBe(actionEvidenceIdFor({ orgId: 'orgB', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION }));
   });
 
   it('each org reads its OWN evidence and never the other\'s', async () => {
-    const a = await store.getEvidence({ orgId: 'orgA', integrationKey: KEY, actionName: ACTION });
-    const b = await store.getEvidence({ orgId: 'orgB', integrationKey: KEY, actionName: ACTION });
+    const a = await store.getEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION });
+    const b = await store.getEvidence({ orgId: 'orgB', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION });
     expect(a?.evidence).toMatchObject({ kind: 'api-call', response: { body: '{"tenant":"A"}' } });
     expect(b?.evidence).toMatchObject({ kind: 'api-call', response: { body: '{"tenant":"B"}' } });
     expect(a?.orgId).toBe('orgA');
@@ -111,7 +118,7 @@ describe('tenancy: two orgs, the same integration and the same action', () => {
     await seed('orgA', 'A2', 'arquivar_processo');
     await seed('orgB', 'B2', 'arquivar_processo');
 
-    const rowsA = await store.listForIntegration('orgA', KEY);
+    const rowsA = await store.listForIntegration('orgA', OWNER, KEY);
     expect(rowsA).toHaveLength(2);
     expect(rowsA.every((r) => r.orgId === 'orgA')).toBe(true);
     // Named explicitly rather than asserted by count alone: a filter that returned everything would
@@ -121,14 +128,63 @@ describe('tenancy: two orgs, the same integration and the same action', () => {
   });
 
   it('a third org that has recorded nothing reads nothing (not somebody else\'s)', async () => {
-    expect(await store.getEvidence({ orgId: 'orgC', integrationKey: KEY, actionName: ACTION })).toBeNull();
-    expect(await store.listForIntegration('orgC', KEY)).toEqual([]);
+    expect(await store.getEvidence({ orgId: 'orgC', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION })).toBeNull();
+    expect(await store.listForIntegration('orgC', OWNER, KEY)).toEqual([]);
   });
 
   it('a discard removes ONE tenant\'s row and leaves the other standing', async () => {
-    expect(await store.discardEvidence({ orgId: 'orgA', integrationKey: KEY, actionName: ACTION })).toBe(true);
-    expect(await store.getEvidence({ orgId: 'orgA', integrationKey: KEY, actionName: ACTION })).toBeNull();
-    expect(await store.getEvidence({ orgId: 'orgB', integrationKey: KEY, actionName: ACTION })).not.toBeNull();
+    expect(await store.discardEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION })).toBe(true);
+    expect(await store.getEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION })).toBeNull();
+    expect(await store.getEvidence({ orgId: 'orgB', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION })).not.toBeNull();
+  });
+});
+
+/**
+ * TENANCY WITHIN ONE ORG - the leg the first cut did not have.
+ *
+ * An `org`-visible definition is one package; the CREDENTIAL behind it is not. `findConfigForOwner`
+ * resolves per (orgId, ownerUserId) and `action-consent.ts` keys an approval on (orgId, userId, …),
+ * so two colleagues running the same action are two different third-party accounts and two
+ * different people's client data.
+ */
+describe('tenancy: two users of ONE org, the same integration and the same action', () => {
+  beforeEach(async () => {
+    await seed('orgA', 'OWNER-PRIVATE', ACTION, OWNER);
+    await seed('orgA', 'PEER-PRIVATE', ACTION, PEER);
+  });
+
+  it('the peer\'s run does not DESTROY the owner\'s sample - two documents, not one', async () => {
+    // Counted at the collection: with the org-only key both writes derived the same `_id`, so the
+    // peer's run superseded the owner's and the org row then held the peer's private data.
+    expect(await integrationActionEvidence.find({})).toHaveLength(2);
+    const owner = await store.getEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION });
+    const peer = await store.getEvidence({ orgId: 'orgA', ownerUserId: PEER, integrationKey: KEY, actionName: ACTION });
+    expect(owner!.evidence).toMatchObject({ response: { body: '{"tenant":"OWNER-PRIVATE"}' } });
+    expect(peer!.evidence).toMatchObject({ response: { body: '{"tenant":"PEER-PRIVATE"}' } });
+  });
+
+  it('neither user can READ the other\'s sample, on the point read or the list read', async () => {
+    // The point read is by deterministic id, so asking for the peer's row as the owner cannot
+    // produce it; the list read is filtered on the stored owner.
+    const ownerRows = await store.listForIntegration('orgA', OWNER, KEY);
+    expect(ownerRows).toHaveLength(1);
+    expect(ownerRows[0]!.ownerUserId).toBe(OWNER);
+    expect((ownerRows[0]!.evidence as { response: { body: string } }).response.body).toBe('{"tenant":"OWNER-PRIVATE"}');
+
+    const peerRows = await store.listForIntegration('orgA', PEER, KEY);
+    expect(peerRows.map((r) => (r.evidence as { response: { body: string } }).response.body))
+      .toEqual(['{"tenant":"PEER-PRIVATE"}']);
+  });
+
+  it('a third member of the same org who has run nothing reads nothing', async () => {
+    expect(await store.getEvidence({ orgId: 'orgA', ownerUserId: 'u-stranger', integrationKey: KEY, actionName: ACTION })).toBeNull();
+    expect(await store.listForIntegration('orgA', 'u-stranger', KEY)).toEqual([]);
+  });
+
+  it('one user\'s discard leaves the other\'s row standing', async () => {
+    expect(await store.discardEvidence({ orgId: 'orgA', ownerUserId: PEER, integrationKey: KEY, actionName: ACTION })).toBe(true);
+    expect(await store.getEvidence({ orgId: 'orgA', ownerUserId: PEER, integrationKey: KEY, actionName: ACTION })).toBeNull();
+    expect(await store.getEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION })).not.toBeNull();
   });
 });
 
@@ -137,8 +193,9 @@ describe('tenancy: rows the deterministic id alone does not protect', () => {
     // The migrated / hand-written document. The id says orgA; the row says orgB. Reading it as orgA
     // - which the id lookup alone would do - hands one tenant a document belonging to another.
     await integrationActionEvidence.put({
-      _id: actionEvidenceIdFor({ orgId: 'orgA', integrationKey: KEY, actionName: ACTION }),
+      _id: actionEvidenceIdFor({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION }),
       orgId: 'orgB',
+      ownerUserId: OWNER,
       integrationKey: KEY,
       actionName: ACTION,
       backingType: 'api-call',
@@ -146,35 +203,134 @@ describe('tenancy: rows the deterministic id alone does not protect', () => {
       evidence: apiCall('SMUGGLED'),
     } as never);
 
-    expect(await store.getEvidence({ orgId: 'orgA', integrationKey: KEY, actionName: ACTION })).toBeNull();
+    expect(await store.getEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION })).toBeNull();
   });
 
-  it('a LIST row whose stored orgId disagrees with the filter is dropped', async () => {
+  it('a row whose stored ownerUserId disagrees with its id fails CLOSED on the point read', async () => {
+    // The same attack one field over: the id says OWNER, the row says PEER. Both stored terms are
+    // re-checked because both are in the id, so neither alone can be trusted.
     await integrationActionEvidence.put({
-      _id: 'hand-written-row',
-      orgId: 'orgB',
+      _id: actionEvidenceIdFor({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION }),
+      orgId: 'orgA',
+      ownerUserId: PEER,
       integrationKey: KEY,
-      actionName: 'smuggled',
+      actionName: ACTION,
+      backingType: 'api-call',
+      validatedAt: '2026-08-17T00:00:00.000Z',
+      evidence: apiCall('PEER-PRIVATE'),
+    } as never);
+
+    expect(await store.getEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION })).toBeNull();
+  });
+
+  it('a PRE-OWNER migrated row - stored with no ownerUserId at all - is served to nobody', async () => {
+    // The exact document the first cut of this collection wrote. It has an `orgId` and no owner, so
+    // the only thing standing between it and whichever member of the org asks first is the stored
+    // re-check. `undefined !== ''` and `undefined !== OWNER`, so it fails closed on both.
+    await integrationActionEvidence.put({
+      _id: actionEvidenceIdFor({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION }),
+      orgId: 'orgA',
+      integrationKey: KEY,
+      actionName: ACTION,
+      backingType: 'api-call',
+      validatedAt: '2026-08-17T00:00:00.000Z',
+      evidence: apiCall('LEGACY-ORG-WIDE'),
+    } as never);
+
+    expect(await store.getEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION })).toBeNull();
+    expect(await store.listForIntegration('orgA', OWNER, KEY)).toEqual([]);
+  });
+
+  it('a LIST row whose stored orgId or ownerUserId disagrees with the filter is dropped', async () => {
+    await integrationActionEvidence.put({
+      _id: 'hand-written-row-foreign-org',
+      orgId: 'orgB',
+      ownerUserId: OWNER,
+      integrationKey: KEY,
+      actionName: 'smuggled-org',
+      backingType: 'api-call',
+      validatedAt: '2026-08-17T00:00:00.000Z',
+      evidence: apiCall('SMUGGLED'),
+    } as never);
+    await integrationActionEvidence.put({
+      _id: 'hand-written-row-foreign-owner',
+      orgId: 'orgA',
+      ownerUserId: PEER,
+      integrationKey: KEY,
+      actionName: 'smuggled-owner',
       backingType: 'api-call',
       validatedAt: '2026-08-17T00:00:00.000Z',
       evidence: apiCall('SMUGGLED'),
     } as never);
     await seed('orgA', 'A');
 
-    const rows = await store.listForIntegration('orgA', KEY);
+    const rows = await store.listForIntegration('orgA', OWNER, KEY);
     expect(rows.map((r) => r.actionName)).toEqual([ACTION]);
   });
 
-  it('an EMPTY org reads nothing and writes nothing - the no-tenant actor shape', async () => {
-    await seed('orgA', 'A');
-    expect(await store.getEvidence({ orgId: '', integrationKey: KEY, actionName: ACTION })).toBeNull();
-    expect(await store.listForIntegration('', KEY)).toEqual([]);
-    expect(await store.discardEvidence({ orgId: '', integrationKey: KEY, actionName: ACTION })).toBe(false);
-    await expect(
-      store.recordEvidence({ orgId: '', integrationKey: KEY, actionName: ACTION }, { backingType: 'api-call', evidence: apiCall('X') }),
-    ).rejects.toBeInstanceOf(ActionEvidenceStoreError);
-    // …and nothing an empty org did disturbed the real tenant's row.
-    expect(await store.getEvidence({ orgId: 'orgA', integrationKey: KEY, actionName: ACTION })).not.toBeNull();
+  /**
+   * THE EMPTY-TENANT CASE, MADE FAILABLE.
+   *
+   * The first cut of this case seeded only a REAL tenant's row and then asserted that an empty org
+   * read nothing - which is true whether or not any guard exists, because no row was stored under
+   * the empty org to read. Three of its four legs could not fail. Each leg here is aimed at a row
+   * PLANTED under exactly the key it asks for.
+   *
+   * WITH ONE MEASURED EXCEPTION, STATED RATHER THAN IMPLIED. Deleting `isTenantScoped` from
+   * `getEvidence`, from `listForIntegration` or from `recordEvidence` reddens that method's own leg.
+   * Deleting it from `discardEvidence` ALONE does NOT: that method calls `getEvidence`, whose guard
+   * enforces the same predicate first, so the two mask each other exactly as the list read's two
+   * `orgId` terms do. Removing BOTH reddens the discard leg. No case below claims to prove
+   * `discardEvidence`'s guard on its own.
+   */
+  describe('an EMPTY org or owner reads nothing and writes nothing - the no-tenant actor shape', () => {
+    const EMPTY_ORG_ID = actionEvidenceIdFor({ orgId: '', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION });
+    const EMPTY_OWNER_ID = actionEvidenceIdFor({ orgId: 'orgA', ownerUserId: '', integrationKey: KEY, actionName: ACTION });
+
+    beforeEach(async () => {
+      await seed('orgA', 'A');
+      // The rows the guard exists to refuse to serve. `put` goes straight at the collection, which
+      // is the only way to create them at all now that `recordEvidence` refuses to.
+      for (const [_id, orgId, ownerUserId] of [[EMPTY_ORG_ID, '', OWNER], [EMPTY_OWNER_ID, 'orgA', '']] as const) {
+        await integrationActionEvidence.put({
+          _id, orgId, ownerUserId, integrationKey: KEY, actionName: ACTION,
+          backingType: 'api-call', validatedAt: '2026-08-17T00:00:00.000Z', evidence: apiCall('UNSCOPED'),
+        } as never);
+      }
+    });
+
+    it('the POINT READ refuses both shapes, though a matching document exists', async () => {
+      expect(await store.getEvidence({ orgId: '', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION })).toBeNull();
+      expect(await store.getEvidence({ orgId: 'orgA', ownerUserId: '', integrationKey: KEY, actionName: ACTION })).toBeNull();
+    });
+
+    it('the LIST READ refuses both shapes, though a matching document exists', async () => {
+      expect(await store.listForIntegration('', OWNER, KEY)).toEqual([]);
+      expect(await store.listForIntegration('orgA', '', KEY)).toEqual([]);
+    });
+
+    it('the DISCARD refuses both shapes, and the planted rows are still there afterwards', async () => {
+      expect(await store.discardEvidence({ orgId: '', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION })).toBe(false);
+      expect(await store.discardEvidence({ orgId: 'orgA', ownerUserId: '', integrationKey: KEY, actionName: ACTION })).toBe(false);
+      // Asserted at the collection: "answered false" and "deleted nothing" are different claims, and
+      // it is the second one that matters for a method whose job is to delete.
+      expect(await integrationActionEvidence.get(EMPTY_ORG_ID)).not.toBeNull();
+      expect(await integrationActionEvidence.get(EMPTY_OWNER_ID)).not.toBeNull();
+    });
+
+    it('the WRITE refuses both shapes', async () => {
+      for (const key of [
+        { orgId: '', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
+        { orgId: 'orgA', ownerUserId: '', integrationKey: KEY, actionName: ACTION },
+      ]) {
+        await expect(store.recordEvidence(key, { backingType: 'api-call', evidence: apiCall('X') }))
+          .rejects.toBeInstanceOf(ActionEvidenceStoreError);
+      }
+    });
+
+    it('…and nothing an empty tenant did disturbed the real one\'s row', async () => {
+      expect(await store.getEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION })).not.toBeNull();
+    });
   });
 });
 
@@ -182,7 +338,7 @@ describe('one live row per action: superseded wholesale, never accumulated', () 
   it('a second validated run REPLACES the first rather than adding to it', async () => {
     await seed('orgA', 'first');
     await seed('orgA', 'second');
-    const rows = await store.listForIntegration('orgA', KEY);
+    const rows = await store.listForIntegration('orgA', OWNER, KEY);
     expect(rows).toHaveLength(1);
     expect((rows[0]!.evidence as { response: { body: string } }).response.body).toBe('{"tenant":"second"}');
   });
@@ -191,8 +347,16 @@ describe('one live row per action: superseded wholesale, never accumulated', () 
     await seed('orgA', 'A');
     await seed('orgB', 'B');
     await seed('orgA', 'A-again');
-    const b = await store.getEvidence({ orgId: 'orgB', integrationKey: KEY, actionName: ACTION });
+    const b = await store.getEvidence({ orgId: 'orgB', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION });
     expect((b!.evidence as { response: { body: string } }).response.body).toBe('{"tenant":"B"}');
+  });
+
+  it('superseding does not touch the SAME-ORG PEER\'s row for the same action', async () => {
+    await seed('orgA', 'OWNER-1', ACTION, OWNER);
+    await seed('orgA', 'PEER-1', ACTION, PEER);
+    await seed('orgA', 'OWNER-2', ACTION, OWNER);
+    const peer = await store.getEvidence({ orgId: 'orgA', ownerUserId: PEER, integrationKey: KEY, actionName: ACTION });
+    expect((peer!.evidence as { response: { body: string } }).response.body).toBe('{"tenant":"PEER-1"}');
   });
 });
 
@@ -215,20 +379,20 @@ describe('the last gate: a live credential value is never written', () => {
 
     await expect(
       store.recordEvidence(
-        { orgId: 'orgA', integrationKey: KEY, actionName: ACTION },
+        { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
         { backingType: 'api-call', evidence: leaky, secrets: evidenceSecretsFromValues([SECRET]) },
       ),
     ).rejects.toBeInstanceOf(ActionEvidenceStoreError);
 
     // Refused means NOT WRITTEN: evidence is worth less than a credential.
-    expect(await store.getEvidence({ orgId: 'orgA', integrationKey: KEY, actionName: ACTION })).toBeNull();
+    expect(await store.getEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION })).toBeNull();
   });
 
   it('a refused supersede leaves the PREVIOUS row intact rather than half-replacing it', async () => {
     await seed('orgA', 'clean');
     await expect(
       store.recordEvidence(
-        { orgId: 'orgA', integrationKey: KEY, actionName: ACTION },
+        { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
         {
           backingType: 'api-call',
           evidence: { kind: 'api-call', request: { method: 'GET', url: `https://probe.example/?t=${SECRET}`, headers: {} }, response: { status: 200 } },
@@ -236,33 +400,33 @@ describe('the last gate: a live credential value is never written', () => {
         },
       ),
     ).rejects.toBeInstanceOf(ActionEvidenceStoreError);
-    const still = await store.getEvidence({ orgId: 'orgA', integrationKey: KEY, actionName: ACTION });
+    const still = await store.getEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION });
     expect((still!.evidence as { response: { body: string } }).response.body).toBe('{"tenant":"clean"}');
   });
 
   it('the same row WITHOUT the value present writes fine - so the refusal is about the value', async () => {
     await store.recordEvidence(
-      { orgId: 'orgA', integrationKey: KEY, actionName: ACTION },
+      { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
       {
         backingType: 'api-call',
         evidence: { kind: 'api-call', request: { method: 'POST', url: 'https://probe.example/send', headers: {} }, response: { status: 200, body: '{"echoed":"••••"}' } },
         secrets: evidenceSecretsFromValues([SECRET]),
       },
     );
-    expect(await store.getEvidence({ orgId: 'orgA', integrationKey: KEY, actionName: ACTION })).not.toBeNull();
+    expect(await store.getEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION })).not.toBeNull();
   });
 });
 
 describe('bounds: a row cannot grow without limit', () => {
   it('caps an over-long response body and says so', async () => {
     await store.recordEvidence(
-      { orgId: 'orgA', integrationKey: KEY, actionName: ACTION },
+      { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
       {
         backingType: 'api-call',
         evidence: { kind: 'api-call', request: { method: 'GET', url: 'https://probe.example/big', headers: {} }, response: { status: 200, body: 'x'.repeat(MAX_EVIDENCE_EXCERPT_CHARS + 500) } },
       },
     );
-    const row = await store.getEvidence({ orgId: 'orgA', integrationKey: KEY, actionName: ACTION });
+    const row = await store.getEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION });
     const response = (row!.evidence as { response: { body: string; truncated?: boolean } }).response;
     expect(response.body).toHaveLength(MAX_EVIDENCE_EXCERPT_CHARS);
     expect(response.truncated).toBe(true);
@@ -270,7 +434,7 @@ describe('bounds: a row cannot grow without limit', () => {
 
   it('caps the number of pinned steps and says so', async () => {
     await store.recordEvidence(
-      { orgId: 'orgA', integrationKey: KEY, actionName: ACTION },
+      { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
       {
         backingType: 'browser-steps',
         evidence: {
@@ -280,7 +444,7 @@ describe('bounds: a row cannot grow without limit', () => {
         },
       },
     );
-    const row = await store.getEvidence({ orgId: 'orgA', integrationKey: KEY, actionName: ACTION });
+    const row = await store.getEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION });
     const ev = row!.evidence as { steps: unknown[]; truncated?: boolean };
     expect(ev.steps).toHaveLength(MAX_EVIDENCE_STEPS);
     expect(ev.truncated).toBe(true);
@@ -290,11 +454,11 @@ describe('bounds: a row cannot grow without limit', () => {
 describe('the retention pins cross tenants, and carry identifiers only', () => {
   it('returns every tenant\'s pinned run ids and NOTHING else about them', async () => {
     await store.recordEvidence(
-      { orgId: 'orgA', integrationKey: KEY, actionName: ACTION },
+      { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
       { backingType: 'browser-steps', evidence: { kind: 'automation', runId: 'run-A', steps: [{ stepIndex: 0, excerpt: 'orgA private text' }] } },
     );
     await store.recordEvidence(
-      { orgId: 'orgB', integrationKey: KEY, actionName: ACTION },
+      { orgId: 'orgB', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
       { backingType: 'bash-cli', evidence: { kind: 'automation', runId: 'run-B', steps: [{ stepIndex: 0, excerpt: 'orgB private text' }] } },
     );
     // An api-call row pins nothing: there are no screenshots to spare.
@@ -310,11 +474,11 @@ describe('the retention pins cross tenants, and carry identifiers only', () => {
 
   it('a superseded run RELEASES its pin in the same write', async () => {
     await store.recordEvidence(
-      { orgId: 'orgA', integrationKey: KEY, actionName: ACTION },
+      { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
       { backingType: 'browser-steps', evidence: { kind: 'automation', runId: 'run-old', steps: [] } },
     );
     await store.recordEvidence(
-      { orgId: 'orgA', integrationKey: KEY, actionName: ACTION },
+      { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
       { backingType: 'browser-steps', evidence: { kind: 'automation', runId: 'run-new', steps: [] } },
     );
     // This is what bounds the retention extension: pins do not accumulate with run volume.

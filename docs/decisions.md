@@ -2806,3 +2806,77 @@ collection, its id derivation, the not-a-field argument and the captured-calls c
 composition-root bundle, the capture points, the retention exemption and the graduation gate. Both
 appended as single text elements carrying `text`, `rawText` and `originalText`; no existing element
 was edited (74 insertions, 0 deletions).
+
+## 2026-08-20 - S1 round two: nothing durable outlives the action, and the sample belongs to the owner
+
+The S1 verification pass found one blocker, three majors and three minors. All seven are closed, and
+the two that changed a decision rather than a defect are recorded here because a future reader would
+be surprised by either.
+
+**THE COLLECTION HAD NO REMOVAL PATH, AND THE DOCBLOCK CLAIMED TWO.** `discardEvidence` had zero
+production callers while stating it was "reached when the action itself is gone (a definition write
+that dropped it), and by the erasure path". Both false. Reproduced end to end: a definition with
+`[doomed, survivor]`, evidence for `doomed` carrying client PII, then the ordinary builder save with
+`[survivor]` only - the same call site that already collects the SIBLING collection's evidence. The
+action was gone, the row and its PII stayed, and `pinnedRunIdsForRetention()` still named the run, so
+its screenshots of an authenticated client-portal session were exempt from the 7-day sweep FOREVER
+(the pin releases only on supersede or discard, and neither can happen again for an action nobody
+can run). S1 as first landed converted a bounded retention into an unbounded one.
+
+The fix follows `recipe-lifecycle.ts`'s discipline rather than its shape: the removal paths are
+ENUMERATED FROM THE CODE in the store's header, by grepping the writers of the definition document
+rather than recalling them. That enumeration is why the count is ONE and not four. `recipe-lifecycle`
+has four because three of its paths remove a RECIPE while leaving the action standing, and an action
+with no recipe still exists and its evidence is still evidence. Only the fourth - the action set
+rewritten by `create(..., onConflict: 'replace')` - removes the action, so only it is a removal path
+here. `IntegrationRecipeStore` is the only other writer of the document and it only `map`s the
+existing `actions` array, so it cannot drop one; there is no definition-delete path at all, and
+retiring a legacy row hides a definition without dropping an action. All three are named as
+NOT-paths in the header so the next reader does not re-derive them.
+
+Two deliberate asymmetries. `actionsDroppedBy` is a SEPARATE predicate from `recipesDroppedBy`
+rather than a reuse: that one filters to actions carrying a compiled recipe (a recipe is the only
+index into the capture pile), and copying it would have skipped the commonest evidence-bearing
+action there is - a plain `api-call` that never went near a discovery pass. And the collector crosses
+OWNERS while the key does not: an action belongs to the definition, so dropping it drops it for every
+member of the org at once.
+
+**THE SAMPLE IS THE OWNER'S, NOT THE ORG'S.** The evidence was keyed
+`(orgId, integrationKey, actionName)` while `findConfigForOwner` resolves a credential per
+`(orgId, ownerUserId)` and `action-consent.ts` keys an approval on `(orgId, userId, ...)`. Within one
+org, an `org`-visible definition run by two people is two third-party accounts and two people's
+client data. Reproduced: the peer's run overwrote the owner's row with the peer's private data, and
+`trustAuthoredAction` - which reads this collection - let one user promote an action to `trusted`,
+and thereby make it auto-runnable by `achieve`, on the strength of another user's run against an
+account they do not hold.
+
+The original argument ("a pointer inherits the rule that already exists") was true of the PNG, which
+sits behind the screenshot plane's org+owner check, and false of the EXCERPT copied into the row
+beside it. The key is now the credential's key and the consent's key, and the graduation gate reads
+the PROMOTING actor's own row. THIS IS A BREAKING CHANGE TO AN INTERNAL SHAPE and is taken
+deliberately: `ActionEvidenceKey` gains a required `ownerUserId`, so every call site is a compile
+error rather than a silent org-wide read, and a row migrated from the org-only key (which carries no
+`ownerUserId`) is served to NOBODY rather than to whoever asks first. Nothing in `shared/` was
+touched - the detail-page contract lands with S2 - so there is no consumer to migrate.
+
+**TWO GATES MADE STRUCTURAL RATHER THAN TESTED.** `sweepExpiredScreenshots`'s `pinnedRunIds` is now
+REQUIRED: dropping `pinnedRunIds` from the one production call was a surviving mutant (46/46 green,
+because `bootState` was entered by no test), and a required option makes that mutant a compile error.
+The test still lands beside it, because the compiler cannot tell `pinnedRunIds: new Set()` from the
+real set: `composition-root-screenshot-pins.test.ts` enters at the REAL `bootState`. In the same
+spirit `bootState` now AWAITS the sweep instead of firing it and forgetting - the obligation was
+unobservable to any caller, and `sweepOrphans` above it already sets the precedent. The sweep cannot
+throw and is bounded by the run tree, so awaiting it can delay listen but cannot prevent it.
+
+**AND ONE THING IS RECORDED AS UNPROVABLE RATHER THAN CLAIMED.** `discardEvidence`'s own empty-key
+guard is masked by `getEvidence`'s, which it calls: removing it alone leaves the isolation suite
+green, and only removing both reddens the discard leg. It is kept for the same belt-and-braces reason
+`listForIntegration` keeps its post-filter, and the store docblock, the suite header and the ledger
+all say it is masked instead of implying a proof that does not exist.
+
+Docs: `architecture.md`'s "Action evidence" section gains the owner term and the removal-path
+enumeration; `findings.md` gains the blocker, the three majors and the three minors, and the standing
+`screenshot-erasure-path-has-no-production-caller` entry is corrected - half its close-by is now
+done, the erasure half is untouched and still claims nothing. Diagrams: `05-data-model` and
+`02-module-map` appended with the owner-keyed row, the removal collector and the awaited boot
+composition (append-only, every new element carrying text/rawText/originalText).

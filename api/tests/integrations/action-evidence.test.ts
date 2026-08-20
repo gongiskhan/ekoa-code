@@ -34,7 +34,7 @@ let mem: MongoMemoryServer;
 let clock = 0;
 const store = new ActionEvidenceStore(integrationActionEvidence, () => new Date(1_700_000_000_000 + clock++));
 
-const KEY: ActionEvidenceKey = { orgId: 'orgA', integrationKey: 'citius', actionName: 'consultar_processo' };
+const KEY: ActionEvidenceKey = { orgId: 'orgA', ownerUserId: 'u-owner', integrationKey: 'citius', actionName: 'consultar_processo' };
 
 const apiCallEvidence = (status = 200, body = '{"ok":true}') =>
   ({
@@ -73,13 +73,76 @@ describe('one live row per action, superseded wholesale', () => {
     await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
     await store.recordEvidence({ ...KEY, actionName: 'arquivar_processo' }, { backingType: 'api-call', evidence: apiCallEvidence() });
     expect(await integrationActionEvidence.find({})).toHaveLength(2);
-    expect(await store.listForIntegration('orgA', 'citius')).toHaveLength(2);
+    expect(await store.listForIntegration('orgA', 'u-owner', 'citius')).toHaveLength(2);
   });
 
-  it('an empty key term is refused rather than writing an un-scoped row', async () => {
+  it('two OWNERS of the same action keep separate rows - the sample is not the org\'s to share', async () => {
+    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence(200, '{"whose":"owner"}') });
+    await store.recordEvidence({ ...KEY, ownerUserId: 'u-peer' }, { backingType: 'api-call', evidence: apiCallEvidence(200, '{"whose":"peer"}') });
+
+    // Counted at the collection, so "separate" cannot be an artefact of a filtered read.
+    expect(await integrationActionEvidence.find({})).toHaveLength(2);
+    expect((await store.getEvidence(KEY))!.evidence).toMatchObject({ response: { body: '{"whose":"owner"}' } });
+    expect((await store.getEvidence({ ...KEY, ownerUserId: 'u-peer' }))!.evidence)
+      .toMatchObject({ response: { body: '{"whose":"peer"}' } });
+  });
+
+  it('an empty key term is refused rather than writing an un-scoped row - org OR owner', async () => {
     await expect(store.recordEvidence({ ...KEY, orgId: '' }, { backingType: 'api-call', evidence: apiCallEvidence() }))
       .rejects.toBeInstanceOf(ActionEvidenceStoreError);
+    // The owner term is held to the SAME rule as the org term. A system actor carrying `userId: ''`
+    // must not be able to mint the one row every member of the org then reads as their own.
+    await expect(store.recordEvidence({ ...KEY, ownerUserId: '' }, { backingType: 'api-call', evidence: apiCallEvidence() }))
+      .rejects.toBeInstanceOf(ActionEvidenceStoreError);
     expect(await integrationActionEvidence.find({})).toHaveLength(0);
+  });
+});
+
+/**
+ * THE REMOVAL COLLECTOR, at the store.
+ *
+ * The pairing's own decisions - counted by DOCUMENT, because the whole failure this closes was a
+ * row that stayed. Its production call site is proved where it lives
+ * (`tests/integrations/action-evidence-removal.test.ts`, through the real definition save), never
+ * here.
+ */
+describe('discardEvidenceForAction - every owner\'s row for one dropped action', () => {
+  it('takes BOTH owners\' rows, and leaves the surviving action and the other org alone', async () => {
+    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
+    await store.recordEvidence({ ...KEY, ownerUserId: 'u-peer' }, { backingType: 'api-call', evidence: apiCallEvidence() });
+    await store.recordEvidence({ ...KEY, actionName: 'survivor' }, { backingType: 'api-call', evidence: apiCallEvidence() });
+    await store.recordEvidence({ ...KEY, orgId: 'orgB' }, { backingType: 'api-call', evidence: apiCallEvidence() });
+    expect(await integrationActionEvidence.find({})).toHaveLength(4);
+
+    const dropped = await store.discardEvidenceForAction({
+      orgId: KEY.orgId, integrationKey: KEY.integrationKey, actionName: KEY.actionName,
+    });
+
+    // An action belongs to the DEFINITION, so it is dropped for every member of the org at once.
+    expect(dropped).toBe(2);
+    const left = await integrationActionEvidence.find({});
+    expect(left.map((r) => `${(r as unknown as { orgId: string }).orgId}/${(r as unknown as { actionName: string }).actionName}`).sort())
+      .toEqual(['orgA/survivor', 'orgB/consultar_processo']);
+  });
+
+  it('is ORG-SCOPED: another tenant\'s row for the same action name is unreachable from here', async () => {
+    await store.recordEvidence({ ...KEY, orgId: 'orgB' }, { backingType: 'api-call', evidence: apiCallEvidence() });
+    expect(await store.discardEvidenceForAction({
+      orgId: KEY.orgId, integrationKey: KEY.integrationKey, actionName: KEY.actionName,
+    })).toBe(0);
+    expect(await integrationActionEvidence.find({})).toHaveLength(1);
+  });
+
+  it('an empty term drops NOTHING rather than matching everything', async () => {
+    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
+    for (const key of [
+      { orgId: '', integrationKey: KEY.integrationKey, actionName: KEY.actionName },
+      { orgId: KEY.orgId, integrationKey: '', actionName: KEY.actionName },
+      { orgId: KEY.orgId, integrationKey: KEY.integrationKey, actionName: '' },
+    ]) {
+      expect(await store.discardEvidenceForAction(key)).toBe(0);
+    }
+    expect(await integrationActionEvidence.find({})).toHaveLength(1);
   });
 });
 
@@ -112,6 +175,40 @@ describe('the caps are real and truncation is recorded', () => {
     await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence(200, 'small') });
     const ev = (await store.getEvidence(KEY))!.evidence as { response: { truncated?: boolean } };
     expect(ev.response.truncated).toBeUndefined();
+  });
+
+  it('caps the REQUEST body too, and says so - the half that used to be silent', async () => {
+    // The first cut called `capText` on the request body and threw the `truncated` half away, so an
+    // oversized request body was cut with no record of it - and cut in the one place a reader cannot
+    // notice, because the executor's `truncateForDisplay` puts its own
+    // "… [truncated, N more bytes]" marker at the END, which this cap then slices off. The stored
+    // sample looked like a complete body that simply stopped.
+    await store.recordEvidence(KEY, {
+      backingType: 'api-call',
+      evidence: {
+        ...apiCallEvidence(),
+        request: {
+          method: 'POST',
+          url: 'https://citius.pt/processos',
+          headers: {},
+          body: `${'p'.repeat(MAX_EVIDENCE_EXCERPT_CHARS)}… [truncated, 4000 more bytes]`,
+        },
+      },
+    });
+    const ev = (await store.getEvidence(KEY))!.evidence as { request: { body: string; truncated?: boolean } };
+    expect(ev.request.body).toHaveLength(MAX_EVIDENCE_EXCERPT_CHARS);
+    expect(ev.request.body).not.toContain('[truncated,');
+    expect(ev.request.truncated).toBe(true);
+  });
+
+  it('a REQUEST body that fits carries no truncation flag', async () => {
+    await store.recordEvidence(KEY, {
+      backingType: 'api-call',
+      evidence: { ...apiCallEvidence(), request: { method: 'POST', url: 'https://citius.pt/x', headers: {}, body: '{"n":1}' } },
+    });
+    const ev = (await store.getEvidence(KEY))!.evidence as { request: { body: string; truncated?: boolean } };
+    expect(ev.request.body).toBe('{"n":1}');
+    expect(ev.request.truncated).toBeUndefined();
   });
 });
 

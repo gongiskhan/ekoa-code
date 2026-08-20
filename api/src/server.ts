@@ -1590,6 +1590,47 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   return app;
 }
 
+/**
+ * THE SCREENSHOT RETENTION SWEEP, JOINED TO THE EVIDENCE PINS (slice S1).
+ *
+ * WHY THIS IS A NAMED, EXPORTED FUNCTION AND NOT THREE LINES INSIDE `bootState`. The two halves are
+ * pinned separately - `pinnedRunIdsForRetention` by the isolation suite, the sweeper's pin guard by
+ * `screenshot-plane.test.ts` - and NOTHING joined them: deleting `pinnedRunIds` from the
+ * `sweepExpiredScreenshots` call left the entire lane green, because `bootState` was entered by no
+ * test at all. `sweepExpiredScreenshots` now REQUIRES the argument (a dropped or renamed field stops
+ * compiling), and this function is the one production composition of the two halves, entered
+ * directly by `tests/automation/composition-root-screenshot-pins.test.ts` against the real store and
+ * a real tree. `bootState` is entered there too, so the call below is proved and not assumed.
+ *
+ * BEST EFFORT. A sweep failure must never fail boot, so the pin read degrades to "pin nothing" and
+ * the whole thing degrades to "swept nothing" - never to a throw, and never to an unpinned sweep on
+ * a mongo blip, which would be the one failure mode that destroys data.
+ *
+ * AWAITED BY `bootState`, where the first cut was fire-and-forget. `sweepOrphans` above sets the
+ * precedent, and the reason is the same: an obligation that resolves after boot "finishes" is one no
+ * caller can wait on and no test can observe without polling. The sweep is bounded by the run tree
+ * and cannot throw, so awaiting it can delay listen but cannot prevent it.
+ */
+export async function sweepScreenshotsSparingPinnedEvidence(
+  now: () => number,
+): Promise<{ removed: number; scanned: number; pinned: number }> {
+  const pinnedRunIds = await actionEvidenceStore
+    .pinnedRunIdsForRetention()
+    .catch(() => new Set<string>());
+  try {
+    const result = await sweepExpiredScreenshots({ now, pinnedRunIds });
+    if (result.removed > 0 || result.pinned > 0) {
+      console.log(
+        `[automation] screenshot retention: removed ${result.removed}/${result.scanned} run dirs, `
+          + `spared ${result.pinned} pinned by evidence`,
+      );
+    }
+    return result;
+  } catch {
+    return { removed: 0, scanned: 0, pinned: 0 };
+  }
+}
+
 /** Boot the persistence + admission state (ch09 §9.7): connect fail-fast, load the
  *  activation map + revocation set, seed the founder super-admin. Then the apps/
  *  boot obligations (ch07 §7.16): registry scan + slug-index load (parallel block),
@@ -1634,16 +1675,7 @@ export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> 
   // a promotion to `trusted` rests on. The pin set is read here (the sweeper keeps no edge to
   // `integrations/`) and is bounded to the ONE run each action's LIVE evidence names: evidence is
   // superseded wholesale, so a newly validated run releases the previous pin in the same write.
-  void actionEvidenceStore
-    .pinnedRunIdsForRetention()
-    .catch(() => new Set<string>())
-    .then((pinnedRunIds) => sweepExpiredScreenshots({ now: deps.now, pinnedRunIds }))
-    .then(({ removed, scanned, pinned }) => {
-      if (removed > 0 || pinned > 0) {
-        console.log(`[automation] screenshot retention: removed ${removed}/${scanned} run dirs, spared ${pinned} pinned by evidence`);
-      }
-    })
-    .catch(() => {});
+  await sweepScreenshotsSparingPinnedEvidence(deps.now);
 
   // A3 — the FROZEN legacy disk runtime tier scan (Rule-10 review 2026-08-15). REPORT-ONLY by
   // default: it persists nothing unless the operator set EKOA_IMPORT_LEGACY_RUNTIME=1 (A3 review

@@ -37,11 +37,15 @@ import { createHash } from 'node:crypto';
 import type { Actor } from '@ekoa/shared';
 import { Store, type Doc } from '../data/store.js';
 import { integrationDefinitions } from '../data/stores.js';
-// THE ONE RUNTIME EDGE OUT OF THIS MODULE, and it is still database-only (see the header note
-// above): `captured-calls-store.ts` stands on `data/` and `security/` alone. It is here because
-// `create`'s replace branch is a REMOVAL PATH for a compiled recipe - see `carryRecipesForward`
-// and `integrations/recipe-lifecycle.ts`'s enumeration.
+// THE TWO RUNTIME EDGES OUT OF THIS MODULE, and both are still database-only (see the header note
+// above): `captured-calls-store.ts` and `action-evidence-store.ts` each stand on `data/` and
+// `security/` alone. They are here because `create`'s replace branch is a REMOVAL PATH for two
+// durable, un-TTL'd collections at once - a compiled recipe's raw capture pile (see
+// `carryRecipesForward` and `integrations/recipe-lifecycle.ts`'s enumeration) and the action's
+// live evidence row (see `recipesDroppedBy`'s sibling `actionsDroppedBy` and the removal-path
+// enumeration in `action-evidence-store.ts`).
 import { discardEvidenceOfRemovedRecipes, type RemovedRecipe } from './captured-calls-store.js';
+import { discardEvidenceOfRemovedActions } from './action-evidence-store.js';
 import type {
   IntegrationConfigField,
   IntegrationAction,
@@ -295,6 +299,25 @@ function recipesDroppedBy(
     }));
 }
 
+/**
+ * The ACTIONS this replace REMOVES - the names `existing` had and `incoming` no longer mentions.
+ *
+ * A SECOND PREDICATE, NOT A REUSE OF `recipesDroppedBy`, and the difference is the whole point:
+ * that one filters to actions that carried a compiled RECIPE, because a recipe is the only index
+ * back into `integration_captured_calls`. An action's EVIDENCE row has no such precondition - the
+ * commonest evidence-bearing action in this product is a plain `api-call` that never went near a
+ * discovery pass - so filtering on `recipe !== undefined` here would have left exactly the ordinary
+ * case behind. Every dropped name is reported, whether or not it ever compiled anything.
+ */
+function actionsDroppedBy(
+  incoming: IntegrationAction[],
+  existing: IntegrationAction[] | undefined,
+): string[] {
+  if (!existing || existing.length === 0) return [];
+  const kept = new Set((incoming ?? []).map((a) => a.actionName));
+  return existing.map((a) => a.actionName).filter((name) => !kept.has(name));
+}
+
 type VisibilityView = Pick<IntegrationDefinitionFields, 'orgId' | 'userId' | 'visibility'> &
   Partial<Pick<IntegrationDefinitionFields, 'publishRequest'>>;
 
@@ -481,13 +504,26 @@ export class IntegrationDefinitionStore {
       createdAt: existing?.createdAt ?? doc.createdAt,
       updatedAt: nowIso,
     });
-    // …AND WHAT THE REWRITE DROPPED TAKES ITS EVIDENCE WITH IT (removal path 4 - see
-    // `recipesDroppedBy`). AFTER the put, never before: the recipe is what NAMES the evidence, so
-    // discarding first would - on a put that then failed - leave a live recipe pointing at documents
-    // that no longer exist, which is the same order `forgetRecipe` argues for.
+    // …AND WHAT THE REWRITE DROPPED TAKES ITS EVIDENCE WITH IT - BOTH KINDS. AFTER the put, never
+    // before: the recipe is what NAMES the raw capture pile, so discarding first would - on a put
+    // that then failed - leave a live recipe pointing at documents that no longer exist, which is
+    // the same order `forgetRecipe` argues for, and the evidence discard is ordered with it so the
+    // two collections are collected under one rule rather than two.
+    //
+    //   - the compiled recipe's raw capture pile (removal path 4 of `recipe-lifecycle.ts`);
+    //   - the action's LIVE EVIDENCE ROW, which is the ONLY removal path that collection has
+    //     (`action-evidence-store.ts` enumerates them from the code). Without this, an ordinary
+    //     builder save that drops an action left a durable row holding that action's last real
+    //     request and response body - and, for an automation-backed action, a PIN that exempts its
+    //     screenshots of an authenticated client-portal session from the 7-day sweep permanently,
+    //     because the pin releases only on supersede or discard and neither can ever happen again.
     await discardEvidenceOfRemovedRecipes(
       { orgId: input.orgId, integrationKey: input.key },
       recipesDroppedBy(doc.actions, existing?.actions),
+    );
+    await discardEvidenceOfRemovedActions(
+      { orgId: input.orgId, integrationKey: input.key },
+      actionsDroppedBy(doc.actions, existing?.actions),
     );
     return replaced;
   }

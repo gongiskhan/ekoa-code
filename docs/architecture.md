@@ -597,9 +597,18 @@ the integration-builder agent authors user-defined integrations at runtime.
 
 ### Action evidence (slice S1)
 
-`integration_action_evidence` holds exactly ONE live row per `(orgId, integrationKey, actionName)`,
-the `_id` derived from that tuple alone, so a newly validated run SUPERSEDES the previous by writing
-the same id rather than accumulating beside it. `integrations/action-evidence-store.ts` wraps it.
+`integration_action_evidence` holds exactly ONE live row per
+`(orgId, ownerUserId, integrationKey, actionName)`, the `_id` derived from that tuple alone, so a
+newly validated run SUPERSEDES the previous by writing the same id rather than accumulating beside
+it. `integrations/action-evidence-store.ts` wraps it.
+
+THE OWNER IS PART OF THE KEY because the sample is the owner's, not the org's. A credential resolves
+per `(orgId, ownerUserId)` (`findConfigForOwner`) and an action approval is keyed on
+`(orgId, userId, ...)` (`action-consent.ts`), so two members of one org running an `org`-visible
+action are two different third-party accounts and two different people's client data. Keyed on the
+org alone, a peer's run overwrote the owner's sample with the peer's private data, and
+`trustAuthoredAction` - which reads this collection - let one user promote an action to `trusted` on
+another user's run.
 
 It is NOT a field on the definition document: it would ride `publishedSnapshot` into other orgs (an
 evidence sample is one tenant's real request and real response body) and it would race the 16MB
@@ -632,9 +641,21 @@ once. It now takes a required `evidence` argument and refuses `unvalidated` when
 or names different bytes. The gate is satisfiable: a provisional action is stored as a write, so the
 owner approves it, runs it once, and promotes on that run.
 
-`sweepExpiredScreenshots` takes a `pinnedRunIds` set so a run named by live evidence survives its
-own expiry. That is an age-sweep exemption and NOT an erasure path - there is no erasure path over
-this tree (see `screenshot-erasure-path-has-no-production-caller` in `findings.md`).
+NOTHING DURABLE OUTLIVES THE THING IT IS EVIDENCE FOR - the invariant `recipe-lifecycle.ts` states
+for the sibling collection, inherited here. The removal paths are enumerated from the code in
+`action-evidence-store.ts`'s header, and there is exactly ONE: an action can only disappear through
+`IntegrationDefinitionStore.create(..., onConflict: 'replace')` (the builder save and `achieve`'s
+in-place write). The collector `discardEvidenceOfRemovedActions` is called on that branch, beside
+the recipe collection's `discardEvidenceOfRemovedRecipes`, and it crosses OWNERS - an action belongs
+to the definition, so dropping it drops it for every member of the org at once.
+
+`sweepExpiredScreenshots` takes a REQUIRED `pinnedRunIds` set so a run named by live evidence
+survives its own expiry; required, so a caller that stops supplying it does not compile.
+`server.ts`'s `sweepScreenshotsSparingPinnedEvidence` is the one production composition of the pin
+read and the sweep, awaited by `bootState`. That is an age-sweep exemption and NOT an erasure path -
+there is no erasure path over this tree (see `screenshot-erasure-path-has-no-production-caller` in
+`findings.md`), which is why the pin has to be released when the action goes: it is bounded by the
+live evidence row and by nothing else.
 
 ## Billing
 

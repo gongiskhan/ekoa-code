@@ -244,12 +244,15 @@ describe('the integration-action executor bound by buildApp carries the discover
         id: 'r-1',
         automationId: AUTOMATION_ID,
         startedAt: '2026-08-17T00:00:00.000Z',
-        status: 'succeeded',
+        // FIXTURE HONESTY: `completed` and `cache` are members of `RunStatus` / `StepStatus` /
+        // `StepTier`. The first cut used `succeeded` and `deterministic`, neither of which the engine
+        // ever writes, which the `as never` cast hid.
+        status: 'completed',
         inputs: {},
         triggeredBy: 'user',
         steps: [
-          { stepId: 's0', index: 0, status: 'succeeded', tier: 'deterministic', durationMs: 1, screenshotPath: `automation-runs/${AUTOMATION_ID}/r-1/step-0.png` },
-          { stepId: 's1', index: 1, status: 'succeeded', tier: 'deterministic', durationMs: 1, output: { kind: 'local_command', stdout: 'listed 1 case', stderr: '', exitCode: 0, durationMs: 1, truncated: false, timedOut: false } },
+          { stepId: 's0', index: 0, status: 'completed', tier: 'cache', durationMs: 1, screenshotPath: `automation-runs/${AUTOMATION_ID}/r-1/step-0.png` },
+          { stepId: 's1', index: 1, status: 'completed', tier: 'cache', durationMs: 1, output: { kind: 'local_command', stdout: 'listed 1 case', stderr: '', exitCode: 0, durationMs: 1, truncated: false, timedOut: false } },
         ],
       } as never);
       const record = vi.spyOn(actionEvidenceStore, 'recordEvidence');
@@ -270,22 +273,23 @@ describe('the integration-action executor bound by buildApp carries the discover
       // …and the collected pointers reached the REAL store under the caller's own tenant.
       expect(record).toHaveBeenCalledTimes(1);
       const [key, input] = record.mock.calls[0]!;
-      expect(key).toEqual({ orgId: ORG, integrationKey: KEY, actionName: READ_ACTION });
+      expect(key).toEqual({ orgId: ORG, ownerUserId: OWNER, integrationKey: KEY, actionName: READ_ACTION });
       expect(input.backingType).toBe('browser-steps');
       expect(input.evidence).toMatchObject({
         kind: 'automation',
-        status: 'succeeded',
+        status: 'completed',
         steps: [
-          // A POINTER into the authenticated screenshot plane, never the PNG bytes.
-          { stepIndex: 0, screenshotUrl: `/automation-screenshots/${AUTOMATION_ID}/r-1/step-0.png` },
-          { stepIndex: 1, excerpt: 'listed 1 case' },
+          // A POINTER into the authenticated screenshot plane, never the PNG bytes. `status` is the
+          // STEP's own outcome - the field the first cut mis-named `title` and filled with it.
+          { stepIndex: 0, status: 'completed', screenshotUrl: `/automation-screenshots/${AUTOMATION_ID}/r-1/step-0.png` },
+          { stepIndex: 1, status: 'completed', excerpt: 'listed 1 case' },
         ],
       });
       // The bytes the run exercised, so a promotion can be bound to them.
       expect(input.shape).toBeTypeOf('string');
 
       // And it really landed - the store write is not merely attempted.
-      const stored = await actionEvidenceStore.getEvidence({ orgId: ORG, integrationKey: KEY, actionName: READ_ACTION });
+      const stored = await actionEvidenceStore.getEvidence({ orgId: ORG, ownerUserId: OWNER, integrationKey: KEY, actionName: READ_ACTION });
       expect(stored?.evidence).toMatchObject({ kind: 'automation', runId: findByRunId.mock.calls[0]![0] });
     }, 30_000);
 

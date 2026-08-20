@@ -125,7 +125,7 @@ export function screenshotPlaneRouter(deps: ScreenshotPlaneDeps): Router {
  * Granularity is the RUN directory (its mtime advances as steps are written), so a run is retained
  * or erased as a unit rather than losing individual steps out of the middle of a trace.
  */
-export async function sweepExpiredScreenshots(opts?: {
+export async function sweepExpiredScreenshots(opts: {
   retentionDays?: number;
   now?: () => number;
   root?: string;
@@ -148,14 +148,19 @@ export async function sweepExpiredScreenshots(opts?: {
    * docs/findings.md). A pinned run is therefore retained past 7 days with nothing that can remove
    * it on request, which is a real gap and is recorded as one.
    *
-   * Absent ⇒ nothing is pinned and the sweep behaves exactly as it did before this slice.
+   * REQUIRED, AND THAT IS THE POINT. Every other option here defaults; this one does not, so a
+   * caller that stops supplying it - or renames the field - fails to COMPILE rather than silently
+   * sweeping the runs every automation-backed evidence row points at. The production wiring is one
+   * line in `server.ts`, and that line dropping this argument was a mutant the whole suite survived:
+   * both halves were pinned in isolation and nothing joined them. An empty set is the honest way to
+   * say "this caller pins nothing"; there is no way left to say nothing at all.
    */
-  pinnedRunIds?: ReadonlySet<string>;
+  pinnedRunIds: ReadonlySet<string>;
 }): Promise<{ removed: number; scanned: number; pinned: number }> {
-  const retentionDays = opts?.retentionDays ?? DEFAULT_SCREENSHOT_RETENTION_DAYS;
-  const now = opts?.now?.() ?? Date.now();
-  const root = opts?.root ?? automationRunsRoot();
-  const pinnedRunIds = opts?.pinnedRunIds;
+  const retentionDays = opts.retentionDays ?? DEFAULT_SCREENSHOT_RETENTION_DAYS;
+  const now = opts.now?.() ?? Date.now();
+  const root = opts.root ?? automationRunsRoot();
+  const pinnedRunIds = opts.pinnedRunIds;
   const cutoff = now - retentionDays * 24 * 60 * 60 * 1000;
   let removed = 0;
   let scanned = 0;
@@ -179,7 +184,7 @@ export async function sweepExpiredScreenshots(opts?: {
       scanned++;
       // The pin is checked BEFORE the mtime, not after the delete: a pinned run is spared without
       // ever becoming a candidate, so no ordering of `stat` failures can drop one.
-      if (pinnedRunIds?.has(runId)) {
+      if (pinnedRunIds.has(runId)) {
         pinned++;
         continue;
       }

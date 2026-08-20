@@ -156,7 +156,7 @@ describe('screenshot retention (R-3)', () => {
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
   it('removes run dirs past the retention window and keeps fresh ones', async () => {
-    const { removed, scanned } = await sweepExpiredScreenshots({ retentionDays: 7, root });
+    const { removed, scanned } = await sweepExpiredScreenshots({ retentionDays: 7, root, pinnedRunIds: new Set() });
     expect(scanned).toBe(2);
     expect(removed).toBe(1);
     expect(existsSync(join(root, 'a1', 'old'))).toBe(false);
@@ -164,7 +164,7 @@ describe('screenshot retention (R-3)', () => {
   });
 
   it('is a safe no-op when the tree does not exist', async () => {
-    await expect(sweepExpiredScreenshots({ root: join(root, 'missing') })).resolves.toEqual({
+    await expect(sweepExpiredScreenshots({ root: join(root, 'missing'), pinnedRunIds: new Set() })).resolves.toEqual({
       removed: 0,
       scanned: 0,
       pinned: 0,
@@ -204,8 +204,11 @@ describe('screenshot retention (R-3)', () => {
     expect(existsSync(join(root, 'a1', 'fresh'))).toBe(true);
   });
 
-  it('pins nothing when no pin set is supplied (pre-S1 behaviour is unchanged)', async () => {
-    const { removed, pinned } = await sweepExpiredScreenshots({ retentionDays: 7, root });
+  it('pins nothing when the pin set is EMPTY (the pre-S1 behaviour, now stated out loud)', async () => {
+    // `pinnedRunIds` is a REQUIRED option, so "this caller pins nothing" is something a caller has
+    // to say rather than something it can fall into by omission - which is what the one production
+    // caller was one deleted property away from doing silently.
+    const { removed, pinned } = await sweepExpiredScreenshots({ retentionDays: 7, root, pinnedRunIds: new Set() });
     expect(pinned).toBe(0);
     expect(removed).toBe(1);
   });

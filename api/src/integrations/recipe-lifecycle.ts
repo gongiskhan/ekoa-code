@@ -41,6 +41,17 @@
  * `captured-calls-store.ts` (see its note) that all four reach, rather than one function here that
  * two of them structurally could not call.
  *
+ * ── THE SIBLING COLLECTION, AND WHY ITS COUNT IS ONE ─────────────────────────────────────────
+ *
+ * `integration_action_evidence` (slice S1) inherits the invariant above verbatim and enumerates its
+ * own removal paths the same way, in its own module header. The count there is ONE, not four, and
+ * the difference is structural rather than an oversight: this file's four paths are four ways a
+ * RECIPE can go, and three of them (the clear, the supersede, the write that never lands) remove a
+ * recipe while leaving the ACTION standing - an action with no recipe still exists and its evidence
+ * is still evidence. Only path 4 removes the action itself, so only path 4 is a removal path for
+ * evidence, and the collector `discardEvidenceOfRemovedActions` is called on that same line of that
+ * same branch, beside `discardEvidenceOfRemovedRecipes`.
+ *
  * ── WHY THE CLEAR IS A MODULE AND NOT A METHOD ───────────────────────────────────────────────
  *
  * It spans two stores with deliberately separate lifecycles (`recipe-store.ts` is "the ONE writer of

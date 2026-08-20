@@ -501,8 +501,14 @@ export async function executeUserIntegrationAction(
     // and the graduation prerequisite reads. Pointers only - `{runId, stepIndex}` plus capped
     // excerpts - never copies of the screenshots, which stay behind the authenticated screenshot
     // plane that already enforces org + owner on every byte.
+    //
+    // KEYED BY (org, OWNER, integration, action) - the same pair `findConfigForOwner` above resolved
+    // the credential under. This ran against ONE person's third-party account, and the EXCERPT
+    // stored beside the pointer is that person's data even though the PNG behind the pointer is
+    // still guarded by the plane's own org+owner check. See `action-evidence-store.ts`'s tenancy
+    // section for the two consequences an org-only key had.
     await captureEvidence(
-      { orgId: input.orgId, integrationKey: input.integrationKey, actionName: input.actionName },
+      { orgId: input.orgId, ownerUserId: input.ownerUserId, integrationKey: input.integrationKey, actionName: input.actionName },
       backingType,
       // The bytes this run exercised. `promoteToTrusted` binds the graduation prerequisite to this
       // rather than to the action's name, so a re-authored action cannot graduate on an old run.
@@ -548,7 +554,7 @@ export async function executeUserIntegrationAction(
     // slice, thrown away on success - the failure path was the only one that kept it. The sample is
     // that same object plus a capped response body through the same `redactSecretsDeep`; no new
     // redaction is written here, and reusing the failure path's is the safety argument.
-    { orgId: input.orgId, integrationKey: input.integrationKey, actionName: input.actionName },
+    { orgId: input.orgId, ownerUserId: input.ownerUserId, integrationKey: input.integrationKey, actionName: input.actionName },
     actionShape(input.integrationKey, action),
   );
 }
