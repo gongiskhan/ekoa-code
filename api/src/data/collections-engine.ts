@@ -68,6 +68,15 @@ export interface Scope {
   appId: string;
 }
 
+/** One logical collection a scope holds, by NAME and by the field names its rows carry. Never a
+ *  value: this is the shape `listCollectionFields` answers, and its only consumer puts it in a
+ *  prompt. */
+export interface CollectionFields {
+  name: string;
+  /** Every field name appearing on any row of this collection, sorted. */
+  fields: string[];
+}
+
 /** The single query-binding point: every driver query is built through this (§4.2.8 #1). */
 function docId(scope: Scope, collection: string, itemId: string): string {
   return `${scope.scopeKey}::${collection}::${itemId}`;
@@ -253,17 +262,54 @@ export class CollectionsEngine {
   }
 
   /**
-   * WHICH logical collections this scope holds - the names, never a row.
+   * WHICH logical collections this scope holds AND WHICH FIELDS their rows carry - the names of
+   * both, never a value.
    *
    * Read-only, additive, and built on the SAME single query-binding point every other read uses
    * (`appId: scope.scopeKey`), so it cannot reach a scope the other reads cannot. It exists because
-   * `achieve`'s compose rung has to NAME the caller's own collections in a prompt, and discovering them
-   * by listing every row of each and looking at what came back would be a read of everybody's data
-   * to answer a question about labels.
+   * `achieve`'s compose rung has to NAME the caller's own collections in a prompt, and discovering
+   * them by listing every row of each and looking at what came back would be a read of everybody's
+   * data to answer a question about labels.
+   *
+   * IT RETURNS THE FIELDS BECAUSE A NAME ALONE IS NOT ENOUGH TO ASK THE QUESTION WITH. An earlier
+   * shape answered names only, and the rung then asked a model to name a FIELD of one of these
+   * collections that it had never been shown - so the only thing the model could do was invent an
+   * identifier, and an invented field name does not fail: `matchesSimpleQuery` reads `undefined` off
+   * every row and the join quietly returns a SHORTER LIST presented as the answer. Showing the
+   * fields turns that guess into a selection from a known set, and a name outside the set into a
+   * deterministic refusal (`integrations/action-compose.ts`, D-S5-5).
+   *
+   * THE FIELD SET IS EXACT RATHER THAN SAMPLED, and that is what makes the refusal fair: a sampled
+   * union is a SUBSET of the real one, so a legitimate field the sample happened to miss would be
+   * refused and the caller would lose a narrowing they were entitled to. The cost is one scan of
+   * this scope, which is the same order as the `distinct` this replaced, on a path that is about to
+   * spend a model call.
+   *
+   * A COLLECTION WHOSE ROWS CARRY NO FIELDS AT ALL STILL APPEARS, with an empty `fields` - it exists,
+   * and a lister that dropped it would tell the caller they hold less than they do. (Every row this
+   * engine writes carries `id`/`createdAt`/`updatedAt`, so that is a shape only a direct driver write
+   * can produce; it is handled rather than assumed away.)
    */
-  async listCollections(scope: Scope): Promise<string[]> {
-    const names = await col().distinct('collection', { appId: scope.scopeKey });
-    return names.filter((n): n is string => typeof n === 'string').sort();
+  async listCollectionFields(scope: Scope): Promise<CollectionFields[]> {
+    const grouped = await col()
+      .aggregate<{ _id: unknown; fields: unknown[] }>([
+        { $match: { appId: scope.scopeKey } },
+        { $project: { collection: 1, field: { $map: { input: { $objectToArray: '$item' }, in: '$$this.k' } } } },
+        { $unwind: { path: '$field', preserveNullAndEmptyArrays: true } },
+        { $group: { _id: '$collection', fields: { $addToSet: '$field' } } },
+      ])
+      .toArray();
+    return grouped
+      .filter((g): g is { _id: string; fields: unknown[] } => typeof g._id === 'string')
+      .map((g) => ({
+        name: g._id,
+        // BOTH SORTS ARE LOAD-BEARING, and neither is tidiness. These names go straight into a MODEL
+        // PROMPT, so their order is part of the input to a nondeterministic step: unsorted, the
+        // prompt varies with the driver's own return order and the same tenant asking the same goal
+        // twice is asked a different question.
+        fields: g.fields.filter((f): f is string => typeof f === 'string').sort(),
+      }))
+      .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   }
 
   private checkSize(rule: z.infer<typeof collectionRule> | undefined, item: Record<string, unknown>): void {

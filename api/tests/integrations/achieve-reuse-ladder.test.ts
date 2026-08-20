@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,10 +29,14 @@ import {
 } from '../../src/integrations/action-parametrize.js';
 import {
   composeRows,
+  fieldsOf,
   parseComposePlan,
   rowsOf,
   verifyComposePlan,
   type AppCollections,
+  type ComposeCollection,
+  type ComposeStageResult,
+  type ComposeSummary,
   COMPOSE_MAX_ITEMS,
   COMPOSE_MAX_COLLECTION_ROWS,
 } from '../../src/integrations/action-compose.js';
@@ -132,9 +136,28 @@ function composeBlock(plan: Record<string, unknown>): string {
   return `Here.\n\n\`\`\`compose-json\n${JSON.stringify(plan, null, 2)}\n\`\`\`\n`;
 }
 
+/**
+ * THE FIELD NAMES OF A SET OF ROWS, computed INDEPENDENTLY of the module under test.
+ *
+ * `fieldsOf` is the production answer to the same question and this suite pins it directly (see the
+ * `fieldsOf` case in section 3); using it to BUILD the fixtures as well would make the seam agree
+ * with the stage by construction and a mutant in either would be invisible. Five lines of duplicate
+ * set-union is the price of the two being independently checkable.
+ */
+const keysOf = (rows: readonly Record<string, unknown>[]): string[] => {
+  const names = new Set<string>();
+  for (const row of rows) for (const key of Object.keys(row)) names.add(key);
+  return [...names].sort();
+};
+
 /** In-memory collections seam. The REAL owner-scoped binding lives in `server.ts` and is exercised
  *  (and mutated) by `api/tests/security/achieve-compose-isolation.test.ts`; what this one supplies
  *  is the ROWS, so this suite is about the stage rather than about the scoping.
+ *
+ *  Its `list` answers NAMES AND FIELDS, exactly as `CollectionsEngine.listCollectionFields` does -
+ *  derived from the same rows `read` will hand back, because in the store they come from the same
+ *  documents. A seam that advertised fields the rows do not carry is a RACE rather than the ordinary
+ *  case, and `collectionsDrifting` below is the fixture for that.
  *
  *  It answers ONLY the two variants the real binding can produce. An earlier version could also
  *  return `ambiguous_collection`, which the real binding never returns - the store has one scope
@@ -152,7 +175,9 @@ function collectionsOf(byName: Record<string, Record<string, unknown>[]>): {
     seam: {
       list: async () => {
         lists++;
-        return Object.keys(byName).sort();
+        return Object.keys(byName)
+          .sort()
+          .map((name) => ({ name, fields: keysOf(byName[name] as Record<string, unknown>[]) }));
       },
       read: async (_actor, collection) => {
         reads.push(collection);
@@ -164,9 +189,29 @@ function collectionsOf(byName: Record<string, Record<string, unknown>[]>): {
 }
 
 /**
+ * A seam whose LISTER and READER disagree about what a collection holds - the live race between the
+ * two queries, and the only way `composeRows`' own field check can fire through the product.
+ *
+ * The lister advertises `advertised` (so the plan passes `verifyComposePlan`, which judges against
+ * exactly that list) and the reader returns `rows`, which do not carry the field. In the store this
+ * is a row deleted, or a field dropped, between `listCollectionFields` and `list` - two separate
+ * queries with no transaction between them.
+ */
+function collectionsDrifting(
+  name: string,
+  advertised: string[],
+  rows: Record<string, unknown>[],
+): AppCollections {
+  return {
+    list: async () => [{ name, fields: [...advertised].sort() }],
+    read: async (_actor, collection) => (collection === name ? { kind: 'rows', rows } : { kind: 'unknown_collection' }),
+  };
+}
+
+/**
  * A collections seam that REJECTS, which is what the real one does.
  *
- * `server.ts` binds `list`/`read` to `CollectionsEngine.listCollections`/`list` - Mongo queries.
+ * `server.ts` binds `list`/`read` to `CollectionsEngine.listCollectionFields`/`list` - Mongo queries.
  * They reject on a dropped connection, a timeout, a replica-set election. `collectionsOf` above
  * cannot express that: every one of its answers is a resolved value, so a suite built only on it
  * proves the rung handles every ANSWER the seam gives and says nothing about the seam FAILING.
@@ -178,7 +223,9 @@ function collectionsThatReject(at: 'list' | 'read', byName: Record<string, Recor
   return {
     list: async () => {
       if (at === 'list') throw new Error(STORE_FAILURE);
-      return Object.keys(byName).sort();
+      return Object.keys(byName)
+        .sort()
+        .map((name) => ({ name, fields: keysOf(byName[name] as Record<string, unknown>[]) }));
     },
     read: async (_actor, collection) => {
       if (at === 'read') throw new Error(STORE_FAILURE);
@@ -324,6 +371,44 @@ const CANONICAL_PLAN = {
   where: { field: 'idade', op: 'lt', value: 40 },
   join: { resultField: 'clienteId', collectionField: 'id' },
 };
+
+/**
+ * THE TWO FIELD SETS THE PLANNING TURN IS SHOWN, written out as literals.
+ *
+ * They are LITERALS rather than `keysOf(...)` calls on purpose: they are the sets every refusal in
+ * this rung is decided against, so what they contain is a fact somebody states here rather than a
+ * value that follows whatever the fixtures happen to hold. The two assertions immediately below tie
+ * them back to the fixtures, so a fixture that grows a field and a set that does not both red.
+ */
+const CLIENT_FIELDS = ['createdAt', 'id', 'idade', 'nome', 'updatedAt'];
+const PROCESS_FIELDS = ['clienteId', 'numeroProcesso', 'tribunal'];
+
+/** The collections the seam offers for the canonical case, as `AppCollections.list` answers them. */
+const HELD_COLLECTIONS: ComposeCollection[] = [
+  { name: 'clients', fields: CLIENT_FIELDS },
+  { name: 'invoices', fields: ['id', 'total'] },
+];
+
+/** `verifyComposePlan` against the canonical sets. Every case that is not ABOUT the sets uses this,
+ *  so a case about a malformed shape is not accidentally also a case about an unknown field. */
+function composeVerdictOn(
+  planned: unknown,
+  opts: { collections?: ComposeCollection[]; resultFields?: string[] } = {},
+) {
+  return verifyComposePlan({
+    planned,
+    collections: opts.collections ?? HELD_COLLECTIONS,
+    resultFields: opts.resultFields ?? PROCESS_FIELDS,
+  });
+}
+
+/** `composeRows` when the stage is expected to have composed. Throws rather than asserting so the
+ *  cases below read as they did before the stage grew its second answer. */
+function composedBy(input: Parameters<typeof composeRows>[0]): { items: Record<string, unknown>[]; summary: ComposeSummary } {
+  const out: ComposeStageResult = composeRows(input);
+  if (out.kind !== 'composed') throw new Error(`expected a composed stage result, got ${JSON.stringify(out)}`);
+  return out;
+}
 
 async function seed(actions: IntegrationAction[], opts: { orgId?: string; userId?: string } = {}): Promise<void> {
   const orgId = opts.orgId ?? 'orgA';
@@ -742,8 +827,31 @@ describe('the parametrize rung fills arguments and then meets the same gate', ()
 // ---------------------------------------------------------------------------------------------
 
 describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\'s', () => {
+  /**
+   * THE FIELD SETS ARE THE FIXTURES' OWN. Stated as an assertion rather than as a derivation so a
+   * fixture that grows a column and a declared set that does not are caught here, not by a refusal
+   * three sections down that nobody can explain.
+   *
+   * It is also the direct pin on `fieldsOf`: the UNION over all rows (not the first row's keys) and
+   * SORTED (the prompt is the input to a nondeterministic step, so the same rows must ask the same
+   * question twice). `keysOf` is this file's own independent implementation - see its header.
+   */
+  it('fieldsOf answers the sorted UNION of the rows\' keys, and the fixtures match what is declared', () => {
+    expect(fieldsOf(CLIENT_ROWS)).toEqual(CLIENT_FIELDS);
+    expect(fieldsOf(PROCESS_ROWS)).toEqual(PROCESS_FIELDS);
+    expect(fieldsOf(CLIENT_ROWS)).toEqual(keysOf(CLIENT_ROWS));
+
+    // THE UNION, and this is the case that makes it load-bearing: a list endpoint that omits an
+    // absent optional field on some rows. Reading only the first row would hide `tribunal`, and a
+    // model asked to narrow by it would be refused for naming a field the data really has.
+    expect(fieldsOf([{ a: 1 }, { b: 2 }, { a: 3, c: 4 }])).toEqual(['a', 'b', 'c']);
+    // SORTED, whatever order the keys arrived in.
+    expect(fieldsOf([{ z: 1, a: 2 }, { m: 3 }])).toEqual(['a', 'm', 'z']);
+    expect(fieldsOf([])).toEqual([]);
+  });
+
   it('joins the action rows against the collection rows that satisfy the predicate', () => {
-    const out = composeRows({
+    const out = composedBy({
       plan: CANONICAL_PLAN as never,
       actionRows: PROCESS_ROWS,
       collectionRows: CLIENT_ROWS,
@@ -760,7 +868,7 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
     // If these ever disagree, one recipe DSL comparison and one compose comparison have drifted.
     for (const row of CLIENT_ROWS) {
       const direct = matchesSimpleQuery(row, { field: 'idade', op: 'lt', value: 40 });
-      const viaStage = composeRows({
+      const viaStage = composedBy({
         plan: { ...CANONICAL_PLAN, join: { resultField: 'id', collectionField: 'id' } } as never,
         actionRows: [row],
         collectionRows: [row],
@@ -779,7 +887,7 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
    * so a collection row genuinely keyed on those strings is what an unguarded absent key joins to.
    */
   it('an ABSENT key on the ACTION side matches nothing - not even a row keyed "null"/"undefined"', () => {
-    const out = composeRows({
+    const out = composedBy({
       plan: CANONICAL_PLAN as never,
       actionRows: [{ numeroProcesso: 'x' }, { numeroProcesso: 'y', clienteId: null }],
       // Real, present keys - the set is NOT empty, so only the action-side guard can exclude these.
@@ -790,7 +898,7 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
   });
 
   it('an ABSENT key on the COLLECTION side keys nothing - not even a row keyed "null"/"undefined"', () => {
-    const out = composeRows({
+    const out = composedBy({
       plan: CANONICAL_PLAN as never,
       // Real, present keys on the action side, spelled as the strings an unguarded null becomes.
       actionRows: [{ numeroProcesso: 'x', clienteId: 'undefined' }, { numeroProcesso: 'y', clienteId: 'null' }],
@@ -802,7 +910,7 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
 
   it('keys are compared as strings, so a numeric id from EITHER side still joins', () => {
     // A number on the ACTION side against a string in the collection.
-    const numericAction = composeRows({
+    const numericAction = composedBy({
       plan: CANONICAL_PLAN as never,
       actionRows: [{ numeroProcesso: 'p', clienteId: 7 }],
       collectionRows: [{ id: '7', idade: 20 }],
@@ -813,7 +921,7 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
     // collection side's own `String(k)` was a SURVIVING MUTANT: its key was already a string, so
     // dropping the coercion changed nothing. This is the direction that catches it - a Mongo row
     // whose id really is a number, joined against an API that returns ids as strings.
-    const numericCollection = composeRows({
+    const numericCollection = composedBy({
       plan: CANONICAL_PLAN as never,
       actionRows: [{ numeroProcesso: 'p', clienteId: '7' }],
       collectionRows: [{ id: 7, idade: 20 }],
@@ -831,13 +939,45 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
     expect(COMPOSE_MAX_ITEMS).toBe(200);
 
     const many = Array.from({ length: COMPOSE_MAX_ITEMS + 5 }, (_, i) => ({ numeroProcesso: `p${i}`, clienteId: 'c1' }));
-    const out = composeRows({ plan: CANONICAL_PLAN as never, actionRows: many, collectionRows: CLIENT_ROWS });
+    const out = composedBy({ plan: CANONICAL_PLAN as never, actionRows: many, collectionRows: CLIENT_ROWS });
     expect(out.items).toHaveLength(COMPOSE_MAX_ITEMS);
     expect(out.summary.matched).toBe(COMPOSE_MAX_ITEMS + 5);
     expect(out.summary.truncated).toBe(true);
     // The OTHER cap did not fire: four collection rows is four collection rows.
     expect(out.summary.collectionScanned).toBe(4);
     expect(out.summary.collectionTruncated).toBe(false);
+  });
+
+  /**
+   * MINOR: THE EMIT CAP'S BOUNDARY WAS NEVER PINNED, and `>` -> `>=` was a SURVIVING MUTANT.
+   *
+   * Round three built exactly this pair for the SIBLING constant (`COMPOSE_MAX_COLLECTION_ROWS`, two
+   * tests below) and did not build it here, so the only case in the file was `MAX + 5` - true under
+   * both readings. Under `>=`, a join that matched EXACTLY 200 rows reports `truncated: true` while
+   * `items` holds every one of them.
+   *
+   * That is a lie in the direction that matters. `truncated` means "there is more of your answer
+   * that you did not receive", so a caller reading it does the one thing the flag exists to prompt:
+   * they narrow their question, or they tell their client the list is partial. Both are wrong when
+   * the list is complete, and a legal filing built on "these are only the first 200" is a different
+   * document from one built on "these are all of them".
+   */
+  it('EXACTLY the cap is not truncated, and one past it is - the boundary, in a pair', () => {
+    const exact = Array.from({ length: COMPOSE_MAX_ITEMS }, (_, i) => ({ numeroProcesso: `p${i}`, clienteId: 'c1' }));
+    const at = composedBy({ plan: CANONICAL_PLAN as never, actionRows: exact, collectionRows: CLIENT_ROWS });
+    expect(at.items).toHaveLength(COMPOSE_MAX_ITEMS);
+    expect(at.summary.matched).toBe(COMPOSE_MAX_ITEMS);
+    // The caller received EVERY matching row, so nothing was withheld and nothing says otherwise.
+    expect(at.summary.truncated).toBe(false);
+
+    const over = composedBy({
+      plan: CANONICAL_PLAN as never,
+      actionRows: [...exact, { numeroProcesso: 'p-extra', clienteId: 'c1' }],
+      collectionRows: CLIENT_ROWS,
+    });
+    expect(over.items).toHaveLength(COMPOSE_MAX_ITEMS);
+    expect(over.summary.matched).toBe(COMPOSE_MAX_ITEMS + 1);
+    expect(over.summary.truncated).toBe(true);
   });
 
   /**
@@ -860,7 +1000,7 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
     // changing it is a decision somebody takes here rather than a number that drifts.
     expect(COMPOSE_MAX_COLLECTION_ROWS).toBe(5_000);
 
-    const out = composeRows({
+    const out = composedBy({
       plan: CANONICAL_PLAN as never,
       actionRows: capAction,
       collectionRows: capRows(COMPOSE_MAX_COLLECTION_ROWS),
@@ -871,7 +1011,7 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
   });
 
   it('one row PAST the cap is not considered, and the answer SAYS it was narrowed against a prefix', () => {
-    const out = composeRows({
+    const out = composedBy({
       plan: CANONICAL_PLAN as never,
       actionRows: capAction,
       collectionRows: capRows(COMPOSE_MAX_COLLECTION_ROWS + 1),
@@ -885,6 +1025,121 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
     expect(out.summary.matchedCollectionRows).toBe(COMPOSE_MAX_COLLECTION_ROWS);
   });
 
+  /**
+   * THE FLOOR: A FIELD THAT IS NOT ON THE ROWS IS NOT A NARROWER FILTER, IT IS NO FILTER AT ALL.
+   *
+   * This is the stage half of the finding. `matchesSimpleQuery` reads an absent field as
+   * `undefined`, which is a VALUE, so the predicate answers a definite `false` (or, under `neq`, a
+   * definite `true`) for every row and the stage returns a shorter list with a summary that looks
+   * exactly like a correct one. There is no signal anywhere in the answer.
+   *
+   * THE CASES DIFFER IN THE DIRECTION THEY GO WRONG, which is why they are written out: a wrong
+   * `where.field` under an ordering op selects NOTHING (NaN); the same wrong field under `neq`
+   * selects EVERYTHING; a wrong `join.collectionField` empties the key set. Only the first looks
+   * like a mistake from the outside, and all of them are refused the same way.
+   */
+  it('the stage REFUSES to narrow by a collection field the rows do not carry', () => {
+    const out = composeRows({
+      plan: { ...CANONICAL_PLAN, where: { field: 'age', op: 'lt', value: 40 } } as never,
+      actionRows: PROCESS_ROWS,
+      collectionRows: CLIENT_ROWS,
+    });
+    // Under the old stage: `{ items: [], summary: { matched: 0, matchedCollectionRows: 0 } }`.
+    if (out.kind !== 'not_applicable') throw new Error(`expected not_applicable, got ${JSON.stringify(out)}`);
+    expect(out.missing).toEqual(['age']);
+  });
+
+  it('…including when the wrong field makes the predicate select EVERYTHING instead of nothing', () => {
+    // `neq` against an absent field is true for every row, so the collection filter vanishes and the
+    // answer is silently WIDER than asked for. A stage that only guarded the empty case would pass
+    // this through.
+    const out = composeRows({
+      plan: { ...CANONICAL_PLAN, where: { field: 'age', op: 'neq', value: 40 } } as never,
+      actionRows: PROCESS_ROWS,
+      collectionRows: CLIENT_ROWS,
+    });
+    expect(out.kind).toBe('not_applicable');
+  });
+
+  it('the stage REFUSES to key the join on a collection field the rows do not carry', () => {
+    const out = composeRows({
+      plan: { ...CANONICAL_PLAN, join: { resultField: 'clienteId', collectionField: '_id' } } as never,
+      actionRows: PROCESS_ROWS,
+      collectionRows: CLIENT_ROWS,
+    });
+    if (out.kind !== 'not_applicable') throw new Error(`expected not_applicable, got ${JSON.stringify(out)}`);
+    expect(out.missing).toEqual(['_id']);
+  });
+
+  it('a field present on SOME rows is present enough - the union is what the join sees', () => {
+    // Optionality on the collection side: one row carries `idade`, the other does not. Judging
+    // presence off the first row alone would refuse a narrowing the data supports.
+    const out = composedBy({
+      plan: CANONICAL_PLAN as never,
+      actionRows: [{ numeroProcesso: 'p', clienteId: 'c9' }],
+      collectionRows: [{ id: 'c8' }, { id: 'c9', idade: 20 }],
+    });
+    expect(out.items).toHaveLength(1);
+  });
+
+  /**
+   * A FIELD PRESENT ONLY AS NULL IS PRESENT. Refusing here would turn "nobody has filled this in
+   * yet" into "your filter does not apply", which is a different and untrue statement about the
+   * caller's data - and it would make the check a test of VALUES, which is the predicate's job.
+   *
+   * What the predicate then does with the null is the recipe DSL's own carried-verbatim semantics
+   * and is deliberately NOT changed here: `Number(null)` is `0`, so a null `idade` really is `lt`
+   * 40. That is exactly what `store.query` does today in every shipped recipe, and this rung
+   * promised to add no comparison of its own. It is asserted rather than glossed so nobody reads
+   * the presence check as having fixed it.
+   */
+  it('a field present only as NULL is present - and the predicate then treats it as the DSL does', () => {
+    const out = composedBy({
+      plan: CANONICAL_PLAN as never,
+      actionRows: [{ numeroProcesso: 'p', clienteId: 'c9' }],
+      collectionRows: [{ id: 'c9', idade: null }],
+    });
+    expect(out.summary.matchedCollectionRows).toBe(1);
+    expect(out.items).toHaveLength(1);
+    // …which is `matchesSimpleQuery`'s answer, not this stage's: one implementation, no drift.
+    expect(matchesSimpleQuery({ id: 'c9', idade: null }, { field: 'idade', op: 'lt', value: 40 })).toBe(true);
+  });
+
+  it('BOTH missing names are reported, not just the first one found', () => {
+    const out = composeRows({
+      plan: { compose: true, collection: 'clients', where: { field: 'age', op: 'lt', value: 40 }, join: { resultField: 'clienteId', collectionField: '_id' } } as never,
+      actionRows: PROCESS_ROWS,
+      collectionRows: CLIENT_ROWS,
+    });
+    if (out.kind !== 'not_applicable') throw new Error(`expected not_applicable, got ${JSON.stringify(out)}`);
+    expect(out.missing).toEqual(['age', '_id']);
+  });
+
+  it('one name reported ONCE when the plan filters and joins on the same missing field', () => {
+    const out = composeRows({
+      plan: { compose: true, collection: 'clients', where: { field: 'age', op: 'lt', value: 40 }, join: { resultField: 'clienteId', collectionField: 'age' } } as never,
+      actionRows: PROCESS_ROWS,
+      collectionRows: CLIENT_ROWS,
+    });
+    if (out.kind !== 'not_applicable') throw new Error(`expected not_applicable, got ${JSON.stringify(out)}`);
+    expect(out.missing).toEqual(['age']);
+  });
+
+  /**
+   * PRESENCE IS JUDGED OVER THE ROWS THE JOIN REALLY CONSIDERS, i.e. the capped prefix. A field that
+   * first appears past `COMPOSE_MAX_COLLECTION_ROWS` is a field the join cannot use, and narrowing
+   * by "the collection has it" while the join never sees it is the truncation lie this rung already
+   * fixed once, wearing a different hat. The mutation is judging presence on `input.collectionRows`.
+   */
+  it('presence is judged over the CONSIDERED prefix, not over rows the cap hid', () => {
+    const hidden = [
+      ...Array.from({ length: COMPOSE_MAX_COLLECTION_ROWS }, (_, i) => ({ id: `filler${i}` })),
+      { id: 'c1', idade: 31 },
+    ];
+    const out = composeRows({ plan: CANONICAL_PLAN as never, actionRows: PROCESS_ROWS, collectionRows: hidden });
+    expect(out.kind).toBe('not_applicable');
+  });
+
   it('rowsOf finds the one list, and REFUSES to guess between two', () => {
     expect(rowsOf(PROCESS_ROWS)).toEqual({ kind: 'rows', rows: PROCESS_ROWS });
     expect(rowsOf({ processos: PROCESS_ROWS })).toEqual({ kind: 'rows', rows: PROCESS_ROWS });
@@ -895,18 +1150,124 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
   });
 
   it('verifyComposePlan refuses a comparison this platform does not perform', () => {
-    const v = verifyComposePlan({
-      planned: { ...CANONICAL_PLAN, where: { field: 'idade', op: 'regex', value: '^4' } },
-    });
+    const v = composeVerdictOn({ ...CANONICAL_PLAN, where: { field: 'idade', op: 'regex', value: '^4' } });
     expect(v.passed).toBe(false);
     expect(v.checks.some((c) => c.name === 'predicate' && !c.ok)).toBe(true);
   });
 
   it('verifyComposePlan refuses a reserved or malformed collection name', () => {
     for (const bad of ['usr.someone', '__system', 'has spaces', '']) {
-      const v = verifyComposePlan({ planned: { ...CANONICAL_PLAN, collection: bad } });
-      expect(v.passed).toBe(false);
+      expect(composeVerdictOn({ ...CANONICAL_PLAN, collection: bad }).passed).toBe(false);
     }
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // THE FIELD NAMES. The rung's sharpest defect was that a model was asked to name three of them
+  // and shown NONE, so every one it produced was an invention - and an invented field name does
+  // not error, it narrows. These are the checks that turn a guess into a refusal.
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * THE COLLECTION MUST BE ONE THE CALLER WAS SHOWN, not merely one the platform could address.
+   *
+   * Before `collection_known` existed, `collection_name` was the only test of the name, and it
+   * asks a different question: is this string ADDRESSABLE. `clientes` is perfectly addressable, so
+   * a plausible-but-wrong name passed the suite and got as far as a store read.
+   */
+  it('verifyComposePlan refuses a collection the caller was never shown', () => {
+    const v = composeVerdictOn({ ...CANONICAL_PLAN, collection: 'clientes' });
+    expect(v.passed).toBe(false);
+    expect(v.plan).toBeNull();
+    // The NAME check passes - `clientes` is a name this platform can address. Only membership fails,
+    // which is what makes the two checks distinguishable rather than two spellings of one.
+    expect(v.checks.find((c) => c.name === 'collection_name')?.ok).toBe(true);
+    expect(v.checks.find((c) => c.name === 'collection_known')?.ok).toBe(false);
+    expect(v.checks.find((c) => c.name === 'collection_known')?.detail).toContain('not one of the collections you hold');
+  });
+
+  /**
+   * THE THREE FIELD NAMES, EACH AGAINST THE SET IT WAS OFFERED, one case per name so that deleting
+   * any single one of the three tests inside `verifyComposePlan` reds a test of its own.
+   *
+   * Each of these plans is EXACTLY what a model with no field list produces: a reasonable guess.
+   * `age` for `idade`, `clientId` for `clienteId`, `_id` for `id`. Under the old suite all three
+   * passed, and each produced an EMPTY `items` array on a `composed` outcome - a shorter list of the
+   * caller's own cases, delivered as the answer.
+   */
+  it('verifyComposePlan refuses a "where.field" the chosen collection does not have', () => {
+    const v = composeVerdictOn({ ...CANONICAL_PLAN, where: { field: 'age', op: 'lt', value: 40 } });
+    expect(v.passed).toBe(false);
+    expect(v.plan).toBeNull();
+    const fields = v.checks.find((c) => c.name === 'fields');
+    expect(fields?.ok).toBe(false);
+    expect(fields?.detail).toContain('"where.field": "age" is not a field of "clients"');
+    // The offered set is NAMED in the violation, so the one repair turn can actually repair.
+    expect(fields?.detail).toContain('idade');
+  });
+
+  it('verifyComposePlan refuses a "join.collectionField" the chosen collection does not have', () => {
+    const v = composeVerdictOn({ ...CANONICAL_PLAN, join: { resultField: 'clienteId', collectionField: '_id' } });
+    expect(v.passed).toBe(false);
+    expect(v.checks.find((c) => c.name === 'fields')?.detail).toContain('"join.collectionField": "_id" is not a field of "clients"');
+  });
+
+  it('verifyComposePlan refuses a "join.resultField" the ACTION\'s rows do not have', () => {
+    const v = composeVerdictOn({ ...CANONICAL_PLAN, join: { resultField: 'clientId', collectionField: 'id' } });
+    expect(v.passed).toBe(false);
+    expect(v.checks.find((c) => c.name === 'fields')?.detail).toContain('"join.resultField": "clientId" is not a field of the rows the action returned');
+    expect(v.checks.find((c) => c.name === 'fields')?.detail).toContain('clienteId');
+  });
+
+  it('all three offending names are reported at once, so ONE repair turn can fix the whole plan', () => {
+    const v = composeVerdictOn({
+      compose: true,
+      collection: 'clients',
+      where: { field: 'age', op: 'lt', value: 40 },
+      join: { resultField: 'clientId', collectionField: '_id' },
+    });
+    const detail = v.checks.find((c) => c.name === 'fields')?.detail ?? '';
+    expect(detail).toContain('where.field');
+    expect(detail).toContain('join.resultField');
+    expect(detail).toContain('join.collectionField');
+  });
+
+  /**
+   * A DIFFERENT COLLECTION IS A DIFFERENT FIELD SET. Without this the `fields` check could resolve
+   * against any held collection - or against the union of all of them - and a plan naming a field
+   * of `invoices` while joining `clients` would pass. The mutation is `collections[0]` instead of
+   * the `find`, and it survives every other case in this file.
+   */
+  it('the fields are judged against the collection the PLAN chose, not against some other one', () => {
+    // `total` is a field of `invoices`, not of `clients`.
+    expect(composeVerdictOn({ ...CANONICAL_PLAN, where: { field: 'total', op: 'lt', value: 40 } }).passed).toBe(false);
+    // …and the same field name IS accepted when the plan names the collection that has it.
+    const v = composeVerdictOn({
+      compose: true,
+      collection: 'invoices',
+      where: { field: 'total', op: 'lt', value: 40 },
+      join: { resultField: 'clienteId', collectionField: 'id' },
+    });
+    expect(v.passed).toBe(true);
+    expect(v.plan?.collection).toBe('invoices');
+  });
+
+  /**
+   * NOTHING IS JUDGED AGAINST A COLLECTION THAT DID NOT RESOLVE. A suite that invented a field set
+   * for a collection the caller does not hold would be inventing the artifact it judges - the rule
+   * the `shape` short-circuit states, one level down. What it CAN still judge, it does: the action's
+   * own rows are known whatever the collection turned out to be.
+   */
+  it('an unknown collection yields no field verdict about it, but the action side is still judged', () => {
+    const v = composeVerdictOn({
+      ...CANONICAL_PLAN,
+      collection: 'clientes',
+      where: { field: 'age', op: 'lt', value: 40 },
+      join: { resultField: 'clientId', collectionField: '_id' },
+    });
+    const detail = v.checks.find((c) => c.name === 'fields')?.detail ?? '';
+    expect(detail).toContain('join.resultField');
+    expect(detail).not.toContain('where.field');
+    expect(detail).not.toContain('join.collectionField');
   });
 
   it('nothing below `shape` is judged on a malformed plan - the suite does not guess at a repair', () => {
@@ -915,18 +1276,62 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
     // real, only one can fire, and what distinguishes them is the CHECK LIST - which is the rule
     // itself (`verifyPlannedArgs` is asserted the same way, in section 1): a suite that keeps
     // judging a plan it has already found malformed is a suite inventing the artifact it judges.
-    const noCollection = verifyComposePlan({ planned: { compose: true, where: CANONICAL_PLAN.where, join: CANONICAL_PLAN.join } });
+    const noCollection = composeVerdictOn({ compose: true, where: CANONICAL_PLAN.where, join: CANONICAL_PLAN.join });
     expect(noCollection.passed).toBe(false);
     expect(noCollection.checks.map((c) => c.name)).toEqual(['shape']);
     expect(noCollection.plan).toBeNull();
     // A WELL-FORMED plan is judged all the way down, so the assertion above is about the
     // short-circuit rather than about this suite only ever running one check.
-    expect(verifyComposePlan({ planned: CANONICAL_PLAN }).checks.map((c) => c.name))
-      .toEqual(['shape', 'collection_name', 'predicate']);
+    expect(composeVerdictOn(CANONICAL_PLAN).checks.map((c) => c.name))
+      .toEqual(['shape', 'collection_name', 'collection_known', 'predicate', 'value', 'fields']);
+  });
+
+  /**
+   * MINOR: `where.value` WAS THE ONE DOOR THE FIELD CHECK DOES NOT COVER.
+   *
+   * Every other thing a compose plan carries is a NAME, and a name is now chosen from a set the
+   * model was shown. The value is not - it is the model's own - and until this check it was accepted
+   * as anything at all, including an object or an array. Every one of those fails the same silent
+   * way the invented field names did:
+   *
+   *   - the four orderings: `Number({...})` is `NaN`, so NOTHING matches, in any direction;
+   *   - `eq`/`neq`: reference comparison against a value that arrived over JSON, so `eq` never
+   *     matches and `neq` always does - a filter that selects the whole collection;
+   *   - the three string ops: `String({...})` is `"[object Object]"`.
+   *
+   * Each produces a well-formed `composed` answer with wrong `items` and nothing on the wire to say
+   * so. `verifyPlannedArgs` has refused non-scalars since the parametrize rung shipped, for this
+   * exact reason; this rung did not.
+   */
+  it('verifyComposePlan refuses a "where.value" that is not a scalar', () => {
+    for (const bad of [{ $gt: 40 }, [40], [], {}, { field: 'idade' }]) {
+      const v = composeVerdictOn({ ...CANONICAL_PLAN, where: { field: 'idade', op: 'lt', value: bad } });
+      expect(v.passed, JSON.stringify(bad)).toBe(false);
+      expect(v.plan).toBeNull();
+      expect(v.checks.find((c) => c.name === 'value')?.ok).toBe(false);
+    }
+    // …and the four scalars the recipe DSL really compares against are all accepted, `null`
+    // included: refusing it would narrow the vocabulary rather than guard it.
+    for (const good of ['40', 40, true, null]) {
+      const v = composeVerdictOn({ ...CANONICAL_PLAN, where: { field: 'idade', op: 'eq', value: good } });
+      expect(v.passed, JSON.stringify(good)).toBe(true);
+    }
+  });
+
+  it('a non-scalar value is diagnosed as ITS OWN problem, not as a bad comparison', () => {
+    // Two different facts about a plan, so two different things to send back. Folding the value into
+    // the `predicate` check would tell a model its `lt` was wrong when its `lt` was fine.
+    const v = composeVerdictOn({ ...CANONICAL_PLAN, where: { field: 'idade', op: 'lt', value: { $gt: 40 } } });
+    expect(v.checks.find((c) => c.name === 'predicate')?.ok).toBe(true);
+    expect(v.checks.find((c) => c.name === 'value')?.detail).toContain('must be a string, number, boolean or null');
+    expect(v.checks.find((c) => c.name === 'value')?.detail).toContain('an object');
+    // …and an array says so rather than calling itself an object.
+    expect(composeVerdictOn({ ...CANONICAL_PLAN, where: { field: 'idade', op: 'lt', value: [40] } })
+      .checks.find((c) => c.name === 'value')?.detail).toContain('an array');
   });
 
   it('`{ "compose": false }` is a well-formed answer that yields no plan', () => {
-    const v = verifyComposePlan({ planned: { compose: false } });
+    const v = composeVerdictOn({ compose: false });
     expect(v.passed).toBe(true);
     expect(v.plan).toBeNull();
   });
@@ -943,7 +1348,7 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
    */
   it('only a LITERAL false declines: a malformed plan is malformed, not a decline', () => {
     for (const bad of [{}, { compose: 0 }, { compose: 'no' }, { compose: null }]) {
-      const v = verifyComposePlan({ planned: bad });
+      const v = composeVerdictOn(bad);
       expect(v.passed, JSON.stringify(bad)).toBe(false);
       expect(v.plan).toBeNull();
       // …and it is diagnosed as a SHAPE problem, so the repair turn is told what was wrong.
@@ -960,7 +1365,7 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
    * plan it has already found malformed is a suite inventing the artifact it judges.
    */
   it('an EMPTY collection name is a SHAPE problem, and nothing below shape is judged', () => {
-    const v = verifyComposePlan({ planned: { ...CANONICAL_PLAN, collection: '' } });
+    const v = composeVerdictOn({ ...CANONICAL_PLAN, collection: '' });
     expect(v.passed).toBe(false);
     expect(v.checks.map((c) => c.name)).toEqual(['shape']);
     expect(v.checks[0]?.detail ?? '').toContain('"collection" is missing');
@@ -1053,6 +1458,64 @@ describe('CANONICAL: "todos os processos de clientes com menos de 40 anos"', () 
     expect(JSON.stringify(meta)).not.toContain('111/24.0T8LSB');
   });
 
+  /**
+   * MINOR: THE AUDIT WRITE'S OWN `catch` IS THE LAST GUARD ON THIS PATH, AND NOBODY CHECKED IT.
+   *
+   * `applyComposition` is built so that nothing in it can destroy an answer already in hand, and its
+   * header states the one exception explicitly: "the only `await` outside the `try` is
+   * `auditComposed`, which catches its own". That sentence is the entire argument for the shape of
+   * the function - and it was a claim about code no test exercised. Delete the `try`/`catch` inside
+   * `auditComposed` and a rejecting activity write propagates out of `applyComposition`, out of
+   * `runMatchedAction`, out of `achieveIntegrationGoal` and into the route's error handler as a 500:
+   *
+   *   the caller's request goes out -> it comes back 200 -> the join is computed and CORRECT ->
+   *   our own audit collection blips -> the caller gets a 500 from US and no processos at all.
+   *
+   * That is the exact defect this branch spent three rounds closing, on its fourth exit. The rows
+   * were not merely in hand here, they were already NARROWED: the whole answer existed and was
+   * thrown away by a write that is nobody's answer.
+   *
+   * THE FAILURE IS INJECTED AT THE STORE the single audit write path really uses (`data/activity.ts`
+   * -> `activityLogs.insert`), not at a seam this file invented.
+   */
+  it('a FAILING audit write does not destroy the composed answer it was recording', async () => {
+    await seed([processos]);
+    const { planner } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
+    const { seam } = collectionsOf({ clients: CLIENT_ROWS });
+    const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: { processos: PROCESS_ROWS } });
+
+    // ONLY the compose row rejects. `mockRejectedValueOnce` would have caught the EXECUTOR's own
+    // audit write instead - the first insert of the call - and proved that guard rather than this
+    // one, which is a different function with a catch of its own.
+    const realInsert = activityLogs.insert.bind(activityLogs);
+    const spy = vi.spyOn(activityLogs, 'insert').mockImplementation(async (doc) => {
+      if ((doc as { type?: string }).type === 'capability_achieve_compose') {
+        throw new Error('MongoNetworkError: connection 7 to ekoa-primary.internal:27017 closed');
+      }
+      return realInsert(doc);
+    });
+    let res: Awaited<ReturnType<typeof achieveIntegrationGoal>>;
+    try {
+      // Before the guard was pinned: this line never returned - the rejection escaped.
+      res = await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL);
+    } finally {
+      spy.mockRestore();
+    }
+
+    const value = valueOf(res);
+    if (value.outcome !== 'composed') throw new Error(`expected composed, got ${JSON.stringify(value)}`);
+    expect(calls).toHaveLength(1);
+    // THE LOAD-BEARING ASSERTION: the narrowed answer the product had already computed reached the
+    // caller, whole and correct. An audit write is a record OF an answer, never a condition on it.
+    expect(value.items.map((r) => r.numeroProcesso)).toEqual(['111/24.0T8LSB', '333/24.0T8CBR']);
+    expect(value.composition.matched).toBe(2);
+    // The store's own message names our host and our driver; it is an operator's fact.
+    expect(JSON.stringify(value)).not.toContain('MongoNetworkError');
+    expect(JSON.stringify(value)).not.toContain('ekoa-primary.internal');
+    // …and the row really did not land, so this is not passing by the write having succeeded.
+    expect(await activityLogs.find({ type: 'capability_achieve_compose' })).toHaveLength(0);
+  });
+
   it('a TRUNCATED join says so on the answer, on the ladder and on the audit row', async () => {
     // The same canonical call over a collection larger than the cap. The client that keys the one
     // surviving process sits PAST the cap, so the honest answer is "here is what I found, and I
@@ -1127,7 +1590,7 @@ describe('the compose rung stands down; it never takes an answer away', () => {
   it('an UNKNOWN COLLECTION does not discard the answer the remote already gave', async () => {
     await seed([processos]);
     const { planner } = plannerEmitting([composeBlock({ ...CANONICAL_PLAN, collection: 'clientes' })]);
-    const { seam } = collectionsOf({ clients: CLIENT_ROWS });
+    const { seam, reads } = collectionsOf({ clients: CLIENT_ROWS });
     const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: { processos: PROCESS_ROWS } });
 
     const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
@@ -1144,16 +1607,47 @@ describe('the compose rung stands down; it never takes an answer away', () => {
     expect((res as { composition?: unknown }).composition).toBeUndefined();
     const step = res.ladder?.find((s) => s.rung === 'compose');
     expect(step?.verdict).toBe('refused');
-    expect(step?.detail).toContain('clientes');
+    // …and it is decided BEFORE the store is touched now. `collection_known` judges the name against
+    // the very list the model was shown, so a name the caller does not hold never becomes a read.
+    expect(step?.violations?.join(' ')).toContain('"clientes" is not one of the collections you hold');
+    expect(reads).toHaveLength(0);
     expect(res.ladder?.find((s) => s.rung === 'reuse')?.verdict).toBe('taken');
     // No join happened, so no audit row claims one did.
     expect(await activityLogs.find({ type: 'capability_achieve_compose' })).toHaveLength(0);
   });
 
-  it('an UNSHAPED result is neither reshaped NOR substituted for the result itself', async () => {
+  /**
+   * THE READER'S OWN not-found ANSWER, still reachable and still non-destructive.
+   *
+   * With `collection_known` judging the name at planning time, this branch is now only reached by a
+   * RACE - the lister and the reader are two separate queries, so a collection can empty out in
+   * between (its last row deleted by the tenant's own app). That is a real production sequence, and
+   * the fixture is exactly it: `list` offers `clients`, `read` answers `unknown_collection`.
+   */
+  it('a collection that EMPTIES between the list and the read still costs the caller nothing', async () => {
     await seed([processos]);
     const { planner } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
-    const { seam } = collectionsOf({ clients: CLIENT_ROWS });
+    const raced: AppCollections = {
+      list: async () => [{ name: 'clients', fields: CLIENT_FIELDS }],
+      read: async () => ({ kind: 'unknown_collection' }),
+    };
+    const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner, collections: raced, data: { processos: PROCESS_ROWS } });
+
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
+
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    expect(calls).toHaveLength(1);
+    expect(res.result.data).toEqual({ processos: PROCESS_ROWS });
+    const step = res.ladder?.find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('refused');
+    expect(step?.detail).toContain('you hold no "clients" collection');
+    expect(await activityLogs.find({ type: 'capability_achieve_compose' })).toHaveLength(0);
+  });
+
+  it('an UNSHAPED result is neither reshaped NOR substituted for the result itself', async () => {
+    await seed([processos]);
+    const { planner, turns } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
+    const { seam, lists } = collectionsOf({ clients: CLIENT_ROWS });
     const two = { processos: PROCESS_ROWS, arquivados: [] };
     const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: two });
 
@@ -1169,6 +1663,171 @@ describe('the compose rung stands down; it never takes an answer away', () => {
     const step = res.ladder?.find((s) => s.rung === 'compose');
     expect(step?.verdict).toBe('refused');
     expect(step?.detail).toContain('several lists');
+    // …and it costs NOTHING now. The rung reads the result's shape before it lists a collection or
+    // buys a planning turn, because there is no honest field set to show a model for a result the
+    // platform cannot read. Both of these reds if `rowsOf` moves back below the model turn.
+    expect(turns()).toBe(0);
+    expect(lists()).toBe(0);
+    expect(await activityLogs.find({ type: 'capability_achieve_compose' })).toHaveLength(0);
+  });
+
+  /**
+   * AN EMPTY LIST IS NOT SOMETHING TO NARROW, and it is the one shape whose field set does not
+   * exist: with no rows there are no keys, so a planning turn would have nothing to offer the model
+   * for `join.resultField` and every answer it gave would be refused. Standing down costs the
+   * caller nothing (an empty list narrowed is an empty list) and costs them no model call either.
+   */
+  it('an action that returned NO ROWS stands the rung down before anything is spent', async () => {
+    await seed([processos]);
+    const { planner, turns } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
+    const { seam, lists } = collectionsOf({ clients: CLIENT_ROWS });
+    const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: { processos: [] } });
+
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
+
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    expect(calls).toHaveLength(1);
+    expect(res.result.data).toEqual({ processos: [] });
+    expect(turns()).toBe(0);
+    expect(lists()).toBe(0);
+    const step = res.ladder?.find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('skipped');
+    expect(step?.detail).toContain('returned no rows');
+  });
+
+  // -------------------------------------------------------------------------------------------
+  // THE MAJOR: a field name the model was never shown, end to end.
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * THE PROMPT NAMES BOTH FIELD SETS.
+   *
+   * This is the half of the fix that lets a model be RIGHT, and it is asserted on the rendered
+   * prompt rather than on the function, because the prompt is where it matters. Before it, the
+   * planning turn was given the action's name, its one-line description, `changes data` and a bare
+   * list of collection names - and the output contract then demanded THREE field names back. There
+   * was nothing to choose from, so every name was an invention.
+   */
+  it('the compose prompt names the ACTION\'s row fields and EVERY collection\'s fields', async () => {
+    await seed([processos]);
+    const { planner, prompts } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
+    const { seam } = collectionsOf({ clients: CLIENT_ROWS, invoices: [{ id: 'i1', total: 10 }] });
+    const { ctx } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: { processos: PROCESS_ROWS } });
+
+    valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
+
+    const prompt = prompts.join('\n');
+    // The ACTION side, from the rows the action really returned. Delete that section and this reds.
+    for (const f of PROCESS_FIELDS) expect(prompt, `action field ${f}`).toContain(`- ${f}`);
+    // The COLLECTION side, per collection, so the model can tell which fields belong to which.
+    expect(prompt).toContain(`- clients: ${CLIENT_FIELDS.join(', ')}`);
+    expect(prompt).toContain('- invoices: id, total');
+    // The contract points at those lists rather than asking for a field in the abstract.
+    expect(prompt).toContain('EVERY FIELD NAME MUST COME FROM THE LISTS ABOVE');
+  });
+
+  /**
+   * A GUESSED FIELD NAME IS A REFUSAL, NOT A SHORTER LIST - the finding, end to end, and the one
+   * assertion that matters is the last pair: `items` is ABSENT and `result.data` is WHOLE.
+   *
+   * `age` for `idade` is exactly what a model with no field list produces. Under the old rung this
+   * answered `composed` with `items: []` and a `composition` block reporting `matched: 0` - a
+   * confident, well-formed, wrong answer that a lawyer reading their own docket cannot distinguish
+   * from a correct one.
+   */
+  it('a "where.field" the model INVENTED refuses the narrowing and returns the whole answer', async () => {
+    await seed([processos]);
+    const { planner } = plannerEmitting([composeBlock({ ...CANONICAL_PLAN, where: { field: 'age', op: 'lt', value: 40 } })]);
+    const { seam, reads } = collectionsOf({ clients: CLIENT_ROWS });
+    const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: { processos: PROCESS_ROWS } });
+
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
+
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    expect(calls).toHaveLength(1);
+    // THE LOAD-BEARING PAIR. Delete the `fields` check and this becomes `composed` with `items: []`.
+    expect((res as { items?: unknown }).items).toBeUndefined();
+    expect(res.result.data).toEqual({ processos: PROCESS_ROWS });
+    expect((res as { composition?: unknown }).composition).toBeUndefined();
+
+    const step = res.ladder?.find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('refused');
+    expect(step?.violations?.join(' ')).toContain('"where.field": "age" is not a field of "clients"');
+    // Nothing was read on the strength of a plan that named a field nobody has.
+    expect(reads).toHaveLength(0);
+    expect(await activityLogs.find({ type: 'capability_achieve_compose' })).toHaveLength(0);
+  });
+
+  it('a "join.resultField" the model INVENTED refuses the narrowing and returns the whole answer', async () => {
+    await seed([processos]);
+    const { planner } = plannerEmitting([composeBlock({ ...CANONICAL_PLAN, join: { resultField: 'clientId', collectionField: 'id' } })]);
+    const { seam } = collectionsOf({ clients: CLIENT_ROWS });
+    const { ctx } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: { processos: PROCESS_ROWS } });
+
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
+
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    // `clientId` is on no row, so the join key set matched nothing: `items: []` under the old rung.
+    expect((res as { items?: unknown }).items).toBeUndefined();
+    expect(res.result.data).toEqual({ processos: PROCESS_ROWS });
+    expect(res.ladder?.find((s) => s.rung === 'compose')?.violations?.join(' '))
+      .toContain('"join.resultField": "clientId" is not a field of the rows the action returned');
+  });
+
+  /**
+   * WHERE THE OFFERED SET ACTUALLY GOES, stated rather than assumed.
+   *
+   * `repairs: 1` is a budget for PARSE violations - `authorWithRepair` re-prompts when the parser
+   * rejects the reply, and a plan naming a field nobody has parses perfectly. So a field violation
+   * never becomes a second turn; it lands on the LADDER, beside the answer, naming the set that was
+   * offered. That is the useful place for it: the caller (or a client) can see exactly which names
+   * were available, and no second model call is bought for a mistake a second call would repeat.
+   *
+   * Written as one test so the boundary is not rediscovered by someone expecting a retry.
+   */
+  it('a field violation is reported on the ladder rather than bought a second turn', async () => {
+    await seed([processos]);
+    const { planner, prompts } = plannerEmitting([composeBlock({ ...CANONICAL_PLAN, where: { field: 'age', op: 'lt', value: 40 } })]);
+    const { seam } = collectionsOf({ clients: CLIENT_ROWS });
+    const { ctx } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: { processos: PROCESS_ROWS } });
+
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
+
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    expect(res.result.data).toEqual({ processos: PROCESS_ROWS });
+    // ONE turn, not two: the reply parsed, so the repair budget was never touched.
+    expect(prompts).toHaveLength(1);
+    // …and the offered set travels on the answer, where a caller can read it.
+    expect(res.ladder?.find((s) => s.rung === 'compose')?.violations?.join(' ')).toContain('idade');
+  });
+
+  /**
+   * THE FLOOR, THROUGH THE PRODUCT. `verifyComposePlan` judged the plan against what the LISTER said
+   * `clients` holds; the READER then returns rows without that field, because the two are separate
+   * queries and the tenant's own app deleted the last row carrying it in between. `composeRows`
+   * refuses, and the caller keeps their whole answer.
+   *
+   * This is the only path on which the stage's own field check can fire, and it exists precisely so
+   * that the guarantee does not rest on the lister being right.
+   */
+  it('a collection that DRIFTS between the list and the read narrows nothing, and costs no answer', async () => {
+    await seed([processos]);
+    const { planner } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
+    // Advertised WITH `idade`; the rows read back no longer carry it.
+    const drifting = collectionsDrifting('clients', CLIENT_FIELDS, [{ id: 'c1' }, { id: 'c3' }]);
+    const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner, collections: drifting, data: { processos: PROCESS_ROWS } });
+
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
+
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    expect(calls).toHaveLength(1);
+    // Without the stage's own check this is `composed` with `items: []` - every row dropped by a
+    // predicate that was never applied.
+    expect((res as { items?: unknown }).items).toBeUndefined();
+    expect(res.result.data).toEqual({ processos: PROCESS_ROWS });
+    const step = res.ladder?.find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('refused');
+    expect(step?.detail).toContain('"clients" has no "idade" on the rows read');
     expect(await activityLogs.find({ type: 'capability_achieve_compose' })).toHaveLength(0);
   });
 
@@ -1182,8 +1841,8 @@ describe('the compose rung stands down; it never takes an answer away', () => {
    */
   it('an upstream FAILURE passes through verbatim - the compose wrapper is not an error boundary', async () => {
     await seed([processos]);
-    const { planner } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
-    const { seam, reads } = collectionsOf({ clients: CLIENT_ROWS });
+    const { planner, turns } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
+    const { seam, reads, lists } = collectionsOf({ clients: CLIENT_ROWS });
     const { ctx } = ctxWith('ownerA', 'orgA', {
       planner,
       collections: seam,
@@ -1204,8 +1863,12 @@ describe('the compose rung stands down; it never takes an answer away', () => {
     expect(step?.detail).toContain('did not succeed');
     // The ladder still names the rung that ANSWERED - the same step a plain execute records.
     expect(res.ladder?.find((s) => s.rung === 'reuse')?.verdict).toBe('taken');
-    // Nobody's collection was read to decorate a failure.
+    // Nobody's collection was read to decorate a failure - nor even ENUMERATED, and no planning turn
+    // was bought to narrow an answer that does not exist. All three red if the failure test moves
+    // back below the model turn, which is where it sat while the rung ran before the execute.
     expect(reads).toHaveLength(0);
+    expect(lists()).toBe(0);
+    expect(turns()).toBe(0);
     const audits = await activityLogs.find({ type: 'capability_achieve_compose' });
     expect(audits).toHaveLength(0);
   });
@@ -1700,9 +2363,15 @@ describe('static: the ladder routes through the ONE gated executor and never pic
     // value. Not one names `scope.appId`.
     expect(engine).toContain('appId: scope.scopeKey');
     expect(engine).not.toContain('scope.appId');
-    // …and `listCollections`, the reader this rung added, uses that same single binding point.
-    const fn = engine.slice(engine.indexOf('async listCollections('));
-    expect(fn.slice(0, fn.indexOf('\n  }'))).toContain("distinct('collection', { appId: scope.scopeKey })");
+    // …and `listCollectionFields`, the reader this rung added, uses that same single binding point.
+    // It now answers FIELD names as well as collection names, so it puts strictly more of the
+    // caller's own metadata into a prompt - all the more reason its `$match` is the same one.
+    const fn = engine.slice(engine.indexOf('async listCollectionFields('));
+    const body = fn.slice(0, fn.indexOf('\n  }'));
+    expect(body).toContain('{ $match: { appId: scope.scopeKey } }');
+    // No second `$match`, and no `$lookup` into anything: one stage decides whose rows this is.
+    expect(body.split('$match').length - 1).toBe(1);
+    expect(body).not.toContain('$lookup');
   });
 
   it('the executor seam has ONE refusal, and it is one `achieve` has already refused upstream', () => {

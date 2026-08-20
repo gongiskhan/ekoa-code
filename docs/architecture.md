@@ -919,6 +919,25 @@ is inherited on the same terms every other rail meets it.
   row. READS ONLY, and the gate is at the ENTRY: an action that can write never enters the rung, so
   no model turn is paid for and - decisively - no answer a model gives can turn a call that was
   executing under a standing approval into a refusal.
+  **THE RUNG RUNS AFTER THE EXECUTE, BECAUSE THAT IS WHERE THE FIELD NAMES ARE.** The model names
+  three fields (`where.field`, `join.resultField`, `join.collectionField`), and while the rung
+  planned BEFORE the request went out there was nothing to name them from: the prompt could carry
+  only facts known in advance - the action's name, its description, and the caller's collection
+  NAMES - so every field name a model produced was an invention, and an invented one does not fail.
+  `matchesSimpleQuery` reads an absent field as `undefined`, so the predicate selects nothing (or,
+  under `neq`, everything) and the answer comes back as a SHORTER LIST with a full narrowing report
+  and no signal at all. Both field sets are now real and shown: the collection side from
+  `CollectionsEngine.listCollectionFields` (one aggregation on the same `appId: scope.scopeKey`
+  binding point, exact rather than sampled so the refusal is fair), the action side from
+  `fieldsOf(rows)` over the rows the call actually returned. `returnSchema` is NOT the source - it is
+  unvalidated documentation, usually absent, and describes the envelope rather than the row. A name
+  outside the shown sets is a deterministic refusal of the PLAN, and the caller receives the executed
+  arm's full answer with the offered set named in `ladder[].violations` (D-S5-5). The `mutates` gate
+  is unmoved: it is still the first statement of the planning stage, so a write reaches no model, no
+  lister and no store, and four cheap disqualifications - a failed execute, several lists, no list,
+  no rows - now cost no planning turn at all. `where.value` is the one thing a model supplies that is
+  a value rather than a name, so it cannot be chosen from a shown set; it is checked as a scalar,
+  which is the sibling rung's rule for the sibling reason.
   The rung is a POST-STAGE, NOT AN ERROR BOUNDARY, and it has no failure mode that costs the caller
   their answer. A failed execute, a collection name the caller does not hold, an action answer with
   no single list in it, a plan the deterministic suite rejects, AND A STORE READ THAT REJECTS: every

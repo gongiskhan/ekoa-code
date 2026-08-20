@@ -45,7 +45,10 @@ where they touch the dashboard.
   entitlement to its owner's data; proven a gate by deleting `appId: scope.scopeKey`, the single
   query-binding point; and the no-existence-oracle claim is an ASSERTION rather than a reading - the
   whole response body for a collection name another org holds is compared byte-for-byte against the
-  body for a name nobody holds anywhere), and the bridge S1-S6 scenarios (`fake-daemon/`).
+  body for a name nobody holds anywhere; and since the planning prompt now carries each collection's
+  FIELD names as well as its name - it has to, or a model invents one and silently narrows somebody's
+  answer - the same three tests assert the absence of a peer's FIELD names too, because "org B tracks
+  salaries" is a leak before a single row moves), and the bridge S1-S6 scenarios (`fake-daemon/`).
   `migration/` holds the protocol-parity replay suites.
 - **The P4 locality suites, and what each is for** (they overlap on purpose, and the overlap is the
   point - a decision this slice makes wrong is an account lock, so each layer proves a different

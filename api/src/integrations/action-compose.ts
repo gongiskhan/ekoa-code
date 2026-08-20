@@ -27,12 +27,41 @@
  * it cannot cause a write of any kind. The stage below is ordinary TypeScript, and it is the only
  * thing that runs.
  *
+ * AND IT CHOOSES ALL THREE STRINGS FROM SETS IT HAS BEEN SHOWN. That is the fix for the sharpest
+ * defect this rung ever had, and it is worth stating as a rule rather than as a note, because the
+ * failure it removes was invisible by construction:
+ *
+ *   The planning turn used to be given the action's NAME, its one-line description, and the NAMES of
+ *   the caller's collections - and nothing else. Not one field name, from either side. The output
+ *   contract then demanded three of them (`where.field`, `join.resultField`, `join.collectionField`),
+ *   so the model had no way to answer except to INVENT identifiers. An invented field name does not
+ *   error: `matchesSimpleQuery` reads `undefined` off every row and selects nothing, or the join key
+ *   set comes back empty, and what the caller receives is A SHORTER LIST OF THEIR OWN CASES,
+ *   confidently, with nothing on the wire to distinguish it from a correct narrowing. For "todos os
+ *   processos de clientes com menos de 40 anos" that is the worst possible shape of wrong: a lawyer
+ *   cannot tell a correctly-filtered docket from a wrongly-narrowed one by looking at it.
+ *
+ * So the rung now runs AFTER the execute, with the answer's own rows in hand, and the planning turn
+ * is shown BOTH field sets: the union of keys over the rows the action really returned, and each
+ * collection's real field names (`CollectionsEngine.listCollectionFields`). `verifyComposePlan`
+ * refuses any name outside those sets, and a refused plan is DISCARDED - the caller gets the
+ * executed arm's full answer with the rung's verdict beside it, never a narrowed one. Both halves
+ * matter: showing the fields is what lets a model be right, and refusing outside them is what makes
+ * being wrong loud (D-S5-5).
+ *
  * ================================ READS ONLY, AND WHERE THAT IS DECIDED =====================
  * This rung is for READS. `integration-achieve.ts` does not enter it at all unless the matched
  * action's `mutates` is a literal `false` - the fail-closed reading `action-consent.ts` fixed - and
  * that gate sits BEFORE the model is consulted, so a write costs no planning turn and, decisively,
  * cannot be turned into a refusal by anything a model says. A write goes down the execute path it
  * always went down, byte for byte.
+ *
+ * THE GATE IS STILL FIRST EVEN THOUGH THE RUNG IS NOW LAST. Moving the planning turn to after the
+ * execute changed WHEN the rung runs, not what it is allowed to touch: the `mutates` test is the
+ * first statement in the planning stage, so a write still reaches no model, no collection lister and
+ * no store. What the move bought is that every one of the rung's cheap disqualifications - a failed
+ * execute, an answer with no single list in it, an answer with no rows - is now discovered BEFORE a
+ * planning turn is bought rather than after.
  *
  * THE GATE IS NOT RESTATED HERE, deliberately. Whether an ACTION may be composed over is a property
  * of the call site, not of the plan; this module judges PLANS. An earlier shape asserted it in both
@@ -85,7 +114,57 @@ export type ComposePlan =
       join: { resultField: string; collectionField: string };
     };
 
-export type ComposeCheckName = 'shape' | 'collection_name' | 'predicate';
+/**
+ * ONE collection the caller holds, exactly as the planning turn is shown it: its NAME and the field
+ * names its rows carry. Structurally the store's own `CollectionFields` - the composition root binds
+ * one to the other - but declared here because this is the SEAM's vocabulary, and `integrations/`
+ * does not take its prompt shape from `data/`.
+ */
+export interface ComposeCollection {
+  name: string;
+  /** Every field name on any row of this collection, sorted. THE SET THE MODEL SELECTS FROM, and
+   *  therefore the set `verifyComposePlan` refuses outside of. */
+  fields: readonly string[];
+}
+
+/**
+ * The field names carried by a set of rows - the union over all of them, sorted.
+ *
+ * THE UNION, not the first row's keys: a list endpoint that omits an absent optional field on some
+ * rows would otherwise have those fields refused, which is a narrowing the caller was entitled to,
+ * lost to a fixture-shaped assumption about tidy responses.
+ *
+ * SORTED, for the reason the collection names are sorted: this goes into a MODEL PROMPT, so its
+ * order is part of the input to a nondeterministic step, and the same rows must ask the same
+ * question twice.
+ */
+export function fieldsOf(rows: readonly Record<string, unknown>[]): string[] {
+  const names = new Set<string>();
+  for (const row of rows) for (const key of Object.keys(row)) names.add(key);
+  return [...names].sort();
+}
+
+/**
+ * WHAT `where.value` MAY BE. The sibling rung's rule (`action-parametrize.ts`, check 5), for a
+ * sibling reason - and this is the ONE thing in a compose plan that cannot be chosen from a set the
+ * model was shown, because it is a value rather than a name.
+ *
+ * A NON-SCALAR HERE FAILS EXACTLY LIKE AN INVENTED FIELD NAME, silently and downwards. Feed
+ * `matchesSimpleQuery` an object and the four orderings read `Number({...})` as `NaN`, so nothing
+ * matches in any direction; `eq`/`neq` compare by reference against a value that arrived over JSON,
+ * so `eq` never matches and `neq` always does; and the three string ops stringify it to
+ * `"[object Object]"`. Every one of those produces a well-formed `composed` answer whose `items` are
+ * wrong, and none produces an error - the whole finding this rung was fixed for, arriving through
+ * the one door the field-name check does not cover.
+ *
+ * `null` IS ALLOWED, deliberately: it is a value the recipe DSL compares against today (`eq` against
+ * a genuinely null column), and refusing it would narrow the vocabulary rather than guard it.
+ */
+export function isComposeValue(v: unknown): v is string | number | boolean | null {
+  return v === null || typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean';
+}
+
+export type ComposeCheckName = 'shape' | 'collection_name' | 'collection_known' | 'predicate' | 'value' | 'fields';
 
 export interface ComposeCheck {
   name: ComposeCheckName;
@@ -114,6 +193,14 @@ function check(name: ComposeCheckName, ok: boolean, detail?: string): ComposeChe
  */
 export function verifyComposePlan(input: {
   planned: unknown;
+  /** The collections WITH their fields, exactly as the planning turn was shown them. The suite
+   *  refuses any collection or collection-field name that is not in here, which is what turns "the
+   *  model guessed" from a silently narrowed answer into a refusal the caller can read. */
+  collections: readonly ComposeCollection[];
+  /** The field names on the rows the action REALLY returned - `fieldsOf` over the rows in hand.
+   *  Available because this rung runs after the execute; before that move there was no honest set to
+   *  check `join.resultField` against and it was accepted as any non-empty string. */
+  resultFields: readonly string[];
 }): ComposeVerdict {
   const checks: ComposeCheck[] = [];
   const done = (plan: Extract<ComposePlan, { compose: true }> | null): ComposeVerdict => ({
@@ -162,11 +249,29 @@ export function verifyComposePlan(input: {
 
   // The collection NAME is judged by the store's own rule, not by a second one written here: the
   // charset guard and the two reserved prefixes (`__`, `usr.`) that `guardCollectionName` enforces.
+  //
+  // HONEST NOTE ON WHAT THIS CAN CATCH THAT `collection_known` BELOW CANNOT: today, nothing. Every
+  // name the lister can answer came out of the store, and the store only accepts names that pass
+  // this rule, so a plan failing here fails there too. It is kept as the check that stays correct if
+  // the LISTER ever changes - a lister answering a `usr.`-prefixed name would satisfy membership and
+  // this is what would still refuse it - and what distinguishes two statements only one of which can
+  // fire is the CHECK LIST, which the suite pins.
   const nameCheck = collectionName.safeParse(obj.collection);
   checks.push(check(
     'collection_name',
     nameCheck.success,
     `"${String(obj.collection)}" is not a collection this platform can address`,
+  ));
+
+  // …AND IT MUST BE ONE THE CALLER WAS SHOWN. Before this check the only test of a collection name
+  // was whether it was ADDRESSABLE, so a model naming a plausible collection the tenant does not
+  // hold got as far as a store read. Membership is decided against the very list that went into the
+  // prompt, so "you may only choose from these" is enforced rather than requested.
+  const held = input.collections.find((c) => c.name === obj.collection) ?? null;
+  checks.push(check(
+    'collection_known',
+    held !== null,
+    `"${String(obj.collection)}" is not one of the collections you hold`,
   ));
 
   // The PREDICATE is the recipe DSL's, exactly: one of nine comparisons, one field, one value.
@@ -176,6 +281,56 @@ export function verifyComposePlan(input: {
     isSimpleQueryOp(op),
     `"${String(op)}" is not a comparison this platform performs (${SIMPLE_QUERY_OPS.join(', ')})`,
   ));
+
+  // …AND THE VALUE IS A SCALAR - see `isComposeValue`. A separate check rather than a clause of
+  // `predicate`, because they are different facts about the plan and the ladder reports which one
+  // was wrong: "you named a comparison that does not exist" and "you compared against an object"
+  // are different things to send back.
+  const value = (whereObj as Record<string, unknown>).value;
+  // The `typeof` fallback covers what JSON cannot produce and a direct caller can. This function is
+  // exported and judged on its own, so calling an `undefined` "an object" would be the suite lying
+  // about the artifact it refused; through the product only the first two branches are reachable,
+  // because `parseComposePlan` runs `JSON.parse`.
+  checks.push(check(
+    'value',
+    isComposeValue(value),
+    `"where.value" must be a string, number, boolean or null - ${
+      Array.isArray(value) ? 'an array' : typeof value === 'object' ? 'an object' : `a ${typeof value}`
+    } compares against nothing this platform can evaluate`,
+  ));
+
+  // THE THREE FIELD NAMES, EACH AGAINST THE SET IT WAS OFFERED. This is the check the rung did not
+  // have, and its absence was not a missing validation so much as a missing QUESTION: the model was
+  // never told what the fields were, so there was no set to check against and any non-empty string
+  // was accepted. A wrong one then produced an empty or narrowed answer that looked exactly like a
+  // correct one.
+  //
+  // `join.resultField` is judged against the rows the action REALLY returned, not against a declared
+  // `returnSchema`: schemas here are unvalidated documentation (`definitions.ts` takes them off
+  // `config.json` verbatim), and a list endpoint's schema describes the ENVELOPE, whose top-level
+  // keys are not the row's. The rows in hand are the only exact answer, and this rung now has them.
+  const whereField = (whereObj as Record<string, unknown>).field as string;
+  const resultField = (joinObj as Record<string, unknown>).resultField as string;
+  const collectionField = (joinObj as Record<string, unknown>).collectionField as string;
+  const unknownFields: string[] = [];
+  if (!input.resultFields.includes(resultField)) {
+    unknownFields.push(
+      `"join.resultField": "${resultField}" is not a field of the rows the action returned (${input.resultFields.join(', ')})`,
+    );
+  }
+  // The collection's fields can only be judged when the collection resolved. Naming a set for a
+  // collection the caller does not hold would be this suite inventing the artifact it judges - the
+  // rule the `shape` short-circuit above states, applied one level down.
+  if (held) {
+    const offered = held.fields.length > 0 ? held.fields.join(', ') : 'none';
+    if (!held.fields.includes(whereField)) {
+      unknownFields.push(`"where.field": "${whereField}" is not a field of "${held.name}" (${offered})`);
+    }
+    if (!held.fields.includes(collectionField)) {
+      unknownFields.push(`"join.collectionField": "${collectionField}" is not a field of "${held.name}" (${offered})`);
+    }
+  }
+  checks.push(check('fields', unknownFields.length === 0, unknownFields.join('; ')));
 
   return done({
     compose: true,
@@ -214,10 +369,10 @@ export type AppCollectionRead =
  * nothing the model says reaches the scope key.
  */
 export interface AppCollections {
-  /** The collection names this caller holds. Named for the prompt, so the model chooses from a
-   *  list instead of inventing one - and a name it invents anyway is refused by `verifyComposePlan`
-   *  and then again by the reader. */
-  list(actor: Actor): Promise<string[]>;
+  /** The collections this caller holds, each with the field names its rows carry. BOTH halves are
+   *  for the prompt, so the model chooses a collection AND a field from lists rather than inventing
+   *  either - and a name it invents anyway is refused by `verifyComposePlan`. */
+  list(actor: Actor): Promise<ComposeCollection[]>;
   read(actor: Actor, collection: string): Promise<AppCollectionRead>;
 }
 
@@ -284,6 +439,16 @@ export interface ComposeSummary {
 }
 
 /**
+ * WHAT THE STAGE PRODUCED. Two members, and the second one is the FLOOR under the whole rung:
+ * whatever the plan says, if a field it names is not on the rows actually being joined, this stage
+ * refuses to narrow rather than narrowing by a field nobody has. The caller then receives the
+ * executed arm's answer whole - `integration-achieve.ts` turns this into a ladder step and a null.
+ */
+export type ComposeStageResult =
+  | { kind: 'composed'; items: Record<string, unknown>[]; summary: ComposeSummary }
+  | { kind: 'not_applicable'; missing: string[] };
+
+/**
  * THE STAGE. Pure: rows in, rows out, no I/O, no model, no clock.
  *
  * Filter the collection by the predicate, key the survivors, keep the action rows whose join field
@@ -291,14 +456,37 @@ export interface ComposeSummary {
  * from one side and `"7"` from the other is the same client, and refusing to see that would make
  * the rung useless against real APIs. A null/undefined key on either side matches nothing rather
  * than matching every other absent key.
+ *
+ * FIRST, THOUGH: THE COLLECTION-SIDE FIELDS MUST BE ON THE ROWS THIS STAGE WAS HANDED. A missing
+ * field is not a filter that matches nothing - it is a filter that was never applied, and the
+ * difference is the whole finding: `matchesSimpleQuery` reads `undefined` off every row, so a wrong
+ * `where.field` selects nothing (or, under `neq`, EVERYTHING) and a wrong `join.collectionField`
+ * empties the key set. Either way `items` comes back short, and short is indistinguishable from
+ * correct when what was asked for was a filtered list.
+ *
+ * THIS IS NOT A SECOND STATEMENT OF `verifyComposePlan`'s `fields` CHECK, and the distinction is the
+ * reason it is here at all. That check judges the plan against what the STORE says the collection
+ * holds, at planning time; this one judges the ROWS THAT WERE ACTUALLY READ, one query later. They
+ * disagree exactly when the collection changed in between - a row deleted, a field dropped - which
+ * is a live race, not a hypothetical, because the lister and the reader are two separate queries.
+ *
+ * The ACTION side is deliberately NOT re-checked here: `verifyComposePlan` judged `join.resultField`
+ * against `fieldsOf` of THE SAME ARRAY this function receives, in the same moment, so a second test
+ * of it could never fire and would be the "two statements, one reading" this module refuses
+ * elsewhere.
  */
 export function composeRows(input: {
   plan: Extract<ComposePlan, { compose: true }>;
   actionRows: readonly Record<string, unknown>[];
   collectionRows: readonly Record<string, unknown>[];
-}): { items: Record<string, unknown>[]; summary: ComposeSummary } {
+}): ComposeStageResult {
   const scanned = input.actionRows.length;
   const considered = input.collectionRows.slice(0, COMPOSE_MAX_COLLECTION_ROWS);
+  const present = new Set(fieldsOf(considered));
+  const missing = [input.plan.where.field, input.plan.join.collectionField]
+    .filter((f, i, all) => all.indexOf(f) === i)
+    .filter((f) => !present.has(f));
+  if (missing.length > 0) return { kind: 'not_applicable', missing };
   const keys = new Set<string>();
   let matchedCollectionRows = 0;
   for (const row of considered) {
@@ -313,6 +501,7 @@ export function composeRows(input: {
     return k !== null && k !== undefined && keys.has(String(k));
   });
   return {
+    kind: 'composed',
     items: all.slice(0, COMPOSE_MAX_ITEMS),
     summary: {
       collection: input.plan.collection,
@@ -366,29 +555,37 @@ export function composeOutputContract(): string {
     '# Output contract',
     'Reply with EXACTLY ONE fenced ```compose-json block and no other fenced block.',
     '',
-    'If the goal asks ONLY for what the action already returns, answer exactly:',
+    'If the goal asks ONLY for what the action already returned, answer exactly:',
     '```compose-json',
     '{ "compose": false }',
     '```',
     '',
-    'If the goal narrows the action\'s results by a fact held in one of the collections listed above,',
+    'If the goal narrows those rows by a fact held in one of the collections listed above,',
     'answer with the join that narrows it:',
     '```compose-json',
     '{',
     '  "compose": true,',
     '  "collection": "<one of the collection names listed above>",',
-    '  "where": { "field": "<a field of that collection>", "op": "lt", "value": 40 },',
-    '  "join": { "resultField": "<a field of the action\'s rows>", "collectionField": "<a field of the collection>" }',
+    '  "where": { "field": "<a field listed for that collection>", "op": "lt", "value": 40 },',
+    '  "join": { "resultField": "<a field listed for the action\'s rows>", "collectionField": "<a field listed for that collection>" }',
     '}',
     '```',
     '',
-    '# Hard rules (a plan that breaks any of these is refused and NOTHING runs)',
+    '# Hard rules (a plan that breaks any of these is refused, and the action answers unnarrowed)',
     `1. "op" is one of: ${SIMPLE_QUERY_OPS.join(', ')}. There are no others, and no boolean logic:`,
     '   exactly ONE field compared against ONE value.',
     '2. "collection" must be one of the collection names listed above. You may not invent one.',
-    '3. "join" states which field of the ACTION\'s rows equals which field of the COLLECTION\'s rows.',
-    '4. You are not choosing the action, and you cannot run anything. If the goal needs work the',
+    '3. EVERY FIELD NAME MUST COME FROM THE LISTS ABOVE. "join.resultField" must be one of the fields',
+    '   listed for the action\'s rows; "where.field" and "join.collectionField" must both be fields',
+    '   listed for the collection you chose. Each is checked against those lists.',
+    '4. If no listed field says what the goal is asking about, answer { "compose": false }. A guessed',
+    '   field name does not produce a narrower answer - it produces a WRONG one, and the person',
+    '   reading it cannot tell.',
+    '5. "where.value" is a single string, number, boolean or null. Not an object, not an array, and',
+    '   no operators inside it.',
+    '6. "join" states which field of the ACTION\'s rows equals which field of the COLLECTION\'s rows.',
+    '7. You are not choosing the action, and you cannot run anything. If the goal needs work the',
     '   action plus one such join cannot do, answer { "compose": false } and say nothing else.',
-    '5. Never put a credential, a token or a person\'s password in any field.',
+    '8. Never put a credential, a token or a person\'s password in any field.',
   ].join('\n');
 }

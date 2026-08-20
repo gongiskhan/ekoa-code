@@ -4611,3 +4611,160 @@ into the existing files rather than re-serialised, so the diff is exactly the ap
 `docs/diagrams/02-module-map.excalidraw` note (e) - the worker/recorder split and the exception exit.
 `docs/diagrams/05-data-model.excalidraw` note (e) - the store read is the throwing edge, and what it
 must not put on the wire.
+
+## 2026-08-21 - D-S5-5: the compose rung stops asking a model to invent field names, and runs where the fields are
+
+Round six on `feat/s4-s5-reuse-ladder`. ZERO BLOCKERS - the spent-200 defect closed in D-S5-4 stayed
+closed. One major and three minors, and the major is the sharpest finding this branch has had.
+
+**MAJOR. THE PLANNING TURN WAS ASKED TO NAME FIELDS IT HAD NEVER BEEN SHOWN, AND A WRONG GUESS
+NARROWED SOMEBODY'S ANSWER INSTEAD OF REFUSING.**
+
+`composeSections()` was the ONLY content the compose planning turn received. It rendered four facts:
+the action's name, its one-line description, `changes data: no`, and the caller's collection NAMES.
+Not one field name, from either side - not a key of the action's response, not a key of a collection
+row. `composeOutputContract()` then demanded THREE field names back: `where.field`,
+`join.resultField`, `join.collectionField`.
+
+So the model had no way to answer except to INVENT identifiers, and `verifyComposePlan` accepted any
+non-empty string for all three. **An invented field name does not fail.** `matchesSimpleQuery` reads
+an absent field as `undefined`, which is a VALUE, so the predicate returns a definite answer for
+every row:
+
+| what was guessed | op | what the caller received |
+| --- | --- | --- |
+| `age` for `idade` | `lt`/`lte`/`gt`/`gte` | `Number(undefined)` is `NaN` - **nothing** matches, `items: []` |
+| `age` for `idade` | `neq` | true for every row - the collection filter **vanishes**, the answer is too WIDE |
+| `age` for `idade` | `contains` etc. | `String(undefined ?? '')` is `''` - matches only an empty needle |
+| `_id` for `id` | any | the join key set is **empty**, `items: []` |
+| `clientId` for `clienteId` | any | no action row carries the key, `items: []` |
+
+Every one of those came back as `200 { "outcome": "composed", "items": [...], "composition": {...} }`
+- a well-formed, confident answer with a full narrowing report, and NOTHING anywhere on the wire to
+distinguish it from a correct one. For this rung's canonical demo, "todos os processos de clientes
+com menos de 40 anos", the failure shape is A SHORTER LIST OF CASES. A legal professional cannot tell
+a correctly-filtered docket from a wrongly-narrowed one by looking at it, and a filing built on the
+short list is a different document.
+
+**FIXED BOTH WAYS, AND THE TWO COLLAPSE INTO ONE STATEMENT BECAUSE THE RUNG MOVED.**
+
+*(a) SHOW IT THE FIELDS.* The planning turn is now given both field sets, per collection and for the
+action:
+
+- the COLLECTION side comes from `CollectionsEngine.listCollectionFields`, which replaces the
+  names-only `listCollections`. It answers `{ name, fields }` per collection off ONE aggregation
+  bound on the same single query-binding point every other read uses (`appId: scope.scopeKey`). The
+  field set is EXACT rather than sampled, and that is what makes the refusal fair - a sampled union
+  is a subset, so a legitimate field the sample missed would be refused and the caller would lose a
+  narrowing they were entitled to.
+- the ACTION side comes from `fieldsOf(rows)`: the sorted UNION of keys over the rows the action
+  really returned. `returnSchema` was considered and REJECTED as the source. It is unvalidated
+  documentation (`definitions.ts` takes it off a `config.json` verbatim), it is absent on almost
+  every shipped action, and when present it describes the ENVELOPE - whose top-level keys are not the
+  row's. Enforcing against it would refuse legitimate plans.
+
+*(b) FAIL THE COMPOSITION OPEN.* Any name outside the sets that were shown is a deterministic refusal
+of the PLAN, never of the call: the plan is discarded, and the caller receives the executed arm's
+FULL answer with `compose` recorded `refused` and the offered set named in `violations`.
+
+**THE RUNG NOW RUNS AFTER THE EXECUTE.** That is what makes (a) possible at all for the action side,
+and it is why (a) and (b) are one statement rather than two: with the rows in hand, "planning time"
+and "execution time" are the same moment, so the plan is judged against the real data and its
+failure path is exactly (b)'s - the whole answer, unnarrowed.
+
+WHAT THE MOVE DID NOT CHANGE:
+
+- **the `mutates` gate is still first.** It is the first statement in the planning stage, so a WRITE
+  still reaches no model, no collection lister and no store. Only WHEN the rung runs changed; what it
+  may touch did not.
+- **the rung still cannot subtract an answer** (D-S5-2/3/4). The worker/recorder split is intact:
+  `draftCompositionPlan`/`attemptComposition` do the work and may throw; `planComposition`/
+  `applyComposition` convert every outcome including a rejection into one ladder step plus a null.
+- **the executed arm is byte-identical** when the rung stands down.
+
+WHAT THE MOVE BOUGHT BESIDES THE FIX: four disqualifications now cost NOTHING that used to cost a
+metered model call - a failed execute, a result with several lists in it, a result with no list at
+all, and a result with zero rows are all discovered before `ctx.planStep` is reached.
+
+**THE STAGE KEEPS ITS OWN FLOOR, AND IT IS NOT A SECOND STATEMENT OF THE SAME RULE.** `composeRows`
+refuses to narrow when a collection-side field is absent from the rows IT was handed. That check
+judges different data at a different moment from `verifyComposePlan`'s: the plan is judged against
+what the LISTER says the collection holds, and the stage against what the READER actually returned -
+two separate queries, so they disagree exactly when the collection changes in between. That race is
+covered by its own suite fixture. The ACTION side is deliberately NOT re-checked in the stage:
+`verifyComposePlan` judged `join.resultField` against `fieldsOf` of the SAME array the stage
+receives, in the same moment, so a second test of it could never fire.
+
+**MINOR 1. `where.value` WAS THE ONE DOOR THE FIELD CHECK DOES NOT COVER.** Everything else in a
+compose plan is a NAME, now chosen from a shown set. The value is not - it is the model's own - and
+`verifyComposePlan` accepted anything, including an object or an array. `{ "$gt": 40 }` is exactly
+what a model that has seen a query language writes, and it fails the same silent way: `Number({...})`
+is `NaN` so the orderings match nothing; `eq`/`neq` compare by reference against a value that arrived
+over JSON, so `eq` never matches and `neq` always does (a filter that selects the whole collection);
+the string ops stringify it to `"[object Object]"`. `verifyPlannedArgs` has refused non-scalars since
+the parametrize rung shipped, for this exact reason. Now so does this one, as its own `value` check
+rather than a clause of `predicate` - "you named a comparison that does not exist" and "you compared
+against an object" are different things to send back. `null` stays allowed: the recipe DSL compares
+against it today.
+
+**MINOR 2. THE EMIT CAP'S BOUNDARY WAS NEVER PINNED**, and `>` -> `>=` was a surviving mutant. Round
+three built exactly this boundary pair for the SIBLING constant (`COMPOSE_MAX_COLLECTION_ROWS`) and
+did not build it for `COMPOSE_MAX_ITEMS`, so the only case in the estate was `MAX + 5` - true under
+both readings. Under `>=`, a join matching EXACTLY 200 rows reports `truncated: true` while `items`
+holds every one of them. That lies in the direction that matters: `truncated` means "there is more of
+your answer you did not receive", and a caller acting on it narrows a question that did not need
+narrowing, or tells their own client a complete list is partial.
+
+**MINOR 3. THE AUDIT WRITE'S OWN `catch` WAS A GUARD NOBODY CHECKED.** `applyComposition`'s header
+states the entire argument for its shape - "the only `await` outside the `try` is `auditComposed`,
+which catches its own" - and that was a claim about code no test exercised. Remove the catch and a
+rejecting `activityLogs.insert` propagates out of `applyComposition`, out of `runMatchedAction`, out
+of `achieveIntegrationGoal` and into the route's error handler as a 500. The sequence is the
+blocker's fourth exit, one step later than D-S5-4's: request goes out, comes back 200, the join is
+computed and CORRECT, our own audit collection blips, the caller gets a 500 and no processos. The
+rows were not merely in hand - the whole narrowed answer existed and was thrown away by a write that
+is nobody's answer. Pinned by injecting a rejection into `activityLogs.insert` for the compose row
+only (a blanket `mockRejectedValueOnce` catches the EXECUTOR's audit write instead, which is a
+different function with a catch of its own). While pinning it, a second unasserted field on the same
+exit: `filledArgs` could be deleted from the `composed` branch with the whole estate green, so an
+answer that a model both filled arguments for AND narrowed came back with a record of only one.
+
+**KNOWN AND ACCEPTED: THE PROMPT IS LARGER, AND NOT CAPPED.** Showing the fields widens the planning
+prompt by roughly the field count of every collection the caller holds. A per-collection field cap
+was considered and rejected: a truncated field list makes the refusal message FALSE - it would tell a
+caller that `idade` is not a field of their own `clients` - and a false statement about somebody's
+own data is worse than a longer prompt. The exposure is bounded by the store's own item-size cap and
+is one constant factor above the pre-existing unbounded collection COUNT. Recorded in
+`docs/findings.md` rather than hidden.
+
+RULE 7: nothing on the wire changed. No schema field was added, removed or re-typed - the fix lives
+entirely in what the prompt carries and what the deterministic suite refuses, and every refusal
+travels on `ladder[].violations`, which already existed. `docs/openapi/cortex.v1.json` and the
+cortex-cli types regenerate byte-identically, asserted by running the gate rather than assumed.
+
+TENANCY (Rule 5): the prompt now carries more of the tenant's own metadata than it did, so the
+isolation suite's job widened with it. "org B tracks salaries" is a second disclosable fact beside
+"org B runs a payroll app", and tests 1, 4 and 5 of `achieve-compose-isolation.test.ts` now assert
+the absence of a peer's FIELD names as well as of their collection names. The binding is unchanged:
+`listCollectionFields` matches on `appId: scope.scopeKey` and nothing else.
+
+**THE CANONICAL TEST, ANSWERED PLAINLY FOR THE SIXTH TIME, IN ONE LINE.** The canonical compose test
+rests on A LOCAL FIXTURE OF THE SAME SHAPE - the action `processos` - and NOT on
+`get-ongoing-processes` existing in the code. `get-ongoing-processes` appears nowhere in `api/src`,
+`shared/`, `web/` or `clients/`; the only occurrences in the repo are in this branch's own test and
+ledger text ABOUT its absence, including one assertion that an action so named is UNREACHABLE from
+the canonical Portuguese goal. The Citius path is not claimed as proven by this slice.
+
+MUTATION EVIDENCE. Eighteen mutants applied to the source, each run against the suites that claim
+it, each restored exactly (`diff` against a pre-mutation snapshot, and `git diff` clean afterwards).
+All eighteen were KILLED: the plan-time field check, the `collection_known` membership check, both
+prompt field lists, the stage's own floor, the floor's capped-prefix scope, the collection
+resolution (`find` -> `[0]`), `fieldsOf`'s sort and its union, the engine's two sorts, the
+failed-execute stand-down, the zero-row stand-down, the unshaped-before-the-turn ordering, the
+`value` scalar check, the emit-cap boundary, the audit catch, and `filledArgs` on the composed exit.
+
+DIAGRAM CHECK (FIXED-12): both appended, append-only, `rawText` AND `originalText` carried, spliced
+into the existing files rather than re-serialised, so the diff is exactly the appended element.
+`docs/diagrams/02-module-map.excalidraw` note (f) - the rung's new position and the two field sets.
+`docs/diagrams/05-data-model.excalidraw` note (f) - what the lister answers now, and the shape of the
+answer a guessed name used to produce.

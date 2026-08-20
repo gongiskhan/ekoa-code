@@ -401,6 +401,59 @@ describe('CANONICAL, through the real app: "todos os processos de clientes com m
     expect((doc?.actions ?? []).map((a) => a.actionName)).toEqual(['processos']);
   });
 
+  /**
+   * A COMPOSED ANSWER THAT WAS ALSO PARAMETRIZED REPORTS BOTH, and until this case nothing asserted
+   * the second half. `filledArgs` is produced on the `composed` exit as well as the `executed` one,
+   * and deleting it from the composed branch left the whole estate green - so an answer that a model
+   * both filled arguments for AND narrowed could come back with no record that any argument was
+   * model-supplied. That is precisely the answer an auditor most needs whole: two model decisions,
+   * one response, and the wire told them about one.
+   */
+  it('an answer that was BOTH parametrized and composed reports both on the wire', async () => {
+    await seedDefinition([processos]);
+    await seedClients();
+    plans.args = argsBlock({ tribunal: 'Lisboa' });
+    plans.compose = composeBlock(COMPOSE_PLAN);
+
+    // No `tribunal` supplied, so the parametrize rung fills it; the goal still has residue, so the
+    // compose rung runs too.
+    const body = await okBody(await achieve(await tokenFor('ownerA'), CANONICAL_GOAL));
+
+    expect(body.outcome).toBe('composed');
+    expect((body.items as unknown[]).length).toBe(2);
+    // THE ASSERTION THAT WAS MISSING.
+    expect(body.filledArgs).toEqual(['tribunal']);
+    // …and the value really reached the request, so `filledArgs` is a record of something that
+    // happened rather than a label.
+    expect(upstream.calls[0]?.url).toContain('tribunal=Lisboa');
+    const ladder = body.ladder as Array<{ rung: string; verdict: string }>;
+    expect(ladder.find((s) => s.rung === 'parametrize')?.verdict).toBe('taken');
+    expect(ladder.find((s) => s.rung === 'compose')?.verdict).toBe('taken');
+  });
+
+  /**
+   * MINOR, ON THE REAL WIRE: `where.value` IS THE ONE DOOR THE FIELD CHECK DOES NOT COVER.
+   *
+   * `{ "$gt": 40 }` is what a model that has seen a query language writes. `Number({...})` is `NaN`,
+   * so `lt` matched nothing and the old rung answered `composed` with `items: []` - the same
+   * confident, well-formed, wrong answer the invented field name produced. The sibling rung has
+   * refused non-scalars since it shipped; this one did not.
+   */
+  it('a "where.value" that is not a scalar refuses the narrowing and returns the whole list', async () => {
+    await seedDefinition([processos]);
+    await seedClients();
+    plans.compose = composeBlock({ ...COMPOSE_PLAN, where: { field: 'idade', op: 'lt', value: { $gt: 40 } } });
+
+    const body = await okBody(await achieve(await tokenFor('ownerA'), CANONICAL_GOAL));
+
+    expect(body.outcome).toBe('executed');
+    expect(body.items).toBeUndefined();
+    expect((body.result as { data?: { processos?: unknown[] } }).data?.processos).toHaveLength(PROCESS_ROWS.length);
+    const step = (body.ladder as Array<{ rung: string; verdict: string; violations?: string[] }>).find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('refused');
+    expect(step?.violations?.join(' ')).toContain('"where.value" must be a string, number, boolean or null');
+  });
+
   it('the collection the model may name comes from the tenant\'s OWN artifacts, not from anywhere else', async () => {
     await seedDefinition([processos]);
     // No artifact at all, and every declared argument supplied, so BOTH rungs skip without a turn
@@ -465,9 +518,71 @@ describe('CANONICAL, through the real app: "todos os processos de clientes com m
     // Nothing was narrowed, so no narrowing block claims it was.
     expect(body.items).toBeUndefined();
     expect(body.composition).toBeUndefined();
-    const step = (body.ladder as Array<{ rung: string; verdict: string; detail?: string }>).find((s) => s.rung === 'compose');
+    const step = (body.ladder as Array<{ rung: string; verdict: string; violations?: string[] }>).find((s) => s.rung === 'compose');
     expect(step?.verdict).toBe('refused');
-    expect(step?.detail).toContain('clientes');
+    expect(step?.violations?.join(' ')).toContain('"clientes" is not one of the collections you hold');
+  });
+
+  /**
+   * THE MAJOR, ON THE REAL WIRE: A GUESSED FIELD NAME IS A REFUSAL, NEVER A SHORTER LIST.
+   *
+   * The compose planning turn is the only step of this rung a model touches, and until this slice it
+   * was shown no field name from either side while its output contract demanded three. `age` for
+   * `idade` is exactly what that produces. The old behaviour on this exact request:
+   *
+   *     200 { "outcome": "composed", "items": [], "composition": { "matched": 0, ... } }
+   *
+   * - a well-formed, confident, WRONG answer. `matchesSimpleQuery` reads an absent field as
+   * `undefined`, so the predicate selected nothing and the join emptied, and nothing anywhere on the
+   * wire distinguishes that from "you genuinely have no client under 40". A lawyer reading their own
+   * docket cannot tell the two apart.
+   *
+   * Now the name is checked against the very list the prompt offered, and the caller gets their
+   * whole answer back with the reason beside it. The load-bearing pair is `items` absent and
+   * `result.data.processos` at full length.
+   */
+  it('a field name the model INVENTED refuses the narrowing and returns the whole list', async () => {
+    await seedDefinition([processos]);
+    await seedClients();
+    plans.compose = composeBlock({ ...COMPOSE_PLAN, where: { field: 'age', op: 'lt', value: 40 } });
+
+    const body = await okBody(await achieve(await tokenFor('ownerA'), CANONICAL_GOAL));
+
+    expect(body.outcome).toBe('executed');
+    expect(upstream.calls).toHaveLength(1);
+    // THE LOAD-BEARING PAIR.
+    expect(body.items).toBeUndefined();
+    expect((body.result as { data?: { processos?: unknown[] } }).data?.processos).toHaveLength(PROCESS_ROWS.length);
+    expect(body.composition).toBeUndefined();
+    const step = (body.ladder as Array<{ rung: string; verdict: string; violations?: string[] }>).find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('refused');
+    // The violation names the field AND the set that was offered, both off the tenant's real rows.
+    expect(step?.violations?.join(' ')).toContain('"where.field": "age" is not a field of "clients"');
+    expect(step?.violations?.join(' ')).toContain('idade');
+    // No join happened, so no audit row claims one did.
+    expect(await activityLogs.find({ type: 'capability_achieve_compose' })).toHaveLength(0);
+  });
+
+  /**
+   * …AND THE SAME FOR THE ACTION SIDE, which is the half that had no honest set to check against
+   * until the rung moved below the execute. `clienteId` is a field of the UPSTREAM's rows - nothing
+   * in this platform declares it, `returnSchema` is absent on this action as it is on almost every
+   * shipped one - so the set can only come from the answer itself.
+   */
+  it('a "join.resultField" the upstream rows do not carry refuses the narrowing too', async () => {
+    await seedDefinition([processos]);
+    await seedClients();
+    plans.compose = composeBlock({ ...COMPOSE_PLAN, join: { resultField: 'clientId', collectionField: 'id' } });
+
+    const body = await okBody(await achieve(await tokenFor('ownerA'), CANONICAL_GOAL));
+
+    expect(body.outcome).toBe('executed');
+    expect(body.items).toBeUndefined();
+    expect((body.result as { data?: { processos?: unknown[] } }).data?.processos).toHaveLength(PROCESS_ROWS.length);
+    const step = (body.ladder as Array<{ rung: string; verdict: string; violations?: string[] }>).find((s) => s.rung === 'compose');
+    expect(step?.violations?.join(' ')).toContain('"join.resultField": "clientId" is not a field of the rows the action returned');
+    // The offered set is the UPSTREAM's own row keys, read off the answer this call produced.
+    expect(step?.violations?.join(' ')).toContain('numeroProcesso');
   });
 
   /**

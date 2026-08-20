@@ -58,8 +58,14 @@ import { AchieveIntegrationGoalResponse } from '@ekoa/shared';
  *
  * THE MUTATION THAT PROVES IT IS A GATE: DELETE THE TENANCY FILTER at the single query-binding
  * point - drop `appId: scope.scopeKey` from `CollectionsEngine.list` (rows) or from
- * `listCollections` (the names put in the prompt). The suite goes red in both directions and
- * nothing else in the estate notices. Both were run; the results are in the slice report.
+ * `listCollectionFields` (the names AND FIELD NAMES put in the prompt). The suite goes red in both
+ * directions and nothing else in the estate notices. Both were run; the results are in the slice
+ * report.
+ *
+ * THE PROMPT NOW CARRIES MORE OF THE TENANT'S OWN METADATA THAN IT DID, and that widened this
+ * suite's job rather than only the rung's: the lister answers each collection's FIELD names too, so
+ * "org B tracks salaries" became a second disclosable fact beside "org B runs a payroll app". Tests
+ * 1, 4 and 5 assert the absence of the peer's field names as well as of their collection names.
  */
 const upstream = vi.hoisted(() => ({ calls: [] as string[], body: '{}' }));
 vi.mock('../../src/services/url-fetcher.js', async (importOriginal) => {
@@ -217,7 +223,7 @@ beforeEach(async () => {
 });
 
 describe('the compose rung cannot see another organisation\'s collections', () => {
-  it('1. the collection NAMES offered to the model are the caller\'s own, in a stable order', async () => {
+  it('1. the collection NAMES AND FIELDS offered to the model are the caller\'s own, in a stable order', async () => {
     // Written in an order that is NOT the sorted one, deliberately - see the ordering assertion.
     await seedApp('app-a', 'orgA', 'userA', {
       matters: [{ id: 'm1' }],
@@ -232,16 +238,33 @@ describe('the compose rung cannot see another organisation\'s collections', () =
     expect(prompt).toContain('clients');
     // Even the EXISTENCE of org B's app is a leak, before a row moves.
     expect(prompt).not.toContain('payroll');
+    // AND SO IS ITS SHAPE. The lister now answers FIELD names as well, so "org B tracks salaries"
+    // is a second thing this prompt could disclose and does not. `salario` appears on no row of
+    // org A's, so a lister that widened its `$match` reds HERE before any row moves.
+    expect(prompt).not.toContain('salario');
 
-    // A SURVIVING MUTANT: `listCollections`' `.sort()` could be deleted and the whole estate stayed
-    // green, because every fixture happened to be written in sorted order. These names go straight
-    // into a MODEL PROMPT, so their order is part of the input to a nondeterministic step: without
-    // the sort the prompt varies with Mongo's `distinct` return order, and the same tenant asking
-    // the same goal twice is asked a different question. Asserted on the rendered prompt rather
-    // than on the function, because the prompt is where it matters.
+    // The caller's OWN fields are there, per collection, because a model that is not shown them can
+    // only invent a field name - and an invented one narrows silently (D-S5-5).
+    expect(prompt).toContain('- clients: createdAt, id, idade, updatedAt');
+
+    // A SURVIVING MUTANT: `listCollectionFields`' `.sort()` could be deleted and the whole estate
+    // stayed green, because every fixture happened to be written in sorted order. These names go
+    // straight into a MODEL PROMPT, so their order is part of the input to a nondeterministic step:
+    // without the sort the prompt varies with the driver's own return order, and the same tenant
+    // asking the same goal twice is asked a different question. Asserted on the rendered prompt
+    // rather than on the function, because the prompt is where it matters.
     expect(prompt).toContain('- arquivo');
     expect(prompt.indexOf('- arquivo')).toBeLessThan(prompt.indexOf('- clients'));
     expect(prompt.indexOf('- clients')).toBeLessThan(prompt.indexOf('- matters'));
+    // …and the FIELD sort is the second one, on a collection whose stamps make the unsorted order
+    // observable: `createdAt` is written after `id` by the engine, so an unsorted set renders
+    // `id, createdAt, ...` and this reds.
+    expect(prompt.indexOf('createdAt, id')).toBeGreaterThan(-1);
+
+    // THE ACTION SIDE, off the rows the upstream really returned. Nothing in this platform declares
+    // them; before the rung moved below the execute there was no set to show at all.
+    expect(prompt).toContain('- numeroProcesso');
+    expect(prompt).toContain('- clienteId');
   });
 
   it('2. naming a collection only ANOTHER org holds reads nothing, and answers IDENTICALLY to a name nobody holds', async () => {
@@ -313,8 +336,10 @@ describe('the compose rung cannot see another organisation\'s collections', () =
     await seedApp('app-a2', 'orgA', 'userA2', { clients: [{ id: 'cA', idade: 31 }] });
 
     const body = await okBody(await achieve(await tokenFor('userA')));
-    // Not offered in the prompt, and not readable when named anyway.
+    // Not offered in the prompt - neither its name NOR its shape - and not readable when named
+    // anyway. `idade` exists only on the peer's rows, so a lister reaching their scope reds here.
     expect(plans.sections.join('\n')).not.toContain('clients');
+    expect(plans.sections.join('\n')).not.toContain('idade');
     expect(body.items).toBeUndefined();
     expect(body.composition).toBeUndefined();
     expect(composeStep(body)?.verdict).toBe('refused');
@@ -334,6 +359,8 @@ describe('the compose rung cannot see another organisation\'s collections', () =
 
     const body = await okBody(await achieve(await tokenFor('userA')));
     expect(plans.sections.join('\n')).not.toContain('clients');
+    // The peer's FIELD names are as unreachable as their rows: `idade` is on no row userA holds.
+    expect(plans.sections.join('\n')).not.toContain('idade');
     // `cA` keys process 111, so a binding that reached userA2's namespace would COMPOSE here and
     // hand userA a row selected by a colleague's data. Nothing was joined.
     expect(body.items).toBeUndefined();

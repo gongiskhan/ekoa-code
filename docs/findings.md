@@ -7361,3 +7361,74 @@ re-implemented a live control had it trusted this heading over the code.
   can still leave a stale stamp on a `global` row. It is not reachable from a route (round three
   folded `{global:true}` into `publishDefinition`), so this is the same in-process-writer class as
   the legacy import, recorded rather than closed here.
+
+- **`s5-compose-asked-the-model-to-invent-field-names`** (CLOSED 2026-08-21, HIGH, silent wrong
+  answer on the rung's own canonical demo). `composeSections()` was the ONLY content the compose
+  planning turn received, and it rendered four facts: the action's name, its one-line description,
+  `changes data: no`, and the caller's collection NAMES. Not one field name, from either side.
+  `composeOutputContract()` then demanded THREE of them back (`where.field`, `join.resultField`,
+  `join.collectionField`), and `verifyComposePlan` accepted any non-empty string for each - so the
+  model could only invent identifiers, and an invented identifier does not error. `matchesSimpleQuery`
+  reads an absent field as `undefined`, which is a VALUE: under `lt`/`lte`/`gt`/`gte` it is `NaN` so
+  nothing matches, under `neq` it is true for every row so the filter vanishes, and a wrong join key
+  empties the key set. Every one of those came back `200 { outcome: "composed", items: [...],
+  composition: {...} }` - well formed, confident, with a full narrowing report and NOTHING on the wire
+  to distinguish it from a correct narrowing. For "todos os processos de clientes com menos de 40
+  anos" the failure shape is a SHORTER LIST OF CASES, which a legal professional cannot tell from a
+  correctly-filtered one by looking at it. Closed by moving the rung BELOW the execute (the only place
+  the action's real row keys exist), showing both field sets in the prompt - the collection side from
+  the new `CollectionsEngine.listCollectionFields`, the action side from `fieldsOf(rows)` - and making
+  a name outside the shown sets a deterministic refusal of the PLAN, never of the call: the caller
+  receives the executed arm's full answer with the offered set named in `ladder[].violations`.
+  `composeRows` keeps its own floor for the collection side, judged against the rows the READER
+  returned rather than what the LISTER advertised, because those are two separate queries. Journal:
+  D-S5-5. Fourteen source mutants (both prompt lists, both suite checks, the stage floor and its
+  capped-prefix scope, the collection resolution, `fieldsOf`'s union and sort, the engine's two sorts,
+  and the four new stand-downs) all KILLED.
+
+- **`s5-compose-where-value-accepted-any-json`** (CLOSED 2026-08-21, MEDIUM, same silent-wrong-answer
+  family as the finding above, through the one door its fix does not cover). Every other thing a
+  compose plan carries is a NAME, now chosen from a shown set. `where.value` is not - it is the
+  model's own - and `verifyComposePlan` accepted anything, object or array included. `{ "$gt": 40 }`
+  is exactly what a model that has seen a query language writes, and it fails the same silent way:
+  `Number({...})` is `NaN` so the orderings match nothing; `eq`/`neq` compare by reference against a
+  value that arrived over JSON, so `eq` never matches and `neq` always does (a filter that selects the
+  whole collection); the string ops stringify it to `"[object Object]"`. `verifyPlannedArgs` has
+  refused non-scalars since the parametrize rung shipped, for this exact reason. Closed with a `value`
+  check of its own rather than a clause of `predicate`, so the ladder can say which of the two was
+  wrong. `null` stays allowed - the recipe DSL compares against it today.
+
+- **`s5-compose-emit-cap-boundary-was-never-pinned`** (CLOSED 2026-08-21, MEDIUM, a wire flag that
+  lies in the direction that prompts action). `truncated: all.length > COMPOSE_MAX_ITEMS` could be
+  mutated to `>=` with the whole estate green: round three built a boundary PAIR for the sibling
+  constant `COMPOSE_MAX_COLLECTION_ROWS` and did not build one here, so the only case in the file was
+  `MAX + 5`, true under both readings. Under `>=` a join matching EXACTLY 200 rows reports
+  `truncated: true` while `items` holds every one of them, and a caller acting on that flag narrows a
+  question that did not need narrowing, or tells their own client that a complete list is partial.
+  Closed with the boundary pair at exactly `COMPOSE_MAX_ITEMS` and one past it.
+
+- **`s5-the-compose-audit-write-was-a-guard-nobody-checked`** (CLOSED 2026-08-21, MEDIUM, the
+  spent-answer defect's fourth exit, one step later than D-S5-4's). `applyComposition`'s header
+  states the entire argument for its shape - "the only `await` outside the `try` is `auditComposed`,
+  which catches its own" - and that was a claim about code no test exercised. Remove the catch and a
+  rejecting `activityLogs.insert` propagates out of `applyComposition`, out of `runMatchedAction`,
+  out of `achieveIntegrationGoal` and into the route's error handler as a 500: request goes out,
+  comes back 200, the join is computed and CORRECT, our own audit collection blips, and the caller
+  gets a 500 and no processos. The rows were not merely in hand - the whole narrowed answer existed
+  and was destroyed by a write that is nobody's answer. Closed by injecting a rejection into
+  `activityLogs.insert` for the compose row only; a blanket `mockRejectedValueOnce` catches the
+  EXECUTOR's audit write instead, which is a different function with a catch of its own. While
+  pinning it, a second unasserted field on the same exit: `filledArgs` could be deleted from the
+  `composed` branch with the estate green, so an answer a model both filled arguments for AND
+  narrowed reported only one of the two.
+
+- **`s5-the-compose-prompt-is-larger-and-deliberately-uncapped`** (DISMISSED 2026-08-21, accepted
+  characteristic, recorded rather than hidden). Showing the field sets widens the planning prompt by
+  roughly the field count of every collection the caller holds, and that prompt is the input to a
+  metered model call. A per-collection field CAP was considered and rejected: a truncated field list
+  makes the refusal message FALSE - it would tell a caller that `idade` is not a field of their own
+  `clients` - and a false statement about somebody's own data is worse than a longer prompt. The
+  exposure is bounded by the store's own 256KB item-size cap, and it is one constant factor above the
+  collection COUNT, which the prompt has carried unbounded since the rung shipped. Revisit if a real
+  tenant's prompt approaches the model's context budget; the honest fix then is to narrow the
+  COLLECTION list first (the rung joins exactly one), not to half-show a field list.

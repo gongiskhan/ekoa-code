@@ -1287,10 +1287,16 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   //
   // (The MUTATION that proves this is a gate, and it was RUN rather than asserted: delete the
   // tenancy filter at the single query-binding point - drop `appId: scope.scopeKey` from
-  // `CollectionsEngine.list`, and separately from `listCollections`. The isolation suite reds in
-  // both directions, rows and prompt names, and nothing else in the estate notices.)
+  // `CollectionsEngine.list`, and separately from `listCollectionFields`. The isolation suite reds
+  // in both directions, rows and prompt names, and nothing else in the estate notices.)
+  //
+  // THE LISTER ANSWERS FIELDS, NOT JUST NAMES, and that is a tenancy fact as much as a prompt one:
+  // the field names of the caller's own collections now go into a planning prompt, so they travel
+  // under exactly the same owner-scoped binding the rows do. `listCollectionFields` binds on the
+  // same `appId: scope.scopeKey` every other read uses, so a peer's field names are as unreachable
+  // as a peer's rows - which the isolation suite asserts directly rather than by inference.
   const achieveCollections: AppCollections = {
-    list: (actor) => automationAppData.listCollections(ownerSharedScope(actor.userId)),
+    list: (actor) => automationAppData.listCollectionFields(ownerSharedScope(actor.userId)),
     read: async (actor, collection) => {
       const rows = await automationAppData.list(ownerSharedScope(actor.userId), collection);
       // ONE scope means one answer: rows, or the name is not one this caller holds. There is no

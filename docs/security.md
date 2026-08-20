@@ -329,10 +329,21 @@ failure text appears nowhere in the response body, at both the module and the wi
 Isolation suite: `api/tests/security/achieve-compose-isolation.test.ts`, of the
 `memvault-isolation.test.ts` class, driven through the real app and the real binding. Proven a gate
 by DELETING the tenancy filter at the single query-binding point (`appId: scope.scopeKey`), which
-reds it in both directions - rows via `list`, collection names via `listCollections`. The claim that
-makes the OWNER the right unit - `Scope.appId` is never part of any query - is asserted from the
-engine's source as well, so adding an `appId`-bound filter reds rather than silently re-introducing
-a per-app dimension the rest of the design assumes away.
+reds it in both directions - rows via `list`, collection names AND FIELD NAMES via
+`listCollectionFields`. The claim that makes the OWNER the right unit - `Scope.appId` is never part
+of any query - is asserted from the engine's source as well, so adding an `appId`-bound filter reds
+rather than silently re-introducing a per-app dimension the rest of the design assumes away.
+
+THE PROMPT CARRIES MORE OF THE TENANT'S OWN METADATA THAN IT USED TO, and the suite widened with it
+(D-S5-5). The planning turn is now shown each collection's FIELD names as well as its name - it has
+to be, because a model asked to name a field it has never seen invents one, and an invented field
+name silently narrows somebody's answer instead of failing. So "org B tracks salaries" became a
+second disclosable fact beside "org B runs a payroll app", and tests 1, 4 and 5 assert the absence of
+a peer's field names as well as of their collection names, before any row moves. The binding itself
+is unchanged: `listCollectionFields` matches on `appId: scope.scopeKey` and nothing else, and the
+static guard requires exactly one `$match` and no `$lookup` in it. What still never reaches a prompt
+is a VALUE: both listers answer keys, and no row of anybody's data is put in a prompt to decide
+whether to look at that data.
 
 ## Incident response
 

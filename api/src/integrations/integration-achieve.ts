@@ -104,10 +104,12 @@ import {
 import {
   composeOutputContract,
   composeRows,
+  fieldsOf,
   parseComposePlan,
   rowsOf,
   verifyComposePlan,
   type AppCollections,
+  type ComposeCollection,
   type ComposeSummary,
 } from './action-compose.js';
 import {
@@ -882,33 +884,37 @@ async function runMatchedAction(
     }
   }
 
-  // --- RUNG 3: COMPOSE (planned before anything runs) ---------------------------------------
-  // `planComposition` cannot refuse. Its worst answer is "no plan", recorded on the ladder.
-  const composePlan = await planComposition(ctx, goal, action, ladder);
-
-  // --- RUNG 1: REUSE - the ONE gated execute, whatever the rungs above decided ---------------
+  // --- RUNG 1: REUSE - the ONE gated execute, whatever the rung above decided ----------------
   const out = await executeIntegrationCapabilityAction(ctx, integrationKey, action.actionName, args);
   if (!out.ok) return out;
 
-  if (composePlan.kind === 'plan') {
-    const composed = await applyComposition(ctx, integrationKey, action, composePlan.plan, out.value, ladder);
-    if (composed) {
-      return {
-        ok: true,
-        value: {
-          outcome: 'composed',
-          actionName: action.actionName,
-          items: composed.items,
-          composition: composed.summary,
-          ladder,
-          // Reported here for the same reason it is reported on `executed`: an answer that was BOTH
-          // model-parametrized and model-narrowed is the one an auditor most needs to see whole.
-          ...(filledArgs.length > 0 ? { filledArgs } : {}),
-        },
-      };
-    }
-    // The composition did not apply. `applyComposition` has recorded WHY on the ladder, and the
-    // answer the product is already holding falls through to the one exit below, unchanged.
+  // --- RUNG 3: COMPOSE (planned and applied over the rows the execute returned) --------------
+  //
+  // AFTER THE EXECUTE, NOT BEFORE, AND THAT ORDER IS THE FIX FOR THIS RUNG'S SHARPEST DEFECT. While
+  // the planning turn ran first, the only things it could be shown were the action's NAME, its
+  // description and the caller's collection NAMES - not one field name from either side - while its
+  // output contract demanded three of them. The model could only invent identifiers, and an invented
+  // field name does not fail loudly: it produces a SHORTER LIST, delivered confidently. Running here
+  // means the rows are in hand, so both field sets are real and every name the model returns is
+  // checked against the set it was offered (`action-compose.ts`, D-S5-5).
+  //
+  // `composeOver` cannot refuse and cannot throw. Its worst answer is null, recorded on the ladder,
+  // and the answer the product is already holding falls through to the one exit below unchanged.
+  const composed = await composeOver(ctx, integrationKey, goal, action, out.value, ladder);
+  if (composed) {
+    return {
+      ok: true,
+      value: {
+        outcome: 'composed',
+        actionName: action.actionName,
+        items: composed.items,
+        composition: composed.summary,
+        ladder,
+        // Reported here for the same reason it is reported on `executed`: an answer that was BOTH
+        // model-parametrized and model-narrowed is the one an auditor most needs to see whole.
+        ...(filledArgs.length > 0 ? { filledArgs } : {}),
+      },
+    };
   }
 
   // THE ONE EXIT FOR AN ADMITTED CALL THAT WAS NOT COMPOSED, and it always carries `out.value`.
@@ -945,6 +951,30 @@ async function runMatchedAction(
 type CompositionAttempt =
   | { kind: 'composed'; items: Record<string, unknown>[]; summary: ComposeSummary }
   | { kind: 'not_applied'; verdict: 'skipped' | 'refused'; detail: string };
+
+/**
+ * THE WHOLE COMPOSE RUNG, in the one place `runMatchedAction` calls it: PLAN, then APPLY, over the
+ * answer the execute already produced. Three lines, and they are three lines rather than an inlined
+ * pair because the guarantee is about the SHAPE - each half writes its own ladder step and neither
+ * can return a refusal or escape by throwing, so this function's return type ("the narrowed answer,
+ * or nothing") is the strongest thing the rung can say about itself.
+ *
+ * The plan carries its `actionRows` forward instead of the stage re-deriving them: the suite judged
+ * `join.resultField` against exactly that array, and a second `rowsOf` here would be a second
+ * reading of the same answer that could disagree with the first.
+ */
+async function composeOver(
+  ctx: AchieveContext,
+  integrationKey: string,
+  goal: string,
+  action: IntegrationAction,
+  result: ExecuteIntegrationActionResult,
+  ladder: AchieveLadderStep[],
+): Promise<{ items: Record<string, unknown>[]; summary: ComposeSummary } | null> {
+  const planned = await planComposition(ctx, goal, action, result, ladder);
+  if (planned.kind === 'none') return null;
+  return applyComposition(ctx, integrationKey, action, planned.plan, planned.actionRows, ladder);
+}
 
 /**
  * THE COMPOSITION POST-STAGE. Returns the narrowed answer, or NULL when it could not be built -
@@ -984,18 +1014,25 @@ type CompositionAttempt =
  * NO AUDIT ROW IS WRITTEN unless a join really happened, which is the truth of what occurred: the
  * `capability_achieve_compose` row exists to record that a SECOND data source was read to narrow
  * somebody's answer, and on these paths none was.
+ *
+ * AND THE ONE `await` OUTSIDE THE `try` IS NOW PINNED RATHER THAN ASSERTED. "auditComposed catches
+ * its own" was the entire argument for this function's shape and was a claim about code no test
+ * exercised: remove that catch and a rejecting `activityLogs.insert` becomes a 500 that destroys a
+ * narrowed answer already computed and correct - the same defect one step later than the throw
+ * above. A rejection is now injected into the compose row's write specifically, and the suite
+ * requires the composed answer whole.
  */
 async function applyComposition(
   ctx: AchieveContext,
   integrationKey: string,
   action: IntegrationAction,
   plan: NonNullable<ReturnType<typeof verifyComposePlan>['plan']>,
-  result: ExecuteIntegrationActionResult,
+  actionRows: readonly Record<string, unknown>[],
   ladder: AchieveLadderStep[],
 ): Promise<{ items: Record<string, unknown>[]; summary: ComposeSummary } | null> {
   let attempt: CompositionAttempt;
   try {
-    attempt = await attemptComposition(ctx, action, plan, result);
+    attempt = await attemptComposition(ctx, action, plan, actionRows);
   } catch (err) {
     console.warn(
       `[integration-achieve] compose post-stage failed for ${integrationKey}.${action.actionName}: ${err instanceof Error ? err.message : String(err)}`,
@@ -1035,15 +1072,8 @@ async function attemptComposition(
   ctx: AchieveContext,
   action: IntegrationAction,
   plan: NonNullable<ReturnType<typeof verifyComposePlan>['plan']>,
-  result: ExecuteIntegrationActionResult,
+  actionRows: readonly Record<string, unknown>[],
 ): Promise<CompositionAttempt> {
-  if (!result.success) {
-    return {
-      kind: 'not_applied',
-      verdict: 'skipped',
-      detail: `"${action.actionName}" did not succeed, so its own answer is returned unchanged rather than narrowed`,
-    };
-  }
   const collection = await (ctx.appCollections as AppCollections).read(ctx.actor, plan.collection);
   if (collection.kind === 'unknown_collection') {
     // NO EXISTENCE ORACLE, and the reason is structural rather than careful wording: this function
@@ -1059,15 +1089,19 @@ async function attemptComposition(
       detail: `you hold no "${plan.collection}" collection to narrow this by, so "${action.actionName}" answers unnarrowed`,
     };
   }
-  const rows = rowsOf(result.data);
-  if (rows.kind === 'unshaped') {
+  const composed = composeRows({ plan, actionRows, collectionRows: collection.rows });
+  if (composed.kind === 'not_applicable') {
+    // THE FLOOR UNDER THE RUNG. The plan was judged against what the LISTER said this collection
+    // holds; these are the rows the READER actually returned, one query later, and they do not carry
+    // a field the plan names. Narrowing by a field nobody has is not a stricter filter - it is a
+    // filter that never ran, and it hands back a shorter list that reads exactly like a correct one.
+    // So the composition does not apply and the executed arm's whole answer goes back instead.
     return {
       kind: 'not_applied',
       verdict: 'refused',
-      detail: `${rows.detail}, so "${action.actionName}" answers unnarrowed`,
+      detail: `"${plan.collection}" has no ${composed.missing.map((f) => `"${f}"`).join(' and no ')} on the rows read, so "${action.actionName}" answers unnarrowed`,
     };
   }
-  const composed = composeRows({ plan, actionRows: rows.rows, collectionRows: collection.rows });
   return { kind: 'composed', items: composed.items, summary: composed.summary };
 }
 
@@ -1077,20 +1111,40 @@ async function attemptComposition(
  * throw out of the model seam or the collection lister cannot leave a step behind.
  */
 type CompositionPlanAttempt =
-  | { kind: 'plan'; plan: NonNullable<ReturnType<typeof verifyComposePlan>['plan']> }
+  | {
+      kind: 'plan';
+      plan: NonNullable<ReturnType<typeof verifyComposePlan>['plan']>;
+      /** The rows the plan was JUDGED against, carried forward so the stage below joins exactly the
+       *  array `verifyComposePlan` checked `join.resultField` on. Re-deriving them there would be a
+       *  second reading of the same answer, and the two could drift. */
+      actionRows: Record<string, unknown>[];
+    }
   | { kind: 'none'; verdict: 'skipped' | 'refused'; detail: string; violations?: string[] };
 
 /**
- * PLAN THE JOIN, or decline to. Returns before anything has executed.
+ * PLAN THE JOIN, or decline to. Runs with the executed answer already in hand.
  *
- * READS ONLY, AND THE GATE IS FIRST. v1 composes over reads; an action that can write leaves this
- * function before the residue is computed, before the collections are listed, before the allowance
- * is checked and above all before a model is asked. That ORDER is the fix for a regression, not a
- * micro-optimisation: while the gate sat downstream of the model turn, a `mutates` action with a
- * wordy goal could be refused outright on the strength of a plan a model volunteered - so a call
- * that had been executing for months under a standing human approval started depending on a
- * model's judgement to run at all. A rung that only ever ADDS an answer must never SUBTRACT one,
- * and for a WRITE the only way to guarantee that is to not enter the rung at all.
+ * READS ONLY, AND THE GATE IS STILL FIRST. v1 composes over reads; an action that can write leaves
+ * this function before the residue is computed, before the collections are listed, before the
+ * allowance is checked and above all before a model is asked. That ORDER is the fix for a
+ * regression, not a micro-optimisation: while the gate sat downstream of the model turn, a `mutates`
+ * action with a wordy goal could be refused outright on the strength of a plan a model volunteered -
+ * so a call that had been executing for months under a standing human approval started depending on
+ * a model's judgement to run at all. A rung that only ever ADDS an answer must never SUBTRACT one,
+ * and for a WRITE the only way to guarantee that is to not enter the rung at all. Moving the stage
+ * after the execute did not move that gate: it is still the first statement in the body.
+ *
+ * WHY IT RUNS AFTER THE EXECUTE AT ALL. The planning turn has to name FIELDS - of the collection and
+ * of the action's own rows - and until this move the second set did not exist anywhere the platform
+ * could see it. `returnSchema` is unvalidated documentation lifted off a `config.json`, absent on
+ * almost every action and describing the ENVELOPE rather than the row when present, so the rung was
+ * asking a model to invent an identifier and then silently narrowing somebody's answer by whatever
+ * it invented. With the rows in hand the set is exact, `fieldsOf` states it, and `verifyComposePlan`
+ * refuses outside it (D-S5-5).
+ *
+ * FOUR DISQUALIFICATIONS NOW COST NOTHING that used to cost a model call: a failed execute, an
+ * answer with no single list in it, an answer with no rows, and a goal with no residue all leave
+ * here before `ctx.planStep` is reached.
  *
  * FOR A READ, THE GUARANTEE IS THE RETURN TYPE. This function used to be able to answer `refused`
  * when the deterministic suite rejected the model's plan, which ended the whole call - the same
@@ -1098,13 +1152,11 @@ type CompositionPlanAttempt =
  * protect. It cannot now: the type below has two members and neither of them is a refusal.
  *
  * AND IT CANNOT THROW EITHER, which the return type alone did not buy. `ctx.appCollections.list` is
- * `CollectionsEngine.listCollections` - a Mongo aggregation - and `ctx.planStep` reaches the LLM
- * chokepoint; either can reject. This stage runs BEFORE the execute, so a rejection here did not
- * discard a spent 200, it did something adjacent and just as wrong: the request never went out at
- * all. An `achieve` that had been executing since before this slice existed would 500 because a
- * rung ABOVE the one that answers it could not do its optional extra work. Same rule, one step
- * earlier: a rung that only adds an answer must never subtract one, and "the database was busy" is
- * not a reason to withhold a call the caller is entitled to make.
+ * `CollectionsEngine.listCollectionFields` - a Mongo aggregation - and `ctx.planStep` reaches the
+ * LLM chokepoint; either can reject. A rejection here happens with a spent side effect and the rows
+ * already in hand, so letting it out would destroy an answer the product has already paid for and
+ * already holds - the same subtraction the post-stage below was fixed for, wearing an exception
+ * instead of a refusal. "The database was busy" is not a reason to withhold an answer that arrived.
  *
  * `mutates === false` as a LITERAL is `action-consent.ts`'s fail-closed reading: an absent or
  * malformed `mutates` is a write, and a write is not composed over. That reading is OBSERVABLE at
@@ -1125,6 +1177,7 @@ async function planComposition(
   ctx: AchieveContext,
   goal: string,
   action: IntegrationAction,
+  result: ExecuteIntegrationActionResult,
   ladder: AchieveLadderStep[],
 ): Promise<
   // TWO ANSWERS, and the absence of a third is the point: THERE IS NO REFUSAL IN THIS TYPE. This
@@ -1132,11 +1185,15 @@ async function planComposition(
   // asking a model a question might end the whole call. Now it cannot: whatever a model says, the
   // worst outcome expressible here is "no plan", and the call proceeds to the rung below.
   | { kind: 'none' }
-  | { kind: 'plan'; plan: NonNullable<ReturnType<typeof verifyComposePlan>['plan']> }
+  | {
+      kind: 'plan';
+      plan: NonNullable<ReturnType<typeof verifyComposePlan>['plan']>;
+      actionRows: Record<string, unknown>[];
+    }
 > {
   let attempt: CompositionPlanAttempt;
   try {
-    attempt = await draftCompositionPlan(ctx, goal, action);
+    attempt = await draftCompositionPlan(ctx, goal, action, result);
   } catch (err) {
     console.warn(
       `[integration-achieve] compose planning failed for "${action.actionName}": ${err instanceof Error ? err.message : String(err)}`,
@@ -1158,7 +1215,7 @@ async function planComposition(
     });
     return { kind: 'none' };
   }
-  return { kind: 'plan', plan: attempt.plan };
+  return { kind: 'plan', plan: attempt.plan, actionRows: attempt.actionRows };
 }
 
 /**
@@ -1169,12 +1226,23 @@ async function draftCompositionPlan(
   ctx: AchieveContext,
   goal: string,
   action: IntegrationAction,
+  result: ExecuteIntegrationActionResult,
 ): Promise<CompositionPlanAttempt> {
   if (action.mutates !== false) {
     return {
       kind: 'none',
       verdict: 'skipped',
       detail: `"${action.actionName}" can change data, and a composed answer is only ever built from a read`,
+    };
+  }
+  // A FAILED EXECUTE IS AN ANSWER ABOUT THE REMOTE SYSTEM, and it is returned whole. Judged here,
+  // before a planning turn is bought, because there is nothing to narrow and nothing to narrow it
+  // by: a non-2xx carries no `data` at all (`action-executor.ts`).
+  if (!result.success) {
+    return {
+      kind: 'none',
+      verdict: 'skipped',
+      detail: `"${action.actionName}" did not succeed, so its own answer is returned unchanged rather than narrowed`,
     };
   }
   const accounted = new Set([...goalTokens(action.actionName), ...goalTokens(action.description ?? '')]);
@@ -1185,6 +1253,24 @@ async function draftCompositionPlan(
   if (!ctx.planStep || !ctx.appCollections) {
     return { kind: 'none', verdict: 'skipped', detail: 'the compose seams are not wired in this deployment' };
   }
+  // THE ROWS ARE FOUND BEFORE ANYTHING IS SPENT ON THEM. `rowsOf` refuses to guess between two lists
+  // rather than picking one, and a result it cannot read is a result there is no honest way to
+  // narrow - so both leave here without a store read and without a model turn.
+  const rows = rowsOf(result.data);
+  if (rows.kind === 'unshaped') {
+    return { kind: 'none', verdict: 'refused', detail: `${rows.detail}, so "${action.actionName}" answers unnarrowed` };
+  }
+  if (rows.rows.length === 0) {
+    return {
+      kind: 'none',
+      verdict: 'skipped',
+      detail: `"${action.actionName}" returned no rows, so there is nothing to narrow`,
+    };
+  }
+  // THE ACTION-SIDE FIELD SET, exact and from the rows themselves. This is the half the rung never
+  // had: without it `join.resultField` was accepted as any non-empty string, and a wrong one emptied
+  // the join silently.
+  const resultFields = fieldsOf(rows.rows);
   const collections = await ctx.appCollections.list(ctx.actor);
   if (collections.length === 0) {
     return { kind: 'none', verdict: 'skipped', detail: 'your organisation holds no collections to narrow a result by' };
@@ -1195,7 +1281,7 @@ async function draftCompositionPlan(
   }
 
   const turn = await ctx.planStep({
-    contentSections: composeSections(action, collections),
+    contentSections: composeSections(action, collections, resultFields),
     outputContract: composeOutputContract(),
     userText: repairableUserText(`Decide whether this goal needs one of those collections:\n\n${goal}`),
     decision: decideForTask(goal, undefined, 'WORKHORSE'),
@@ -1207,7 +1293,10 @@ async function draftCompositionPlan(
     return { kind: 'none', verdict: 'skipped', detail: `the planning model was unavailable (${turn.reason})` };
   }
 
-  const verdict = verifyComposePlan({ planned: turn.draft });
+  // JUDGED AGAINST THE VERY SETS THE TURN WAS SHOWN. Passing anything else here - a re-listed
+  // collection set, a re-derived row set - would mean the suite checking a plan against facts the
+  // model never saw, which is how a fair refusal turns into an arbitrary one.
+  const verdict = verifyComposePlan({ planned: turn.draft, collections, resultFields });
   if (!verdict.passed) {
     // THE PLAN IS THROWN AWAY, THE CALL IS NOT - the parametrize rung's rule, one rung down, and it
     // took a round to be carried here. This used to `return refused('compose_refused', …)` and
@@ -1217,8 +1306,8 @@ async function draftCompositionPlan(
     // call, and what they got back for it was nothing.
     //
     // Nothing unsafe survives the discard: `verdict.plan` is null on a failed verdict, so no
-    // model-named collection, field or comparison reaches the stage, and the request that goes out
-    // below is byte-for-byte the request the caller asked for.
+    // model-named collection, field or comparison reaches the stage, and the answer that goes back
+    // is byte-for-byte the answer the action produced.
     return {
       kind: 'none',
       verdict: 'refused',
@@ -1232,7 +1321,7 @@ async function draftCompositionPlan(
   if (!verdict.plan) {
     return { kind: 'none', verdict: 'skipped', detail: 'no collection narrows this goal' };
   }
-  return { kind: 'plan', plan: verdict.plan };
+  return { kind: 'plan', plan: verdict.plan, actionRows: rows.rows };
 }
 
 /** The repair wording both rungs use. Identical in shape to the author arm's, and for its reason:
@@ -1274,17 +1363,44 @@ function parametrizeSections(
   ];
 }
 
-/** Facts the compose turn is given: the action, and the NAMES of the caller's own collections. No row
- *  of anybody's data is put in a prompt to decide whether to look at that data. */
-function composeSections(action: IntegrationAction, collections: readonly string[]): string[] {
+/**
+ * Facts the compose turn is given: the action, THE FIELD NAMES ON THE ROWS IT RETURNED, and the
+ * caller's own collections WITH THEIR FIELD NAMES.
+ *
+ * THE TWO FIELD LISTS ARE THE POINT OF THIS FUNCTION, and their absence was the rung's sharpest
+ * defect. This used to render the action's name, its one-line description, `changes data` and a
+ * bare list of collection names - not one field name anywhere - while the output contract demanded
+ * three field names back. There was no set to choose from, so the model invented identifiers, and
+ * `matchesSimpleQuery` reads an invented field as `undefined` on every row: the caller got a
+ * SHORTER LIST of their own cases, with nothing to distinguish it from a correct narrowing.
+ *
+ * NAMES ONLY, STILL. No row and no VALUE from either side is put in a prompt to decide whether to
+ * look at that data - `fieldsOf` and the store's lister both answer keys. The action-side keys are
+ * the caller's own answer to their own call; the collection-side keys are the caller's own data,
+ * scoped by the composition root to the acting user and nobody else (the isolation suite pins that
+ * a peer's collection is neither named nor described here).
+ */
+function composeSections(
+  action: IntegrationAction,
+  collections: readonly ComposeCollection[],
+  resultFields: readonly string[],
+): string[] {
   return [
     [
-      '# The action that will run (already chosen and confirmed by a person)',
+      '# The action that already ran (chosen and confirmed by a person, never by you)',
       `action: ${action.actionName}`,
       `what it does: ${action.description}`,
-      `changes data: ${action.mutates === false ? 'no' : 'yes'}`,
+      // Not a ternary: this rung is entered only for `mutates === false`, so a branch printing
+      // "yes" would be a line no caller can ever reach, restating a gate that has already fired.
+      'changes data: no',
     ].join('\n'),
-    `# Collections this organisation holds\n${collections.map((c) => `- ${c}`).join('\n')}`,
+    `# Fields on the rows it returned - the ONLY names "join.resultField" may take\n${resultFields.map((f) => `- ${f}`).join('\n')}`,
+    [
+      '# Collections this organisation holds, and the fields on their rows',
+      '# "collection" must be one of these names; "where.field" and "join.collectionField" must be',
+      '# fields listed for the collection you choose.',
+      ...collections.map((c) => `- ${c.name}: ${c.fields.length > 0 ? c.fields.join(', ') : '(no fields)'}`),
+    ].join('\n'),
   ];
 }
 
