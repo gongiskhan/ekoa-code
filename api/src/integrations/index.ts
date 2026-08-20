@@ -127,7 +127,8 @@ export {
 } from './definition-lessons.js';
 // E2 — the publish scrub: deterministic floor + one chokepoint model pass into a FROZEN snapshot
 // other orgs read, plus its dry-run preview. `applyPublishFloor`/`publishedViewOf` are the pure
-// read-time half; `previewPublish`/`publishDefinition` are the two doors the route layer mounts.
+// read-time half; `previewPublish`/`publishDefinition` are the two doors the route layer mounts
+// (S6: it now really does - `routes/integrations.ts`, which imports them directly).
 export {
   applyPublishFloor,
   scrubForPublish,
@@ -137,6 +138,8 @@ export {
   publishedViewOf,
   publishableContentOf,
   packageConfigFromDoc,
+  publishableActionOf,
+  publishableAuthoringOf,
   isPublishSafeCredentialValue,
   looksLikeLiteralSecret,
   PUBLISH_SCRUB_VERSION,

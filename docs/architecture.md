@@ -811,6 +811,23 @@ failure dump and the success sample "cannot drift into showing a person two diff
 same body" over two independent `8_000` literals, and mutating either alone left the estate green.
 Pinned behaviourally - one oversized body driven through the real executor twice, 2xx and 5xx, and
 what each path shows compared.
+CROSS-ORG PUBLICATION HAS DOORS (2026-08-20, S6). `publish-scrub.ts`'s deterministic floor + one
+chokepoint model pass, the frozen `publishedSnapshot`, the supersede protocol and the
+author-initiated submit-for-review window were built and tested by slice E2 with no HTTP caller, so
+the review queue behind them had never been reachable. Five routes now mount them, in the router's
+literal-segment tier and with `/definitions/publish-requests` registered before the
+`/definitions/:id/…` siblings: submit and withdraw (`user`), the dry-run preview (`user`, admitted
+by the module's own `getWritableForActor` - which, for a super-admin who is not a member of the
+authoring org, is true only while that org's submission stands), and the platform review queue plus
+the publish itself (`super-admin`, `requireRole` beside the store's own bar). NONE is `user-or-key`,
+so the public OpenAPI document - generated from the `user-or-key` descriptors and nothing else - is
+byte-unchanged. A re-publish REPLACES the live snapshot wholesale and stamps what it replaced. What
+the snapshot may contain is a WHITELIST at BOTH the package and the action level (S6 closed the
+second half: dropping the recipe was a subtraction, and the rest of each action object was copied
+through), and the platform-authored `authoring` record is projected so that no user id and no author
+prose crosses an org boundary while the trust semantics - `state`, `shape`, `declaredMutates`, the
+verification verdict - survive intact. Keeping `state` is load-bearing: an ABSENT record reads as
+human-written and therefore trusted. See `docs/decisions.md` 2026-08-20.
 
 ## Billing
 

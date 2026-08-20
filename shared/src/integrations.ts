@@ -180,6 +180,168 @@ export const DefinitionVisibilityResponse = z.object({
 });
 export type DefinitionVisibilityResponse = z.infer<typeof DefinitionVisibilityResponse>;
 
+/* --- The PUBLISH DOORS (slice S6) ------------------------------------------------------------ */
+
+/**
+ * The ceiling on a publish-request note, in the units `String.length` and zod's `.max()` both count.
+ *
+ * Small on purpose. The note is one sentence of context for a platform reviewer ("this replaces the
+ * old CRM package, the endpoints moved"), NOT a second lessons body - and unlike lessons it travels
+ * OUT OF THE TENANT to a super-admin who is not a member of the org, so every character of it is a
+ * character the author has to have meant to send.
+ */
+export const PUBLISH_REQUEST_NOTE_MAX_CHARS = 1_000;
+
+/**
+ * SUBMIT FOR REVIEW: the tenant asking the platform to publish its definition cross-org.
+ *
+ * `auth: 'user'` on both the submit and the withdraw, and the note is the only field: nothing here
+ * names an org, a user or a definition other than the `:id` in the path, which the store resolves
+ * under the verified actor.
+ */
+export const RequestDefinitionPublishRequest = z.object({
+  note: z.string().max(PUBLISH_REQUEST_NOTE_MAX_CHARS).optional(),
+});
+export type RequestDefinitionPublishRequest = z.infer<typeof RequestDefinitionPublishRequest>;
+
+/**
+ * A live submission, as the AUTHORING ORG sees its own.
+ *
+ * `requestedBy` is a user id of the reader's own org here - the tenant routes only ever answer with
+ * their own row. The cross-org REVIEW QUEUE below carries the same field deliberately: a reviewer
+ * publishing another org's package to every tenant must be able to see who asked for it.
+ */
+export const IntegrationPublishRequest = z.object({
+  requestedBy: z.string(),
+  requestedAt: IsoTimestamp,
+  /** Scrubbed and capped server-side before it is stored - see the route. */
+  note: z.string().optional(),
+});
+export type IntegrationPublishRequest = z.infer<typeof IntegrationPublishRequest>;
+
+/** The echo both tenant routes answer with: `null` after a withdraw, the stamp after a submit. */
+export const DefinitionPublishRequestResponse = z.object({
+  ok: z.literal(true),
+  publishRequest: IntegrationPublishRequest.nullable(),
+});
+export type DefinitionPublishRequestResponse = z.infer<typeof DefinitionPublishRequestResponse>;
+
+/**
+ * ONE row of the platform REVIEW QUEUE - a WHITELIST projection, emphatically not the document.
+ *
+ * The queue is the one surface where a super-admin who is NOT a member of the authoring org reads
+ * something of that org's, so what it may carry is decided here rather than by a spread. It carries
+ * ADDRESSING and PROVENANCE only: enough to find the row, know which org asked and decide whether to
+ * open it. It carries NO CONTENT - no `skillMd`, no `lessons`, no `configSchema`, no action bodies -
+ * because that content is exactly what `publish-scrub.ts` exists to scrub before it crosses an org
+ * boundary, and the queue runs no scrub. A reviewer reads the content through `previewPublish`,
+ * which does.
+ */
+export const IntegrationPublishQueueEntry = z.object({
+  /** The definition `_id` - what `previewPublish` and `publishDefinition` take in their path. */
+  id: z.string(),
+  key: z.string(),
+  displayName: z.string().optional(),
+  /** The asking tenant. The point of the queue, and the reason it is super-admin only. */
+  orgId: z.string(),
+  /** How many actions the package declares. A size signal, never the actions themselves. */
+  actionCount: z.number().int().nonnegative(),
+  /** True when this row already has a live snapshot: publishing it SUPERSEDES that one wholesale. */
+  republish: z.boolean(),
+  requestedBy: z.string(),
+  requestedAt: IsoTimestamp,
+  note: z.string().optional(),
+});
+export type IntegrationPublishQueueEntry = z.infer<typeof IntegrationPublishQueueEntry>;
+
+export const IntegrationPublishQueueResponse = itemsResponse(IntegrationPublishQueueEntry);
+export type IntegrationPublishQueueResponse = z.infer<typeof IntegrationPublishQueueResponse>;
+
+/**
+ * How the ONE chokepoint model pass went - the SECOND net over free text, after the deterministic
+ * floor. `failed` (the model was asked and did not answer) is deliberately distinct from `skipped`
+ * (a caller asked for floor-only): collapsing them would hide an outage behind a policy choice.
+ *
+ * A `failed` pass is NOT a failed publish. The floor is the control and is never conditional on a
+ * model, so the artifact publishes with the degradation recorded on it - unless the caller asked for
+ * the stricter posture with `requireModelPass`, in which case the publish refuses instead.
+ */
+export const IntegrationPublishModelPass = z.object({
+  status: z.enum(['applied', 'skipped', 'failed']),
+  reason: z.string().optional(),
+  spansApplied: z.number().int().nonnegative().optional(),
+});
+export type IntegrationPublishModelPass = z.infer<typeof IntegrationPublishModelPass>;
+
+/**
+ * ONE redaction the scrub performed: WHERE and HOW MUCH, never WHAT.
+ *
+ * The removed text is deliberately absent from the wire shape - this response is served to a
+ * platform super-admin previewing another org's row, and echoing the removed bytes back would make
+ * the preview a brand-new way to read exactly the credential material the scrub just took out. The
+ * author sees WHERE by reading `snapshot`, which shows `[REDACTED]` at that path.
+ */
+export const IntegrationPublishRedaction = z.object({
+  path: z.string(),
+  rule: z.enum(['credential-named-field', 'literal-secret-token', 'credential-line-literal', 'model-flagged']),
+  source: z.enum(['floor', 'model']),
+  removedChars: z.number().int().nonnegative(),
+});
+export type IntegrationPublishRedaction = z.infer<typeof IntegrationPublishRedaction>;
+
+/**
+ * The DRY RUN: exactly what a foreign org would read if this were published now.
+ *
+ * `snapshot` is byte-identical to what the write would store - preview and publish share one scrub
+ * and neither adds anything to the content but the timestamp stamp. `config` is typed as an open
+ * record because it is the canonical `IntegrationPackageConfig`, whose action shape is an open
+ * superset the api owns; the CONTRACT here is that the preview and the write agree, and the shape
+ * of what they agree on is the package shape.
+ */
+export const PublishPreviewResponse = z.object({
+  ok: z.literal(true),
+  snapshot: z.object({
+    config: z.record(z.unknown()),
+    skillMd: z.string(),
+    lessons: z.string().optional(),
+  }),
+  redactions: z.array(IntegrationPublishRedaction),
+  modelPass: IntegrationPublishModelPass,
+  /** The stamp of the snapshot this publish would replace. Absent ⇒ this is a first publication. */
+  supersedes: z.object({ scrubbedAt: IsoTimestamp, scrubbedBy: z.string() }).optional(),
+});
+export type PublishPreviewResponse = z.infer<typeof PublishPreviewResponse>;
+
+/**
+ * `requireModelPass` is the STRICTER posture, opt-in per call: refuse the publish when the second
+ * net did not run, instead of publishing the floor result with the degradation recorded on it. The
+ * default (absent ⇒ false) is the standing decision journaled 2026-08-03, restated on the wire so a
+ * reviewer can take the stricter one without a redeploy.
+ */
+export const PublishDefinitionRequest = z.object({
+  requireModelPass: z.boolean().optional(),
+});
+export type PublishDefinitionRequest = z.infer<typeof PublishDefinitionRequest>;
+
+/**
+ * The publication receipt. `visibility` is read off the PERSISTED document, never off the request,
+ * so the response can only ever report the state that really landed.
+ *
+ * `supersedes` present ⇒ this publish REPLACED a live snapshot wholesale (there is exactly one
+ * snapshot field per definition, so re-publish is total replacement, and this is the lineage of what
+ * it replaced). Tenant copies are unaffected: a consuming org that extended the package forked its
+ * own row at that moment and reads its own.
+ */
+export const PublishDefinitionResponse = z.object({
+  ok: z.literal(true),
+  visibility: DefinitionVisibility,
+  scrubbedAt: IsoTimestamp,
+  redactionCount: z.number().int().nonnegative(),
+  modelPass: IntegrationPublishModelPass,
+  supersedes: z.object({ scrubbedAt: IsoTimestamp, scrubbedBy: z.string() }).optional(),
+});
+export type PublishDefinitionResponse = z.infer<typeof PublishDefinitionResponse>;
+
 /* --- The write gate (slice C2) --------------------------------------------------------------- */
 
 /**
@@ -724,6 +886,90 @@ export const integrationsEndpoints = {
     request: SetDefinitionGlobalRequest,
     response: DefinitionVisibilityResponse,
   },
+  /* --- The PUBLISH DOORS (slice S6) --------------------------------------------------------- */
+
+  /**
+   * THE FIVE DOORS ONTO THE PUBLISH MECHANISM, and why NOT ONE OF THEM IS `user-or-key`.
+   *
+   * `setGlobal` above states the rule this family inherits: a key-bearing agent must never publish
+   * a definition to every org. That covers the two super-admin doors trivially. It covers the three
+   * `user` ones for the reason C2's consent descriptors and C3's lessons are `user`:
+   *
+   *  - `requestPublish` writes free text (`note`) that a platform reviewer then reads while deciding
+   *    to promote a package to every tenant. An agent that could write it could argue for its own
+   *    promotion in the reviewer's own words;
+   *  - `withdrawPublish` closes the review window, and the record that the org ever asked. That is
+   *    the tenant's own decision, taken by a person;
+   *  - `previewPublish` renders the tenant's row through the scrub. It reveals strictly less than
+   *    the raw row its admission set can already read - but its admission set is JWT principals,
+   *    and a gateway key is not one of them.
+   *
+   * Narrow is the reversible direction: widening an auth class later is additive (Rule 7).
+   *
+   * ADMISSION IS TWO LAYERS AND THEY ARE NOT THE SAME. The `auth` class here is what the ROUTE
+   * mounts; the row-level gate is the store's (`canWriteDefinition` for submit/withdraw/preview,
+   * `visibilityWriteVerdict` for the publish) and this contract adds no authority over it. In
+   * particular `previewPublish` is `user` while its module gate admits an owner, their org-admin, or
+   * a super-admin who can SEE the row - which, for a non-member super-admin, is true only while the
+   * org's submission stands. That is the E2 review window, and it is the whole reason the queue is
+   * reachable at all.
+   */
+  requestPublish: {
+    method: 'POST',
+    path: '/api/v1/integrations/definitions/:id/publish-request',
+    auth: 'user',
+    request: RequestDefinitionPublishRequest,
+    response: DefinitionPublishRequestResponse,
+  },
+  withdrawPublish: {
+    method: 'DELETE',
+    path: '/api/v1/integrations/definitions/:id/publish-request',
+    auth: 'user',
+    response: DefinitionPublishRequestResponse,
+  },
+  /**
+   * THE REVIEW QUEUE - every `org` row whose tenant has asked to publish it, across every org.
+   *
+   * A LITERAL PATH THAT MUST OUTRANK `:id`. It shares the `/definitions` prefix with the four
+   * `/:id/...` routes, so the router registers it FIRST; see the ordering note at the top of
+   * `api/src/routes/integrations.ts`.
+   *
+   * Its entries are a whitelist projection with no content on them (`IntegrationPublishQueueEntry`).
+   */
+  listPublishRequests: {
+    method: 'GET',
+    path: '/api/v1/integrations/definitions/publish-requests',
+    auth: 'super-admin',
+    response: IntegrationPublishQueueResponse,
+  },
+  /**
+   * THE DRY RUN. A POST rather than a GET although it stores nothing: it runs the chokepoint model
+   * pass, which is a billed egress call. An endpoint a cache or a link-prefetch may replay for free
+   * must not be one that spends the caller's credits.
+   */
+  previewPublish: {
+    method: 'POST',
+    path: '/api/v1/integrations/definitions/:id/publish-preview',
+    auth: 'user',
+    response: PublishPreviewResponse,
+  },
+  /**
+   * THE PUBLISH. Scrub the live row into a frozen snapshot and move it to the cross-org `global`
+   * tier, in ONE gated store write. `auth: 'super-admin'`, matching the route's `requireRole` mount
+   * and the `setGlobal` precedent it sits beside.
+   *
+   * SUPERSEDE IS THE NORMAL CASE, not an error: a definition has exactly one snapshot field, so
+   * publishing a key that already has a live snapshot REPLACES it wholesale and stamps the replaced
+   * one's provenance into `supersedes`.
+   */
+  publishDefinition: {
+    method: 'POST',
+    path: '/api/v1/integrations/definitions/:id/publish',
+    auth: 'super-admin',
+    request: PublishDefinitionRequest,
+    response: PublishDefinitionResponse,
+  },
+
   /**
    * The write gate's READ side: every action of an integration with its target, its shape and the
    * live approval (if any). `auth: 'user'` — see the note on the write below.

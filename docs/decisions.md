@@ -3467,3 +3467,109 @@ which is what a Mongo TTL index would have been. FIXED-12: retention gains a TIM
 lifecycle trigger on an existing seam, so `02-module-map` carries an append-only AS-BUILT (f) note;
 the stored shape of an evidence row does not change, and `05-data-model` carries an append-only (h)
 note correcting what its own retention line means, because the diagram stated the boot-only trigger.
+---
+
+## 2026-08-20 - S6: the publish doors are mounted, and what a promotion may carry
+
+**THE MECHANISM WAS COMPLETE AND UNREACHABLE.** Slice E2 built the publish scrub (deterministic
+floor + one chokepoint model pass into a frozen snapshot), the supersede protocol, the dry-run
+preview, and an author-initiated submit-for-review window that is the ONLY thing putting a tenant row
+in front of a platform reviewer who is not a member of the org (`isDefinitionVisibleTo`). All of it
+was tested. None of it had a non-test caller: `previewPublish`, `publishDefinition`, `requestPublish`,
+`withdrawPublishRequest` and `listPublishRequests` were reachable from unit tests and from nothing
+else, so the review queue E2 designed had never been reachable in the running product. This slice
+adds five descriptors and five thin routes and nothing else - every gate below them is theirs.
+
+**ADMISSION: THREE `user`, TWO `super-admin`, NONE `user-or-key`.** `setGlobal` already states the
+rule for the two super-admin doors - a key-bearing agent must never publish a definition to every
+org. It extends to the three `user` ones for the reason C2's consent descriptors and C3's lessons are
+`user`: the submit writes free text a reviewer reads while deciding to promote a package to every
+tenant (an agent that could write it could argue for its own promotion in the reviewer's words); the
+withdraw closes the org's own review window and deletes its record that it ever asked; and the
+preview's admission set is JWT principals, which a gateway key is not. Narrow is the reversible
+direction - widening an auth class later is additive (Rule 7). CONSEQUENCE, checked rather than
+assumed: the OpenAPI document is generated from the `user-or-key` descriptors and nothing else, so it
+and the cortex-cli client are byte-unchanged by five new endpoints.
+
+**SUPERSEDE IS THE NORMAL CASE.** A definition has exactly one `publishedSnapshot` field, so
+publishing a key that already has a live snapshot REPLACES it wholesale and stamps the replaced one's
+provenance into `supersedes`. That is the brief's "promoting a user-built integration may replace the
+existing public one", and it is total rather than a version chain readers would have to choose
+between. Tenant copies are unaffected: a consuming org that extended the package forked its own row
+at that moment and reads that instead.
+
+**`requireModelPass` IS ON THE WIRE, DEFAULT OFF.** The 2026-08-03 decision stands (a failed second
+net publishes the floor result with the degradation recorded on the artifact, because the floor is
+the control and is never conditional on a model). The stricter posture is now an opt-in request
+field, so a reviewer can take it per call without a redeploy. Its refusal is `SECRET_GUARD_BLOCKED`
+(422) - a guard protecting secrets refused the write, which is what that code already names on the
+config-save and artifact-download paths - and NOT a new `ErrorCode` member, because widening the
+shared enum breaks every older client's reading of the envelope. Its `details` carry the machine code
+`model_pass_required` AND NOTHING ELSE: `PublishResult.model_pass_required` carries a `reason` that
+is the chokepoint's own thrown message - a transport status, a credential-store error - and putting
+that on the wire is exactly the defect the 2026-08-16 "derive user-facing errors from a code, never
+server prose" change closed elsewhere. The operator diagnoses from the logs.
+
+### DECIDED: platform-authored provenance is SCRUBBED from the published snapshot, not carried
+
+`VERIFICATION.md` flagged that `authoring.authoredBy` (a user id), `authoring.goal` (free text) and
+`verification.checks[].detail` rode into the published snapshot. They did, and so did `trustedBy`.
+The decision is to scrub, on three grounds:
+
+1. `authoredBy` / `trustedBy` are user ids of people in the AUTHORING tenant, on an artifact that is
+   permanent and read by every organisation. `definitionFromDoc` is deliberately careful never to
+   tell a cross-org reader which org authored a `global` row; naming two of its members inside the
+   actions was the same disclosure by a longer route.
+2. `goal` is the author's own prose, and it is the ONE free-text field on the artifact the chokepoint
+   model pass never sees - `FREE_TEXT_PATHS` names `skillMd`, `lessons`, `config.description` and
+   `config.credentialGuide`, and nothing else. The floor alone was the whole of its protection.
+3. `checks[].detail` is documented as being about SHAPE rather than content, which is a claim about
+   today's checks and not a property of the field.
+
+**WHAT IS KEPT IS THE TRUST SEMANTICS, AND KEEPING IT IS NOT OPTIONAL.** An action with NO authoring
+record reads as human-written and therefore TRUSTED (`authoringStateOf` → `'none'` →
+`isTrustedAction` true), so scrubbing the record wholesale would have published every provisional
+action to every consuming org as one a person had reviewed - the write gate opened by a scrub. So
+`state`, `authoredAt`, `declaredMutates`, `shape`, `trustedAt` and the verification VERDICT
+(`verifiedAt`, `passed`, `checks[].{name, ok}`) stay. `shape` in particular is the integrity tie that
+keeps a re-authored action reading as provisional wherever it is read.
+
+### FOUND WHILE PROVING D5: the published ACTION was not a whitelist
+
+D5 says evidence lives in a tenant-scoped collection structurally OUTSIDE the published snapshot, so
+promotion carries none BY CONSTRUCTION, and that structural exclusion IS the v1 sanitization. Proving
+it from the publish side found that the structure was weaker than the claim. `packageConfigFromDoc`
+whitelists the PACKAGE fields, which was read as covering the snapshot. It did not:
+`actionsWithoutRecipes` SUBTRACTS one field (`recipe`) and copies the rest of the action object
+through, and `IntegrationAction` is an open superset - so a field placed on an ACTION rode into the
+frozen artifact and out to every organisation with nothing in the way. Per-action evidence is the
+most natural thing in the world to hang off the action it describes. `publishableActionOf` is now a
+whitelist over the twelve declared package fields plus the projected `authoring`, the same kind of
+statement `recipeSummary` and `fieldsFromPackageConfig` already are: a field added to the stored
+shape later must be OPTED IN to publication, never carried onto it by a spread nobody re-read.
+
+**WHAT THIS SLICE ASSERTS AND WHAT IT CANNOT.** `tests/security/publish-doors-isolation.test.ts`
+plants evidence- and feedback-shaped fields on the definition document (six at the top level, five
+per action), publishes, and asserts the snapshot's key set as an EQUALITY at three levels - so the
+exclusion holds for whatever the other stream ends up calling its fields. It CANNOT assert the other
+half: `publishedViewOf` spreads the stored doc before overlaying the snapshot's content, so a
+hypothetical evidence field placed ON the row would ride the in-process cross-org VIEW even though it
+never entered the snapshot (the wire projection `definitionFromDoc` is itself a whitelist, so nothing
+reaches a client - both facts are asserted, so a change to either reddens). The store owners must
+confirm from their side that neither collection writes onto the definition document.
+
+### The publish-request note is scrubbed through the PUBLISH floor, at the route
+
+Mounting the submit door made `publishRequest.note` a written field for the first time: free text a
+person types that LEAVES THE TENANT, read by a super-admin who is not a member of their org. It is
+scrubbed with `scrubPublishText` - the read-path scrub plus the strict credential-line rule plus the
+blanket literal-secret scan - and NOT with `scrubSecretText`, which is the narrower egress rule and
+was measured leaving a pasted vendor key sitting in prose. Then capped at 1000 characters. It happens
+at the route rather than in the store because `definition-store.ts` holds no runtime dependency on
+the modules that own the scrub (its own standing claim, and the reason `withoutRecipes` is restated
+there rather than imported), and it cannot rely on the schema alone because `.max()` bounds the
+length and not the content.
+
+**DIAGRAM CHECK (FIXED-12):** 02-module-map gains the five routes and the two new pure projections as
+new edges from the route layer; 05-data-model gains what the frozen snapshot may now contain and the
+note that starts being written. Both APPEND-ONLY. No new module, no new seam, no new collection.

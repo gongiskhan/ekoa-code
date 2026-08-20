@@ -67,6 +67,8 @@ import {
   scrubSecretText,
   scrubSecretTextWith,
   PLACEHOLDER_SRC,
+  type IntegrationAction,
+  type IntegrationActionAuthoring,
   type IntegrationPackageConfig,
   type SecretWalkRules,
 } from './definitions.js';
@@ -640,6 +642,85 @@ export async function scrubForPublish(
 // Doc <-> publishable-content mapping
 // ============================================================================================
 
+/**
+ * PLATFORM-AUTHORED PROVENANCE, projected for publication (slice S6).
+ *
+ * The `authoring` record (slice D3) rode into the published snapshot whole, and three of its fields
+ * had no business crossing an org boundary onto a permanent artifact:
+ *
+ *   - `authoredBy` / `trustedBy` - user ids of people in the AUTHORING tenant. `definitionFromDoc`
+ *     is careful never to tell a cross-org reader which org authored a `global` row; naming two of
+ *     its members inside the actions was the same disclosure by a longer route;
+ *   - `goal` - the author's own prose. Worse than ordinary free text here: `FREE_TEXT_PATHS` names
+ *     `skillMd`, `lessons`, `config.description` and `config.credentialGuide`, so the chokepoint
+ *     model pass - the second net over exactly this kind of content - never looks at it;
+ *   - `verification.checks[].detail` - a guardrail's failure prose. Documented as being about SHAPE
+ *     rather than content, which is a claim about today's checks, not a property of the field.
+ *
+ * WHAT IS KEPT IS THE TRUST SEMANTICS, and keeping it is not optional. An action with NO record
+ * reads as human-written and therefore TRUSTED (`authoringStateOf` -> `'none'` ->
+ * `isTrustedAction` true), so scrubbing the record wholesale would publish every consuming org a
+ * provisional action promoted to trusted - the write gate opened by a scrub. `state`, `shape`,
+ * `declaredMutates` and the verification VERDICT stay; `shape` in particular is the integrity tie
+ * that keeps a re-authored action reading as provisional wherever it is read.
+ */
+export function publishableAuthoringOf(record: IntegrationActionAuthoring): IntegrationActionAuthoring {
+  return {
+    state: record.state,
+    authoredAt: record.authoredAt,
+    declaredMutates: record.declaredMutates,
+    shape: record.shape,
+    ...(record.trustedAt !== undefined ? { trustedAt: record.trustedAt } : {}),
+    verification: {
+      verifiedAt: record.verification.verifiedAt,
+      passed: record.verification.passed,
+      checks: record.verification.checks.map((check) => ({ name: check.name, ok: check.ok })),
+    },
+  };
+}
+
+/**
+ * ONE action as it may be PUBLISHED - a WHITELIST over `IntegrationAction`, deliberately, and this
+ * is the level at which the D5 structural exclusion actually has to hold.
+ *
+ * `packageConfigFromDoc` below whitelists the package fields, and that was read as covering the
+ * whole snapshot. It did not: `actionsWithoutRecipes` SUBTRACTS one field and copies the rest of the
+ * action object through, so a field placed on an ACTION rode into the frozen artifact and out to
+ * every organisation with nothing to stop it. That is the exact hole D5 relies on not existing -
+ * per-action evidence (a redacted request summary, a response sample, a screenshot pointer) is the
+ * most natural thing in the world to hang off the action it describes, and hanging it there would
+ * have published it. The published action is now the same kind of statement `recipeSummary` (routes)
+ * and `fieldsFromPackageConfig` (definition-save) are: a field added to the stored shape later must
+ * be OPTED IN to publication, never carried onto it by a spread nobody re-read.
+ *
+ * WHAT IS NOT HERE AND WHY: `recipe` (a tenant's learned map of a portal's private API - the rule
+ * `actionsWithoutRecipes` states, kept as the first subtraction so the two cannot disagree) and the
+ * identifying half of `authoring` (`publishableAuthoringOf` above).
+ */
+export function publishableActionOf(action: IntegrationAction): IntegrationAction {
+  return {
+    actionName: action.actionName,
+    description: action.description,
+    mutates: action.mutates,
+    ...(action.argsSchema !== undefined ? { argsSchema: action.argsSchema } : {}),
+    ...(action.returnSchema !== undefined ? { returnSchema: action.returnSchema } : {}),
+    ...(action.httpConfig !== undefined ? { httpConfig: action.httpConfig } : {}),
+    ...(action.automationBinding !== undefined ? { automationBinding: action.automationBinding } : {}),
+    ...(action.backingType !== undefined ? { backingType: action.backingType } : {}),
+    ...(action.capabilities !== undefined ? { capabilities: action.capabilities } : {}),
+    ...(action.transport !== undefined ? { transport: action.transport } : {}),
+    ...(action.posture !== undefined ? { posture: action.posture } : {}),
+    ...(action.authProfile !== undefined ? { authProfile: action.authProfile } : {}),
+    ...(action.authoring !== undefined ? { authoring: publishableAuthoringOf(action.authoring) } : {}),
+  };
+}
+
+/** The publishable action set. `actionsWithoutRecipes` runs FIRST so the recipe rule stays stated in
+ *  the one place all three boundaries read it from, and the whitelist then decides the rest. */
+function publishableActions(actions: IntegrationAction[]): IntegrationAction[] {
+  return actionsWithoutRecipes(actions).map(publishableActionOf);
+}
+
 /** The stored row as the canonical package config — the exact inverse of the save path's
  *  `fieldsFromPackageConfig`, so a publish round trip cannot invent or drop a package field. */
 export function packageConfigFromDoc(doc: IntegrationDefinitionDoc): IntegrationPackageConfig {
@@ -658,7 +739,11 @@ export function packageConfigFromDoc(doc: IntegrationDefinitionDoc): Integration
     // session token. Publishing freezes what every other org then reads, so the recipe is dropped
     // from the publishable content rather than scrubbed within it. Nothing is lost to the author:
     // the recipe stays on their live row, and `publishSnapshot` writes only the snapshot field.
-    actions: actionsWithoutRecipes(doc.actions),
+    // S6 CLOSES THE OTHER HALF OF THE SAME LINE. Dropping the recipe was a SUBTRACTION and the rest
+    // of the action object was copied through - so this function whitelisted the PACKAGE fields and
+    // nothing inside them, and any field on an action rode into the snapshot. `publishableActions`
+    // makes the action a whitelist too, and projects its authoring provenance.
+    actions: publishableActions(doc.actions),
     ...(doc.credentialGuide !== undefined ? { credentialGuide: doc.credentialGuide } : {}),
     ...(doc.sessionConnect !== undefined ? { sessionConnect: doc.sessionConnect } : {}),
     ...(doc.webhookConfig !== undefined ? { webhookConfig: doc.webhookConfig } : {}),

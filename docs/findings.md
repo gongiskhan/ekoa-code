@@ -6472,3 +6472,53 @@ re-implemented a live control had it trusted this heading over the code.
   so a reader could mistake pinned surface for a covered production path; now stated, with a note to
   delete the paragraph when the page mounts. (4) `EVIDENCE_RETENTION_DAYS`'s docblock now names its
   enforcing case.
+- **`s6-the-publish-mechanism-had-no-door`** (CLOSED 2026-08-20, HIGH, a whole reviewed subsystem
+  unreachable in production). Slice E2 built and tested the publish scrub, the frozen cross-org
+  snapshot, the supersede protocol, the dry-run preview and the author-initiated submit-for-review
+  window - and shipped none of it with an HTTP route. `previewPublish`, `publishDefinition`,
+  `requestPublish`, `withdrawPublishRequest` and `listPublishRequests` had ZERO non-test callers, so
+  the one thing that opens a tenant row to a non-member platform reviewer (`isDefinitionVisibleTo`'s
+  submit branch) could never be opened, and the review queue behind it had never been reachable. The
+  only way to publish anything cross-org was `POST /definitions/:id/global`, which flips
+  `visibility` WITHOUT writing a snapshot - so every publication the product could actually perform
+  landed on the read-time floor rather than the reviewed, model-passed artifact. Closed with five
+  descriptors and five thin routes (three `user`, two `super-admin`, none `user-or-key`), journaled
+  in `docs/decisions.md`.
+
+- **`s6-a-published-action-was-a-spread-not-a-whitelist`** (CLOSED 2026-08-20, MEDIUM, latent
+  cross-org disclosure the D5 decision assumed away). `packageConfigFromDoc` whitelists the package
+  fields of a published snapshot and was read as covering the whole artifact. It did not:
+  `actionsWithoutRecipes` SUBTRACTS `recipe` and copies the rest of each action object through, and
+  `IntegrationAction` is an open superset - so any other field on an action rode into the frozen
+  snapshot and out to every organisation. Found while proving D5's "promotion carries no evidence BY
+  CONSTRUCTION" from the publish side: a fixture planting evidence- and feedback-shaped fields on the
+  actions saw five of them arrive in the snapshot, one carrying a user id. Nothing writes such a
+  field today (evidence and feedback are separate tenant-scoped collections), so this was latent
+  rather than live - but per-action evidence is the obvious place to put per-action evidence, and the
+  structural argument the decision rests on was not structural at the level it needed to be. Closed
+  with `publishableActionOf`, a whitelist over the twelve declared package fields plus the projected
+  `authoring`. Verified by mutation: restoring the spread reddens two cases of
+  `tests/security/publish-doors-isolation.test.ts`.
+
+- **`s6-identifying-provenance-rode-into-the-published-snapshot`** (CLOSED 2026-08-20, MEDIUM,
+  cross-tenant identity + unscanned free text on a permanent artifact). `authoring.authoredBy`,
+  `authoring.trustedBy` (user ids in the AUTHORING org), `authoring.goal` (the author's prose) and
+  `verification.checks[].detail` were published verbatim to every organisation, permanently. `goal`
+  is additionally the one free-text field on the artifact that `FREE_TEXT_PATHS` does not name, so
+  the chokepoint model pass - the second net that exists for exactly this content - never saw it.
+  Closed with `publishableAuthoringOf`, which drops the four and keeps the trust semantics. The
+  half that had to be kept: an ABSENT authoring record reads as human-written and therefore TRUSTED
+  (`authoringStateOf` → `'none'` → `isTrustedAction` true), so scrubbing the record wholesale would
+  have promoted every provisional action to trusted for every consuming org - the write gate opened
+  by a scrub. The suite carries that case explicitly, and `authoredBy`/`goal`/`trustedBy` become
+  optional on the api-internal type so the omission is expressed rather than cast away.
+
+- **`s6-the-publish-request-note-left-the-tenant-unscrubbed`** (CLOSED 2026-08-20, LOW-MEDIUM, new
+  egress created by this slice). `publishRequest.note` had existed since E2 with no writer. Mounting
+  the submit door made it a real field: free text a person types, read by a super-admin who is not a
+  member of their org. The first implementation scrubbed it with `scrubSecretText` - the READ-PATH
+  egress rule - and the security suite measured a pasted vendor key surviving it in prose. It now
+  goes through `scrubPublishText`, the same publish floor the artifact it argues for gets (read-path
+  scrub + strict credential-line rule + blanket literal-secret scan), then a 1000-character cap.
+  Scrubbed at the route rather than in the store, because `definition-store.ts` deliberately holds no
+  runtime dependency on the modules that own the scrub.

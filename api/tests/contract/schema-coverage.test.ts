@@ -289,6 +289,24 @@ const COVERED = new Set<string>([
   // agent cannot destroy the evidence a promotion to `trusted` rests on). ONE NEW descriptor, one
   // COVERED entry: the pinned EXPECTED_PENDING_COUNT below is UNCHANGED.
   'integrations.discardActionEvidence',
+  // 2026-08-20 (S6) - THE PUBLISH DOORS. The E2 publish mechanism was built and tested and had ZERO
+  // non-test callers; the review queue it designed had never been reachable. Five descriptors, five
+  // routes, exercised by integrations-publish.test.ts through the real app: submit/withdraw inside
+  // the tenant (the launch-pad rule, the idempotent re-stamp, the platform reviewer refused the
+  // org's own withdraw), the queue outside it (a whitelist key-set EQUALITY, super-admin at the
+  // ROUTE - an org-admin gets 403 rather than an empty list - and the literal path outranking
+  // `:id`), the preview (the floor visibly applied on the wire, the redaction report carrying no
+  // removed text, the E2 review window opening and closing with the submission, and preview/publish
+  // byte-compared), and the publish (the tier and the artifact landing in ONE write, the author's
+  // live row untouched, another org reading the scrubbed artifact through the ordinary registry,
+  // `requireModelPass` refusing rather than degrading, and RE-PUBLISH SUPERSEDING wholesale with the
+  // replaced stamp recorded). Every 2xx against the shared schemas, every non-2xx against the
+  // envelope, the 404s byte-identical to a missing id. Admission is additionally walked off the
+  // router's own stack by integrations-capability.test.ts; the D5 structural exclusion, the
+  // provenance projection and the note scrub by tests/security/publish-doors-isolation.test.ts.
+  // FIVE new descriptors, five COVERED entries: the pinned EXPECTED_PENDING_COUNT below is UNCHANGED.
+  'integrations.requestPublish', 'integrations.withdrawPublish', 'integrations.listPublishRequests',
+  'integrations.previewPublish', 'integrations.publishDefinition',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

@@ -8,16 +8,19 @@
  *      per-user gateway key reaches these; `requireUserOrApiKey` delegates to `requireAuth`
  *      untouched for a platform JWT, so the dashboard's calls are byte-identical to before.
  *   2. Everything else — the dashboard surface: configs CRUD, the active catalog, the org-admin
- *      refresh, the SHARING routes (E1) and the three WRITE-GATE consent routes (C2). These carry
- *      `requireAuth` and a gateway key can never reach them. The consent routes in particular are
- *      `auth: 'user'` on purpose: an agent refused at the write gate must not be able to POST the
- *      shape it was just handed and retry (see shared/src/integrations.ts `approveAction`).
+ *      refresh, the SHARING routes (E1), the five PUBLISH DOORS (S6) and the three WRITE-GATE
+ *      consent routes (C2). These carry `requireAuth` and a gateway key can never reach them. The
+ *      consent routes in particular are `auth: 'user'` on purpose: an agent refused at the write
+ *      gate must not be able to POST the shape it was just handed and retry (see
+ *      shared/src/integrations.ts `approveAction`). The publish doors are `user` / `super-admin`
+ *      for the sibling reason `setGlobal` is: a key must never publish to every org.
  *
  * HOW THE TWO TIERS ARE KEPT APART, and why the ordering below is load-bearing: express matches in
  * registration order, so `GET /:key` (tier 1) is registered AFTER the dashboard's literal-segment
  * routes (`/active`, `/configs`, `/refresh`, `/definitions/…`, `/recipes`) - otherwise it would
  * swallow them - and the router-wide `requireAuth` blanket sits BELOW it, covering every remaining
- * `:key` route.
+ * `:key` route. The same rule applies one level down, inside `/definitions`: the literal
+ * `/definitions/publish-requests` is registered before the four `/definitions/:id/…` routes.
  * That blanket is the SAFE DEFAULT for anything appended later. The routes above it each carry
  * their admission EXPLICITLY, and `api/tests/contract/integrations-capability.test.ts` walks this
  * router's own stack and probes every route it finds: unauthenticated must be 401, and every route
@@ -39,11 +42,15 @@ import {
   IntegrationActionParams,
   IntegrationKeyParams,
   SetIntegrationLessonsRequest,
+  RequestDefinitionPublishRequest,
+  PublishDefinitionRequest,
+  PUBLISH_REQUEST_NOTE_MAX_CHARS,
 } from '@ekoa/shared';
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
 import { requireUserOrApiKey, type ApiKeyPrincipal } from '../auth/api-key-middleware.js';
 import { listConfigs, upsertConfig, updateConfig, deleteConfig, configSummary, findConfigForOwner } from '../integrations/service.js';
 import { refreshDefinitions, integrationAutomationTemplate } from '../integrations/definitions.js';
+import { previewPublish, publishDefinition, scrubPublishText } from '../integrations/publish-scrub.js';
 import { resolveDefinition, listDefinitionsFor, activeCatalogFor } from '../integrations/definition-registry.js';
 import {
   actionRequiresConsent,
@@ -68,6 +75,7 @@ import {
 import {
   integrationDefinitionStore,
   type DefinitionVisibility,
+  type IntegrationDefinitionDoc,
   type SetVisibilityResult,
 } from '../integrations/definition-store.js';
 import { readLessons, writeLessons } from '../integrations/definition-lessons.js';
@@ -151,6 +159,54 @@ function sendVisibility(res: Response, result: SetVisibilityResult): void {
   if (result.verdict === 'notfound') return notFound(res);
   if (result.verdict === 'forbidden') return sendError(res, 'FORBIDDEN', 'Sem permissão.');
   res.json({ ok: true, visibility: result.doc.visibility });
+}
+
+/**
+ * The SAME verdict mapping as `sendVisibility`, answering the publish-request echo instead - one
+ * place for the submit and the withdraw, so the two can never drift.
+ *
+ * The echo is read off the PERSISTED document: a withdraw answers `null` because the field really is
+ * gone from the row, not because the handler knows which route it is on.
+ */
+function sendPublishRequest(res: Response, result: SetVisibilityResult): void {
+  if (result.verdict === 'notfound') return notFound(res);
+  if (result.verdict === 'forbidden') return sendError(res, 'FORBIDDEN', 'Sem permissão.');
+  const req = result.doc.publishRequest;
+  // A WHITELIST, not a spread, for the same reason `publishQueueEntry` below is one: the shape is
+  // read off a stored document, and a document can carry more than its type says it does.
+  res.json({
+    ok: true,
+    publishRequest: req
+      ? { requestedBy: req.requestedBy, requestedAt: req.requestedAt, ...(req.note !== undefined ? { note: req.note } : {}) }
+      : null,
+  });
+}
+
+/**
+ * ONE row of the review queue, projected onto `IntegrationPublishQueueEntry`.
+ *
+ * A WHITELIST, and here it is load-bearing rather than tidy: this is the only response in the
+ * process that carries another organisation's row to a super-admin who is not a member of it, and it
+ * runs NO scrub. So `skillMd`, `lessons`, `configSchema`, `credentialGuide` and the action bodies -
+ * everything `publish-scrub.ts` exists to clean before it crosses an org boundary - are absent by
+ * construction, not by a spread that happened to omit them. The reviewer reads content through
+ * `POST …/publish-preview`, which is the scrub.
+ *
+ * `actionCount` is the one thing derived from the content: a size signal, never the content.
+ */
+function publishQueueEntry(doc: IntegrationDefinitionDoc) {
+  const req = doc.publishRequest!;
+  return {
+    id: doc._id,
+    key: doc.key,
+    ...(doc.displayName !== undefined ? { displayName: doc.displayName } : {}),
+    orgId: doc.orgId,
+    actionCount: (doc.actions ?? []).length,
+    republish: doc.publishedSnapshot !== undefined,
+    requestedBy: req.requestedBy,
+    requestedAt: req.requestedAt,
+    ...(req.note !== undefined ? { note: req.note } : {}),
+  };
 }
 
 /**
@@ -313,6 +369,164 @@ export function integrationsRouter(deps: {
     const target: DefinitionVisibility = body.global ? 'global' : 'org';
     const result = await integrationDefinitionStore.setVisibility(req.params.id as string, actorOf(req), target);
     sendVisibility(res, result);
+  });
+
+  // --- The PUBLISH DOORS (slice S6) ----------------------------------------------------------
+  //
+  // Five thin shells over machinery that was built, tested and had NO CALLER: the store's
+  // submit/withdraw/queue (`requestPublish`, `withdrawPublishRequest`, `listPublishRequests`) and
+  // the scrub module's dry run and write (`previewPublish`, `publishDefinition`). Every gate below
+  // is theirs. Nothing here re-derives visibility, admission, the scrub, or the supersede.
+  //
+  // ORDERING, twice over. (1) Every path here has a LITERAL first segment, so the whole block sits
+  // above the `/:key` capability routes or `:key` would swallow `definitions`. (2) Inside the block,
+  // `/definitions/publish-requests` is registered BEFORE the `/definitions/:id/...` routes: they do
+  // not collide today (two segments vs three), and that is precisely the kind of accident a later
+  // `/definitions/:id` read would turn into a queue that answers for an integration named
+  // "publish-requests". Literal before parameter, at both levels.
+  //
+  // ADMISSION: three `user`, two `super-admin` (`requireRole`, defense in depth beside the store's
+  // own bar, exactly as `/definitions/:id/global` above). NONE is `user-or-key` - see the descriptor
+  // block in `shared/src/integrations.ts` for why each one in turn.
+
+  /**
+   * GET /api/v1/integrations/definitions/publish-requests -> { items } (auth: super-admin).
+   * The platform REVIEW QUEUE, reachable for the first time. Entries are the whitelist projection
+   * (`publishQueueEntry`); the store answers `[]` for any non-super-admin, and the role gate above
+   * it means a non-super-admin never even gets an empty queue to infer from.
+   */
+  r.get('/definitions/publish-requests', requireAuth, requireRole('super-admin'), async (req: AuthedRequest, res: Response) => {
+    const rows = await integrationDefinitionStore.listPublishRequests(actorOf(req));
+    res.json({ items: rows.map(publishQueueEntry) });
+  });
+
+  /**
+   * POST /api/v1/integrations/definitions/:id/publish-request -> { ok, publishRequest } (auth: user).
+   *
+   * SUBMIT FOR REVIEW. The store requires the row to already be `org` and the actor to be able to
+   * write it; presence of the stamp is what opens the E2 review window (`isDefinitionVisibleTo`), so
+   * this is the ONLY thing that puts a tenant row in front of a non-member platform reviewer - and
+   * it is opened from inside the tenant. Re-submitting re-stamps (the note can be corrected).
+   *
+   * THE NOTE GETS THE PUBLISH FLOOR, not the egress scrub, and the difference is not cosmetic. It
+   * is free text a person typed that LEAVES THE TENANT - read by a super-admin who is not a member
+   * of their org - so it belongs to the same class as the artifact it argues for, and it is scrubbed
+   * by the same `scrubPublishText`: the read-path scrub plus the strict credential-line rule plus
+   * the BLANKET literal-secret scan. `scrubSecretText` alone is the narrower egress rule and leaves
+   * a pasted vendor key sitting in prose (measured, not assumed - the security suite planted one and
+   * watched it survive). Then a hard cap, the shape `authored-action.ts` gives an authoring goal.
+   *
+   * It cannot go in the store: `definition-store.ts` holds no runtime dependency on the modules that
+   * own the scrub (its own header, and the reason `withoutRecipes` is restated there rather than
+   * imported). It cannot rely on the schema alone either - `.max()` bounds the length, not the
+   * content. So the one place that mints a publish request does both, and
+   * `tests/security/publish-doors-isolation.test.ts` reads the PERSISTED row back to prove it.
+   */
+  r.post('/definitions/:id/publish-request', requireAuth, async (req: AuthedRequest, res: Response) => {
+    const body = parseBody(res, RequestDefinitionPublishRequest, req.body ?? {});
+    if (!body) return;
+    const note = body.note === undefined
+      ? undefined
+      : scrubPublishText(body.note).slice(0, PUBLISH_REQUEST_NOTE_MAX_CHARS);
+    const result = await integrationDefinitionStore.requestPublish(req.params.id as string, actorOf(req), note);
+    sendPublishRequest(res, result);
+  });
+
+  /**
+   * DELETE /api/v1/integrations/definitions/:id/publish-request -> { ok, publishRequest: null }.
+   *
+   * WITHDRAW, closing the review window again (auth: user). The store refuses while the row is
+   * `global` - a published row is already visible to every org, so withdrawing there would only
+   * strip the reviewer's ability to UN-publish it. It also refuses a super-admin who is not a member
+   * of the authoring org: a platform reviewer must not be able to delete the org's own record that
+   * it ever asked.
+   */
+  r.delete('/definitions/:id/publish-request', requireAuth, async (req: AuthedRequest, res: Response) => {
+    const result = await integrationDefinitionStore.withdrawPublishRequest(req.params.id as string, actorOf(req));
+    sendPublishRequest(res, result);
+  });
+
+  /**
+   * POST /api/v1/integrations/definitions/:id/publish-preview -> PublishPreviewResponse (auth: user).
+   *
+   * THE DRY RUN: exactly what a foreign org would read if this were published now, from the SAME
+   * `scrubForPublish` the write uses. A POST although it stores nothing - it spends a chokepoint
+   * call, and an endpoint a prefetch may replay for free must not be one that bills the caller.
+   *
+   * ADMISSION IS THE MODULE'S (`getWritableForActor`): the author, their org-admin, or a super-admin
+   * who can see the row - which for a non-member reviewer means "while the submission stands". The
+   * preview reveals strictly LESS than the raw row every one of those principals can already read,
+   * which is the whole argument for it not needing the publish's bar.
+   */
+  r.post('/definitions/:id/publish-preview', requireAuth, async (req: AuthedRequest, res: Response) => {
+    const out = await previewPublish(actorOf(req), req.params.id as string);
+    if (out.verdict === 'notfound') return notFound(res);
+    if (out.verdict === 'forbidden') return sendError(res, 'FORBIDDEN', 'Sem permissão.');
+    res.json({
+      ok: true,
+      snapshot: {
+        config: out.snapshot.config,
+        skillMd: out.snapshot.skillMd,
+        ...(out.snapshot.lessons !== undefined ? { lessons: out.snapshot.lessons } : {}),
+      },
+      redactions: out.redactions,
+      modelPass: out.modelPass,
+      ...(out.supersedes !== undefined ? { supersedes: out.supersedes } : {}),
+    });
+  });
+
+  /**
+   * POST /api/v1/integrations/definitions/:id/publish -> PublishDefinitionResponse (auth: super-admin).
+   *
+   * THE PUBLISH: scrub into a frozen snapshot and move to `global`, in ONE gated store write, so a
+   * published row and its scrubbed artifact can never disagree. The gate is
+   * `publishSnapshot` -> `visibilityWriteVerdict` - the same bar `/definitions/:id/global` meets, in
+   * both directions - and this handler adds no authority of its own.
+   *
+   * SUPERSEDE IS THE NORMAL CASE. One snapshot field per definition means a re-publish REPLACES it
+   * wholesale and stamps the replaced one's provenance into `supersedes`. That is the brief's
+   * "promoting a user-built integration may replace the existing public one", and it is total rather
+   * than a version chain readers would have to choose between. A consuming org that extended the
+   * package is untouched: self-extension forked it a row of its own, which it reads instead.
+   *
+   * `model_pass_required` is `SECRET_GUARD_BLOCKED` (422) and not a new code: a guard protecting
+   * secrets refused the write, which is exactly what that code already names on the config-save and
+   * artifact-download paths, and widening the shared `ErrorCode` enum breaks every older client's
+   * reading of the envelope (`shared/src/errors.ts`).
+   *
+   * ITS `details` CARRY A MACHINE CODE AND NOTHING ELSE. `PublishResult.model_pass_required` carries
+   * a `reason` that is the chokepoint's own thrown message - a transport status, a credential-store
+   * error, whatever `completeFast` raised - and putting server prose on the wire is the exact defect
+   * the 2026-08-16 "derive user-facing errors from a code, never server prose" change closed
+   * elsewhere. The operator diagnoses from the logs; the client gets the code.
+   */
+  r.post('/definitions/:id/publish', requireAuth, requireRole('super-admin'), async (req: AuthedRequest, res: Response) => {
+    const body = parseBody(res, PublishDefinitionRequest, req.body ?? {});
+    if (!body) return;
+    const out = await publishDefinition(
+      actorOf(req),
+      req.params.id as string,
+      body.requireModelPass === true ? { requireModelPass: true } : {},
+    );
+    if (out.verdict === 'notfound') return notFound(res);
+    if (out.verdict === 'forbidden') return sendError(res, 'FORBIDDEN', 'Sem permissão.');
+    if (out.verdict === 'model_pass_required') {
+      return sendError(
+        res,
+        'SECRET_GUARD_BLOCKED',
+        'A revisão automática do conteúdo não pôde ser concluída, por isso a publicação foi recusada. Tente novamente.',
+        { code: 'model_pass_required' },
+      );
+    }
+    const snapshot = out.doc.publishedSnapshot!;
+    res.json({
+      ok: true,
+      visibility: out.doc.visibility,
+      scrubbedAt: snapshot.scrubbedAt,
+      redactionCount: snapshot.redactionCount,
+      modelPass: out.modelPass,
+      ...(snapshot.supersedes !== undefined ? { supersedes: snapshot.supersedes } : {}),
+    });
   });
 
   // --- Configs CRUD (literal first segment — must precede the `/:key` routes) -----------------

@@ -132,19 +132,36 @@ export interface IntegrationActionAuthoringVerification {
  *
  * An action with NO record is trusted by construction: shipped packages and human builder saves
  * behave exactly as they did before this slice (Rule 7, additive).
+ *
+ * WHY THREE OF THESE FIELDS ARE OPTIONAL (slice S6). The record rides into the PUBLISHED SNAPSHOT
+ * with the action it belongs to, and a snapshot is read by every other organisation, permanently.
+ * `publishableAuthoringOf` (publish-scrub.ts) therefore omits the three that identify a person or
+ * carry their prose - `authoredBy`, `trustedBy`, `goal` - while keeping the whole trust semantics.
+ * The optionality is that omission expressed in the type; the writer (`authored-action.ts`) always
+ * fills them, and NOTHING reads them: `authoringStateOf`, `isTrustedAction` and `promoteToTrusted`
+ * read only `state`, `shape`, `declaredMutates` and `verification`. Dropping `state` instead would
+ * have been the dangerous shortcut - an ABSENT record means "a human wrote it", so scrubbing the
+ * record wholesale would silently promote every provisional action to trusted for every consuming
+ * org.
  */
 export interface IntegrationActionAuthoring {
   state: 'provisional' | 'trusted';
-  /** The user whose `achieve` call produced it (server-stamped from the verified actor). */
-  authoredBy: string;
+  /** The user whose `achieve` call produced it (server-stamped from the verified actor).
+   *  ABSENT on a published snapshot: a cross-org reader has no business learning who, in another
+   *  tenant, typed a goal. Nothing reads it. */
+  authoredBy?: string;
   authoredAt: string;
-  /** The goal it was authored to satisfy — scrubbed free text, capped. Provenance, never input. */
-  goal: string;
+  /** The goal it was authored to satisfy - scrubbed free text, capped. Provenance, never input.
+   *  ABSENT on a published snapshot: it is the author's own prose, and it is the ONE free-text field
+   *  on the artifact the chokepoint model pass never sees (`FREE_TEXT_PATHS` does not name it), so
+   *  the floor alone would be the whole of its protection. */
+  goal?: string;
   /** What the draft claimed about mutation. Only a promotion lets this take effect. */
   declaredMutates: boolean;
   /** `actionShape(integrationKey, action)` at authoring time — the integrity tie (see above). */
   shape: string;
   verification: IntegrationActionAuthoringVerification;
+  /** The human who promoted it. ABSENT on a published snapshot, same reason as `authoredBy`. */
   trustedBy?: string;
   trustedAt?: string;
 }

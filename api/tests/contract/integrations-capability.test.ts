@@ -480,9 +480,23 @@ describe('admission boundary: every route of the integrations router, enumerated
 
   it('the walker really finds the whole surface (a sanity floor, so an empty walk cannot pass)', () => {
     const routes = routesOf();
-    expect(routes.length).toBeGreaterThanOrEqual(14);
+    // RATCHETED, never loosened: 14 before S6, +5 for the publish doors. The floor exists so a
+    // walker that silently found nothing (a refactor to a nested router, an express upgrade that
+    // changes `stack`) cannot make the two probes below vacuously green.
+    expect(routes.length).toBeGreaterThanOrEqual(19);
     for (const declared of CAPABILITY_ROUTES) {
       expect(routes.map((r) => `${r.method} ${r.path}`)).toContain(declared);
+    }
+    // The publish doors are on the walked surface, so the "no route answers without a credential"
+    // and "a live gateway key is refused by every non-capability route" probes below cover them.
+    for (const door of [
+      'get /definitions/publish-requests',
+      'post /definitions/:id/publish-request',
+      'delete /definitions/:id/publish-request',
+      'post /definitions/:id/publish-preview',
+      'post /definitions/:id/publish',
+    ]) {
+      expect(routes.map((r) => `${r.method} ${r.path}`)).toContain(door);
     }
   });
 
