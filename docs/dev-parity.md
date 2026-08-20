@@ -22,8 +22,8 @@ living in one shell profile; an unreachable peer is a warning, never a pass.
 
 <!-- parity-peers: madrid=ssh://dev-madrid/home/ggomes/dev/ekoa-dev -->
 
-Last audited upstream commit: `9e6779f79d3bcbd30836c480678a94b360fc90fe` (2026-08-06, audited 2026-08-06)
-Last audited peer commit (`madrid`): `9e6779f7` (2026-08-06, audited 2026-08-06) - now PUSHED; the peer and origin agree.
+Last audited upstream commit: `9e6779f79d3bcbd30836c480678a94b360fc90fe` (2026-08-06, audited 2026-08-20) - origin/main UNCHANGED since 2026-08-06 (no new pushed commits).
+Last audited peer commit (`madrid`): `a7b5e10a` (2026-08-19, audited 2026-08-20) - UNPUSHED; the peer is ahead of origin/main by this one commit (the PDF letterhead fix, PORTED below). This machine's local `../ekoa-dev` is ahead of origin only by the already-tracked `bd5ac057` PWA-icon commit + a merge - not new work.
 
 ## Dispositions
 
@@ -74,6 +74,19 @@ production is released by hand.
 | `38365623` | 2026-08-06 | Cobranças featured artifact | PORTED 2026-08-06 - `api/assets/featured-artifacts/cobrancas/` (48 files, rank 30, v1.1.0). ADDITIVE, not a replacement: upstream keeps `legal-cobrancas` (rank 60) alongside it and so do we. Verified as runtime truth, not assumed: it seeds (42 featured, up from 41), builds, serves at `/apps/cobrancas/`, renders its full nav, auto-seeds its default profiles, reads the shared legal spine, and drives the newly-ported plane for real (`200 GET /api/app-email/integrations` returning the three capability-discovered senders) with ZERO console errors. TWO content defects fixed on the way in: (a) its `dados-omissao.test.mjs` resolved `seed-data.json` one directory too shallow, so the test ERRORED rather than asserting - it had never run, upstream included; fixed, and the invariant it guards (auto-seed and fork-seed are the same content) does hold. (b) its Definições page told the user "a plataforma não aplica qualquer confirmação adicional aos envios" - true of the old platform, FALSE here, where a send is a write behind the consent gate. Rewritten to state both approvals. This is the `governance.md` runtime-truth rule doing its job: ported content makes claims about a platform it was not written for |
 | `9e6779f7` | 2026-08-06 | the two missing halves of "continuar edita NO LUGAR" | PORTED / NOT-NEEDED 2026-08-06 - this commit was WRITTEN during this run, on the peer, to commit the two changes `c4f7f2c6` described and left in its working tree. Its chat-stripes half is the same fix already ported here (see the row below); its `useAgentExecution` half is NOT-NEEDED, since ekoa-code already keys a follow-up on the artifact id alone |
 | `c4f7f2c6` | 2026-08-06 | continuing a featured app edits it IN PLACE, never forks | PORTED 2026-08-06 (the real half) - `web/components/chat/chat-stripes.tsx` no longer forks, and `web/lib/featured-fork.ts` is deleted; regression suite `web/__tests__/components/chat-stripes-featured.test.tsx` pins the NEGATIVE assertion (fork is never called). NOTE: upstream's commit MESSAGE describes three changes but the commit contains only the file deletion - the other two are still uncommitted in dev-madrid's working tree. The `useAgentExecution` half is NOT-NEEDED here: ekoa-code already keys a follow-up on the artifact id alone and never sends a client-side project dir (the server resolves it), so the bug it fixes cannot occur |
+
+## Peer audit 2026-08-19..20 (`madrid`) - the PDF letterhead footer fix
+
+`a7b5e10a` is the single new commit the peer holds past origin/main, still UNPUSHED (invisible to
+GitHub and prod). The operator mentioned "a couple of fixes ... and maybe more in the ERP itself";
+the audit found exactly this ONE committed commit on the peer. Any further ERP fixes are still
+UNCOMMITTED in dev-madrid's working tree and are therefore invisible to git from here (the
+`c4f7f2c6` "message is not the change" lesson) - they must be committed on the peer before they can
+be audited/ported. Ported the one committed fix this run.
+
+| upstream | date | subject | disposition |
+|---|---|---|---|
+| `a7b5e10a` | 2026-08-19 | feat(pdf): per-page letterhead chrome in renderHtmlToPdf via displayHeaderFooter | PORTED 2026-08-20 - `api/src/apps/pdf.ts`: `PdfPageChrome` + `parsePdfMarginShorthand` + `extractPdfPageChrome` (DOM-extracted `<template data-pdf-header\|footer>` + `data-pdf-margin`), wired into `renderHtmlToPdf` and painted via Chromium's native `displayHeaderFooter`. `renderHtmlToPdf` is the exact fn the composition root injects into `integrations/zoho-sign.ts` (`ZohoSignDeps.renderHtmlToPdf`), so the signed-proposal PDF picks the chrome up. Fixes the PROP-0244 "floating footer" (the in-flow thead/tfoot repetition trick dropped the footer mid-page on the last page of each section). Regression: `api/tests/apps/pdf-page-chrome.test.ts` - the pure margin-shorthand cases always run; a Chromium-guarded real render (browser-pool.test.ts pattern) asserts the footer repeats once per physical page and is absent without a template, verified live via `pdfjs-dist` text extraction. Adapted to ekoa-code, not copied verbatim: string-form `page.evaluate` (no DOM lib in the api tsconfig, same as `renderAppDocumentPdf`) and an explicit shorthand parse (this repo runs `noUncheckedIndexedAccess`, which rejects upstream's destructuring-with-defaults). Upstream shipped NO test; this port adds one. The commit stays UNPUSHED on `dev-madrid`. |
 
 ### Open work this ledger opened
 

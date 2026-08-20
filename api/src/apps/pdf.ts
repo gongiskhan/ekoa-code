@@ -17,6 +17,9 @@ import { join } from 'node:path';
 import { Router, json, type Request, type Response } from 'express';
 import { getSharedBrowser } from '../services/browser-pool.js';
 import { loadConfig } from '../config.js';
+// Type-only (erased at compile time - does NOT force a runtime playwright import,
+// so a machine without the Chromium binary still loads this module, same as browser-pool).
+import type { Page } from 'playwright';
 
 const RENDER_TIMEOUT_MS = 30_000;
 const RENDER_SETTLE_MS = 800;
@@ -121,6 +124,89 @@ export async function renderArtifactPdf(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Per-page chrome (letterhead header/footer) for renderHtmlToPdf
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-page chrome extracted from the document itself. A document that needs a
+ * repeated letterhead (logo on top, firm addresses at the bottom of EVERY physical
+ * page) embeds it as inert `<template>` tags:
+ *
+ *   <template data-pdf-header> ...logo html... </template>
+ *   <template data-pdf-footer data-pdf-margin="26mm 20mm 26mm 20mm"> ...addresses... </template>
+ *
+ * They are passed to Chromium's native `displayHeaderFooter` - the only mechanism
+ * that pins chrome to the physical page bottom regardless of where the flowed
+ * content ends. Every in-flow imitation fails structurally: `position:fixed`
+ * overlays the text (the original Zoho footer incident), and the `<table>`
+ * thead/tfoot repetition trick drops the footer right after the last content
+ * fragment, mid-page, on the final page of each section (the PROP-0244 "floating
+ * footer" incident). Ported from ekoa-dev `a7b5e10a`.
+ *
+ * Contract: templates use inline styles only (Chromium renders them in an isolated
+ * context - no external resources, explicit font-size required), and the document
+ * declares `@page { size: ... }` WITHOUT margins - margins come from
+ * `data-pdf-margin` (CSS shorthand, on either template; default 24mm 20mm) so
+ * content layout and template placement can never disagree.
+ */
+export interface PdfPageChrome {
+  headerTemplate?: string;
+  footerTemplate?: string;
+  margin?: { top: string; right: string; bottom: string; left: string };
+}
+
+/** Parse a 1-4 value CSS margin shorthand ("26mm 20mm" etc.) into sides. */
+export function parsePdfMarginShorthand(value: string): PdfPageChrome['margin'] {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 1 || parts.length > 4) return undefined;
+  // CSS margin shorthand: 1->all; 2->[v,h]; 3->[t,h,b]; 4->[t,r,b,l]. `parts[0]` is
+  // present (length>=1 checked); the rest fall back per the shorthand rules.
+  const top = parts[0] as string;
+  const right = parts[1] ?? top;
+  const bottom = parts[2] ?? top;
+  const left = parts[3] ?? right;
+  return { top, right, bottom, left };
+}
+
+/**
+ * Extract `<template data-pdf-header|footer>` chrome from the LOADED page via the
+ * DOM - never regex over the HTML string: the same text can legitimately appear
+ * inside a <style> comment or a visible code sample, and a string match there
+ * swallows everything up to the next real `</template>` (this exact bug blanked a
+ * whole proposal upstream). querySelector only sees real elements. The templates are
+ * inert in the layout, so they need no removal. String-evaluate: no DOM lib in the
+ * api tsconfig, same pattern as renderAppDocumentPdf's page-rule probe.
+ */
+async function extractPdfPageChrome(page: Page): Promise<PdfPageChrome> {
+  const raw = (await page
+    .evaluate(
+      `(function () {
+        var header = document.querySelector('template[data-pdf-header]');
+        var footer = document.querySelector('template[data-pdf-footer]');
+        var margin =
+          (header && header.getAttribute('data-pdf-margin')) ||
+          (footer && footer.getAttribute('data-pdf-margin')) ||
+          null;
+        return {
+          header: header ? header.innerHTML.trim() : null,
+          footer: footer ? footer.innerHTML.trim() : null,
+          margin: margin,
+        };
+      })()`,
+    )
+    .catch(() => ({ header: null, footer: null, margin: null }))) as {
+    header: string | null;
+    footer: string | null;
+    margin: string | null;
+  };
+  return {
+    headerTemplate: raw.header || undefined,
+    footerTemplate: raw.footer || undefined,
+    margin: raw.margin ? parsePdfMarginShorthand(raw.margin) : undefined,
+  };
+}
+
 /**
  * Render a self-contained HTML document to PDF BYTES (no file written). Used by the
  * e-signature proxies (integrations/zoho-sign.ts), which need the rendered bytes in
@@ -129,16 +215,35 @@ export async function renderArtifactPdf(
  * `renderArtifactPdf` (print media + the vetted reset injected LAST so it wins),
  * keeping a signed PDF paginated the same as the platform's other PDF pipeline.
  * Rejects if the shared browser is unavailable (the caller surfaces the failure).
+ *
+ * A document may embed per-page letterhead chrome via `<template data-pdf-header>` /
+ * `<template data-pdf-footer>` - see PdfPageChrome above (ekoa-dev `a7b5e10a`).
  */
 export async function renderHtmlToPdf(html: string): Promise<Buffer> {
   const browser = await getSharedBrowser();
   const page = await browser.newPage({ viewport: VIEWPORT });
   try {
     await page.setContent(html, { waitUntil: 'networkidle', timeout: RENDER_TIMEOUT_MS });
+    const chrome = await extractPdfPageChrome(page);
     await page.emulateMedia({ media: 'print' });
     await page.addStyleTag({ content: PDF_PRINT_RESET_CSS });
     await page.waitForTimeout(RENDER_SETTLE_MS);
-    const pdf = await page.pdf({ format: 'A4', printBackground: true, preferCSSPageSize: true });
+    const hasChrome = Boolean(chrome.headerTemplate || chrome.footerTemplate);
+    const pdf = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      preferCSSPageSize: true,
+      // With chrome, BOTH templates must be explicit: an omitted headerTemplate makes
+      // Chromium print its default date/title header in the top margin.
+      ...(hasChrome
+        ? {
+            displayHeaderFooter: true,
+            headerTemplate: chrome.headerTemplate || '<span></span>',
+            footerTemplate: chrome.footerTemplate || '<span></span>',
+            margin: chrome.margin || { top: '24mm', right: '20mm', bottom: '24mm', left: '20mm' },
+          }
+        : {}),
+    });
     return Buffer.from(pdf);
   } finally {
     await page.close().catch(() => {});
