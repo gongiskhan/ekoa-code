@@ -87,30 +87,56 @@
  * out of the 7-day sweep for as long as it lives, so a row whose action no longer exists converts a
  * bounded retention into an unbounded one.
  *
- * An earlier revision of `discardEvidence` claimed two removal paths ("the action itself is gone (a
- * definition write that dropped it), and … the erasure path") and HAD NEITHER - it had no production
- * caller at all. Counted from the code this time rather than from what the author had in mind:
- * `git grep` for the writers of the definition document finds `IntegrationDefinitionStore.create`
- * and `IntegrationRecipeStore` and nothing else; the recipe store only ever `map`s the existing
- * `actions` array (it rewrites one element's `recipe` field), so it can never drop an action. There
- * is exactly ONE path, and no definition-delete path exists at all:
+ * TWO REVISIONS OF THIS HEADER GOT THE REMOVAL WRONG, IN THE SAME WAY TWICE, AND THE WAY IS THE
+ * POINT. The first claimed two removal paths and HAD NEITHER (`discardEvidence` had no production
+ * caller). The second enumerated the paths correctly - grep the writers of the definition document
+ * and only `IntegrationDefinitionStore.create` can drop an action - and then handed the collector
+ * THE WRONG UNIT: `discardEvidenceOfRemovedActions({ orgId: input.orgId, ... })`, the org that WROTE
+ * the definition. A row is keyed by the org that RAN it. Those are the same org only while nothing
+ * crosses an org boundary, and the whole `global` tier exists so that they do not:
  *
- *   1. THE ACTION SET REWRITTEN - `IntegrationDefinitionStore.create(..., onConflict: 'replace')`,
- *      the ordinary builder save (`definition-save.ts`) and `achieve`'s in-place write
- *      (`integration-achieve.ts`, twice). An action the incoming set no longer names - removed or
- *      renamed, an ordinary edit and exactly what an agent re-authoring an integration does - is
- *      gone. Collector: `discardEvidenceOfRemovedActions` below, called there, beside the sibling
- *      collection's `discardEvidenceOfRemovedRecipes` on the same line of the same branch.
+ *   a super-admin publishes org A's definition to `visibility: 'global'`; `getForActor` grants the
+ *   cross-org tier, so a user in org B resolves it, connects THEIR OWN credential and runs the
+ *   action. The row lands under `{orgId: orgB, ownerUserId: uB}` holding org B's real response body.
+ *   Org A then re-authors without that action - and a `deleteMany` filtered on org A matches
+ *   nothing. The action now resolves for NOBODY, so the row can never be superseded either, and its
+ *   screenshot pin exempts an authenticated client-portal session from the 7-day sweep permanently.
  *
- * THE COLLECTOR IS PER-ACTION AND CROSSES OWNERS, and that asymmetry with the key is deliberate: an
- * action is a property of the DEFINITION, so when it is dropped it is dropped for every member of
- * the org at once, and every owner's row for it must go. It is scoped to the one org that wrote.
+ * That is the fifth time in this codebase a decision has been scoped to the wrong UNIT (per-run
+ * where it should be per-origin, per-recipe where it should be per-call, per-action where it should
+ * be per-call, per-artifact where it should be per-owner, and here per-writing-org where it should
+ * be per-RUNNING-org). So the collector is no longer a diff of action sets at all.
  *
- * NOT A REMOVAL PATH, and named so the next reader does not have to re-derive it: retiring a legacy
- * row (`setVisibility` global -> org) hides a definition without dropping any action, and `DELETE
- * /api/v1/integrations/:key` deletes a CONFIG (a credential), not a definition. There is no
- * subject-erasure path over this collection, exactly as there is none over the screenshot tree
- * (`screenshot-plane.ts`); that is recorded as a gap in docs/findings.md, not implied to be closed.
+ * ── THE RULE: A ROW LIVES ONLY WHILE ITS OWNER CAN STILL RESOLVE ITS ACTION ────────────────────
+ *
+ * `discardEvidenceOfUnresolvableActions` below RECONCILES, per (orgId, ownerUserId) - the row's own
+ * key, i.e. the unit that produced it - by asking the ONE resolver production runs actions through
+ * (`getForActor`) which action names that owner still resolves for the key, and dropping every row
+ * of theirs that names something else. Stating it that way makes it independent of WHICH write
+ * narrowed the reach, which is what the two previous enumerations could not be:
+ *
+ *   1. THE ACTION SET REWRITTEN - `create(..., onConflict: 'replace')`: the builder save
+ *      (`definition-save.ts`) and `achieve`'s in-place write (`integration-achieve.ts`, twice). A
+ *      removed or renamed action, in the writing org AND in every org that resolved that definition
+ *      cross-org.
+ *   2. THE REACH NARROWED - `setVisibility`. `global -> org` takes EVERY action of the integration
+ *      away from every consumer org at once; `org -> private` does the same to every peer inside the
+ *      author's own org. The previous header dismissed this transition by name as "NOT A REMOVAL
+ *      PATH … hides a definition without dropping any action", which is true of the definition and
+ *      false of what the consumer can reach - the unit error again, one level up.
+ *   3. THE CREDENTIAL DISCONNECTED - `DELETE /api/v1/integrations/:key` (`service.ts` `deleteConfig`).
+ *      Not a definition write at all: the action still resolves, but the third-party account whose
+ *      request and response the sample holds is no longer connected, and the owner has asked for it
+ *      to go. Collector: `discardEvidenceForDisconnectedConfig`, called there. This is the OWNER'S
+ *      erasure control, and it is why `discardEvidence` is no longer a method without a caller.
+ *
+ * NOT A REMOVAL PATH, counted the same way: `publishSnapshot` (org -> global) only WIDENS reach, so
+ * it can orphan nothing; `requestPublish`/`withdrawPublishRequest` move a review window that
+ * `getForActor` never consults for a foreign org; `IntegrationRecipeStore` only `map`s the existing
+ * `actions` array, so it cannot drop one; and there is no definition-delete path in this codebase.
+ *
+ * THE SCREENSHOT TREE still has no subject-erasure path of its own (`screenshot-plane.ts`); that
+ * remains recorded as an open gap in docs/findings.md rather than implied to be closed here.
  */
 import { createHash } from 'node:crypto';
 import { Store, type Doc } from '../data/store.js';
@@ -144,17 +170,43 @@ export interface ActionEvidenceKey {
 }
 
 /**
- * Names ONE ACTION of one org, across every owner - the REMOVAL key.
- *
- * Deliberately a different type from `ActionEvidenceKey` rather than that type with an optional
- * `ownerUserId`: an optional term is one a caller can forget, and forgetting it here would silently
- * turn "drop every owner's row for a deleted action" into "drop nobody's".
+ * WHO produced a row - the unit a removal decision is scoped by, and the unit the previous
+ * collector got wrong. Exactly the pair `findConfigForOwner` resolves a credential under, so
+ * "which actions can this owner still resolve" is a question about a real principal rather than
+ * about whoever happened to write the definition.
  */
-export interface ActionEvidenceActionKey {
+export interface ActionEvidenceOwner {
   orgId: string;
-  integrationKey: string;
+  ownerUserId: string;
+}
+
+/**
+ * ONE row, as the reconciler sees it: WHOSE it is and WHICH action it names, and nothing else.
+ *
+ * There is no sample in this shape and that is deliberate rather than economical - the reconciler
+ * reads across tenants (see `listOwnerRefsForKey`), so it must not be able to see a byte of anyone's
+ * request or response body in the first place.
+ */
+export interface ActionEvidenceOwnerRef extends ActionEvidenceOwner {
   actionName: string;
 }
+
+/**
+ * The scope of the OWNER'S erasure control - a disconnected credential (`deleteConfig`).
+ *
+ * A DISCRIMINATED `owner`, NOT AN OPTIONAL `ownerUserId`, because the two cases are genuinely
+ * different and an optional term is one a caller can forget: a config row stamped with a custodian
+ * (`ownerUserId`) is that one person's credential, while a legacy org-shared row carries none and is
+ * the fallback `findConfigForOwner` hands to EVERY member of the org - so deleting it disconnects
+ * all of them, and leaving their samples behind would leave every one of those rows naming an
+ * account nobody is connected to any more. Forgetting the term would silently turn the second case
+ * into "drop nobody's".
+ */
+export type DisconnectedConfigScope = {
+  orgId: string;
+  integrationKey: string;
+  owner: { userId: string } | 'every-owner-in-org';
+};
 
 /** The api-call sample: the executor's own redacted request summary plus a capped response body. */
 export interface ApiCallEvidence {
@@ -329,9 +381,8 @@ export class ActionEvidenceStore {
   }
 
   /**
-   * Drop ONE owner's evidence for one action. The narrow discard - a superseding write already
-   * replaces a row in place, so this exists for the case where a specific owner's sample must go
-   * and the action itself survives.
+   * Drop ONE owner's evidence for one action. THE removal primitive: every path that removes a row
+   * goes through it, so there is one place where "which row, and whose" is decided.
    *
    * ITS OWN `isTenantScoped` CHECK IS BELT-AND-BRACES, AND IS RECORDED AS SUCH RATHER THAN LEFT TO
    * LOOK LOAD-BEARING. `getEvidence` below applies the same predicate first, so the two mask each
@@ -348,21 +399,50 @@ export class ActionEvidenceStore {
   }
 
   /**
-   * Drop EVERY owner's evidence for one action of one org - the removal-path discard.
+   * Drop the samples a DISCONNECTED credential produced - the owner's erasure control (path 3).
    *
-   * CROSSES OWNERS ON PURPOSE, AND IS STILL ORG-SCOPED. An action belongs to the DEFINITION, so a
-   * write that drops it drops it for every member of the org at once; leaving one peer's row behind
-   * would leave a durable sample - and its screenshot pin - naming an action that no longer exists.
-   * `orgId` remains an exact-match term of the query, so no other tenant's row is reachable from
-   * here however the action is named. Answers how many rows went.
+   * Scoped to the config that went, and the config's own unit is (org, custodian, integration): the
+   * `every-owner-in-org` arm is not a widening, it is the shape of a legacy org-shared config row,
+   * which carries no custodian and is the credential `findConfigForOwner` hands to every member. In
+   * both arms `orgId` and `integrationKey` are exact-match terms, so nothing outside the tenant whose
+   * config was deleted is reachable. Answers how many rows went.
    */
-  async discardEvidenceForAction(key: ActionEvidenceActionKey): Promise<number> {
-    if (key.orgId === '' || key.integrationKey === '' || key.actionName === '') return 0;
+  async discardEvidenceForDisconnectedConfig(scope: DisconnectedConfigScope): Promise<number> {
+    if (scope.orgId === '' || scope.integrationKey === '') return 0;
+    if (scope.owner !== 'every-owner-in-org' && scope.owner.userId === '') return 0;
     return this.store.deleteMany({
-      orgId: key.orgId,
-      integrationKey: key.integrationKey,
-      actionName: key.actionName,
+      orgId: scope.orgId,
+      integrationKey: scope.integrationKey,
+      ...(scope.owner === 'every-owner-in-org' ? {} : { ownerUserId: scope.owner.userId }),
     });
+  }
+
+  /**
+   * WHO holds a row for this integration key, and WHICH action it names - across every tenant.
+   *
+   * DELIBERATELY CROSS-TENANT, AND HELD TO IDENTIFIERS BY THE PROJECTION RATHER THAN BY A PROMISE.
+   * The reconciler has to decide a row's fate per (orgId, ownerUserId), and a definition write in
+   * one org can end an action for another (the `global` tier), so the question cannot be asked
+   * inside one org - that scoping error is exactly what this replaces. What crosses the boundary is
+   * bounded by the projection: three short strings per row, no sample, no request, no response body,
+   * no run id. The one caller is `discardEvidenceOfUnresolvableActions`, which returns a COUNT to
+   * its caller and never a row.
+   *
+   * The projection is also the SIZE bound - see `Store.find`'s note. Rows are hundreds of KB and
+   * grow as orgs x owners x integrations x actions, so this read must never materialise a sample.
+   */
+  async listOwnerRefsForKey(integrationKey: string): Promise<ActionEvidenceOwnerRef[]> {
+    if (integrationKey === '') return [];
+    const rows = await this.store.find(
+      { integrationKey },
+      { orgId: 1, ownerUserId: 1, actionName: 1 },
+      { projection: { orgId: 1, ownerUserId: 1, actionName: 1 } },
+    );
+    return rows.map((row) => ({
+      orgId: row.orgId ?? '',
+      ownerUserId: row.ownerUserId ?? '',
+      actionName: row.actionName ?? '',
+    }));
   }
 
   /**
@@ -377,9 +457,32 @@ export class ActionEvidenceStore {
    * no org, no action, no integration key and no sample attached. A caller learns that some run is
    * pinned, never whose it is or what it did. The one production caller is the boot sweeper
    * (`server.ts`), which does not have an actor and cannot be reached by a request.
+   *
+   * ── THE READ IS BOUNDED, WHICH IS A DIFFERENT CLAIM FROM "THE PIN COUNT IS BOUNDED" ──────────
+   *
+   * The paragraph above bounds the ANSWER: one pin per live row, released on every supersede. It
+   * says nothing about the READ, and the first cut's `find({})` walked whole documents - rows that
+   * hold a capped request plus a capped response sample (hundreds of KB) and accumulate as
+   * orgs x owners x integrations x actions with no TTL. At 10k rows that is a multi-gigabyte
+   * materialisation to build a set of short strings, AT BOOT. The `.catch` on the one caller cannot
+   * degrade it either: an OOM abort is not a rejection, so the real failure mode was a boot crash
+   * loop rather than the documented "degrades to pin nothing".
+   *
+   * So the query names the only two fields this needs, and pre-filters to the only `kind` that can
+   * contribute one. WHICH OF THE TWO `kind` TESTS IS LOAD-BEARING IS RECORDED RATHER THAN IMPLIED,
+   * because they are not the pair they look like: the QUERY term is the one that narrows (dropping
+   * it reddens the bounded-read case, measured), while the loop's `ev.kind === 'automation'` is a
+   * TYPE DISCRIMINATION - deleting it does not compile, and casting it away instead SURVIVES,
+   * because an api-call row carries no `runId` for the loop to read. It is kept for the reason
+   * `listForIntegration` keeps its redundant pair: a later change to the query shape must not
+   * silently be the removal of the only rule there is.
    */
   async pinnedRunIdsForRetention(): Promise<Set<string>> {
-    const rows = await this.store.find({});
+    const rows = await this.store.find(
+      { 'evidence.kind': 'automation' },
+      undefined,
+      { projection: { 'evidence.kind': 1, 'evidence.runId': 1 } },
+    );
     const pins = new Set<string>();
     for (const row of rows) {
       const ev = row.evidence;
@@ -470,39 +573,132 @@ export function evidenceSecretsFromValues(values: Iterable<unknown>): SecretRegi
 export const actionEvidenceStore = new ActionEvidenceStore();
 
 /**
- * THE PAIRING - the ONE implementation of "an action that has been REMOVED takes its evidence with
- * it", reached by the one removal path there is (enumerated in the module header).
- *
- * WHY A FREE FUNCTION AND NOT JUST THE STORE METHOD. Exactly the argument
- * `discardEvidenceOfRemovedRecipes` makes one file over, and it is the reason that function is
- * shaped this way too: the removal happens inside `definition-store.ts`, which only the WRITER can
- * see (it alone knows which actions the incoming set stopped naming), and the failure posture of
- * the pairing must be stated ONCE rather than re-decided at each call site. It is also what makes
- * the collector injectable, so a caller's suite can prove the pairing without a store.
- *
- * BEST EFFORT AND LOUD, per action. The removal is the operation and it has already happened by the
- * time this runs; a throw here must not undo it or be reported as a failed save. A leaked sample is
- * untidy - a save that reported failure after actually rewriting the definition is worse. One
- * action that throws does not abandon the rest of the batch.
+ * Which action names of one integration key an OWNER can still resolve. `getForActor`'s answer,
+ * mapped to names - i.e. the same resolution the executor runs an action through, asked on behalf of
+ * the principal whose row is being judged. An empty set means "resolves the key but no such action";
+ * it is also the honest answer when the key resolves to nothing at all.
  */
-export async function discardEvidenceOfRemovedActions(
-  scope: { orgId: string; integrationKey: string },
-  removedActionNames: readonly string[],
-  deps: { discardEvidenceForAction?: (key: ActionEvidenceActionKey) => Promise<number> } = {},
+export type ResolveOwnerActionNames = (owner: ActionEvidenceOwner) => Promise<ReadonlySet<string>>;
+
+/**
+ * THE PAIRING - the ONE implementation of "a durable sample lives only while its OWNER can still
+ * reach the action it is a sample of".
+ *
+ * SCOPED BY THE ROW, NOT BY THE WRITE, and that is the entire correction. Its predecessor took the
+ * writing org and the names the incoming action set had dropped, which answered a question about the
+ * AUTHOR while every row is keyed by the RUNNER (module header). Asking each row's own owner what
+ * they still resolve makes the collector independent of which write narrowed the reach, so the two
+ * paths that narrow it - a rewritten action set and a `setVisibility` that takes the definition out
+ * of an org's tier - reach ONE rule rather than each needing to be remembered. It is also why this
+ * is a free function: `definition-store.ts` owns the resolver, this file owns the collection, and
+ * neither may own both.
+ *
+ * FAILS TOWARDS KEEPING, EVERYWHERE. Deletion here is irreversible and the row is somebody's only
+ * copy, so every uncertainty keeps it: a listing that throws collects nothing, a resolution that
+ * throws keeps every row of that owner, and a discard that throws does not abandon the rest of the
+ * batch. The inverse posture - "delete when unsure" - would turn one Mongo blip during an ordinary
+ * save into silent data loss across every tenant that had ever run the integration.
+ *
+ * BEST EFFORT AND LOUD. The write that narrowed the reach has already landed by the time this runs;
+ * a throw here must not undo it or be reported as a failed save.
+ */
+export async function discardEvidenceOfUnresolvableActions(
+  integrationKey: string,
+  resolveActionNames: ResolveOwnerActionNames,
+  deps: {
+    listOwnerRefsForKey?: (integrationKey: string) => Promise<ActionEvidenceOwnerRef[]>;
+    discardEvidence?: (key: ActionEvidenceKey) => Promise<boolean>;
+  } = {},
 ): Promise<number> {
-  const discard = deps.discardEvidenceForAction
-    ?? ((key: ActionEvidenceActionKey) => actionEvidenceStore.discardEvidenceForAction(key));
+  if (integrationKey === '') return 0;
+  const listOwnerRefs = deps.listOwnerRefsForKey
+    ?? ((key: string) => actionEvidenceStore.listOwnerRefsForKey(key));
+  const discard = deps.discardEvidence ?? ((key: ActionEvidenceKey) => actionEvidenceStore.discardEvidence(key));
+
+  let refs: ActionEvidenceOwnerRef[];
+  try {
+    refs = await listOwnerRefs(integrationKey);
+  } catch (err) {
+    console.warn(`[integrations] could not list the evidence of '${integrationKey}' to reconcile it: ${messageOf(err)}`);
+    return 0;
+  }
+
+  // One resolution per OWNER, not per row: an owner with twelve actions asks `getForActor` once.
+  // `null` records "we asked and could not find out", which is not the same as "resolves nothing".
+  const resolvedPerOwner = new Map<string, ReadonlySet<string> | null>();
   let discarded = 0;
-  for (const actionName of removedActionNames) {
-    if (actionName === '') continue;
+  for (const ref of refs) {
+    if (ref.orgId === '' || ref.actionName === '') continue;
+    if (ref.ownerUserId === '') {
+      // A row that names no owner cannot be addressed by the removal primitive (its key would not be
+      // tenant-scoped), so it can never be superseded or discarded either. No writer in this
+      // codebase produces that shape - `ActionEvidenceDoc.ownerUserId` is required and the executor
+      // always stamps it - so this is loud rather than handled: it means a hand-written or migrated
+      // row is sitting in the collection pinning screenshots that nothing can release.
+      console.warn(
+        `[integrations] an evidence row of '${integrationKey}' in org ${ref.orgId} names no owner and `
+          + 'cannot be reconciled - it must be removed by hand',
+      );
+      continue;
+    }
+    const ownerId = JSON.stringify([ref.orgId, ref.ownerUserId]);
+    if (!resolvedPerOwner.has(ownerId)) {
+      try {
+        resolvedPerOwner.set(ownerId, await resolveActionNames({ orgId: ref.orgId, ownerUserId: ref.ownerUserId }));
+      } catch (err) {
+        console.warn(
+          `[integrations] could not resolve '${integrationKey}' for ${ref.orgId}/${ref.ownerUserId}; `
+            + `keeping their evidence: ${messageOf(err)}`,
+        );
+        resolvedPerOwner.set(ownerId, null);
+      }
+    }
+    const resolvable = resolvedPerOwner.get(ownerId);
+    if (resolvable == null || resolvable.has(ref.actionName)) continue;
     try {
-      discarded += await discard({ orgId: scope.orgId, integrationKey: scope.integrationKey, actionName });
+      if (await discard({ orgId: ref.orgId, ownerUserId: ref.ownerUserId, integrationKey, actionName: ref.actionName })) {
+        discarded += 1;
+      }
     } catch (err) {
       console.warn(
-        `[integrations] the evidence of ${scope.integrationKey}/${actionName} outlived the action it `
-          + `was evidence for: ${err instanceof Error ? err.message : String(err)}`,
+        `[integrations] the evidence of ${integrationKey}/${ref.actionName} outlived the action it was `
+          + `evidence for, for ${ref.orgId}/${ref.ownerUserId}: ${messageOf(err)}`,
       );
     }
   }
   return discarded;
+}
+
+/**
+ * THE OWNER'S ERASURE CONTROL - the samples a credential produced go when the credential does.
+ *
+ * A SEPARATE FUNCTION FROM THE RECONCILER BECAUSE IT ANSWERS A DIFFERENT QUESTION. The reconciler
+ * asks "can this owner still REACH the action" and a disconnected credential does not change that
+ * answer: the definition still resolves, so a reconcile would keep every row. What changed is that
+ * the third-party account whose request and response the sample holds is no longer connected, and
+ * the person who connected it has just asked for it to go.
+ *
+ * BEST EFFORT AND LOUD, for the same reason as above: `deleteConfig` has already removed the
+ * credential by the time this runs, and an undeletable config would be a worse failure than a
+ * reported leftover.
+ */
+export async function discardEvidenceOfDisconnectedConfig(
+  scope: DisconnectedConfigScope,
+  deps: { discardEvidenceForDisconnectedConfig?: (scope: DisconnectedConfigScope) => Promise<number> } = {},
+): Promise<number> {
+  const discard = deps.discardEvidenceForDisconnectedConfig
+    ?? ((s: DisconnectedConfigScope) => actionEvidenceStore.discardEvidenceForDisconnectedConfig(s));
+  try {
+    return await discard(scope);
+  } catch (err) {
+    console.warn(
+      `[integrations] the evidence of '${scope.integrationKey}' in org ${scope.orgId} outlived the `
+        + `credential that produced it: ${messageOf(err)}`,
+    );
+    return 0;
+  }
+}
+
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }

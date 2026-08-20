@@ -71,8 +71,27 @@ export class Store<T extends Doc> {
     return (res ?? null) as T | null;
   }
 
-  async find(filter: Record<string, unknown> = {}, sort?: Record<string, 1 | -1>): Promise<T[]> {
-    let q = this.col().find(filter as Filter<T>);
+  /**
+   * `opts.projection` is the SIZE bound on a read, and it is a third optional argument rather than
+   * a changed signature so every existing caller keeps its meaning unchanged (Rule 7, additive).
+   *
+   * It exists because a collection whose rows are LARGE and whose row COUNT grows with tenants
+   * cannot be walked whole just to build a set of short strings. `integration_action_evidence` is
+   * the case that forced it: rows hold a capped request + response sample (hundreds of KB) and
+   * accumulate as orgs x owners x integrations x actions with no TTL, and the driver materialises
+   * every document it returns - so an unprojected `find({})` over 10k rows is a multi-gigabyte
+   * allocation. That failure is NOT catchable: an OOM abort kills the process rather than rejecting
+   * the promise, so a `.catch` around such a read degrades nothing. Naming the two fields a reader
+   * actually needs is what makes the read bounded.
+   */
+  async find(
+    filter: Record<string, unknown> = {},
+    sort?: Record<string, 1 | -1>,
+    opts: { projection?: Record<string, 0 | 1> } = {},
+  ): Promise<T[]> {
+    let q = opts.projection
+      ? this.col().find(filter as Filter<T>, { projection: opts.projection })
+      : this.col().find(filter as Filter<T>);
     if (sort) q = q.sort(sort);
     return (await q.toArray()) as unknown as T[];
   }

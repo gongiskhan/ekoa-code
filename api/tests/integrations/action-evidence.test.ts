@@ -18,6 +18,7 @@ import type { IntegrationAction } from '../../src/integrations/definitions.js';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import { integrationActionEvidence } from '../../src/data/stores.js';
+import { Store, type Doc } from '../../src/data/store.js';
 import {
   ActionEvidenceStore,
   ActionEvidenceStoreError,
@@ -99,48 +100,90 @@ describe('one live row per action, superseded wholesale', () => {
 });
 
 /**
- * THE REMOVAL COLLECTOR, at the store.
+ * THE TWO REMOVAL PRIMITIVES, at the store. Counted by DOCUMENT, because the whole failure class
+ * this collection keeps producing is a row that STAYED.
  *
- * The pairing's own decisions - counted by DOCUMENT, because the whole failure this closes was a
- * row that stayed. Its production call site is proved where it lives
- * (`tests/integrations/action-evidence-removal.test.ts`, through the real definition save), never
- * here.
+ * Their production call sites are proved where they live - the reconciler through the real
+ * definition writes (`tests/integrations/action-evidence-removal.test.ts`), the erasure control
+ * through the real `deleteConfig` (same file) - never here.
  */
-describe('discardEvidenceForAction - every owner\'s row for one dropped action', () => {
-  it('takes BOTH owners\' rows, and leaves the surviving action and the other org alone', async () => {
-    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
+describe('listOwnerRefsForKey - who holds a row, and nothing else about it', () => {
+  it('names every tenant and every owner holding a row for the key, and no sample', async () => {
+    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence(200, '{"secretish":"orgA owner"}') });
     await store.recordEvidence({ ...KEY, ownerUserId: 'u-peer' }, { backingType: 'api-call', evidence: apiCallEvidence() });
-    await store.recordEvidence({ ...KEY, actionName: 'survivor' }, { backingType: 'api-call', evidence: apiCallEvidence() });
     await store.recordEvidence({ ...KEY, orgId: 'orgB' }, { backingType: 'api-call', evidence: apiCallEvidence() });
-    expect(await integrationActionEvidence.find({})).toHaveLength(4);
+    // A different key must not appear: the reconciler judges one integration at a time.
+    await store.recordEvidence({ ...KEY, integrationKey: 'outra' }, { backingType: 'api-call', evidence: apiCallEvidence() });
 
-    const dropped = await store.discardEvidenceForAction({
-      orgId: KEY.orgId, integrationKey: KEY.integrationKey, actionName: KEY.actionName,
-    });
+    const refs = await store.listOwnerRefsForKey('citius');
 
-    // An action belongs to the DEFINITION, so it is dropped for every member of the org at once.
-    expect(dropped).toBe(2);
-    const left = await integrationActionEvidence.find({});
-    expect(left.map((r) => `${(r as unknown as { orgId: string }).orgId}/${(r as unknown as { actionName: string }).actionName}`).sort())
-      .toEqual(['orgA/survivor', 'orgB/consultar_processo']);
+    // CROSS-TENANT ON PURPOSE - a `global` definition's consumers hold rows in their own orgs, and
+    // the reconciler cannot find them from inside the authoring org.
+    expect(refs.map((r) => `${r.orgId}/${r.ownerUserId}/${r.actionName}`).sort()).toEqual([
+      'orgA/u-owner/consultar_processo',
+      'orgA/u-peer/consultar_processo',
+      'orgB/u-owner/consultar_processo',
+    ]);
+    // …AND HELD TO IDENTIFIERS BY THE PROJECTION. This is the assertion that makes the cross-tenant
+    // read defensible: no response body of anyone's crosses the boundary, and the row is not even
+    // materialised in memory to be filtered afterwards.
+    expect(JSON.stringify(refs)).not.toContain('secretish');
+    for (const ref of refs) expect(Object.keys(ref).sort()).toEqual(['actionName', 'orgId', 'ownerUserId']);
   });
 
-  it('is ORG-SCOPED: another tenant\'s row for the same action name is unreachable from here', async () => {
+  it('an empty key lists NOTHING rather than every tenant\'s rows', async () => {
+    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
+    expect(await store.listOwnerRefsForKey('')).toEqual([]);
+  });
+});
+
+describe('discardEvidenceForDisconnectedConfig - the owner\'s erasure control', () => {
+  it('takes every row the OWNER holds for that integration, and nobody else\'s', async () => {
+    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
+    await store.recordEvidence({ ...KEY, actionName: 'arquivar_processo' }, { backingType: 'api-call', evidence: apiCallEvidence() });
+    // The three CONTROLS: a peer in the same org, another tenant, and another integration.
+    await store.recordEvidence({ ...KEY, ownerUserId: 'u-peer' }, { backingType: 'api-call', evidence: apiCallEvidence() });
     await store.recordEvidence({ ...KEY, orgId: 'orgB' }, { backingType: 'api-call', evidence: apiCallEvidence() });
-    expect(await store.discardEvidenceForAction({
-      orgId: KEY.orgId, integrationKey: KEY.integrationKey, actionName: KEY.actionName,
-    })).toBe(0);
-    expect(await integrationActionEvidence.find({})).toHaveLength(1);
+    await store.recordEvidence({ ...KEY, integrationKey: 'outra' }, { backingType: 'api-call', evidence: apiCallEvidence() });
+
+    const dropped = await store.discardEvidenceForDisconnectedConfig({
+      orgId: 'orgA', integrationKey: 'citius', owner: { userId: 'u-owner' },
+    });
+
+    expect(dropped).toBe(2);
+    const left = (await integrationActionEvidence.find({})) as unknown as {
+      orgId: string; ownerUserId: string; integrationKey: string;
+    }[];
+    expect(left.map((r) => `${r.orgId}/${r.ownerUserId}/${r.integrationKey}`).sort())
+      .toEqual(['orgA/u-owner/outra', 'orgA/u-peer/citius', 'orgB/u-owner/citius']);
+  });
+
+  it('a config with NO custodian is the org-shared credential, so every member\'s rows go', async () => {
+    // `findConfigForOwner` falls back to the row with no `ownerUserId` for EVERY member, so deleting
+    // it disconnects all of them at once. Their samples were all produced through that one credential.
+    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
+    await store.recordEvidence({ ...KEY, ownerUserId: 'u-peer' }, { backingType: 'api-call', evidence: apiCallEvidence() });
+    await store.recordEvidence({ ...KEY, orgId: 'orgB' }, { backingType: 'api-call', evidence: apiCallEvidence() });
+
+    const dropped = await store.discardEvidenceForDisconnectedConfig({
+      orgId: 'orgA', integrationKey: 'citius', owner: 'every-owner-in-org',
+    });
+
+    // Every member of orgA, and STILL not the other tenant - `orgId` is an exact-match term of both arms.
+    expect(dropped).toBe(2);
+    expect((await integrationActionEvidence.find({})).map((r) => (r as unknown as { orgId: string }).orgId)).toEqual(['orgB']);
   });
 
   it('an empty term drops NOTHING rather than matching everything', async () => {
     await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
-    for (const key of [
-      { orgId: '', integrationKey: KEY.integrationKey, actionName: KEY.actionName },
-      { orgId: KEY.orgId, integrationKey: '', actionName: KEY.actionName },
-      { orgId: KEY.orgId, integrationKey: KEY.integrationKey, actionName: '' },
+    for (const scope of [
+      { orgId: '', integrationKey: 'citius', owner: { userId: 'u-owner' } },
+      { orgId: 'orgA', integrationKey: '', owner: { userId: 'u-owner' } },
+      { orgId: 'orgA', integrationKey: 'citius', owner: { userId: '' } },
+      // The dangerous one: an empty org with the org-wide arm would be "delete the whole collection".
+      { orgId: '', integrationKey: 'citius', owner: 'every-owner-in-org' as const },
     ]) {
-      expect(await store.discardEvidenceForAction(key)).toBe(0);
+      expect(await store.discardEvidenceForDisconnectedConfig(scope)).toBe(0);
     }
     expect(await integrationActionEvidence.find({})).toHaveLength(1);
   });
@@ -267,6 +310,48 @@ describe('retention pins', () => {
     await store.recordEvidence(KEY, { backingType: 'browser-steps', evidence: { kind: 'automation', runId: 'run-old', steps: [] } });
     await store.recordEvidence(KEY, { backingType: 'browser-steps', evidence: { kind: 'automation', runId: 'run-new', steps: [] } });
     expect(await store.pinnedRunIdsForRetention()).toEqual(new Set(['run-new']));
+  });
+
+  /**
+   * THE READ IS BOUNDED - a different claim from "the pin count is bounded", and the one the first
+   * cut did not make. `find({})` walked whole documents: rows hold a capped request plus a capped
+   * response sample and accumulate as orgs x owners x integrations x actions with no TTL, so at
+   * 10k rows this was a multi-gigabyte materialisation AT BOOT to build a set of short strings. The
+   * one caller's `.catch` degrades nothing there, because an OOM abort is not a rejection - the real
+   * failure mode was a boot crash loop, not "degrades to pin nothing".
+   *
+   * Asserted BY CONSEQUENCE, over what the driver actually handed back, rather than by inspecting an
+   * options object: a sample that is in the returned documents is a sample that was materialised.
+   */
+  it('never materialises a sample: the returned documents carry the run id and nothing else', async () => {
+    const HUGE_SAMPLE = 'Processo 1234/24.5T8LSB - Cliente: Maria Silva';
+    await store.recordEvidence(KEY, {
+      backingType: 'browser-steps',
+      evidence: { kind: 'automation', runId: 'run-pinned', status: 'completed', steps: [{ stepIndex: 0, excerpt: HUGE_SAMPLE }] },
+    });
+    await store.recordEvidence({ ...KEY, actionName: 'other' }, {
+      backingType: 'api-call',
+      evidence: { ...apiCallEvidence(200, `{"resumo":"${HUGE_SAMPLE}"}`) },
+    });
+
+    // A REAL store over the REAL collection, with only the answer observed on the way past.
+    const observed = new Store<Doc>(integrationActionEvidence.name);
+    const realFind = observed.find.bind(observed);
+    let handedBack: unknown[] = [];
+    let askedFor: Record<string, unknown> | undefined;
+    observed.find = async (filter, sort, opts) => {
+      askedFor = filter;
+      const rows = await realFind(filter, sort, opts);
+      handedBack = rows;
+      return rows;
+    };
+
+    expect(await new ActionEvidenceStore(observed).pinnedRunIdsForRetention()).toEqual(new Set(['run-pinned']));
+    // The projection is what bounds the SIZE: not one byte of either sample came back.
+    expect(JSON.stringify(handedBack)).not.toContain(HUGE_SAMPLE);
+    // …and the query term is what bounds the COUNT: the api-call row is never a candidate.
+    expect(handedBack).toHaveLength(1);
+    expect(askedFor).toEqual({ 'evidence.kind': 'automation' });
   });
 });
 

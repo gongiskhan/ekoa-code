@@ -39,13 +39,19 @@ import { Store, type Doc } from '../data/store.js';
 import { integrationDefinitions } from '../data/stores.js';
 // THE TWO RUNTIME EDGES OUT OF THIS MODULE, and both are still database-only (see the header note
 // above): `captured-calls-store.ts` and `action-evidence-store.ts` each stand on `data/` and
-// `security/` alone. They are here because `create`'s replace branch is a REMOVAL PATH for two
-// durable, un-TTL'd collections at once - a compiled recipe's raw capture pile (see
-// `carryRecipesForward` and `integrations/recipe-lifecycle.ts`'s enumeration) and the action's
-// live evidence row (see `recipesDroppedBy`'s sibling `actionsDroppedBy` and the removal-path
-// enumeration in `action-evidence-store.ts`).
+// `security/` alone. They are here because this store holds the writes that END something durable
+// and un-TTL'd - a compiled recipe's raw capture pile (see `carryRecipesForward` and
+// `integrations/recipe-lifecycle.ts`'s enumeration) and an action's live evidence row.
+//
+// THE TWO ARE NOT SYMMETRIC, and the asymmetry is the S1 verification-round-three correction. A
+// capture pile is named by the recipe on THIS row, so "what did this write drop" is a question about
+// the row and `recipesDroppedBy` answers it. An evidence row is keyed by the org that RAN the
+// action, which the `global` tier makes a different org from the one that wrote the definition - so
+// the evidence question is "what can each ROW'S OWNER still resolve", and it is asked by
+// `discardEvidenceOfUnresolvableActions` from every write that can narrow reach: the replace branch
+// AND `setVisibility`.
 import { discardEvidenceOfRemovedRecipes, type RemovedRecipe } from './captured-calls-store.js';
-import { discardEvidenceOfRemovedActions } from './action-evidence-store.js';
+import { discardEvidenceOfUnresolvableActions, type ActionEvidenceOwner } from './action-evidence-store.js';
 import type {
   IntegrationConfigField,
   IntegrationAction,
@@ -299,24 +305,15 @@ function recipesDroppedBy(
     }));
 }
 
-/**
- * The ACTIONS this replace REMOVES - the names `existing` had and `incoming` no longer mentions.
- *
- * A SECOND PREDICATE, NOT A REUSE OF `recipesDroppedBy`, and the difference is the whole point:
- * that one filters to actions that carried a compiled RECIPE, because a recipe is the only index
- * back into `integration_captured_calls`. An action's EVIDENCE row has no such precondition - the
- * commonest evidence-bearing action in this product is a plain `api-call` that never went near a
- * discovery pass - so filtering on `recipe !== undefined` here would have left exactly the ordinary
- * case behind. Every dropped name is reported, whether or not it ever compiled anything.
- */
-function actionsDroppedBy(
-  incoming: IntegrationAction[],
-  existing: IntegrationAction[] | undefined,
-): string[] {
-  if (!existing || existing.length === 0) return [];
-  const kept = new Set((incoming ?? []).map((a) => a.actionName));
-  return existing.map((a) => a.actionName).filter((name) => !kept.has(name));
-}
+// THERE IS NO `actionsDroppedBy` SIBLING, AND ITS ABSENCE IS THE FIX RATHER THAN AN OMISSION.
+// One existed: `recipesDroppedBy` without the `recipe !== undefined` filter, feeding a collector
+// scoped to `input.orgId`. Both halves were right about the DEFINITION and wrong about the
+// EVIDENCE, because a diff of THIS row's action sets can only ever speak for the org that owns this
+// row - and an evidence row is keyed by the org that RAN the action, which the `global` tier makes
+// a different org. The replacement asks each row's own owner what they still resolve
+// (`resolvableActionNames` -> `discardEvidenceOfUnresolvableActions`), so nothing has to diff
+// anything, and `setVisibility` - which drops no action at all yet ends every action for a
+// consumer org - reaches the same rule instead of needing a second one.
 
 type VisibilityView = Pick<IntegrationDefinitionFields, 'orgId' | 'userId' | 'visibility'> &
   Partial<Pick<IntegrationDefinitionFields, 'publishRequest'>>;
@@ -510,22 +507,45 @@ export class IntegrationDefinitionStore {
     // the same order `forgetRecipe` argues for, and the evidence discard is ordered with it so the
     // two collections are collected under one rule rather than two.
     //
-    //   - the compiled recipe's raw capture pile (removal path 4 of `recipe-lifecycle.ts`);
-    //   - the action's LIVE EVIDENCE ROW, which is the ONLY removal path that collection has
-    //     (`action-evidence-store.ts` enumerates them from the code). Without this, an ordinary
-    //     builder save that drops an action left a durable row holding that action's last real
-    //     request and response body - and, for an automation-backed action, a PIN that exempts its
-    //     screenshots of an authenticated client-portal session from the 7-day sweep permanently,
-    //     because the pin releases only on supersede or discard and neither can ever happen again.
+    //   - the compiled recipe's raw capture pile (removal path 4 of `recipe-lifecycle.ts`), which
+    //     IS a per-writing-org question: the pile is named by the recipe on this very row;
+    //   - the action's LIVE EVIDENCE ROWS, which are NOT. `input.orgId` is the org that WROTE the
+    //     definition and an evidence row is keyed by the org that RAN the action, so scoping the
+    //     evidence collector to this org (the first cut of the pairing) collected nothing at all for
+    //     a `global` definition's consumers - leaving a durable row holding their real response body
+    //     and, for an automation-backed action, a PIN that exempts their screenshots of an
+    //     authenticated client-portal session from the 7-day sweep permanently, because the pin
+    //     releases only on supersede or discard and neither can happen again once the action stops
+    //     resolving. The reconciler is therefore keyed by the ROW's owner, and this call passes the
+    //     one thing only this store can supply: the resolution.
     await discardEvidenceOfRemovedRecipes(
       { orgId: input.orgId, integrationKey: input.key },
       recipesDroppedBy(doc.actions, existing?.actions),
     );
-    await discardEvidenceOfRemovedActions(
-      { orgId: input.orgId, integrationKey: input.key },
-      actionsDroppedBy(doc.actions, existing?.actions),
-    );
+    await discardEvidenceOfUnresolvableActions(input.key, (owner) => this.resolvableActionNames(owner, input.key));
     return replaced;
+  }
+
+  /**
+   * Which actions of `key` this OWNER can still resolve - the reconciler's question, answered by the
+   * ONE resolver production runs actions through.
+   *
+   * `getForActor` AND NOT A RE-DERIVATION OF IT: the whole value of asking is that the answer is the
+   * same one `executeUserIntegrationAction` will get, tier rules and all (own row at any visibility,
+   * an org-shared peer row, a `global` row from any org, never another org's private row, never a
+   * retired sentinel row). A second predicate here would drift, and the drift would be silent
+   * deletion of somebody's only copy.
+   *
+   * ROLE `user` IS DELIBERATE AND IS THE LEAST-PRIVILEGED READING. `isDefinitionVisibleTo` grants an
+   * `org-admin` nothing a `user` does not already have, so for every ordinary principal this is
+   * exact. It is narrower than the truth for a super-admin alone (the sentinel-org and
+   * review-window branches), and narrower means "reconciles a row the owner could still reach" -
+   * which is why the caller's failure posture keeps rather than deletes on any doubt, and why the
+   * only rows that can differ belong to a platform actor running against a retired legacy package.
+   */
+  private async resolvableActionNames(owner: ActionEvidenceOwner, key: string): Promise<ReadonlySet<string>> {
+    const doc = await this.getForActor({ orgId: owner.orgId, userId: owner.ownerUserId, role: 'user' }, key);
+    return new Set((doc?.actions ?? []).map((action) => action.actionName));
   }
 
   /** RAW by-id fetch — NOT tenant-scoped (see the class doc). */
@@ -637,7 +657,22 @@ export class IntegrationDefinitionStore {
       return { ...cur, visibility, updatedAt: this.nowIso() };
     });
     if (raced) return { verdict: 'forbidden' };
-    return updated ? { verdict: 'ok', doc: updated } : { verdict: 'notfound' };
+    if (!updated) return { verdict: 'notfound' };
+    // A VISIBILITY WRITE IS A REMOVAL PATH FOR EVIDENCE, which the S1 header dismissed by name
+    // ("retiring a legacy row (`setVisibility` global -> org) hides a definition without dropping
+    // any action"). True of the definition, false of what a consumer can reach, and the difference
+    // is the same unit error one level up: `global -> org` takes EVERY action of this integration
+    // away from every org that resolved it cross-org, and `org -> private` does the same to every
+    // peer inside the author's own org. Their rows and their screenshot pins would stand with
+    // nothing left that could ever release them - the action they name resolves for nobody, so it
+    // can never be superseded, and until now nothing discarded it.
+    //
+    // Run on EVERY successful visibility write rather than only on the two narrowing transitions:
+    // the reconciler's own question ("what can each row's owner still resolve") already answers
+    // correctly for a widening one by collecting nothing, and a rule with no transition table in it
+    // is a rule a future tier cannot fall outside of.
+    await discardEvidenceOfUnresolvableActions(updated.key, (owner) => this.resolvableActionNames(owner, updated.key));
+    return { verdict: 'ok', doc: updated };
   }
 
   /**

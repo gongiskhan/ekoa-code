@@ -2880,3 +2880,80 @@ enumeration; `findings.md` gains the blocker, the three majors and the three min
 done, the erasure half is untouched and still claims nothing. Diagrams: `05-data-model` and
 `02-module-map` appended with the owner-keyed row, the removal collector and the awaited boot
 composition (append-only, every new element carrying text/rawText/originalText).
+
+## 2026-08-20 - S1 round three: the collector is scoped by the row that exists, not by the write that happened
+
+The S1 verification pass ran again and found one major and four minors. The major is the SAME ERROR
+AS ROUND TWO, ONE LEVEL UP, and that is the decision worth recording - the individual defect is in
+`findings.md`.
+
+**THE UNIT WAS WRONG, NOT THE METHOD.** Round two enumerated the removal paths by grepping the
+writers of the definition document, concluded there was exactly ONE, and paired it with
+`discardEvidenceOfRemovedActions({ orgId: input.orgId, ... })`. The enumeration was honest work and
+the collector was still wrong, because `input.orgId` is the org that WROTE the definition and every
+evidence row is keyed by the org that RAN the action. The `global` tier exists so those are different
+orgs: a super-admin publishes org A's definition, a user in org B resolves it through `getForActor`,
+connects their own credential and runs it, and the row lands in org B. Org A dropping the action
+matched nothing at all - a durable row of org B's real response body, and a screenshot pin that
+nothing could ever release, because an action that resolves for nobody can never be superseded
+either. `setVisibility` (`global -> org`, `org -> private`) ends actions for a whole org while
+dropping none, so it was reachable through a transition the round-two header dismissed by name.
+
+THIS IS THE FIFTH TIME IN THIS CODEBASE: per-run where it should be per-origin, per-recipe where it
+should be per-call, per-action where it should be per-call, per-artifact where it should be
+per-owner, and now per-writing-org where it should be per-running-org. The standing lesson is written
+down here rather than left to be re-learned: BEFORE ENUMERATING THE PATHS THAT END SOMETHING, NAME
+THE UNIT THE THING IS KEYED BY, AND CHECK THAT THE WRITE YOU ARE ABOUT TO INSTRUMENT CAN SEE IT. An
+enumeration of writes can only ever speak for the rows the writer can see.
+
+**SO THE COLLECTOR STOPS DIFFING AND STARTS RECONCILING.** `discardEvidenceOfUnresolvableActions`
+takes an integration key and, per `(orgId, ownerUserId)` - the row's own key - asks which action names
+that owner still resolves, and drops the rest. Three consequences, all deliberate:
+
+- THE QUESTION IS ASKED THROUGH `getForActor`, the one resolver `executeUserIntegrationAction` runs
+  actions through, and not through a second predicate. A re-derivation would drift, and the drift
+  would be silent deletion of somebody's only copy. Role `user` is the least-privileged reading and
+  is exact for every non-super-admin (`isDefinitionVisibleTo` grants an org-admin nothing extra).
+- THE RULE HAS NO TRANSITION TABLE, so both writes that can narrow reach reach ONE rule (Rule 1) and
+  a future tier cannot fall outside it. `setVisibility` runs it on EVERY successful write, including
+  widening ones, because the reconciler's own question already answers correctly there by collecting
+  nothing - which is asserted as a control rather than assumed.
+- IT FAILS TOWARDS KEEPING, EVERYWHERE. A listing that throws collects nothing; a resolution that
+  throws keeps that owner's rows; a discard that throws does not abandon the batch. The inverse
+  posture would turn one Mongo blip during an ordinary save into silent data loss across every tenant
+  that had ever run the integration, which is worse than the leak the collector exists to prevent.
+
+**THIS WIDENS THE MODULE'S TENANCY REACH, AND THE WIDENING IS PAID FOR RATHER THAN WAVED THROUGH.**
+`listOwnerRefsForKey` is the second deliberately cross-tenant reader in `action-evidence-store.ts`.
+It is held to the same rule as `pinnedRunIdsForRetention` and by the same mechanism: a projection, so
+what crosses the boundary is org + owner + action name and never a byte of anyone's sample, and a
+caller that returns a COUNT and never a row. `api/tests/security/action-evidence-isolation.test.ts`
+gains its case. Note that no tenant can weaponise it: the resolution check is what decides each row,
+so an org that resolves the key through its OWN definition keeps its rows however another org
+rewrites a global one - that control is in the suite and reddens under a blind-delete mutant.
+
+**AND THE OWNER GETS AN ERASURE CONTROL, RATHER THAN THE GAP BEING RE-RECORDED.** Round two's header
+said the erasure gap "is recorded as a gap in docs/findings.md"; the only erasure entry there was
+about the screenshot TREE. `deleteConfig` now calls `discardEvidenceOfDisconnectedConfig`. It is a
+SECOND, differently-scoped call rather than a fifth trigger for the reconciler, because disconnecting
+a credential does not change what resolves - a reconcile would keep every row - while the third-party
+account whose traffic the sample holds is no longer connected. Its scope is a discriminated `owner`
+(`{ userId }` | `'every-owner-in-org'`) and never an optional term, because a legacy org-shared
+config carries no custodian and is the credential every member uses.
+
+**TWO CLAIMS ARE CORRECTED RATHER THAN DEFENDED.** Round two said `bootState`'s `await` is what makes
+the sweep observable; it is not - boot awaits slower things afterwards, so `void sweep(...)` left the
+suite 5/5 green and the pass was a race that happened to win. The await is correct and is now pinned
+the only way it can be, structurally: `bootState` READS the returned counts (the retention log line
+moved from the composition function to the call site), so the mutant stops compiling. And the pin
+read's docblock argued the PIN COUNT is bounded, which is true and a different claim from the READ
+being bounded - `find({})` walked whole documents at boot, and an OOM abort is not a rejection, so
+the `.catch` degraded nothing. `Store.find` gains an additive `projection` option (third optional
+argument; every existing caller keeps its meaning) and the pin query gains a `kind` term.
+
+Docs: `architecture.md`'s "Action evidence" section replaces the enumeration with the reconciliation
+and states the unit error plainly; `recipe-lifecycle.ts`'s "why its count is ONE" section is rewritten
+as "why its paths cannot be counted this way at all"; `findings.md` gains the major and the four
+minors and corrects the round-two paragraph on the standing screenshot-erasure entry. Diagrams:
+`05-data-model` and `02-module-map` appended with the reconciler, its cross-tenant listing and the
+disconnect erasure control (append-only, every new element carrying text/rawText/originalText).

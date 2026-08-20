@@ -30,6 +30,16 @@
  * This is the approach `composition-root-action-seam.test.ts` and `composition-root-locality.test.ts`
  * established for the other seams this repo binds once and can silently lose.
  *
+ * ── WHAT THIS FILE DOES *NOT* PIN, STATED SO NOBODY BUILDS ON THE WRONG CLAIM ────────────────
+ *
+ * NOT THE `await`. `bootState` awaits the sweep, and the round-two notes here, in `server.ts` and in
+ * the decisions entry all presented that await as what makes the sweep observable. It is not: boot
+ * goes on to await slower things afterwards, so `void sweep(...)` still finishes before any case
+ * here looks at the tree. The mutation left 5/5 green - the pass was a race that happened to win,
+ * not an assertion. The await is correct and it is now pinned where it CAN be pinned, structurally:
+ * `bootState` READS the returned counts, so `void` has no `.removed` and the mutant stops compiling.
+ * What this file pins is the ARGUMENT and its consequence, which is a smaller and true claim.
+ *
  * ── THE FIXTURE IS BUILT SO ONLY THE PIN CAN PRODUCE THE RESULT ──────────────────────────────
  *
  * Both run directories carry the SAME long-ago mtime, so both are equally expired and any rule other

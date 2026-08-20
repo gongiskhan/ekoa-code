@@ -41,16 +41,28 @@
  * `captured-calls-store.ts` (see its note) that all four reach, rather than one function here that
  * two of them structurally could not call.
  *
- * ── THE SIBLING COLLECTION, AND WHY ITS COUNT IS ONE ─────────────────────────────────────────
+ * ── THE SIBLING COLLECTION, AND WHY ITS PATHS CANNOT BE COUNTED THIS WAY AT ALL ──────────────
  *
- * `integration_action_evidence` (slice S1) inherits the invariant above verbatim and enumerates its
- * own removal paths the same way, in its own module header. The count there is ONE, not four, and
- * the difference is structural rather than an oversight: this file's four paths are four ways a
- * RECIPE can go, and three of them (the clear, the supersede, the write that never lands) remove a
- * recipe while leaving the ACTION standing - an action with no recipe still exists and its evidence
- * is still evidence. Only path 4 removes the action itself, so only path 4 is a removal path for
- * evidence, and the collector `discardEvidenceOfRemovedActions` is called on that same line of that
- * same branch, beside `discardEvidenceOfRemovedRecipes`.
+ * `integration_action_evidence` (slice S1) inherits the invariant above verbatim, and then departs
+ * from this file in the one way that matters. An earlier revision of this paragraph said its count
+ * was "ONE, not four"; that count was reached the same way this file's own "THREE" was, and it was
+ * wrong for a sharper reason than being off by a number.
+ *
+ * Three of the four paths above (the clear, the supersede, the write that never lands) remove a
+ * recipe while leaving the ACTION standing, and an action with no recipe still exists, so its
+ * evidence is still evidence - that part holds. But path 4 was then paired with a collector scoped
+ * to `input.orgId`, which answers a question about the org that WROTE the definition, while every
+ * evidence row is keyed by the org that RAN the action. The `global` tier makes those different
+ * orgs, and `setVisibility` ends an action for a consumer org without any write touching an action
+ * set at all - so no enumeration of writes-to-this-row could ever have been complete.
+ *
+ * The sibling is therefore collected by a RECONCILER rather than by a diff:
+ * `discardEvidenceOfUnresolvableActions` asks each row's own owner, through `getForActor`, which
+ * actions of the key they still resolve, and drops the rest. `definition-store.ts` calls it from
+ * both writes that can narrow reach - the replace branch (beside `discardEvidenceOfRemovedRecipes`,
+ * on the same line of the same branch) and `setVisibility` - and `service.ts` `deleteConfig` calls
+ * the separate owner-erasure control. A CAPTURE PILE stays a per-row question because the recipe
+ * that names it lives on this row; an EVIDENCE ROW never was one.
  *
  * ── WHY THE CLEAR IS A MODULE AND NOT A METHOD ───────────────────────────────────────────────
  *

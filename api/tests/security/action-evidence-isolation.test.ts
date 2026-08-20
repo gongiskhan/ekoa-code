@@ -37,8 +37,10 @@ import {
  *     none of them is unfailable;
  *   - the LAST GATE refuses a row that still carries a live credential value after redaction, and
  *     refuses it by NOT WRITING it;
- *   - the one deliberately cross-tenant reader (`pinnedRunIdsForRetention`) hands back run
- *     IDENTIFIERS and nothing else.
+ *   - the TWO deliberately cross-tenant readers hand back IDENTIFIERS and nothing else:
+ *     `pinnedRunIdsForRetention` (run ids, for the boot sweeper) and, since verification round
+ *     three, `listOwnerRefsForKey` (org + owner + action name, for the reconciler that must judge a
+ *     row in the org that RAN the action from a write made in the org that AUTHORED it).
  *
  * THE TENANCY FILTERS ARE PROVED REMOVABLE, and where they are NOT individually provable this
  * suite says so instead of implying otherwise. Every count below is MEASURED by reverting the named
@@ -483,5 +485,44 @@ describe('the retention pins cross tenants, and carry identifiers only', () => {
     );
     // This is what bounds the retention extension: pins do not accumulate with run volume.
     expect([...await store.pinnedRunIdsForRetention()]).toEqual(['run-new']);
+  });
+});
+
+/**
+ * THE SECOND DELIBERATELY CROSS-TENANT READER (verification round three).
+ *
+ * `listOwnerRefsForKey` exists because a definition write in ONE org can end an action for another -
+ * the `global` tier is exactly that - so the reconciler cannot ask its question from inside a single
+ * org. That is a real widening of this module's reach and it is held to the same rule as the pins:
+ * what crosses the boundary is IDENTIFIERS, bounded by the projection rather than by a promise, and
+ * the caller (`discardEvidenceOfUnresolvableActions`) hands its own caller a COUNT and never a row.
+ */
+describe('the reconciler\'s cross-tenant listing carries no tenant\'s data', () => {
+  it('names every tenant holding a row for the key, with no sample of anyone\'s in it', async () => {
+    await store.recordEvidence(
+      { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
+      { backingType: 'browser-steps', evidence: { kind: 'automation', runId: 'run-A', steps: [{ stepIndex: 0, excerpt: 'orgA private text' }] } },
+    );
+    await store.recordEvidence(
+      { orgId: 'orgB', ownerUserId: PEER, integrationKey: KEY, actionName: ACTION },
+      { backingType: 'api-call', evidence: { kind: 'api-call', request: { method: 'GET', url: 'https://x/y', headers: {} }, response: { status: 200, body: 'orgB private text' } } },
+    );
+
+    const refs = await store.listOwnerRefsForKey(KEY);
+
+    expect(refs.map((r) => `${r.orgId}/${r.ownerUserId}/${r.actionName}`).sort())
+      .toEqual([`orgA/${OWNER}/${ACTION}`, `orgB/${PEER}/${ACTION}`]);
+    const serialised = JSON.stringify(refs);
+    expect(serialised).not.toContain('orgA private text');
+    expect(serialised).not.toContain('orgB private text');
+    for (const ref of refs) expect(Object.keys(ref).sort()).toEqual(['actionName', 'orgId', 'ownerUserId']);
+  });
+
+  it('an empty key lists NOTHING rather than every tenant\'s rows', async () => {
+    await store.recordEvidence(
+      { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
+      { backingType: 'api-call', evidence: { kind: 'api-call', request: { method: 'GET', url: 'https://x/y', headers: {} }, response: { status: 200 } } },
+    );
+    expect(await store.listOwnerRefsForKey('')).toEqual([]);
   });
 });

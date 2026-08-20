@@ -13,6 +13,11 @@ import {
   discardCredentialShadow,
   type CredentialShadowWrite,
 } from './credential-cofre.js';
+// THE OWNER'S ERASURE CONTROL over `integration_action_evidence`. Database-only, exactly like the
+// edges `definition-store.ts` takes for the same reason: disconnecting a credential is the one
+// moment a person says "remove what my third-party account produced", and `deleteConfig` is the only
+// place that hears it. See `action-evidence-store.ts`'s removal-path enumeration, path 3.
+import { discardEvidenceOfDisconnectedConfig } from './action-evidence-store.js';
 
 export interface IntegrationConfigDoc extends Doc {
   orgId: string;
@@ -589,6 +594,33 @@ export async function deleteConfig(actor: Actor, integrationKey: string): Promis
       );
     }
     await integrationConfigs.delete(c._id);
+    // …AND THE SAMPLES THAT CREDENTIAL PRODUCED GO WITH IT (slice S1, verification round three).
+    //
+    // AFTER the delete, for the same reason the shadow goes BEFORE it: order each obligation by what
+    // it would strand on a failure. A shadow left behind is a standing unlock, so it must not
+    // outlive the row that reaches it; an evidence row left behind is a sample of an account nobody
+    // is connected to any more, which is untidy but reachable - and discarding it before a delete
+    // that then failed would destroy the sample of a credential the user still has.
+    //
+    // WHY THIS IS NOT THE RECONCILER. `discardEvidenceOfUnresolvableActions` asks whether the owner
+    // can still REACH the action, and disconnecting a credential does not change that answer - the
+    // definition still resolves, so a reconcile keeps every row. What ended is the connection to the
+    // third-party account whose real request and real response body the row holds, and the person
+    // who made that connection has just asked for it to end. Until this existed, connecting an
+    // integration, running one browser-steps action and then disconnecting left a durable row of
+    // that account's traffic plus a permanent screenshot pin, with no way to remove it and no way to
+    // supersede it (that needs re-connecting and re-running).
+    const forgotten = await discardEvidenceOfDisconnectedConfig({
+      orgId: c.orgId,
+      integrationKey: c.integrationKey,
+      // A row with no custodian is the legacy ORG-SHARED config - the credential `findConfigForOwner`
+      // hands to every member of the org - so deleting it disconnects all of them at once, and every
+      // member's sample was produced through it.
+      owner: c.ownerUserId ? { userId: c.ownerUserId } : 'every-owner-in-org',
+    });
+    if (forgotten > 0) {
+      console.log(`[integrations] disconnecting ${c.integrationKey} discarded ${forgotten} action-evidence row(s)`);
+    }
   }
   return { verdict: 'ok' };
 }

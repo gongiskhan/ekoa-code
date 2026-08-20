@@ -54,6 +54,17 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   released when the action is dropped. The erasure half stands exactly as written above: there is
   still no request-driven erasure over this tree, and S1 still claims none.
 
+  **2026-08-20 (S1 round three), CORRECTING THE PARAGRAPH ABOVE, AND THE ERASURE HALF MOVES A LITTLE.**
+  "The pin is released when the action is dropped" was true only for the org that WROTE the
+  definition. For a `global` definition's consumers - and for every member of an org whose definition
+  was retired by `setVisibility` - nothing released it, so for those runs the permanent exemption
+  survived round two intact (`evidence-collector-scoped-to-the-writing-org`). It is closed now by a
+  reconciliation keyed on the row's own owner. Separately, the OWNER now has one request-driven
+  control that reaches the pin: disconnecting the credential (`DELETE /api/v1/integrations/:key`)
+  discards the evidence rows that credential produced, and therefore their pins. That is a control
+  over `integration_action_evidence`, NOT over the screenshot tree - `deleteRunScreenshots` still has
+  no production caller and this entry still claims no erasure coverage over the PNGs.
+
 - **`resolve-step-origin-runs-twice-per-gated-browser-step`** (**FIXED 2026-08-19**, round seven;
   see the round-seven fixed section). The walk still runs two to three times per gated browser step -
   that is inherent to resolving locality before the gate and re-resolving after it - but its
@@ -3192,6 +3203,127 @@ silently absorbed into a ledger note):
   `sales-crm.png` ("Página não encontrada" 404 instead of the dashboard) - `booking-system` is
   disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
   `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
+
+## Recently fixed - 2026-08-20 action evidence round three (one major + four minors)
+
+The S1 verification pass repeated. Its finding is that the round-two fix below was RIGHT ABOUT THE
+METHOD AND WRONG ABOUT THE UNIT, so the entries here correct the ones in the next section rather than
+sitting beside them.
+
+- **`evidence-collector-scoped-to-the-writing-org`** (2026-08-20, **MAJOR, FIXED**). Round two's
+  collector ran `discardEvidenceOfRemovedActions({ orgId: input.orgId, ... })` - the org that WROTE
+  the definition - while every evidence row is keyed by the org that RAN the action. The `global`
+  tier exists precisely so those differ.
+
+  REPRODUCED END TO END, as a failing spec before any code changed: a super-admin publishes org A's
+  definition at `visibility: 'global'`; `getForActor` grants the cross-org tier, so a user in org B
+  resolves it, connects THEIR OWN credential and runs a browser-steps action. The row lands under
+  `{orgId: orgB, ownerUserId: uB}` holding org B's real response body (client PII) plus an automation
+  pin naming `run-consumer`. Org A then re-authors the definition without that action, and the
+  `deleteMany` filtered on org A matched NOTHING. Measured after the replace: 2 rows left, both org
+  B's, PII intact, `pinnedRunIdsForRetention()` still returning `run-consumer`. The action now
+  resolves for NOBODY, so the row can never be superseded either - the screenshots of an
+  authenticated client-portal session were exempt from the 7-day sweep PERMANENTLY, which is exactly
+  the state the round-two blocker was raised to end.
+
+  A SECOND REACHABLE TRIGGER used the transition round two's header dismissed BY NAME as not a
+  removal path: `setVisibility` `global -> org` takes every action of the integration away from every
+  consumer org at once, and `org -> private` does the same to every peer inside the author's own org,
+  with no super-admin anywhere in the story. Their rows and pins stood with nothing that could
+  release them.
+
+  THIS IS THE FIFTH TIME A DECISION IN THIS CODEBASE HAS BEEN SCOPED TO THE WRONG UNIT (per-run where
+  it should be per-origin, per-recipe where it should be per-call, per-action where it should be
+  per-call, per-artifact where it should be per-owner, and here per-writing-org where it should be
+  per-running-org), and that - not the individual defect - is the finding.
+
+  FIXED by replacing the diff with a RECONCILIATION scoped by the ROW: for each `(orgId,
+  ownerUserId)` holding a row for the integration, `discardEvidenceOfUnresolvableActions` asks
+  `getForActor` - the same resolver production runs actions through - which action names that owner
+  still resolves, and drops the rest. `definition-store.ts` calls it from both writes that can narrow
+  reach (the replace branch and `setVisibility`), so a rule with no transition table in it covers
+  both triggers and any future tier. `actionsDroppedBy` is deleted; nothing diffs action sets for
+  evidence any more. The listing (`listOwnerRefsForKey`) is cross-tenant and projected to org + owner
+  + action name, so no sample crosses the boundary and its caller only ever learns a count; and the
+  collector fails towards KEEPING everywhere - a listing that throws collects nothing, a resolution
+  that throws keeps that owner's rows - because deletion is irreversible and the row is somebody's
+  only copy.
+
+  THE CLAIMS WERE FIXED AS WELL AS THE CODE. "There is exactly ONE path" and "an action belongs to
+  the DEFINITION, so when it is dropped it is dropped for every member of the org at once" appeared
+  in the store header, `recipe-lifecycle.ts`, `architecture.md`, `decisions.md` and this ledger; all
+  five now say that a row lives only while its OWNER can still resolve its action.
+
+  SUITE: `api/tests/integrations/action-evidence-removal.test.ts` (21 cases), entered at the REAL
+  `saveAuthoredDefinition`, `create(..., 'replace')`, `setVisibility` and `deleteConfig`.
+  MUTATION-VERIFIED, every count measured with the source restored and md5-checked afterwards:
+  restoring the per-writing-org scope reddens 2 (both cross-org cases, while every same-org case
+  stays green - exactly the shape of the shipped bug); deleting the `setVisibility` call reddens 2;
+  dropping the resolution check so the collector deletes blindly by (key, action) reddens 8,
+  including the control that another tenant resolving the same action name through its OWN definition
+  keeps its row; resolving with `userId: ''` instead of the row's owner reddens 1 (the `org ->
+  private` peer case, which is what proves the per-OWNER unit inside one org); inverting the
+  fail-posture so a failed resolution deletes reddens 1; dropping the listing's `integrationKey` term
+  reddens 1, in `listOwnerRefsForKey`'s own case.
+
+- **`action-evidence-erasure-control-still-had-no-caller`** (2026-08-20, **MINOR, FIXED**).
+  `discardEvidence` still had zero production callers after round two, and the round-two header said
+  the erasure gap "is recorded as a gap in docs/findings.md" when the only erasure entry here was
+  about the screenshot TREE, not this collection. A user who connected an integration, ran a
+  browser-steps action once and then hit `DELETE /api/v1/integrations/:key` kept a durable row of
+  their third-party account's request/response plus a permanent screenshot pin, with no way to remove
+  it and no way to supersede it (that needs re-connecting and re-running).
+
+  FIXED by wiring the control rather than by recording the gap: `deleteConfig` calls
+  `discardEvidenceOfDisconnectedConfig` after each config row goes. It is deliberately NOT the
+  reconciler - the definition still resolves, so a reconcile keeps every row; what ended is the
+  connection to the account whose traffic the sample holds. The scope is a discriminated `owner`,
+  never an optional term: a config stamped with a custodian erases that person's rows, and a legacy
+  org-shared config (no custodian - the credential `findConfigForOwner` hands to every member)
+  erases every member's. `discardEvidence` itself now has a caller too: it is the reconciler's
+  removal primitive. MUTATION-VERIFIED: deleting the call reddens 2; always taking the org-wide arm
+  reddens 1 (the colleague's row).
+
+- **`pinned-run-read-was-unbounded-and-its-failure-uncatchable`** (2026-08-20, **MINOR, FIXED**).
+  `pinnedRunIdsForRetention()` did `find({})` with no filter and no projection, then walked whole
+  rows for `runId`. Rows are hundreds of KB and grow as orgs x owners x integrations x actions with
+  no TTL; at 10k rows that is a multi-gigabyte materialisation AT BOOT to build a set of short
+  strings. The caller's `.catch` degrades a rejection but cannot catch an OOM abort, so the real
+  failure mode was a boot crash loop rather than the documented "degrades to pin nothing". The
+  round-two docblock argued the PIN COUNT is bounded, which is true and a different claim from the
+  READ being bounded.
+
+  FIXED with an additive `projection` option on `Store.find` (Rule 7 shape: a third optional
+  argument, so every existing caller keeps its meaning) plus an `{'evidence.kind': 'automation'}`
+  query term. The docblock now records WHICH of the two `kind` tests is load-bearing instead of
+  calling them a masked pair: the query term narrows (measured), while the loop's `ev.kind ===
+  'automation'` is a TYPE discrimination - deleting it does not compile, and casting it away instead
+  SURVIVES, because an api-call row carries no `runId` to read. MUTATION-VERIFIED: dropping the
+  projection reddens 1 (a planted sample comes back in the returned documents); dropping the query
+  term reddens 1 (two documents instead of one); the cast variant survives, and is recorded as
+  surviving rather than claimed as covered.
+
+- **`evidence-fixture-used-a-non-member-run-status`** (2026-08-20, **MINOR, FIXED**). The removal
+  suite built automation evidence with `status: 'succeeded'`, which is not a member of `RunStatus`
+  (the production writer `collectRunEvidence` copies `RunRecord.status` straight through, and the
+  members are `running | completed | failed | ...`). It is typed `string?`, so nothing caught it, and
+  nothing asserted it - so it was not unfailable, it was a stand-in waiting to be copied into a case
+  that DOES assert a run status. Same fixture-honesty class as the one fixed one file over in round
+  two. FIXED to `completed`, with the production writer named in the fixture's own comment.
+
+- **`the-awaited-boot-sweep-was-unpinned`** (2026-08-20, **MINOR, FIXED**).
+  `composition-root-screenshot-pins.test.ts` could not distinguish `await sweep(...)` from
+  `void sweep(...)`: mutating the await left 5/5 green, because `bootState` awaits slower things
+  afterwards so the sweep won the race either way. The round-two report, the `server.ts` docblock and
+  the decisions entry all presented the await as what makes the sweep observable; what actually makes
+  it observable is the REQUIRED `pinnedRunIds` option plus that suite. The await was correct and
+  unpinned, and the pass was a race that happened to win.
+
+  FIXED by making the distinction structural, the same move `pinnedRunIds` already used: `bootState`
+  now READS the returned counts (the retention log line moved from the composition function to the
+  call site), so `void` has no `.removed` and the mutant stops compiling. MUTATION-VERIFIED: `await
+  -> void` fails `tsc` with five errors. The three places that made the wrong claim are corrected,
+  and the suite header now states what it does NOT pin.
 
 ## Recently fixed - 2026-08-20 action evidence round two (blocker + three majors + three minors)
 

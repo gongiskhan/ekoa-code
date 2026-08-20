@@ -1610,6 +1610,15 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
  * precedent, and the reason is the same: an obligation that resolves after boot "finishes" is one no
  * caller can wait on and no test can observe without polling. The sweep is bounded by the run tree
  * and cannot throw, so awaiting it can delay listen but cannot prevent it.
+ *
+ * AND THE AWAIT IS PINNED BY THE CALL SITE, NOT BY A TEST - stated precisely because the previous
+ * revision of this note claimed otherwise. No case in the pins suite could tell `await sweep(...)`
+ * from `void sweep(...)`: `bootState` awaits several slower things afterwards, so the sweep always
+ * finished first anyway and the mutant left 5/5 green. What actually made the binding observable was
+ * `sweepExpiredScreenshots`'s REQUIRED `pinnedRunIds` option plus that suite. So the await is pinned
+ * the same way - by making the mutant not compile: `bootState` READS the counts this returns, and
+ * `void` has no `.removed`. That is why the log line below moved to the call site and did not stay
+ * here; a result nobody reads is a result an `await` cannot be proved to have waited for.
  */
 export async function sweepScreenshotsSparingPinnedEvidence(
   now: () => number,
@@ -1618,14 +1627,7 @@ export async function sweepScreenshotsSparingPinnedEvidence(
     .pinnedRunIdsForRetention()
     .catch(() => new Set<string>());
   try {
-    const result = await sweepExpiredScreenshots({ now, pinnedRunIds });
-    if (result.removed > 0 || result.pinned > 0) {
-      console.log(
-        `[automation] screenshot retention: removed ${result.removed}/${result.scanned} run dirs, `
-          + `spared ${result.pinned} pinned by evidence`,
-      );
-    }
-    return result;
+    return await sweepExpiredScreenshots({ now, pinnedRunIds });
   } catch {
     return { removed: 0, scanned: 0, pinned: 0 };
   }
@@ -1675,7 +1677,18 @@ export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> 
   // a promotion to `trusted` rests on. The pin set is read here (the sweeper keeps no edge to
   // `integrations/`) and is bounded to the ONE run each action's LIVE evidence names: evidence is
   // superseded wholesale, so a newly validated run releases the previous pin in the same write.
-  await sweepScreenshotsSparingPinnedEvidence(deps.now);
+  //
+  // THE RESULT IS READ, AND THAT IS WHAT PINS THE `await`. Nothing in the pins suite can distinguish
+  // an awaited call from a fire-and-forget one here (boot goes on to await slower things, so the
+  // sweep wins the race either way), so the distinction is made structural instead: `void` has no
+  // `.removed`, so the mutant stops compiling. See the function's own note.
+  const screenshotSweep = await sweepScreenshotsSparingPinnedEvidence(deps.now);
+  if (screenshotSweep.removed > 0 || screenshotSweep.pinned > 0) {
+    console.log(
+      `[automation] screenshot retention: removed ${screenshotSweep.removed}/${screenshotSweep.scanned} run dirs, `
+        + `spared ${screenshotSweep.pinned} pinned by evidence`,
+    );
+  }
 
   // A3 — the FROZEN legacy disk runtime tier scan (Rule-10 review 2026-08-15). REPORT-ONLY by
   // default: it persists nothing unless the operator set EKOA_IMPORT_LEGACY_RUNTIME=1 (A3 review
