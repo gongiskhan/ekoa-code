@@ -1,13 +1,13 @@
 /**
- * THE ONE RESOLUTION (slice S1, verification round four) - `integrations/action-resolution.ts`.
+ * THE ONE RESOLUTION (slice S1) - `integrations/action-resolution.ts`.
  *
- * ── WHY THIS MODULE HAS A SUITE OF ITS OWN ────────────────────────────────────────────────────
+ * ── WHAT THIS MODULE ANSWERS, AND WHAT IT NO LONGER ANSWERS ───────────────────────────────────
  *
- * Because three consecutive rounds of S1 answered "which actions can this owner still reach" with a
- * RE-DERIVATION of it, and each re-derivation was wrong on a different axis - and being wrong there
- * deleted tenants' data. The module exists so the question has exactly one answer, shared with
- * `action-executor.ts` itself. This file pins the three axes a re-derivation got wrong, each as a
- * CONTRAST against the thing the wrong answer would have used:
+ * It answers, for ONE call at ONE instant: which package does this run execute against, and as
+ * whom. That question is genuinely subtle - three rounds of re-deriving it inside other modules got
+ * it wrong on a different axis each time - so it has one implementation, shared with
+ * `action-executor.ts` itself, and this file pins the three axes as CONTRASTS against the thing a
+ * re-derivation would have used:
  *
  *   1. LIVE ROW vs FROZEN SNAPSHOT - a consumer of a published definition resolves the snapshot, so
  *      an action org A dropped from its live row is still reachable for org B. `getForActor`'s own
@@ -15,8 +15,28 @@
  *   2. RUNNER vs CUSTODIAN - an org-shared credential resolves the definition as the credential's
  *      custodian and "never as the reader". The reader's own view is asserted EMPTY in the same
  *      case, so "resolves it" cannot be satisfied by the reader seeing it themselves.
- *   3. "COULD NOT FIND OUT" vs "RESOLVES NOTHING" - `null` and the empty set are different answers
- *      and collapsing them is how a Mongo blip becomes silent deletion.
+ *   3. A REFUSAL IS NOT AN EMPTY REACH - `null` means the (reader, config) pair is INCOHERENT and
+ *      there is no principal to resolve as. It is a thing the CALLER IS TOLD, and this file pins
+ *      that consequence at the executor rather than at the type.
+ *
+ * ── WHAT ROUND FIVE DELETED FROM THIS FILE, STATED RATHER THAN QUIETLY DROPPED ────────────────
+ *
+ * The module also exported `resolvableActionNamesForOwner`: the same resolution projected onto the
+ * set of action names, answering three ways (`null` = could not find out, empty set = resolves
+ * nothing) so a retention decision could not read a Mongo blip as "reaches nothing". Its arm
+ * `if (!surface) return null` was an EQUIVALENT MUTANT - substituting `new Set()` there, which would
+ * have deleted every row of that owner, left the whole suite green.
+ *
+ * It is not pinned. It is GONE, with both of its callers: the write-time reconciler and the
+ * reader-side collector. The question they asked it - "is this action gone, so may I delete the
+ * evidence of it?" - is not answerable synchronously at all, because a correct answer about an
+ * instant still governs a row that outlives the instant. Retention is now decided by TTL, by the
+ * owner's own DELETE, and by a newer validated run; see `action-evidence-removal.test.ts`.
+ *
+ * WHAT SURVIVES OF THAT ARM IS ONE TIER DOWN - `resolveOwnerActionSurface`'s own `null`, which the
+ * executor turns into a `credential_invalid` REFUSAL. That is pinned below, at the production
+ * consequence, because a refusal is something a caller is told and never something that deletes
+ * their data.
  *
  * Every fixture is built by the PRODUCTION writer: the published row goes through
  * `requestPublish` -> `publishDefinition`, never `create({ visibility: 'global' })`, because a row
@@ -37,10 +57,8 @@ import {
 import { saveAuthoredDefinition } from '../../src/integrations/definition-save.js';
 import { publishDefinition } from '../../src/integrations/publish-scrub.js';
 import { createConfig } from '../../src/integrations/service.js';
-import {
-  resolvableActionNamesForOwner,
-  resolveOwnerActionSurface,
-} from '../../src/integrations/action-resolution.js';
+import { resolveOwnerActionSurface } from '../../src/integrations/action-resolution.js';
+import { executeUserIntegrationAction } from '../../src/integrations/action-executor.js';
 import type { IntegrationPackageConfig } from '../../src/integrations/definitions.js';
 
 let mem: MongoMemoryServer;
@@ -96,8 +114,16 @@ async function publish(): Promise<void> {
   expect((await publishDefinition(superAdmin, id, { modelPass: null }, integrationDefinitionStore)).verdict).toBe('ok');
 }
 
-const names = (owner: { orgId: string; userId: string }) =>
-  resolvableActionNamesForOwner(owner.orgId, owner.userId, KEY);
+/**
+ * What this owner's RUN would execute against, as action names - read off the surface itself rather
+ * than through a helper of its own, so no projection sits between the assertion and what the
+ * executor reads. `null` is "no coherent principal", which is a different thing from `[]`.
+ */
+const names = async (owner: { orgId: string; userId: string }): Promise<string[] | null> => {
+  const surface = await resolveOwnerActionSurface(owner.orgId, owner.userId, KEY);
+  if (!surface) return null;
+  return (surface.definition?.actions ?? []).map((a) => a.actionName);
+};
 
 beforeAll(async () => {
   process.env.ENCRYPTION_KEY = 'test-encryption-key-32-characters!';
@@ -136,9 +162,8 @@ describe('axis 1: a consumer resolves the FROZEN SNAPSHOT, not the author\'s liv
     // the LIVE row, which no longer names the action…
     const live = await integrationDefinitionStore.getForActor(consumer, KEY);
     expect(live?.actions.map((a) => a.actionName)).toEqual([SURVIVOR]);
-    // …while what the consumer actually RESOLVES still does. A retention decision taken on the first
-    // answer destroys the evidence of an action the second answer says still runs.
-    expect([...(await names(consumer))!].sort()).toEqual([DOOMED, SURVIVOR].sort());
+    // …while what the consumer actually RESOLVES, and therefore RUNS, still does.
+    expect((await names(consumer))!.sort()).toEqual([DOOMED, SURVIVOR].sort());
   }, 30_000);
 
   it('the author\'s OWN org reads its live row, so the two answers differ by tenant and not by luck', async () => {
@@ -151,8 +176,8 @@ describe('axis 1: a consumer resolves the FROZEN SNAPSHOT, not the author\'s liv
 
     // Same row, same moment: the owner sees live (`crossOrgView` is a no-op inside the org), the
     // consumer sees the snapshot. That is why the answer cannot be a property of the definition.
-    expect([...(await names(author))!]).toEqual([SURVIVOR]);
-    expect([...(await names(consumer))!].sort()).toEqual([DOOMED, SURVIVOR].sort());
+    expect(await names(author)).toEqual([SURVIVOR]);
+    expect((await names(consumer))!.sort()).toEqual([DOOMED, SURVIVOR].sort());
   }, 30_000);
 });
 
@@ -172,7 +197,7 @@ describe('axis 2: an org-shared credential resolves as the CUSTODIAN, never as t
     // THE CONTRAST: the peer's own view is empty…
     expect(await integrationDefinitionStore.getForActor({ ...peer, userId: PEER, role: 'user' }, KEY)).toBeNull();
     // …and what they resolve is the custodian's, which is what a run of theirs will actually use.
-    expect([...(await names(peer))!].sort()).toEqual([DOOMED, SURVIVOR].sort());
+    expect((await names(peer))!.sort()).toEqual([DOOMED, SURVIVOR].sort());
     const surface = await resolveOwnerActionSurface(ORG, PEER, KEY);
     expect(surface?.definitionActor).toEqual({ userId: admin.userId, orgId: ORG, role: 'user' });
   });
@@ -185,39 +210,60 @@ describe('axis 2: an org-shared credential resolves as the CUSTODIAN, never as t
 
     const surface = await resolveOwnerActionSurface(ORG, PEER, KEY);
     expect(surface?.definitionActor).toEqual({ userId: PEER, orgId: ORG, role: 'user' });
-    expect([...(await names({ orgId: ORG, userId: PEER }))!]).toEqual([]);
+    expect(await names({ orgId: ORG, userId: PEER })).toEqual([]);
   });
 });
 
-describe('axis 3: "could not find out" is NEVER "resolves nothing"', () => {
-  it('a key that resolves and names no such action answers the EMPTY SET', async () => {
+/**
+ * AXIS 3 - `null` IS A REFUSAL, AND THE REFUSAL IS THE ONLY THING IT DECIDES.
+ *
+ * Round four had a second `null` one tier up, in `resolvableActionNamesForOwner`, whose whole job
+ * was to stop a retention decision reading "could not find out" as "reaches nothing". Nobody covered
+ * its arm and substituting `new Set()` for it - a mutant that deletes every row of that owner - left
+ * 240/240 green. That function is deleted (see this file's header), so the arm below is the one that
+ * remains, and it is pinned WHERE IT ACTS: at the executor, where it becomes a coded refusal handed
+ * to the caller.
+ */
+describe('axis 3: an INCOHERENT (reader, config) pair is a refusal, not an empty reach', () => {
+  it('a key that resolves and names no such action answers a real, EMPTY list', async () => {
     await integrationDefinitionStore.create(definitionRow([SURVIVOR]), { actor: author });
-    const answer = await names(author);
-    expect(answer).not.toBeNull();
-    expect([...answer!]).toEqual([SURVIVOR]);
+    const surface = await resolveOwnerActionSurface(ORG, OWNER, KEY);
+    // The surface EXISTS - a coherent principal, a resolved package - and simply has one action.
+    expect(surface).not.toBeNull();
+    expect(surface!.definition?.actions.map((a) => a.actionName)).toEqual([SURVIVOR]);
   });
 
-  it('an INCOHERENT custodian answers null - a refusal, not an empty reach', async () => {
+  it('an org-less reader answers null - there is no principal to resolve AS', async () => {
     await integrationDefinitionStore.create(definitionRow([SURVIVOR]), { actor: author });
     // An org-less reader matches every `global` row (A2 review F4), so "we could not determine the
-    // custodian" must never collapse into "resolve as somebody" - or, here, into "reaches nothing".
-    expect(await resolvableActionNamesForOwner('', OWNER, KEY)).toBeNull();
-    expect(await resolvableActionNamesForOwner(ORG, '', KEY)).toBeNull();
-    expect(await resolvableActionNamesForOwner(ORG, OWNER, '')).toBeNull();
+    // custodian" must never collapse into "resolve as somebody".
     expect(await resolveOwnerActionSurface('', OWNER, KEY)).toBeNull();
   });
 
-  it('a resolver that THROWS answers null, so a mongo blip keeps every row', async () => {
-    const answer = await resolvableActionNamesForOwner(ORG, OWNER, KEY, {
-      resolve: async () => { throw new Error('mongo is unhappy'); },
-    });
-    expect(answer).toBeNull();
-  });
+  it('THE PRODUCTION CONSEQUENCE: the executor refuses the call with `credential_invalid`', async () => {
+    // What the `null` arm is FOR, asserted at the only place it is read. Delete
+    // `if (!definitionActor) return null` and this call resolves a package as an org-less actor -
+    // which matches every `global` row in the installation - instead of being refused.
+    await integrationDefinitionStore.create(definitionRow([SURVIVOR]), { actor: author });
 
-  it('a CONFIG READ that throws answers null too - the refusal covers both reads', async () => {
-    const answer = await resolvableActionNamesForOwner(ORG, OWNER, KEY, {
-      findConfig: async () => { throw new Error('mongo is unhappy'); },
+    const refused = await executeUserIntegrationAction({
+      orgId: '', ownerUserId: OWNER, integrationKey: KEY, actionName: SURVIVOR, args: {},
     });
-    expect(answer).toBeNull();
+
+    expect(refused.success).toBe(false);
+    expect(refused.code).toBe('credential_invalid');
+    // …and the refusal is a MESSAGE, never a deletion. Round four's version of this branch collected
+    // the caller's evidence rows on the way past; round five's tells them and touches nothing.
+    expect(refused.error).toContain(KEY);
+  }, 30_000);
+
+  it('a resolver that THROWS is not caught here - it is a real failure and it propagates', async () => {
+    // STATED RATHER THAN IMPLIED. Round four caught this into `null`, because a retention decision
+    // was about to read the answer and a swallowed blip would have deleted rows. Nothing reads it
+    // that way any more, so a broken resolve surfaces as the failure it is instead of being
+    // laundered into "this owner reaches nothing".
+    await expect(resolveOwnerActionSurface(ORG, OWNER, KEY, {
+      resolve: async () => { throw new Error('mongo is unhappy'); },
+    })).rejects.toThrow('mongo is unhappy');
   });
 });

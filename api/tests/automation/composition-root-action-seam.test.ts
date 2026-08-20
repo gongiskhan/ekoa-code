@@ -222,11 +222,18 @@ describe('the integration-action executor bound by buildApp carries the discover
    *
    * `server.ts` builds ONE `executorDeps` bundle carrying `recordActionEvidence` (the real
    * `integration_action_evidence` store) and `collectRunEvidence` (the real `automation/` collector),
-   * and hands the SAME bundle to all four executor call sites - plus, from round four,
-   * `discardOwnActionEvidence` (the reader's own collection) and one call to
-   * `bindDefinitionEvidenceReconciler()` beside it. Delete any member and nothing fails: actions
-   * keep running and simply stop leaving - or stop collecting - evidence, the exact silent-loss
-   * failure this file was created for, one seam over.
+   * and hands the SAME bundle to all four executor call sites. Delete either member and nothing
+   * fails: actions keep running and simply stop leaving evidence, the exact silent-loss failure this
+   * file was created for, one seam over.
+   *
+   * TWO CASES USED TO LIVE HERE AND ARE DELETED WITH WHAT THEY PINNED (round five): a third bundle
+   * member `discardOwnActionEvidence` (the reader's own collection), and a
+   * `bindDefinitionEvidenceReconciler()` line beside it. Both were COLLECTORS - they answered "is
+   * this action gone?" synchronously and deleted on the answer - and both are gone, because that
+   * question is not answerable at one instant for data whose lifetime is durable. Retention is now
+   * TTL, the owner's own DELETE, and supersede-on-validated-run; see
+   * `tests/integrations/action-evidence-removal.test.ts`. NOTHING ON AN EXECUTION PATH DELETES AN
+   * EVIDENCE ROW, so there is no collection binding left here to lose.
    *
    * WHAT IS REAL HERE AND WHAT IS STUBBED. The chain under test is entirely real: the bundle
    * `buildApp` built, the executor's capture call, the bound collector, the bound store. The ONE
@@ -313,51 +320,51 @@ describe('the integration-action executor bound by buildApp carries the discover
     }, 30_000);
 
     /**
-     * ROUND FOUR - THE TWO COLLECTION BINDINGS, which have the same silent-loss property as the two
-     * above and one extra: what they collect is somebody's only copy of their own data, so a
-     * binding that is missing leaves an orphan and a binding that is wrong destroys a row.
+     * ROUND FIVE - THE COMPOSITION ROOT BINDS NO COLLECTOR, ASSERTED THROUGH THE REAL COMPOSITION.
+     *
+     * Two cases here used to assert the opposite, one per collector: a refusal through the bound
+     * executor dropped the caller's rows, and a definition rewrite through the bound seam dropped
+     * that org's. Both collectors are gone, and their absence is worth a case of its own for the
+     * same reason their presence was - it is a property of the ONE production composition, not of a
+     * module, and a future round re-binding a collector here would otherwise pass silently.
+     *
+     * BOTH TRIGGERS IN ONE CASE, deliberately: they are the same claim about the same wiring, and
+     * the rows are distinguished by owner so neither can mask the other.
      */
-    it('the READER\'S OWN collection is bound: a run that cannot resolve drops the CALLER\'S row', async () => {
+    it('binds NO collector: neither a refused run nor a definition rewrite deletes an evidence row', async () => {
       await integrationActionEvidence.deleteMany({});
-      // Two rows for an action that is about to stop resolving: the caller's, and a colleague's.
-      for (const owner of [OWNER, 'u-colleague']) {
+      // ONE ROW PER TRIGGER, EACH ONE THE ROW THAT TRIGGER WOULD HAVE DESTROYED. The caller's own
+      // row for the action they are about to fail to resolve (round four's reader collection), and
+      // a colleague's row for the action the rewrite below drops (round four's write-time seam).
+      // Without both, one mutant has nothing to delete and this case passes for the wrong reason.
+      for (const [owner, actionName] of [[OWNER, 'accao_removida'], ['u-colleague', READ_ACTION]] as const) {
         await actionEvidenceStore.recordEvidence(
-          { orgId: ORG, ownerUserId: owner, integrationKey: KEY, actionName: 'accao_removida' },
+          { orgId: ORG, ownerUserId: owner, integrationKey: KEY, actionName },
           { backingType: 'api-call', evidence: { kind: 'api-call', request: { method: 'GET', url: `${ORIGIN}/x`, headers: {} }, response: { status: 200 } } },
         );
       }
 
-      const result = await executeIntegrationAction({
+      // (a) a run through the bound executor that cannot resolve the action…
+      const refused = await executeIntegrationAction({
         integrationKey: KEY,
         actionName: 'accao_removida',
         args: {},
         ownerUserId: OWNER,
       });
+      expect(refused.success).toBe(false);
 
-      expect(result.success).toBe(false);
-      // ONLY the caller's row. `discardOwnActionEvidence` unbound leaves both; bound to anything
-      // wider takes the colleague's too, and the colleague never made this call.
-      const left = (await integrationActionEvidence.find({})) as unknown as { ownerUserId: string }[];
-      expect(left.map((r) => r.ownerUserId)).toEqual(['u-colleague']);
-    }, 30_000);
-
-    it('the WRITE-TIME collector is bound: a definition rewrite collects that org\'s stranded rows', async () => {
-      // `bindDefinitionEvidenceReconciler()` is ONE line in `buildApp`. Without it a definition
-      // write collects nothing at all - which is safe but silent, and the retention gap it leaves
-      // is the whole reason the line exists.
-      await integrationActionEvidence.deleteMany({});
-      await actionEvidenceStore.recordEvidence(
-        { orgId: ORG, ownerUserId: OWNER, integrationKey: KEY, actionName: READ_ACTION },
-        { backingType: 'api-call', evidence: { kind: 'api-call', request: { method: 'GET', url: `${ORIGIN}/x`, headers: {} }, response: { status: 200 } } },
-      );
-
+      // (b) …and a definition rewrite through the bound store that really drops an action.
       const row = definitionRow();
-      await definitions.create(
+      const rewritten = await definitions.create(
         { ...row, actions: row.actions.filter((a) => a.actionName !== READ_ACTION) },
         { actor, onConflict: 'replace' },
       );
+      // THE CONTROL: the rewrite landed and the action really is gone from the definition, so the
+      // surviving rows are the absent collector and not a write that no-opped.
+      expect(rewritten.actions.map((a) => a.actionName)).not.toContain(READ_ACTION);
 
-      expect(await integrationActionEvidence.find({})).toEqual([]);
+      const left = (await integrationActionEvidence.find({})) as unknown as { ownerUserId: string }[];
+      expect(left.map((r) => r.ownerUserId).sort()).toEqual([OWNER, 'u-colleague'].sort());
     }, 30_000);
   });
 

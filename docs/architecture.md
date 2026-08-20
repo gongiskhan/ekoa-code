@@ -642,58 +642,60 @@ or names different bytes. The gate is satisfiable: a provisional action is store
 owner approves it, runs it once, and promotes on that run.
 
 NOTHING DURABLE OUTLIVES THE THING IT IS EVIDENCE FOR - the invariant `recipe-lifecycle.ts` states
-for the sibling collection, inherited here. The rule that implements it took four rounds to reach,
-and the two wrong shapes are recorded because each was a *reasonable* reading of the previous one.
+for the sibling collection, inherited here. It took FIVE rounds to work out how to honour it, and the
+four wrong shapes are recorded because each was a *reasonable* reading of the previous one and
+because the SEQUENCE, not any one of them, is the lesson.
 
-Round two ENUMERATED the writes that drop an action and scoped the collector to `input.orgId`, the
-org that WROTE the definition. Every row is keyed by the org that RAN the action, and the `global`
-tier exists precisely so those differ, so every consumer of a published definition was orphaned.
-Round three widened the same collector to reconcile ACROSS TENANTS by asking `getForActor` per row
-owner - and DELETED ACROSS AN ORG BOUNDARY, twice over:
+| round | vantage the collector used | defect |
+| --- | --- | --- |
+| two | the writing org's action-set diff | ORPHANED every consumer of a `global` row |
+| three | every tenant's rows, via `getForActor` | DELETED ACROSS A TENANT BOUNDARY, twice over |
+| four | the reader's own run, via the one production resolution | DELETED on TRANSIENT unreachability |
+| four | the writing org's own rows, same resolution | DELETED on a tier flip that was REVERTED |
+| four | the boot screenshot sweep | SWEPT UNPINNED when the pin read failed |
 
-- it asked for the LIVE row while a consumer resolves the FROZEN `publishedSnapshot` (the replace
-  branch carries the snapshot forward deliberately, and `setVisibility` re-promotes without
-  re-scrubbing), so org A's re-save destroyed org B's only copy of a sample for an action **org B
-  could still run**;
-- it asked as the RUNNER while an org-shared credential resolves the definition as the CUSTODIAN
-  (`definitionActorForCredential`), so a peer's rows were wiped by a save that dropped nothing.
+Round three's two axes are worth keeping in full, because they are what makes "use a better actor"
+look like a fix: it asked for the LIVE row while a consumer resolves the FROZEN `publishedSnapshot`
+(the replace branch carries the snapshot forward deliberately, and `setVisibility` re-promotes
+without re-scrubbing), so org A's re-save destroyed org B's only copy of a sample for an action **org
+B could still run**; and it asked as the RUNNER while an org-shared credential resolves as the
+CUSTODIAN (`definitionActorForCredential`), so a peer's rows were wiped by a save that dropped
+nothing. Round four fixed both, from the best-informed vantage in the system, with a scope that
+required both tenancy terms - and still deleted data that was not stale.
 
-THE STANDING RULE IS NOW A SHAPE, NOT A PARAMETER: **a write by one org never deletes another org's
-data.** "Who can still resolve this action" has a genuinely different answer per reader - live row
-vs frozen snapshot, runner vs custodian, own-org row vs a foreign `global` row vs the shipped
-baseline - so it is never answered at write time on behalf of a reader the writer cannot see. Three
-mechanisms replace the one:
+**THE CAUSE IS NOT THE SCOPE, THE ACTOR OR THE VANTAGE.** Every attempt answered *"is this action
+gone?"* SYNCHRONOUSLY, at one instant, from one vantage, and acted on the answer by deleting a row
+whose lifetime is durable. That question is not answerable that way. So round five removed
+synchronous collection entirely and did not replace it with a cleverer reachability check. **A
+definition edit, a tier flip, a re-publish and a failed resolve record NOTHING and delete NOTHING.**
 
-1. **The reader collects its own.** `action-executor.ts` resolves through `action-resolution.ts` -
-   the ONE production resolution, shared with the run path itself - so it knows, for this org, this
-   owner, this credential and this document, whether the integration or the action is still
-   reachable. When it is not, the refusal drops that owner's rows (`discardOwnerEvidence`, whose
-   scope type REQUIRES both tenancy terms and has no org-wide arm).
-2. **The write collects inside its own tenant.** `definition-store.ts` declares a seam taking
-   `(orgId, integrationKey)`; `evidence-reconcile.ts` implements it, asking the same production
-   resolution per owner, and `server.ts` binds the two through
-   `bindDefinitionEvidenceReconciler()`. The store cannot import the resolution directly (that is a
-   cycle through `definition-registry.ts`), and putting the call at the four higher-tier write sites
-   would make reachability something four authors must remember. Bounded by
-   `MAX_RECONCILED_OWNERS`; unbound, it collects nothing, which is the safe direction.
-3. **Everything else fails towards RETAINING, and the gap is bounded rather than argued away.** An
-   orphaned row is a retention and privacy gap; a deleted row is unrecoverable tenant data. Those
-   costs are not comparable. `sweepExpiredEvidence` at boot ends every row not re-validated within
-   `EVIDENCE_RETENTION_DAYS` (90), whether or not any collector noticed; `DELETE
-   /api/v1/integrations/:key/actions/:actionName/evidence` is the owner's own erasure control (and
-   the reason `discardEvidence` has a production caller); and `deleteConfig` erases what a
-   disconnected credential produced. The residual window is an open entry in `findings.md`.
+Three DURABLE signals end a row, and nothing else does:
 
-Read as what a CONSUMER RESOLVES rather than as what a definition says, the narrowing writes are:
-`create(..., 'replace')`, `setVisibility` in either narrowing direction, and `publishSnapshot` on a
-RE-PUBLISH - a fresh snapshot with fewer actions narrows every consumer at once, which earlier text
-here dismissed as "widening only". All three collect the writing org's rows and none of them touches
-another tenant's.
+1. **TIME.** `sweepExpiredEvidence` at boot ends every row not re-validated within
+   `EVIDENCE_RETENTION_DAYS` (90), orphan or not. It was the backstop; it is now THE collector, and
+   its virtue is that **no vantage has to be right about anything**.
+2. **THE OWNER.** `DELETE /api/v1/integrations/:key/actions/:actionName/evidence` (`auth: 'user'`,
+   idempotent, key built from the verified actor) - the reason `discardEvidence` is a public method.
+   `deleteConfig`'s erasure is the same signal one step out and is KEPT for that reason: it is not a
+   reachability guess (the definition still resolves afterwards), it is the durable removal of the
+   credential whose third-party account the sample holds, by the person who connected it. Its
+   org-shared arm is an EXCLUSION LIST, not "everyone": `findConfigForOwner` answers a member's own
+   row before falling back to the custodian-less shared one, so a member holding their own credential
+   was never served by the deleted row.
+3. **A NEWER SAMPLE.** `recordEvidence` supersedes wholesale because the `_id` IS the tuple, so a
+   validated run replaces the previous sample and releases its screenshot pin in one write.
 
-`deleteConfig`'s org-shared arm is an EXCLUSION LIST, not "everyone": `findConfigForOwner` answers a
-member's own row before falling back to the custodian-less shared one, so a member holding their own
-credential was never served by the deleted row and their sample is a sample of a credential they
-still have. The scope is every owner for whom `findConfigForOwner` would have resolved THIS row.
+**THIS IS A DELIBERATE TRADE.** An orphaned row is a BOUNDED retention and privacy gap - at most 90
+days, closable at any moment by its owner, only ever the owner's own sample. A wrongly-deleted row is
+unrecoverable tenant data. Those costs are not comparable, and four rounds of evidence say the guess
+is not reliable enough to spend the second one. The residual window is an OPEN entry in
+`findings.md` (`evidence-orphan-window-until-ttl`), widened by this change and written as the
+accepted cost rather than as a closed gap.
+
+`action-resolution.ts` survives the retirement and keeps its one job: the resolution a RUN executes
+against, shared with `action-executor.ts` itself. It no longer has a retention consumer, and its
+header says so in as many words - a resolution decides whether this call runs or is refused, and a
+refusal is a thing a caller is TOLD, never a thing that deletes their data.
 
 `sweepExpiredScreenshots` takes a REQUIRED `pinnedRunIds` set so a run named by live evidence
 survives its own expiry; required, so a caller that stops supplying it does not compile.
@@ -702,7 +704,16 @@ evidence retention sweep, the pin read and the screenshot sweep - in that order,
 out releases its pin on the SAME boot rather than granting its screenshots one extra boot's grace.
 `bootState` awaits it AND READS ITS COUNTS - the read is what pins the await, since no test can
 distinguish an awaited call from a fire-and-forget one there (boot awaits slower things afterwards)
-while `void` has no `.removed`. The pin read is bounded by a projection and a `kind` query term:
+while `void` has no `.removed`.
+
+**A PIN READ THAT FAILS SKIPS THE SWEEP FOR THAT BOOT** (round five). It used to
+`.catch(() => new Set())` and sweep ANYWAY - which deleted every screenshot behind a live, unexpired
+evidence row, across every tenant at once (the tree is `<automationId>/<runId>` and carries no org),
+on a transient Mongo blip, with no restore path. The pin set is a PRECONDITION of the sweep, not an
+embellishment on it: without it the sweep does not know less, it knows nothing. It is the same
+instant-vs-durable error as the evidence collectors above, and the same answer - one boot of retained
+PNGs, collected by the next healthy read, beats an unrecoverable deletion. The pin read is bounded by
+a projection and a `kind` query term:
 rows are hundreds of KB and grow as orgs x owners x integrations x actions, and an unprojected
 `find({})` at boot was a multi-gigabyte materialisation whose OOM abort is not a rejection and
 therefore not something the caller's `.catch` could degrade. Pinning is an age-sweep exemption and

@@ -489,72 +489,102 @@ describe('the retention pins cross tenants, and carry identifiers only', () => {
 });
 
 /**
- * THE SECOND CROSS-TENANT READER, DELETED (verification round four).
+ * THE LAST MULTI-ROW DELETE IN THE MODULE (verification round five).
  *
- * Round three added `listOwnerRefsForKey(key)` - every tenant's rows for a key - so a write-time
- * reconciler could decide a foreign org's rows. It could not: whether a consumer still reaches an
- * action depends on THEIR credential's custodian and on a FROZEN published snapshot the writer never
- * sees, and the reconciler asked for the live row as the runner. A cross-tenant LISTING is what made
- * a cross-tenant DELETE expressible, so the listing is gone rather than narrowed and the collector
- * is handed the writing org's own id.
+ * Two describes used to sit here, one per collector: `listOwnerRefsInOrg` (the write-time
+ * reconciler's org-scoped listing, itself a narrowing of round three's cross-tenant
+ * `listOwnerRefsForKey`) and `discardOwnerEvidence` (the reader's own collection). BOTH METHODS ARE
+ * DELETED with the collectors they served - the question those collectors asked, "is this action
+ * gone?", is not answerable at one instant for a row whose lifetime is durable, and four rounds of
+ * asking it produced five defects. Nothing in this codebase enumerates who holds a row any more.
  *
- * WHAT THIS DESCRIBE PINS IS THEREFORE THE BOUND ITSELF: `listOwnerRefsInOrg` must answer for ONE
- * org, and must still carry identifiers only - `pinnedRunIdsForRetention` remains this module's one
- * cross-tenant reader, and it returns run ids to a boot job with no actor.
+ * `discardEvidenceForDisconnectedConfig` is what is left that can touch more than one document, and
+ * it is a DURABLE OWNER SIGNAL rather than a reachability guess: `deleteConfig` removed the
+ * credential whose third-party account the samples hold, and the person who connected it removed it.
+ * Being the widest remaining delete, it gets the Rule 5 treatment - both of its arms, both tenancy
+ * terms, with a control so "reached nothing" cannot be satisfied by a primitive that stopped
+ * deleting.
  */
-describe('the collector\'s listing is org-scoped, and carries no tenant\'s data', () => {
-  it('names only the asked org\'s owners, with no sample of anyone\'s in it', async () => {
-    await store.recordEvidence(
-      { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
-      { backingType: 'browser-steps', evidence: { kind: 'automation', runId: 'run-A', steps: [{ stepIndex: 0, excerpt: 'orgA private text' }] } },
-    );
-    await store.recordEvidence(
-      { orgId: 'orgB', ownerUserId: PEER, integrationKey: KEY, actionName: ACTION },
-      { backingType: 'api-call', evidence: { kind: 'api-call', request: { method: 'GET', url: 'https://x/y', headers: {} }, response: { status: 200, body: 'orgB private text' } } },
+describe('the credential erasure reaches ONE tenant\'s rows, on either arm', () => {
+  const seedRow = (orgId: string, ownerUserId: string, body: string, integrationKey = KEY) =>
+    store.recordEvidence(
+      { orgId, ownerUserId, integrationKey, actionName: ACTION },
+      { backingType: 'api-call', evidence: { kind: 'api-call', request: { method: 'GET', url: 'https://x/y', headers: {} }, response: { status: 200, body } } },
     );
 
-    const refs = await store.listOwnerRefsInOrg('orgA', KEY);
-
-    // THE TENANCY CLAIM: orgB's row names the same key and the same action and is still not here.
-    expect(refs.map((r) => `${r.orgId}/${r.ownerUserId}/${r.actionName}`)).toEqual([`orgA/${OWNER}/${ACTION}`]);
-    const serialised = JSON.stringify(refs);
-    expect(serialised).not.toContain('orgA private text');
-    expect(serialised).not.toContain('orgB private text');
-    for (const ref of refs) expect(Object.keys(ref).sort()).toEqual(['actionName', 'orgId', 'ownerUserId']);
-    // …and asking as orgB answers orgB's row, so "one row" above is the SCOPE and not an empty read.
-    expect((await store.listOwnerRefsInOrg('orgB', KEY)).map((r) => r.ownerUserId)).toEqual([PEER]);
+  beforeEach(async () => {
+    await seedRow('orgA', OWNER, 'orgA owner private text');
+    await seedRow('orgA', PEER, 'orgA peer private text');
+    await seedRow('orgB', OWNER, 'orgB private text');
+    await seedRow('orgA', OWNER, 'another integration', 'outra-integracao');
   });
 
-  it('an empty org or an empty key lists NOTHING rather than every tenant\'s rows', async () => {
-    await store.recordEvidence(
-      { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
-      { backingType: 'api-call', evidence: { kind: 'api-call', request: { method: 'GET', url: 'https://x/y', headers: {} }, response: { status: 200 } } },
-    );
-    expect(await store.listOwnerRefsInOrg('orgA', '')).toEqual([]);
-    expect(await store.listOwnerRefsInOrg('', KEY)).toEqual([]);
+  it('the OWNER-STAMPED arm reaches one org, one owner, one integration - and no other tenant', async () => {
+    // The same owner id exists in orgB, and the same org holds a peer and a second integration.
+    // Only the named triple goes.
+    expect(await store.discardEvidenceForDisconnectedConfig({
+      orgId: 'orgA', integrationKey: KEY, owner: { userId: OWNER },
+    })).toBe(1);
+
+    const left = (await integrationActionEvidence.find({})) as unknown as { orgId: string; ownerUserId: string; integrationKey: string }[];
+    expect(left.map((r) => `${r.orgId}/${r.ownerUserId}/${r.integrationKey}`).sort())
+      .toEqual([`orgA/${OWNER}/outra-integracao`, `orgA/${PEER}/${KEY}`, `orgB/${OWNER}/${KEY}`].sort());
+    expect(JSON.stringify(await integrationActionEvidence.find({}))).not.toContain('orgA owner private text');
+    expect(JSON.stringify(await integrationActionEvidence.find({}))).toContain('orgB private text');
   });
 
-  it('the READER\'S OWN collection cannot be pointed at another tenant or another member', async () => {
-    // `discardOwnerEvidence` is the seam the executor's refusal path calls. Both tenancy terms are
-    // required by its scope type AND are exact-match query terms, so the two rows below are
-    // unreachable from a caller who names either one differently.
-    await store.recordEvidence(
-      { orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION },
-      { backingType: 'api-call', evidence: { kind: 'api-call', request: { method: 'GET', url: 'https://x/y', headers: {} }, response: { status: 200, body: 'orgA private text' } } },
-    );
-    await store.recordEvidence(
-      { orgId: 'orgB', ownerUserId: PEER, integrationKey: KEY, actionName: ACTION },
-      { backingType: 'api-call', evidence: { kind: 'api-call', request: { method: 'GET', url: 'https://x/y', headers: {} }, response: { status: 200, body: 'orgB private text' } } },
-    );
+  it('the ORG-SHARED arm is an EXCLUSION list and still never leaves its org', async () => {
+    // `$nin` is the widest filter in this module. Its org and integration terms are what confine it:
+    // orgB's row is held by the very owner named in the exclusion list and must be untouched anyway,
+    // because it is not this org's.
+    expect(await store.discardEvidenceForDisconnectedConfig({
+      orgId: 'orgA', integrationKey: KEY, owner: { everyOwnerExcept: [OWNER] },
+    })).toBe(1);
 
-    // Right owner, WRONG org; right org, WRONG owner. Neither reaches a document.
-    expect(await store.discardOwnerEvidence({ orgId: 'orgB', ownerUserId: OWNER, integrationKey: KEY })).toBe(0);
-    expect(await store.discardOwnerEvidence({ orgId: 'orgA', ownerUserId: PEER, integrationKey: KEY })).toBe(0);
-    expect(await integrationActionEvidence.find({})).toHaveLength(2);
+    const left = (await integrationActionEvidence.find({})) as unknown as { orgId: string; ownerUserId: string; integrationKey: string }[];
+    expect(left.map((r) => `${r.orgId}/${r.ownerUserId}/${r.integrationKey}`).sort())
+      .toEqual([`orgA/${OWNER}/${KEY}`, `orgA/${OWNER}/outra-integracao`, `orgB/${OWNER}/${KEY}`].sort());
+    expect(JSON.stringify(await integrationActionEvidence.find({}))).not.toContain('orgA peer private text');
+  });
 
-    // …and the matching pair does reach its own, so the two refusals above are the FILTERS and not a
-    // primitive that had stopped deleting.
-    expect(await store.discardOwnerEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY })).toBe(1);
-    expect((await integrationActionEvidence.find({})).map((r) => (r as unknown as { orgId: string }).orgId)).toEqual(['orgB']);
+  /**
+   * THE EMPTY-TERM CASE, MADE FAILABLE THE SAME WAY THE POINT-READ ONE WAS.
+   *
+   * Asserting that `orgId: ''` erases nothing is UNFAILABLE against ordinary rows: no row carries an
+   * empty org, so the query matches nothing whether or not the guard exists, and deleting the guard
+   * leaves this green (measured). Each leg is therefore aimed at a row PLANTED under exactly the
+   * term it names - the migrated / hand-written shapes `recordEvidence` refuses to create - so the
+   * guard is the only thing standing between the call and a deletion.
+   */
+  it('an empty org, key or owner erases NOTHING - asserted against rows planted under those keys', async () => {
+    const planted = [
+      { _id: 'plant-empty-org', orgId: '', ownerUserId: OWNER, integrationKey: KEY },
+      { _id: 'plant-empty-key', orgId: 'orgA', ownerUserId: OWNER, integrationKey: '' },
+      { _id: 'plant-empty-owner', orgId: 'orgA', ownerUserId: '', integrationKey: KEY },
+    ];
+    for (const row of planted) {
+      await integrationActionEvidence.put({
+        ...row, actionName: ACTION, backingType: 'api-call',
+        validatedAt: '2026-08-17T00:00:00.000Z',
+        evidence: { kind: 'api-call', request: { method: 'GET', url: 'https://x/y', headers: {} }, response: { status: 200, body: 'UNSCOPED' } },
+      } as never);
+    }
+
+    // The widest filter in the module with a narrowing term removed is "every row in the
+    // installation". Each of these names a term that a planted row would match.
+    expect(await store.discardEvidenceForDisconnectedConfig({ orgId: '', integrationKey: KEY, owner: { everyOwnerExcept: [] } })).toBe(0);
+    expect(await store.discardEvidenceForDisconnectedConfig({ orgId: 'orgA', integrationKey: '', owner: { everyOwnerExcept: [] } })).toBe(0);
+    expect(await store.discardEvidenceForDisconnectedConfig({ orgId: 'orgA', integrationKey: KEY, owner: { userId: '' } })).toBe(0);
+    // Asserted at the collection: "answered 0" and "deleted nothing" are different claims.
+    for (const row of planted) expect(await integrationActionEvidence.get(row._id)).not.toBeNull();
+    expect(await integrationActionEvidence.find({})).toHaveLength(7);
+
+    // THE CONTROL: the same call with real terms does erase, so the three refusals above are the
+    // guards and not a primitive that had stopped deleting. The planted empty-OWNER row goes too -
+    // `$nin` matches a row carrying no owner, which the method's own comment records as deliberate.
+    expect(await store.discardEvidenceForDisconnectedConfig({
+      orgId: 'orgA', integrationKey: KEY, owner: { everyOwnerExcept: [] },
+    })).toBe(3);
+    expect(await integrationActionEvidence.find({})).toHaveLength(4);
   });
 });

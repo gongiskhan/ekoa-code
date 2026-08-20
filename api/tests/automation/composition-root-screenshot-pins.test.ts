@@ -159,9 +159,9 @@ describe('bootState sweeps expired screenshots WITH the evidence pins', () => {
  * The same composition, entered directly.
  *
  * `bootState` above proves the production LINE. These cases prove the function's own decisions
- * without paying for a full boot, and one of them is a decision only reachable here: a pin read that
- * FAILS must degrade to "pin nothing" and never to an exception that takes down boot - and the sweep
- * must still be safe to run in that state.
+ * without paying for a full boot, and one of them is a decision only reachable here: what happens
+ * when the PIN READ FAILS. Round four answered "sweep anyway with no pins" and shipped it; round
+ * five answers "skip this boot" - see that case for why the two are not close.
  */
 describe('sweepScreenshotsSparingPinnedEvidence - the composition itself', () => {
   it('reports what it spared and what it removed', async () => {
@@ -224,17 +224,57 @@ describe('sweepScreenshotsSparingPinnedEvidence - the composition itself', () =>
     }
   });
 
-  it('a pin read that THROWS degrades to pinning nothing, and never to a throw of its own', async () => {
-    // A mongo blip at boot must not fail boot. It must also not be the one failure mode that
-    // destroys data quietly - which is why the degrade is asserted here rather than assumed: the
-    // sweep still runs, and everything expired still goes.
+  /**
+   * ROUND FIVE - A PIN READ THAT FAILS SKIPS THE SWEEP, IT DOES NOT SWEEP UNPINNED.
+   *
+   * The case that used to live here asserted the opposite, in as many words: it expected
+   * `{removed: 2, pinned: 0}` from a failing pin read, i.e. every screenshot behind a LIVE,
+   * unexpired evidence row deleted, across every tenant at once (the tree is
+   * `<automationId>/<runId>` and has no org in it), with no restore path, on a transient blip. That
+   * is the exact failure mode this file's own header calls "the one failure mode that destroys
+   * data", asserted as the design.
+   *
+   * IT IS THE SAME INSTANT-VS-DURABLE ERROR the evidence collectors had: one failed read, at one
+   * moment, deciding the fate of data whose lifetime is durable. The pin set is a PRECONDITION of
+   * the sweep, not an embellishment on it - without it the sweep does not know less, it knows
+   * nothing - so the sweep is skipped for this boot. Bounded and recoverable (one extra boot of
+   * retained PNGs, collected by the next healthy read) beats unrecoverable.
+   */
+  it('a pin read that THROWS SKIPS the sweep for this boot, and never throws of its own', async () => {
+    await seedPinningEvidence();
     const original = actionEvidenceStore.pinnedRunIdsForRetention.bind(actionEvidenceStore);
     actionEvidenceStore.pinnedRunIdsForRetention = async () => { throw new Error('mongo is unhappy'); };
     try {
+      // Reported as a sweep that did nothing, not as a sweep that pinned nothing.
       await expect(sweepScreenshotsSparingPinnedEvidence(() => Date.now()))
-        .resolves.toEqual({ removed: 2, scanned: 2, pinned: 0, evidenceRemoved: 0 });
+        .resolves.toEqual({ removed: 0, scanned: 0, pinned: 0, evidenceRemoved: 0 });
+      // AND ASSERTED ON DISK, which is the claim that matters: the run behind the live evidence row
+      // is still there. Under the old degrade it was deleted, irrecoverably.
+      expect(existsSync(runDir(PINNED_RUN))).toBe(true);
+      // The unpinned one survives this boot too - that is the COST of skipping, stated rather than
+      // hidden, and it is one boot of retained PNGs against an unrecoverable deletion.
+      expect(existsSync(runDir(LOOSE_RUN))).toBe(true);
     } finally {
       actionEvidenceStore.pinnedRunIdsForRetention = original;
     }
+  });
+
+  it('…and the NEXT boot, with a healthy read, collects what the skip left behind', async () => {
+    // THE CONTROL, and what makes "skip" a deferral rather than a leak: nothing about the skipped
+    // boot makes the loose run permanently exempt.
+    await seedPinningEvidence();
+    const original = actionEvidenceStore.pinnedRunIdsForRetention.bind(actionEvidenceStore);
+    actionEvidenceStore.pinnedRunIdsForRetention = async () => { throw new Error('mongo is unhappy'); };
+    try {
+      await sweepScreenshotsSparingPinnedEvidence(() => Date.now());
+    } finally {
+      actionEvidenceStore.pinnedRunIdsForRetention = original;
+    }
+
+    const result = await sweepScreenshotsSparingPinnedEvidence(() => Date.now());
+
+    expect(result).toEqual({ removed: 1, scanned: 2, pinned: 1, evidenceRemoved: 0 });
+    expect(existsSync(runDir(PINNED_RUN))).toBe(true);
+    expect(existsSync(runDir(LOOSE_RUN))).toBe(false);
   });
 });

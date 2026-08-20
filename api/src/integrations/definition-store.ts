@@ -303,59 +303,29 @@ function recipesDroppedBy(
     }));
 }
 
-// THERE IS NO `actionsDroppedBy` SIBLING, AND ITS ABSENCE IS THE FIX RATHER THAN AN OMISSION.
-// One existed: `recipesDroppedBy` without the `recipe !== undefined` filter, feeding a collector
-// scoped to `input.orgId`. Both halves were right about the DEFINITION and wrong about the
-// EVIDENCE - a diff of THIS row's action sets speaks only for readers who resolve THIS row, live,
-// as themselves, and that is not who most evidence rows belong to. Round three replaced the diff
-// with a cross-tenant reconciler, which then DELETED ACROSS AN ORG BOUNDARY. Round four keeps the
-// reconciliation and takes the cross-tenant reach away: the seam below is handed this row's OWN org
-// and can address nothing else, and every other org's rows are collected on their own reader's path.
-
-/**
- * THE WRITE-TIME EVIDENCE SEAM - reconcile the WRITING ORG'S OWN evidence rows for `integrationKey`,
- * and nothing outside that org. Answers how many rows went.
- *
- * A SEAM RATHER THAN AN IMPORT because the honest answer needs the production resolution
- * (credential custodian, published snapshot, shipped baseline), which lives above this module and
- * cannot be imported into it without a cycle. `evidence-reconcile.ts` implements it and the
- * composition root binds it.
- *
- * THE ORG IS THE FIRST PARAMETER AND IT IS REQUIRED. That is the whole tenancy contract of this
- * seam: a definition write can reach the rows of the org that owns the definition and of no other
- * tenant, whatever the implementation on the other side does.
- */
-export type DefinitionEvidenceReconciler = (orgId: string, integrationKey: string) => Promise<number>;
-
-let definitionEvidenceReconciler: DefinitionEvidenceReconciler | null = null;
-
-/** Bind the collector (composition root). Absent, a definition write collects no evidence at all -
- *  which is the SAFE direction: the reader's own path, the retention sweep and the owner's erasure
- *  control all still reach the rows this would have collected. */
-export function setDefinitionEvidenceReconciler(fn: DefinitionEvidenceReconciler): void {
-  definitionEvidenceReconciler = fn;
-}
-
-/** Restore the unbound state (tests only). */
-export function __resetDefinitionEvidenceReconcilerForTests(): void {
-  definitionEvidenceReconciler = null;
-}
-
-/**
- * Run the bound collector, BEST EFFORT AND LOUD. The write has already landed, so a throw here must
- * never undo it or be reported as a failed save.
- */
-async function reconcileEvidenceOfOrg(orgId: string, integrationKey: string): Promise<void> {
-  if (!definitionEvidenceReconciler) return;
-  try {
-    await definitionEvidenceReconciler(orgId, integrationKey);
-  } catch (err) {
-    console.warn(
-      `[integrations] could not reconcile ${orgId}'s evidence of '${integrationKey}' after a definition `
-        + `write: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-}
+// ── A DEFINITION WRITE DECIDES NOTHING ABOUT ACTION EVIDENCE (round five) ────────────────────────
+//
+// THERE IS NO `actionsDroppedBy` SIBLING AND NO EVIDENCE SEAM, and the absence of BOTH is the fix
+// rather than an omission. Four rounds put a collector here and each one was wrong differently:
+//
+//   round two   `recipesDroppedBy` without its `recipe !== undefined` filter, feeding a collector
+//               scoped to `input.orgId` - which orphaned every consumer of a `global` row;
+//   round three a CROSS-TENANT reconciler asking `getForActor` per row owner - which deleted across
+//               an org boundary, twice over;
+//   round four  a seam handed this row's OWN org, asking the one production resolution - which still
+//               deleted a peer's row on an `org -> private` flip that was reverted a second later,
+//               because the flip is an instant and the row is durable.
+//
+// The common cause is not the scope. It is that "can somebody still reach this action" is answered
+// SYNCHRONOUSLY, at one instant, from one vantage, while the row it governs outlives that instant.
+// The question is not answerable that way, so it is no longer asked here at all: a definition write
+// records nothing and deletes nothing. TTL (`sweepExpiredEvidence`) collects, the owner's own
+// DELETE collects, and a newer validated run supersedes. See `action-evidence-store.ts`'s header for
+// the trade and `docs/decisions.md` (2026-08-20, round five) for why it was taken deliberately.
+//
+// A CAPTURE PILE IS STILL COLLECTED HERE, and the difference is real rather than an inconsistency:
+// `recipesDroppedBy` reads the recipe on THIS ROW, whose `capturedCallsRef` names the pile. That is
+// a durable pointer this write actually removes, not a guess about who can reach what.
 
 type VisibilityView = Pick<IntegrationDefinitionFields, 'orgId' | 'userId' | 'visibility'> &
   Partial<Pick<IntegrationDefinitionFields, 'publishRequest'>>;
@@ -543,26 +513,22 @@ export class IntegrationDefinitionStore {
       createdAt: existing?.createdAt ?? doc.createdAt,
       updatedAt: nowIso,
     });
-    // …AND WHAT THE REWRITE DROPPED TAKES ITS EVIDENCE WITH IT - BOTH KINDS. AFTER the put, never
-    // before: the recipe is what NAMES the raw capture pile, so discarding first would - on a put
-    // that then failed - leave a live recipe pointing at documents that no longer exist, which is
-    // the same order `forgetRecipe` argues for, and the evidence discard is ordered with it so the
-    // two collections are collected under one rule rather than two.
+    // …AND WHAT THE REWRITE DROPPED TAKES ITS RAW CAPTURE PILE WITH IT. AFTER the put, never before:
+    // the recipe is what NAMES the pile, so discarding first would - on a put that then failed -
+    // leave a live recipe pointing at documents that no longer exist, which is the same order
+    // `forgetRecipe` argues for.
     //
-    //   - the compiled recipe's raw capture pile (removal path 4 of `recipe-lifecycle.ts`), which
-    //     IS a per-writing-org question: the pile is named by the recipe on this very row;
-    //   - THIS ORG'S OWN evidence rows, through the seam, because that is the only tenant whose
-    //     rows this write may touch. `input.orgId` is the org that WROTE the definition, and other
-    //     orgs' rows are keyed by the org that RAN the action - their reach depends on their own
-    //     credential's custodian and on the FROZEN `publishedSnapshot` this branch deliberately
-    //     carries forward, neither of which is knowable here. Round three deleted them anyway and
-    //     destroyed still-runnable tenants' data; they are collected on their own reader's path
-    //     instead, and bounded by the retention sweep until then.
+    // THE PILE ONLY, AND NOT THE ACTION EVIDENCE (round five). The pile is named by the recipe ON
+    // THIS ROW: this write genuinely removes the pointer, so removing what it pointed at is a
+    // durable consequence of a durable change. An evidence row is not named by this row at all - it
+    // is keyed by whoever RAN the action, under their own credential, against whichever document
+    // THEY resolve - so ending one from here is a guess about readers this write cannot see. Four
+    // rounds of that guess produced five defects. It is no longer made; see the note above
+    // `VisibilityView`.
     await discardEvidenceOfRemovedRecipes(
       { orgId: input.orgId, integrationKey: input.key },
       recipesDroppedBy(doc.actions, existing?.actions),
     );
-    await reconcileEvidenceOfOrg(input.orgId, input.key);
     return replaced;
   }
 
@@ -676,21 +642,12 @@ export class IntegrationDefinitionStore {
     });
     if (raced) return { verdict: 'forbidden' };
     if (!updated) return { verdict: 'notfound' };
-    // A VISIBILITY WRITE IS A REMOVAL PATH FOR EVIDENCE, which the round-two header dismissed by
-    // name ("hides a definition without dropping any action"). True of the definition, false of what
-    // a reader can reach: `org -> private` takes every action of this integration away from every
-    // PEER inside this org at once.
-    //
-    // COLLECTED FOR THIS ORG ONLY. `global -> org` ends the same actions for every CONSUMER org, and
-    // round three collected those here too - which is how a visibility flip in one tenant came to
-    // delete rows in others. Those rows go on their own reader's path; this call reaches the rows of
-    // the org that owns the definition and no other.
-    //
-    // Run on EVERY successful visibility write rather than only on the narrowing transitions: the
-    // collector's own question ("what can this org's owners still resolve") already answers a
-    // widening one correctly by collecting nothing, and a rule with no transition table in it is a
-    // rule a future tier cannot fall outside of.
-    await reconcileEvidenceOfOrg(updated.orgId, updated.key);
+    // A TIER FLIP DELETES NO EVIDENCE (round five), and this is where round four's last defect lived.
+    // `org -> private` really does end a peer's reach - for as long as the row stays `private`. It is
+    // a TOGGLE: an admin who narrows a package to review it and widens it back a minute later has
+    // ended nothing, but round four had already destroyed every peer's sample on the way down, and
+    // the way back up restores no bytes. A durable row governed by a decision that reverts is the
+    // whole shape of this slice's five defects. `publishSnapshot` below is the same argument.
     return { verdict: 'ok', doc: updated };
   }
 
@@ -857,19 +814,11 @@ export class IntegrationDefinitionStore {
     });
     if (raced) return { verdict: 'forbidden' };
     if (!updated) return { verdict: 'notfound' };
-    // A RE-PUBLISH IS A NARROWING WRITE FOR EVERY CONSUMER, and saying so is the round-four
-    // correction to this file. `publishSnapshot` was dismissed by name as "only WIDENS reach, so it
-    // can orphan nothing" - true of the FIRST publish and false of every one after it, because a
-    // fresh snapshot with fewer actions is exactly how a published definition stops offering an
-    // action to every other org at once. That is reasoning about what the CONSUMER RESOLVES rather
-    // than about what the definition says, which is the reading this slice kept getting wrong.
-    //
-    // AND IT STILL DOES NOT COLLECT THEIR ROWS. A consumer's reach is a fact about the consumer's
-    // tenant; this write may reach its own org only. Consumer rows go on the consumer's own reader
-    // path (`action-executor.ts`), bounded until then by the retention sweep. The call below is here
-    // for the author's own org - where publishing WIDENS reach, so it collects nothing - so that
-    // every write through this store meets the same rule and no future tier can fall outside it.
-    await reconcileEvidenceOfOrg(updated.orgId, updated.key);
+    // A RE-PUBLISH DOES NARROW REACH FOR EVERY CONSUMER - a fresh snapshot with fewer actions is
+    // exactly how a published definition stops offering one to every other org at once - AND IT
+    // STILL DELETES NO EVIDENCE (round five). Every reason not to is one tier stronger here than on
+    // `setVisibility`: the rows belong to tenants this write cannot read, resolving a snapshot this
+    // write is in the middle of replacing, and the next re-publish can put the action back.
     return { verdict: 'ok', doc: updated };
   }
 

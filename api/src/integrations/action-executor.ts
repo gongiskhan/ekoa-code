@@ -238,58 +238,20 @@ export interface ExecutorDeps {
   ) => Promise<unknown>;
   /** The automation-run half of the same capture. See `RunEvidenceCollector`. */
   collectRunEvidence?: RunEvidenceCollector;
-  /**
-   * THE READER'S OWN COLLECTION (slice S1, round four) - drop the evidence THIS caller holds for an
-   * integration or an action they can no longer resolve.
-   *
-   * A SEAM AND NOT AN IMPORT, for the same reason `recordActionEvidence` is one: absent ⇒ nothing is
-   * collected and execution is byte-for-byte what it was, so no existing caller of this executor
-   * changes behaviour (Rule 7 additive).
-   *
-   * THE SCOPE TYPE CARRIES BOTH TENANCY TERMS AND NO OPTIONAL ONE. `orgId` and `ownerUserId` are
-   * required by the type, so the seam cannot be called with a filter that reaches past the caller;
-   * `actionName` is the only optional term and its absence means "this owner's rows for this
-   * integration", never "everyone's".
-   */
-  discardOwnActionEvidence?: (scope: OwnActionEvidenceScope) => Promise<number>;
-}
-
-/**
- * What the reader's own collection may address: ONE owner, ONE integration, optionally ONE action.
- * There is no org-wide arm and no all-owners arm - a run collects its own rows or nothing.
- */
-export interface OwnActionEvidenceScope {
-  orgId: string;
-  ownerUserId: string;
-  integrationKey: string;
-  actionName?: string;
-}
-
-/**
- * Call the reader's collection seam, BEST EFFORT AND LOUD.
- *
- * The refusal this sits beside has already been decided, so a failure here must not change what the
- * caller is told - the same rule `captureEvidence` follows, for the same reason. FAILING TO COLLECT
- * IS THE SAFE DIRECTION: it leaves an orphaned row, which the boot retention sweep and the owner's
- * own erasure control both still reach.
- */
-async function discardOwnEvidence(deps: ExecutorDeps, scope: OwnActionEvidenceScope): Promise<void> {
-  if (!deps.discardOwnActionEvidence) return;
-  try {
-    const dropped = await deps.discardOwnActionEvidence(scope);
-    if (dropped > 0) {
-      console.log(
-        `[integrations] ${scope.orgId}/${scope.ownerUserId} can no longer resolve `
-          + `${scope.integrationKey}${scope.actionName ? `/${scope.actionName}` : ''}; `
-          + `discarded ${dropped} action-evidence row(s) of their own`,
-      );
-    }
-  } catch (err) {
-    console.warn(
-      `[integrations] could not collect ${scope.orgId}/${scope.ownerUserId}'s own evidence for `
-        + `${scope.integrationKey}: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
+  // THERE IS NO `discardOwnActionEvidence` SEAM, AND ITS ABSENCE IS ROUND FIVE'S FIX.
+  //
+  // Round four had one: a refusal here dropped the caller's own rows for the integration or the
+  // action they had just failed to resolve. Own rows only, both tenancy terms required by the type -
+  // and still wrong, because a REFUSAL IS NOT A FACT ABOUT REACHABILITY. `resolveOwnerActionSurface`
+  // returning no definition means "this call could not resolve one NOW", which a Mongo blip, a
+  // half-applied definition write, a credential mid-rotation or a tier flip somebody reverts a
+  // minute later all produce. The row it deleted was the owner's only copy.
+  //
+  // The executor is genuinely the best-informed vantage in the system for that question, and that is
+  // precisely the point: even the best synchronous answer is an answer about one instant, and the
+  // data it governs is durable. So execution no longer decides retention at all. A validated run
+  // still SUPERSEDES (`recordActionEvidence` above), the owner's DELETE still erases, and TTL still
+  // collects; a failed run records nothing and deletes nothing.
 }
 
 const MAX_BODY_DISPLAY_BYTES = 8_000;
@@ -346,29 +308,19 @@ export async function executeUserIntegrationAction(
   const { config, definition: def } = surface;
 
   if (!def) {
-    // ── THE READER'S OWN COLLECTION (S1 round four) ───────────────────────────────────────────
-    // This reader has just proved, through the ONE production resolution, that they cannot reach
-    // this integration at all. Every evidence row THEY hold for it is therefore a sample of an
-    // action nobody can run again, pinning its screenshots out of the 7-day sweep for ever. It is
-    // collected HERE because here is the only place the answer is knowable: a writer in another org
-    // cannot see this reader's config, cannot see which document this reader resolves, and cannot
-    // see whether a frozen published snapshot still offers it. Scoped to (this org, this owner) and
-    // nothing else - the blast radius is the caller's own row, by construction.
-    await discardOwnEvidence(deps, { orgId: input.orgId, ownerUserId: input.ownerUserId, integrationKey: input.integrationKey });
+    // NOTHING IS COLLECTED HERE (round five). Round four read this branch as proof that the caller
+    // can never reach the integration again and dropped their evidence rows. It proves no such
+    // thing: it is one resolution at one instant, and it answers the same way for a package that is
+    // gone for good and for one whose org-admin narrowed it to `private` for the length of a review.
+    // See `ExecutorDeps` for the seam that used to be here and why it is not.
     return { success: false, code: 'unknown_integration', error: `unknown integration: ${input.integrationKey}` };
   }
 
   const action = def.actions.find((a) => a.actionName === input.actionName);
   if (!action) {
-    // The same collection, one action wide: the key still resolves for this reader, this action
-    // does not. A row exists here only if this very owner ran this very action successfully once,
-    // so there is no way for a mistyped action name to reach anyone else's data.
-    await discardOwnEvidence(deps, {
-      orgId: input.orgId,
-      ownerUserId: input.ownerUserId,
-      integrationKey: input.integrationKey,
-      actionName: input.actionName,
-    });
+    // Nor here, and for the same reason one scope narrower: the key resolves for this reader and
+    // this action does not, right now. A half-applied rename, a snapshot mid-replace and a genuine
+    // removal are indistinguishable from this line.
     const available = def.actions.map((a) => a.actionName).join(', ');
     return { success: false, code: 'unknown_action', error: `action "${input.actionName}" not found on ${input.integrationKey}. Available: ${available}` };
   }

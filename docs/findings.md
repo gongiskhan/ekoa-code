@@ -77,28 +77,45 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   `deleteRunScreenshots` still has no production caller and this entry still claims no erasure
   coverage over the screenshot tree.
 
-- **`evidence-orphan-window-until-the-reader-returns`** (2026-08-20, OPEN, **LOW**, opened
-  DELIBERATELY by S1 round four as the accepted cost of the fix above). An evidence row whose action
-  has stopped resolving for its owner is now collected in one of five ways, and none of them is
-  instantaneous for a reader in another tenant: their own next run of that integration collects it,
-  their own erasure control removes it on request, disconnecting the credential removes it, and the
-  boot retention sweep removes it at `EVIDENCE_RETENTION_DAYS` (90). A reader who never returns
-  therefore keeps a durable sample of their own third-party account - and, for an automation-backed
-  row, a screenshot pin - for up to that window.
+- **`evidence-orphan-window-until-ttl`** (2026-08-20, OPEN, **LOW**, opened DELIBERATELY by S1
+  round four and WIDENED DELIBERATELY by round five - the accepted cost of the fix above. RENAMES
+  and REWRITES `evidence-orphan-window-until-the-reader-returns`: the old slug named a bound that no
+  longer holds, and what it claimed is quoted below rather than quietly dropped).
 
-  **WHY THIS IS THE ACCEPTED SIDE OF THE TRADE, STATED AS A TRADE.** The alternative is a write-time
-  reconciler that answers "can this reader still resolve it" on behalf of readers it cannot see, and
-  three rounds of that produced first an orphan for every consumer of a published definition and then
-  deletion across an org boundary for actions those consumers could still run. An orphaned row is a
-  bounded retention and privacy gap; a deleted row is unrecoverable tenant data. Those costs are not
-  comparable, so the collector fails towards retaining and the window is bounded by a sweep rather
-  than closed by a guess.
-  CONSEQUENCE IF NOT CLOSED: a sample of a third-party account outlives the reachability of the
-  action it documents, by up to 90 days, for a reader who never comes back.
-  CLOSE BY (optional, and only if the window is judged too long): shortening
-  `EVIDENCE_RETENTION_DAYS`, or a lazy reconcile on the S2/S3 detail-page read - which is a READER'S
-  path and therefore may collect that reader's own rows safely. NOT by re-introducing a write-time
-  cross-tenant collector under any parameterisation.
+  **THE WINDOW IS NOW UNIFORM AND IT IS UP TO `EVIDENCE_RETENTION_DAYS` (90 DAYS).** An evidence row
+  whose action nobody can reach again is ended by exactly three things, and only one of them is
+  automatic: the boot retention sweep at 90 days, the owner's own
+  `DELETE /api/v1/integrations/:key/actions/:actionName/evidence`, and a newer validated run
+  superseding it (which cannot happen for an action nobody can run). `deleteConfig` also erases what
+  a disconnected credential produced. Nothing else collects. So an orphan persists - as a durable
+  sample of its owner's own third-party account, and, for an automation-backed row, as a screenshot
+  pin exempting that run's PNGs from the 7-day sweep - until one of those, whichever comes first.
+
+  **THIS IS WIDER THAN THE ROUND-FOUR ENTRY DESCRIBED, AND SAYING SO IS THE POINT.** Round four also
+  claimed the owner's own next run would collect it, and the writing org's next definition save
+  would collect its own tenant's. Both collectors are deleted (see the round-five fixed entries
+  below), because both answered *"is this action gone?"* synchronously - at one instant, from one
+  vantage - about a row whose lifetime is durable, and both destroyed data that was not stale. So
+  where round four said "up to 90 days for a reader who never comes back", round five says **up to
+  90 days, for everybody, unless they ask.**
+
+  **WHY THIS IS THE ACCEPTED SIDE OF THE TRADE, STATED AS A TRADE AND NOT AS A CLOSURE.** An
+  orphaned row is a BOUNDED retention and privacy gap: at most 90 days, uniform, closable at any
+  moment by the one person whose data it is, and only ever that person's own sample. A
+  wrongly-deleted row is unrecoverable tenant data - somebody's only copy of a real client name and
+  a real processo number. Those costs are not comparable, and **four rounds and five defects are the
+  evidence that the guess is not reliable enough to spend the second one.** This entry is OPEN, not
+  accepted-by-design, because 90 days of retained third-party samples for an action nobody can run
+  is a real cost that a future slice may want to shorten - it is simply not a cost worth closing with
+  another synchronous collector.
+  CONSEQUENCE IF NOT CLOSED: a sample of a third-party account, and the screenshots behind it,
+  outlive the reachability of the action they document by up to 90 days.
+  CLOSE BY (optional, only if the window is judged too long, and only with a DURABLE signal):
+  shortening `EVIDENCE_RETENTION_DAYS`; surfacing the owner's existing DELETE control on the S2/S3
+  detail page so asking is easy; or a per-owner opt-in retention setting. **NOT by re-introducing a
+  synchronous collector on any write, any run, any read or any boot-time reachability check, under
+  any scope or any actor** - that is the exact thing four rounds proved does not work, and the
+  round-five decision entry exists to stop the fifth attempt.
 
 - **`resolve-step-origin-runs-twice-per-gated-browser-step`** (**FIXED 2026-08-19**, round seven;
   see the round-seven fixed section). The walk still runs two to three times per gated browser step -
@@ -3238,6 +3255,95 @@ silently absorbed into a ledger note):
   `sales-crm.png` ("Página não encontrada" 404 instead of the dashboard) - `booking-system` is
   disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
   `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
+
+## Recently fixed - 2026-08-20 action evidence round FIVE (one blocker + two majors)
+
+The S1 verification pass repeated a fourth time, and the same defect arrived in a fourth disguise.
+These entries **retire the mechanism the round-four section below describes**, and the round-three
+and round-two ones with it. The section below is kept unedited because the SEQUENCE is the finding:
+four different, individually reasonable collectors, five defects, one cause.
+
+**THE CAUSE, STATED ONCE.** Every attempt answered *"is this action gone?"* SYNCHRONOUSLY - at one
+instant, from one vantage - and deleted a row on the answer. A decision scoped to an instant was
+governing data whose lifetime is durable. The vantage improved every round; the defects did not stop.
+The fix is not a better reachability check. It is to stop asking: TTL collects, the owner collects,
+and a newer validated run supersedes. Full reasoning and the trade: `docs/decisions.md`
+(2026-08-20, S1 round five).
+
+- **`unpinned-screenshot-sweep-on-a-failed-pin-read`** (2026-08-20, **BLOCKER, FIXED**).
+  `sweepScreenshotsSparingPinnedEvidence` did `pinnedRunIdsForRetention().catch(() => new Set())`
+  and then **swept anyway**. A transient Mongo failure on that ONE read did not skip the sweep - it
+  ran it with NO PINS. Reproduced: a healthy read gives `{removed:1, pinned:1}`; a failing read gave
+  `{removed:2, pinned:0}`, deleting every screenshot behind a LIVE, unexpired evidence row, **across
+  every tenant at once** (the tree is `<root>/<automationId>/<runId>` and carries no org), with no
+  restore path and no erasure ledger - PNGs of authenticated client-portal sessions, court filings
+  and processo numbers, gone on a blip.
+
+  **IT WAS WRITTEN DOWN AS THE DESIGN, WHICH IS THE WORST PART.** `server.ts`'s own docblock said the
+  pin read "degrades to pin nothing" and, in the same paragraph, called an unpinned sweep "the one
+  failure mode that destroys data". `composition-root-screenshot-pins.test.ts`'s header repeated it,
+  and the case immediately below asserted `{removed: 2, pinned: 0}` as the expected result. The
+  suite was green on the defect.
+
+  **FIXED: A FAILED PIN READ SKIPS THE SWEEP FOR THAT BOOT.** The pin set is a PRECONDITION, not an
+  embellishment - without it the sweep does not know less, it knows nothing. Cost: one boot of
+  retained PNGs, collected by the next healthy read. Bounded and recoverable beats unrecoverable.
+  The suite case is inverted and now asserts ON DISK that the pinned run survives, with a
+  next-boot-collects control so "skip" is a deferral rather than a leak.
+  MEASURED: restoring `.catch(() => new Set())` reddens 2 in
+  `api/tests/automation/composition-root-screenshot-pins.test.ts`.
+
+- **`reader-side-collector-deleted-on-transient-unreachability`** (2026-08-20, **MAJOR, FIXED**).
+  Round four's `discardOwnActionEvidence`, called from `action-executor.ts`'s `unknown_integration`
+  and `unknown_action` refusals, treated *"this call could not resolve it now"* as *"this is gone"*.
+  It is not: a Mongo blip, a credential mid-rotation, a half-applied definition write and a package
+  restored a second later all produce the identical branch. Reproduced end to end: the definition
+  blips away, the caller's run refuses, **every row that caller held for the key is destroyed**, the
+  definition comes back, and the action runs again with its owner's only sample gone.
+
+  The scope was impeccable - own org, own owner, both required by the type - and that is precisely
+  the lesson. The executor is the best-informed vantage in the system, and its best answer is still
+  an answer about one instant.
+  MEASURED: restoring the collection on either refusal branch reddens 3 in
+  `api/tests/integrations/action-evidence-removal.test.ts` and 1 in
+  `api/tests/automation/composition-root-action-seam.test.ts`.
+
+- **`tier-flip-collector-deleted-on-a-reverted-flip`** (2026-08-20, **MAJOR, FIXED**). Round four's
+  write-time seam ran on EVERY successful `setVisibility`, deliberately without a transition table.
+  `org -> private` really does end a peer's reach - for as long as the row stays `private`. It is a
+  TOGGLE. Reproduced: an org-admin narrows a package to review it, every peer's sample is destroyed
+  on the way down, the admin widens it back a minute later, the peers can run again and **their data
+  does not come back**. The same argument applies one tier out to `publishSnapshot`, whose consumers
+  the write cannot even read.
+  MEASURED: restoring the collector on the `private` transition reddens 1; the cross-tenant
+  round-three variant reddens 4.
+
+  **ALL THREE FIXED BY REMOVING SYNCHRONOUS COLLECTION ENTIRELY.** Deleted:
+  `api/src/integrations/evidence-reconcile.ts`; the definition store's seam
+  (`DefinitionEvidenceReconciler`, `setDefinitionEvidenceReconciler`,
+  `__resetDefinitionEvidenceReconcilerForTests`, and its three call sites in `create(..., 'replace')`,
+  `setVisibility` and `publishSnapshot`); the executor seam `discardOwnActionEvidence` and its two
+  call sites; the store methods `discardOwnerEvidence` and `listOwnerRefsInOrg`, which existed only
+  to serve them; and `resolvableActionNamesForOwner`, which existed only to be asked by them. What
+  remains is three DURABLE signals - `sweepExpiredEvidence` (TTL, the collector now), the owner's
+  `DELETE .../evidence` and `deleteConfig`'s credential erasure, and supersede-on-validated-run. The
+  residual retention window is OPEN above as `evidence-orphan-window-until-ttl`, widened and stated
+  as the accepted cost rather than implied to be closed.
+
+- **`the-null-arm-nobody-covered`** (2026-08-20, **MINOR, CLOSED BY DELETION**).
+  `resolvableActionNamesForOwner`'s `if (!surface) return null` was an EQUIVALENT MUTANT:
+  substituting `new Set()` there - which would have deleted every row of that owner - left the whole
+  suite green (reported as 240/240 by the reviewer who found it; not re-measured here, and confirmed
+  from the code instead - the arm was reachable ONLY with three non-empty terms and an incoherent
+  custodian, i.e. a config row from another tenant, and no case constructed that. The earlier
+  empty-term legs returned at the guard above it). It sat under the "axis 3" describe that exists
+  precisely to pin "could not find out" against "resolves nothing", and under a docblock spending its
+  longest paragraph on that arm. **The arm is not pinned; it is deleted with its function and both of
+  its callers.** What survives is
+  `resolveOwnerActionSurface`'s own `null` one tier down, which is now pinned WHERE IT ACTS - at the
+  executor, where it becomes a `credential_invalid` refusal handed to the caller rather than a
+  silent deletion. MEASURED: `?? reader` in place of that arm reddens 2 in
+  `api/tests/integrations/action-resolution.test.ts`.
 
 ## Recently fixed - 2026-08-20 action evidence round four (one blocker + one major + five minors)
 

@@ -158,16 +158,19 @@ export interface CapabilityContext {
    * Carried as a BUNDLE rather than as more named fields, deliberately: every seam added to this
    * context so far has had to be remembered separately at each call site, and the failure mode when
    * one is forgotten is SILENCE - the rail keeps working and quietly stops doing the thing. A bundle
-   * can only be threaded whole, which is why round four's third seam
-   * (`discardOwnActionEvidence` - the reader's own collection) reached every rail by being added
-   * here rather than by four call sites remembering it.
+   * can only be threaded whole, so a seam added to it reaches every rail without four call sites
+   * remembering it.
+   *
+   * CAPTURE SEAMS ONLY. Round four briefly carried a third member - `discardOwnActionEvidence`, the
+   * reader's own collection - and round five removed it along with every other synchronous
+   * collector; nothing on an execution path deletes an evidence row any more.
    *
    * Absent ⇒ the capability rail executes exactly as it did before this slice and records no
    * evidence. It IS bound in production, and
    * `api/tests/automation/composition-root-action-seam.test.ts` is what stops that binding from
    * quietly disappearing.
    */
-  executorEvidence?: Pick<ExecutorDeps, 'recordActionEvidence' | 'collectRunEvidence' | 'discardOwnActionEvidence'>;
+  executorEvidence?: Pick<ExecutorDeps, 'recordActionEvidence' | 'collectRunEvidence'>;
   /**
    * The PLATFORM seam (google-workspace / microsoft-365), bound once by the composition root
    * exactly like the automation one. Absent, a platform action is refused as `not_connected`

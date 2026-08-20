@@ -1,12 +1,22 @@
 /**
- * integrations/action-resolution.ts - THE ONE ANSWER to "which actions of this integration can this
- * (org, owner) actually reach right now" (slice S1, verification round four).
+ * integrations/action-resolution.ts - THE ONE ANSWER to "which package, as whom, does THIS RUN
+ * execute against" (slice S1).
  *
- * ── WHY THIS FILE EXISTS ─────────────────────────────────────────────────────────────────────
+ * ── WHAT IT IS FOR, AND WHAT IT IS EMPHATICALLY NOT FOR (round five) ─────────────────────────
  *
- * Because three consecutive rounds of S1 answered that question with a re-derivation of it, and the
- * re-derivation was wrong in a different way each time. The question has a genuinely different
- * answer per reader, and every term of the difference lives in a different module:
+ * IT ANSWERS FOR A RUN, AT THE INSTANT OF THE RUN, AND NOTHING ELSE READS IT. Rounds two to four
+ * also pointed retention decisions at this question - which actions an owner can still reach - and
+ * every one of them deleted somebody's only copy of their own data, because a resolution is a fact
+ * about one instant from one vantage and an evidence row is durable. Reachability now decides
+ * exactly one thing: whether this call runs or is refused, which the caller is told immediately.
+ * Retention is decided by time, by the owner, and by a newer sample - see
+ * `action-evidence-store.ts`. DO NOT re-point a collector at this module.
+ *
+ * ── WHY THE RESOLUTION IS ONE FUNCTION ANYWAY ────────────────────────────────────────────────
+ *
+ * Because it is genuinely subtle, and three rounds of re-deriving it inside other modules got it
+ * wrong differently each time. The question has a different answer per reader, and every term of the
+ * difference lives in a different module:
  *
  *   - WHICH DOCUMENT. `getForActor` prefers the reader's own org row, then any `global` row from any
  *     org, then nothing; `resolveDefinition` falls through to the SHIPPED DISK BASELINE when the
@@ -21,12 +31,10 @@
  *     exfiltration hole that rule closed). A peer running such a credential reaches whatever the
  *     custodian reaches, including the custodian's `private` row - which the peer cannot see.
  *
- * A collector that asks `getForActor(runner)` gets the LIVE row and the RUNNER, i.e. the wrong
- * answer on two of those three axes, and the consequence of a wrong answer there is the deletion of
- * somebody's only copy of their own data. So the question is asked ONCE, here, in the exact terms
- * the executor runs an action in - and `action-executor.ts` itself is a caller, which is what keeps
- * this from becoming a fourth re-derivation. If this file is wrong, execution is wrong too, loudly
- * and immediately, rather than silently deleting rows in the background.
+ * A caller that asks `getForActor(runner)` gets the LIVE row and the RUNNER, i.e. the wrong answer
+ * on two of those three axes. So the question is asked ONCE, here, in the exact terms the executor
+ * runs an action in - and `action-executor.ts` is the caller, which is what keeps this from becoming
+ * a re-derivation. If this file is wrong, execution is wrong too, loudly and immediately.
  *
  * ── WHAT IT IS NOT ───────────────────────────────────────────────────────────────────────────
  *
@@ -80,33 +88,16 @@ export async function resolveOwnerActionSurface(
   return { definitionActor, config, definition: await resolve(definitionActor, integrationKey) };
 }
 
-/**
- * The same resolution, projected onto the ONLY thing a retention decision may look at: the set of
- * action NAMES this owner can still reach.
- *
- * THE THREE-WAY ANSWER IS THE POINT, and collapsing it is exactly the bug this replaced. `null` is
- * "we could not find out" and is NEVER the same as the empty set: an incoherent custodian, a Mongo
- * blip or a resolver failure must leave every row standing, while "the key resolves and names no
- * such action" is a real, actionable empty answer. A two-way answer would turn one failed read into
- * silent deletion of a tenant's only copy of its own data.
- */
-export async function resolvableActionNamesForOwner(
-  orgId: string,
-  ownerUserId: string,
-  integrationKey: string,
-  deps: Parameters<typeof resolveOwnerActionSurface>[3] = {},
-): Promise<ReadonlySet<string> | null> {
-  if (orgId === '' || ownerUserId === '' || integrationKey === '') return null;
-  let surface: OwnerActionSurface | null;
-  try {
-    surface = await resolveOwnerActionSurface(orgId, ownerUserId, integrationKey, deps);
-  } catch (err) {
-    console.warn(
-      `[integrations] could not resolve '${integrationKey}' for ${orgId}/${ownerUserId}: `
-        + `${err instanceof Error ? err.message : String(err)}`,
-    );
-    return null;
-  }
-  if (!surface) return null; // incoherent custodian - a refusal, not an empty reach
-  return new Set((surface.definition?.actions ?? []).map((action) => action.actionName));
-}
+// ── THE RETENTION PROJECTION IS GONE (round five) ────────────────────────────────────────────
+//
+// `resolvableActionNamesForOwner` used to sit here: the same resolution projected onto the set of
+// action NAMES an owner reaches, answering three ways so that "we could not find out" (`null`) could
+// never be read as "reaches nothing" (the empty set). It had exactly two callers - a write-time
+// reconciler and a reader-side collector - and BOTH are deleted, because the question they asked it
+// is not answerable synchronously at all: a correct instantaneous answer still governs a row that
+// outlives the instant. See `action-evidence-store.ts`'s removal rule.
+//
+// The three-way discipline itself was right and is not lost. It survives one tier down, in
+// `resolveOwnerActionSurface`'s `null`, which the executor turns into `credential_invalid` rather
+// than into "this owner reaches nothing" - and a refusal is a thing a caller is TOLD, never a thing
+// that deletes their data.

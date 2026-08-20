@@ -191,12 +191,11 @@ import {
   // of the `load_context` body are joined.
   lessonsForPrompt,
   composeIntegrationContext,
-  // Slice S1: the evidence store the executor's capture seam is bound to, the retention pins the
-  // screenshot sweep must spare, the retention window the sweep reports, and the ONE binder that
-  // joins the definition store's write-time collector to the production resolution.
+  // Slice S1: the evidence store the executor's capture seam is bound to, which also owns the
+  // retention pins the screenshot sweep must spare and the TTL sweep that is now the only automatic
+  // collector, plus the window that sweep reports.
   actionEvidenceStore,
   EVIDENCE_RETENTION_DAYS,
-  bindDefinitionEvidenceReconciler,
 } from './integrations/index.js';
 // Deep import, deliberately NOT via the integrations barrel (A3 review L2): the importer mints a
 // platform-level actor, so only THIS composition-root boot path may reach it — keeping it off the
@@ -532,21 +531,14 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     runAutomationBackedAction,
     recordActionEvidence: (key, evidence) => actionEvidenceStore.recordEvidence(key, evidence),
     collectRunEvidence: (runId) => collectRunEvidence(runId),
-    // THE READER'S OWN COLLECTION (round four). The executor is the only place that knows, for a
-    // given org + owner + credential + resolved document, whether an action is still reachable - so
-    // it is where a row stops being evidence and starts being an orphan. Bound to the store method
-    // whose scope type REQUIRES both tenancy terms, so this binding cannot be pointed at anyone
-    // else's rows.
-    discardOwnActionEvidence: (scope) => actionEvidenceStore.discardOwnerEvidence(scope),
+    // THE BUNDLE CARRIES CAPTURE SEAMS ONLY, AND NO COLLECTION SEAM (round five). Round four bound a
+    // third member here - `discardOwnActionEvidence`, the reader's own collection - and called
+    // `bindDefinitionEvidenceReconciler()` on the next line for the write-time one. Both are gone
+    // with the collectors they fed: a run's refusal and a definition write are each one instant's
+    // answer, and an evidence row is durable. Retention is decided by time
+    // (`sweepScreenshotsSparingPinnedEvidence` at boot), by the owner's own DELETE, and by a newer
+    // validated run superseding the old sample. See `integrations/action-evidence-store.ts`.
   };
-  // THE WRITE-TIME COLLECTOR (round four), bound through the ONE named production binder rather
-  // than by reaching for the store's setter here: `definition-store.ts` cannot import the resolution
-  // it needs (that is a cycle), and the four higher-tier write call sites must not each have to
-  // remember to collect. Unbound, a definition write collects nothing - which is the safe direction,
-  // since the reader path, the retention sweep and the owner's erasure control all still reach those
-  // rows. `tests/automation/composition-root-action-seam.test.ts` is what stops this line from
-  // quietly disappearing.
-  bindDefinitionEvidenceReconciler();
   setIntegrationActionExecutor(async (call) => {
     const owner = (await users.get(call.ownerUserId)) as { orgId?: string } | null;
     // REFUSE an org-less caller (A2 review F4). Before A2 an empty orgId merely missed a credential
@@ -1293,7 +1285,6 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       executorEvidence: {
         recordActionEvidence: executorDeps.recordActionEvidence!,
         collectRunEvidence: executorDeps.collectRunEvidence!,
-        discardOwnActionEvidence: executorDeps.discardOwnActionEvidence!,
       },
       draftAction,
       callPlatform,
@@ -1620,9 +1611,19 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
  * directly by `tests/automation/composition-root-screenshot-pins.test.ts` against the real store and
  * a real tree. `bootState` is entered there too, so the call below is proved and not assumed.
  *
- * BEST EFFORT. A sweep failure must never fail boot, so the pin read degrades to "pin nothing" and
- * the whole thing degrades to "swept nothing" - never to a throw, and never to an unpinned sweep on
- * a mongo blip, which would be the one failure mode that destroys data.
+ * BEST EFFORT, AND "BEST EFFORT" MEANS SKIPPING - NOT PROCEEDING WITHOUT THE FACTS (round five).
+ * The previous revision of this note said the pin read "degrades to pin nothing", and the code did
+ * exactly that: `.catch(() => new Set())` and then swept ANYWAY. That is the one failure mode this
+ * note itself names as destroying data, written down as the design. Reproduced: a healthy pin read
+ * gives {removed:1, pinned:1}; a failing one gave {removed:2, pinned:0} - every screenshot behind a
+ * LIVE, unexpired evidence row deleted, across every tenant at once (the screenshot tree has
+ * `<automationId>/<runId>` in it and no org), with no restore path, on a transient Mongo blip.
+ *
+ * SO A PIN READ THAT FAILS SKIPS THE SWEEP FOR THIS BOOT. The screenshots stay one more boot -
+ * bounded, recoverable, and the next boot with a healthy read collects them. It is the same
+ * instant-vs-durable error as the evidence collectors round five removed: one failed read at one
+ * moment must not decide the fate of data whose lifetime is durable. A sweep failure still never
+ * fails boot; the whole thing still degrades to "swept nothing" and never to a throw.
  *
  * AWAITED BY `bootState`, where the first cut was fire-and-forget. `sweepOrphans` above sets the
  * precedent, and the reason is the same: an obligation that resolves after boot "finishes" is one no
@@ -1647,20 +1648,30 @@ export async function sweepScreenshotsSparingPinnedEvidence(
   // expiring row would grant its screenshots one extra boot's grace - a retention rule that is a
   // little bit longer than it says it is.
   //
-  // AND THIS IS WHAT BOUNDS THE ORPHANED ROW. `integration_action_evidence` fails towards RETAINING
-  // everywhere else, because deleting a tenant's only copy of its own data is unrecoverable while
-  // keeping it is a gap - and a gap is only acceptable if something closes it. This is that
-  // something: a row nobody re-validates goes at 90 days whether or not any collector ever noticed
-  // its action stopped resolving.
+  // AND THIS IS THE ONLY THING THAT ENDS AN ORPHANED ROW BY ITSELF (round five). Every synchronous
+  // collector is gone, so TTL is the collector: a row nobody re-validates goes at 90 days whether or
+  // not anything ever noticed its action stopped resolving, and no vantage has to be right about
+  // anything for that to be correct.
   const evidenceRemoved = await actionEvidenceStore
     .sweepExpiredEvidence({ now: now() })
     .catch((err: unknown) => {
       console.warn(`[integrations] the action-evidence retention sweep did not run: ${err instanceof Error ? err.message : String(err)}`);
       return 0;
     });
+  // THE PIN READ IS A PRECONDITION OF THE SWEEP, NOT AN EMBELLISHMENT ON IT. `null` here is "we do
+  // not know what is pinned", and the only safe thing to do without that knowledge is nothing: an
+  // unpinned sweep deletes the screenshots behind live evidence rows, irrecoverably, for every
+  // tenant. Skipping costs one boot of retained PNGs. See the docblock.
   const pinnedRunIds = await actionEvidenceStore
     .pinnedRunIdsForRetention()
-    .catch(() => new Set<string>());
+    .catch((err: unknown) => {
+      console.warn(
+        '[automation] screenshot retention: the evidence pin read failed, so the sweep is SKIPPED this '
+          + `boot rather than run unpinned (it would delete screenshots behind live evidence): ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    });
+  if (pinnedRunIds === null) return { removed: 0, scanned: 0, pinned: 0, evidenceRemoved };
   try {
     return { ...(await sweepExpiredScreenshots({ now, pinnedRunIds })), evidenceRemoved };
   } catch {

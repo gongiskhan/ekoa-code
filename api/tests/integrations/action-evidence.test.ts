@@ -101,93 +101,25 @@ describe('one live row per action, superseded wholesale', () => {
 
 /**
  * THE REMOVAL PRIMITIVES, at the store. Counted by DOCUMENT, because the whole failure class this
- * collection keeps producing is a row that STAYED - or, in round three, one that went when it was
- * somebody else's.
+ * collection keeps producing is a row that STAYED - or, in rounds three and four, one that went when
+ * it should not have.
  *
- * Their production call sites are proved where they live - the write-time collector through the real
- * definition writes, the reader's own collection through the real executor, and the
- * credential-disconnection erasure through the real `deleteConfig`, all in
- * `tests/integrations/action-evidence-removal.test.ts` - never here.
+ * THERE ARE THREE OF THEM AND THEY ARE ALL DURABLE SIGNALS (round five). `listOwnerRefsInOrg` and
+ * `discardOwnerEvidence` used to be tested here, one per collector - the write-time reconciler and
+ * the reader's own collection - and both methods are deleted with the collectors they served, since
+ * "is this action gone?" is not answerable at one instant for a row whose lifetime is durable. What
+ * remains: TIME (`sweepExpiredEvidence`, below), THE OWNER (`discardEvidence`, and
+ * `discardEvidenceForDisconnectedConfig` one step out), and A NEWER SAMPLE (`recordEvidence`'s
+ * structural supersede, above).
+ *
+ * Their production call sites are proved where they live - the owner's DELETE route through the
+ * contract suite, the credential erasure through the real `deleteConfig`, and the sweep through the
+ * real boot composition - never here.
  */
-describe('listOwnerRefsInOrg - who inside ONE org holds a row, and nothing else about it', () => {
-  it('names every owner of THAT ORG holding a row for the key, and no sample', async () => {
-    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence(200, '{"secretish":"orgA owner"}') });
-    await store.recordEvidence({ ...KEY, ownerUserId: 'u-peer' }, { backingType: 'api-call', evidence: apiCallEvidence() });
-    await store.recordEvidence({ ...KEY, orgId: 'orgB' }, { backingType: 'api-call', evidence: apiCallEvidence() });
-    // A different key must not appear: the reconciler judges one integration at a time.
-    await store.recordEvidence({ ...KEY, integrationKey: 'outra' }, { backingType: 'api-call', evidence: apiCallEvidence() });
-
-    const refs = await store.listOwnerRefsInOrg('orgA', 'citius');
-
-    // ORG-SCOPED, WHICH IS THE ROUND-FOUR CORRECTION. Its predecessor took a key alone and answered
-    // across every tenant, and a cross-tenant LISTING is what made a cross-tenant DELETE
-    // expressible. orgB's row is absent even though it names the same key and the same action.
-    expect(refs.map((r) => `${r.orgId}/${r.ownerUserId}/${r.actionName}`).sort()).toEqual([
-      'orgA/u-owner/consultar_processo',
-      'orgA/u-peer/consultar_processo',
-    ]);
-    // …AND HELD TO IDENTIFIERS BY THE PROJECTION: no response body crosses into the collector, and
-    // the row is not even materialised in memory to be filtered afterwards.
-    expect(JSON.stringify(refs)).not.toContain('secretish');
-    for (const ref of refs) expect(Object.keys(ref).sort()).toEqual(['actionName', 'orgId', 'ownerUserId']);
-  });
-
-  it('an empty org or an empty key lists NOTHING rather than every tenant\'s rows', async () => {
-    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
-    expect(await store.listOwnerRefsInOrg('orgA', '')).toEqual([]);
-    expect(await store.listOwnerRefsInOrg('', 'citius')).toEqual([]);
-  });
-});
 
 /**
- * THE READER'S OWN COLLECTION, at the store. Its production caller is the executor's refusal path
- * (proved in the removal suite); what is pinned here is that the scope cannot widen.
- */
-describe('discardOwnerEvidence - one owner\'s rows, optionally one action', () => {
-  it('drops one action for one owner, and nobody else\'s row for it', async () => {
-    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
-    await store.recordEvidence({ ...KEY, ownerUserId: 'u-peer' }, { backingType: 'api-call', evidence: apiCallEvidence() });
-    await store.recordEvidence({ ...KEY, orgId: 'orgB' }, { backingType: 'api-call', evidence: apiCallEvidence() });
-
-    const dropped = await store.discardOwnerEvidence({
-      orgId: 'orgA', ownerUserId: 'u-owner', integrationKey: 'citius', actionName: 'consultar_processo',
-    });
-
-    expect(dropped).toBe(1);
-    expect((await integrationActionEvidence.find({})).map((r) => (r as unknown as { orgId: string; ownerUserId: string }))
-      .map((r) => `${r.orgId}/${r.ownerUserId}`).sort()).toEqual(['orgA/u-peer', 'orgB/u-owner']);
-  });
-
-  it('with NO action term it drops that owner\'s whole integration - never the org\'s', async () => {
-    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
-    await store.recordEvidence({ ...KEY, actionName: 'arquivar_processo' }, { backingType: 'api-call', evidence: apiCallEvidence() });
-    await store.recordEvidence({ ...KEY, ownerUserId: 'u-peer' }, { backingType: 'api-call', evidence: apiCallEvidence() });
-    await store.recordEvidence({ ...KEY, integrationKey: 'outra' }, { backingType: 'api-call', evidence: apiCallEvidence() });
-
-    expect(await store.discardOwnerEvidence({ orgId: 'orgA', ownerUserId: 'u-owner', integrationKey: 'citius' })).toBe(2);
-    expect((await integrationActionEvidence.find({})).map((r) => (r as unknown as { ownerUserId: string; integrationKey: string }))
-      .map((r) => `${r.ownerUserId}/${r.integrationKey}`).sort()).toEqual(['u-owner/outra', 'u-peer/citius']);
-  });
-
-  it('an empty term drops NOTHING rather than matching everything', async () => {
-    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence() });
-    for (const scope of [
-      { orgId: '', ownerUserId: 'u-owner', integrationKey: 'citius' },
-      { orgId: 'orgA', ownerUserId: '', integrationKey: 'citius' },
-      { orgId: 'orgA', ownerUserId: 'u-owner', integrationKey: '' },
-      // An empty ACTION term must not collapse into "the whole integration": absent and empty are
-      // different requests, and only the absent one is a widening the type permits.
-      { orgId: 'orgA', ownerUserId: 'u-owner', integrationKey: 'citius', actionName: '' },
-    ]) {
-      expect(await store.discardOwnerEvidence(scope)).toBe(0);
-    }
-    expect(await integrationActionEvidence.find({})).toHaveLength(1);
-  });
-});
-
-/**
- * THE RETENTION SWEEP - the bound that makes "fail towards retaining" honest rather than a way of
- * saying "keep it for ever".
+ * THE RETENTION SWEEP - the ONLY automatic collector there is, and what keeps "nothing synchronous
+ * deletes a row" from meaning "keep it for ever".
  */
 describe('sweepExpiredEvidence - the retention bound', () => {
   const aged = async (validatedAt: string, key = KEY): Promise<void> => {

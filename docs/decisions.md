@@ -3047,3 +3047,103 @@ the blocker, the major and five minors, opens `evidence-orphan-window-until-the-
 the accepted cost, and corrects the round-three paragraph on the standing screenshot-erasure entry.
 Diagrams: `02-module-map` and `05-data-model` appended (append-only, every new element carrying
 text/rawText/originalText).
+
+## 2026-08-20 - S1 round five: retention stops being answered synchronously, and TTL becomes the collector
+
+The S1 verification pass repeated a fourth time. This entry **retires the mechanism the round-four
+entry above describes**, and it retires the round-two and round-three ones with it - all four should
+be read together, because the interesting thing is not any one of them but the sequence.
+
+**THE PATTERN, WHICH FOUR ROUNDS OF FIXES ONLY MOVED.** Every attempt answered *"is this action
+gone?"* SYNCHRONOUSLY, at one instant, from one vantage, and acted on the answer by deleting a row.
+The vantage got better each round and the defects kept coming:
+
+| round | vantage | defect |
+| --- | --- | --- |
+| two | the writing org's action-set diff | ORPHANED every consumer of a `global` row (too narrow) |
+| three | every tenant's rows, via `getForActor` | DELETED ACROSS A TENANT BOUNDARY, twice over (too wide) |
+| four | the reader's own run, via the one production resolution | DELETED on TRANSIENT unreachability |
+| four | the writing org's own rows, same resolution | DELETED on a tier flip that was REVERTED |
+| four | the boot screenshot sweep | SWEPT UNPINNED when the pin read failed |
+
+Five defects, one cause: **a decision scoped to an INSTANT was governing data whose lifetime is
+DURABLE.** Round four's answers were not sloppy - the executor genuinely is the best-informed vantage
+in the system, and its scope was own-org, own-owner, required by the type. That is the point. Even
+the best synchronous answer is an answer about one moment, and the row it deletes outlives the
+moment. A better reachability check is not the fix; asking a different question is.
+
+**THE DECISION. Remove synchronous evidence collection entirely, and do not replace it.** The
+reader-side collector, `setVisibility`'s collector and the definition-save reconciler are all
+deleted, along with the module that implemented the seam (`evidence-reconcile.ts`), the seam itself
+(`DefinitionEvidenceReconciler` + its setter and binder), the executor seam
+(`discardOwnActionEvidence`), and the two store methods that existed only to serve them
+(`discardOwnerEvidence`, `listOwnerRefsInOrg`). `resolvableActionNamesForOwner` goes with its two
+callers. **A definition edit, a tier flip, a re-publish and a failed resolve now record NOTHING and
+delete NOTHING.**
+
+**THREE DURABLE SIGNALS END A ROW, and nothing else does.**
+
+1. *TIME.* `sweepExpiredEvidence` at boot, `EVIDENCE_RETENTION_DAYS` (90). It already existed as a
+   backstop; it is now THE collector. A row nobody re-validated inside the window goes, orphan or
+   not, and **no vantage has to be right about anything** for that to be correct. It still runs
+   BEFORE the pin read, so an expiring row releases its screenshot pin on the same boot.
+2. *THE OWNER.* `discardEvidence`, behind `DELETE /api/v1/integrations/:key/actions/:actionName/
+   evidence` (`auth: 'user'`, idempotent, key built from the verified actor). A person asking for
+   their own data to go is a durable statement, not a guess. `deleteConfig`'s credential erasure is
+   the same signal one step out and is KEPT for that reason, stated explicitly because the general
+   rule might otherwise be read as retiring it: it is not a reachability guess (the definition still
+   resolves perfectly well afterwards), it is a durable removal of the credential whose third-party
+   account the sample holds, performed by the person who connected it.
+3. *A NEWER SAMPLE.* `recordEvidence` supersedes wholesale, because the `_id` IS the tuple. Also
+   durable: a validated run happened, and the newer sample replaces the older one.
+
+**THIS IS A DELIBERATE TRADE AND IT IS RECORDED AS ONE.** An orphaned row is a BOUNDED retention and
+privacy gap - at most 90 days, closable at any moment by its owner, and only ever the owner's own
+sample. A wrongly-deleted row is unrecoverable tenant data: one person's only copy of their own
+client's processo number and name. **Those costs are not comparable, and four rounds of evidence say
+the guess is not reliable enough to spend the second one.** The residual window is OPEN in
+`findings.md` (`evidence-orphan-window-until-ttl`), written as the accepted cost it is rather than
+implied to be closed.
+
+**WHAT THIS COSTS, STATED PLAINLY.** An action nobody can reach again keeps its sample - and its
+screenshot pin - for up to 90 days unless its owner deletes it. Round four would have collected some
+of those sooner and destroyed others that were not stale at all. The exchange is a bounded, uniform,
+owner-controllable delay for the removal of an unbounded, silent, unrecoverable loss.
+
+**THE SWEEP FIX IS THE SAME ERROR IN THE SCREENSHOT TREE.** `sweepScreenshotsSparingPinnedEvidence`
+did `pinnedRunIdsForRetention().catch(() => new Set())` and then swept ANYWAY, under a docblock that
+named an unpinned sweep as "the one failure mode that destroys data" - and a suite case asserting
+exactly that behaviour. Reproduced: healthy read `{removed:1, pinned:1}`, failing read
+`{removed:2, pinned:0}`, deleting every screenshot behind a LIVE, unexpired evidence row, across
+every tenant at once (the tree is `<automationId>/<runId>` and carries no org), with no restore path.
+**A failed pin read now SKIPS the sweep for that boot.** The pin set is a precondition, not an
+embellishment: without it the sweep does not know less, it knows nothing. The cost is one boot of
+retained PNGs, collected by the next healthy read - bounded and recoverable against unrecoverable.
+
+**THE ONE ARM THE SIMPLIFICATION DELETED RATHER THAN PINNED**, stated because it was raised as an
+open equivalent mutant. `resolvableActionNamesForOwner`'s `if (!surface) return null` was an
+equivalent mutant - substituting `new Set()`, which deletes every row of that owner, left the suite
+green (240/240 as reported by the reviewer who found it; not re-measured here, and confirmed from the
+code instead - the arm was reachable only with three non-empty terms AND an incoherent custodian,
+i.e. a config row from another tenant, and no case constructed that). The "axis 3" describe that
+exists to pin "could not find out" against "resolves nothing" covered every arm but that one. It is not pinned, because the function is gone with both of its
+callers. What survives is `resolveOwnerActionSurface`'s own `null` one tier down, and it is now
+pinned WHERE IT ACTS: at the executor, where it becomes a `credential_invalid` refusal handed to the
+caller. A refusal is a thing a caller is TOLD; it never deletes anything.
+
+**WHAT IS NOT CHANGED, so the retirement is not read as wider than it is.** The resolution itself
+(`action-resolution.ts`) stays, still shared with the run path, still the one answer to "which
+package, as whom" - it just no longer has a retention consumer, and its header says so. Capture is
+untouched: a validated run still records evidence, through the same seams, on the same bundle.
+Graduation still reads the collection. `deleteConfig`'s erasure and the owner's DELETE route are
+untouched.
+
+Rule 7: nothing additive and nothing breaking on the wire - no schema, descriptor, route or auth
+class moves, so OpenAPI and the generated cortex-cli are byte-identical (regenerated in this commit
+and clean) and `EXPECTED_PENDING_COUNT` is unmoved. Rule 5: `discardEvidenceForDisconnectedConfig` is
+the widest remaining delete in the module and gains a full isolation describe in
+`action-evidence-isolation.test.ts` (both arms, both tenancy terms, proved by deleting the filter);
+the describes for the two deleted methods go with them. Docs: `architecture.md`'s action-evidence
+section is rewritten around the three signals; `findings.md` gains the two round-four defects as
+FIXED and re-opens the retention window honestly. Diagrams: `02-module-map` and `05-data-model`
+appended (append-only, every new element carrying text/rawText/originalText).
