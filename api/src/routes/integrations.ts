@@ -359,7 +359,7 @@ function capabilityCtxOf(
     // D3: the AUTHORING seam, bound once by the composition root exactly like the automation one.
     // Absent, `achieve` still executes and refuses to author (`authoring_unavailable`).
     ...(deps.draftAction ? { draftAction: deps.draftAction } : {}),
-    // S4/S5: the PLANNING seam and the tenant's own collections, bound once by the composition root
+    // S4/S5: the PLANNING seam and the CALLER'S OWN collections, bound once by the composition root
     // exactly like the authoring one. Absent, the two upper rungs of the reuse ladder are SKIPPED
     // and `achieve` behaves precisely as it did before they existed.
     ...(deps.planStep ? { planStep: deps.planStep } : {}),
@@ -398,7 +398,7 @@ export function integrationsRouter(deps: {
   draftAction?: ActionDrafter;
   /** The PLANNING seam (the reuse ladder's two upper rungs): the same core, a different contract. */
   planStep?: PlanDrafter;
-  /** The tenant's own collections, ORG-SCOPED by the composition root (the compose rung's data). */
+  /** The CALLER'S OWN collections, owner-scoped by the composition root (the compose rung's data). */
   appCollections?: AppCollections;
   /** The PLATFORM seam: google-workspace / microsoft-365 run on org-scoped OAuth custody. */
   callPlatform?: CapabilityContext['callPlatform'];

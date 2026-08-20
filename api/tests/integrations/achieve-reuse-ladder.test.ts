@@ -59,13 +59,17 @@ import { authorWithRepair } from '../../src/agents/authoring-core.js';
  *   left out. `argsSchema` is documentation everywhere else in this repo (the executor never reads
  *   it), so `verifyPlannedArgs` is the ONLY thing standing between a model-invented key and the
  *   `{{name}}` namespace `buildVars` interpolates from - section 2 is written accordingly.
- *   Decision D1 lives in the `targeting` check: body arguments always, resource-selecting ones
- *   only on an action that cannot write.
+ *   Decision D1 is ONE predicate, `mayBeModelFilled`, shared by the rung's pre-filter and the
+ *   `targeting` check so the two cannot drift, and it is an ALLOWLIST: fillable iff the action
+ *   cannot write, or the argument lands in the BODY. The allowlist is what reaches an
+ *   automation-backed action, whose request this platform cannot read at all - every argument of
+ *   one reads `unknown`, never `body`, so a write offers nothing.
  *
- *   COMPOSE - a trusted READ is run and its rows narrowed against ONE of the tenant's own
+ *   COMPOSE - a trusted READ is run and its rows narrowed against ONE of the CALLER'S OWN
  *   collections with a `SimpleQuery`-class predicate. The model names the collection, the field,
  *   the comparison and the join; every row that moves is moved by TypeScript. Section 4 is the
- *   canonical case end to end, and section 5 is what compose refuses.
+ *   canonical case end to end, and section 5 is what compose refuses - starting with the fact that
+ *   a WRITE never enters the rung, so nothing a model says can refuse a call that used to run.
  *
  * EVERY RUNG DEGRADES TO THE ONE BELOW IT. Section 6 pins that: an absent seam, an outage, a
  * refused allowance and a goal with no residue all leave `achieve` behaving exactly as it did
@@ -127,10 +131,14 @@ function composeBlock(plan: Record<string, unknown>): string {
   return `Here.\n\n\`\`\`compose-json\n${JSON.stringify(plan, null, 2)}\n\`\`\`\n`;
 }
 
-/** In-memory collections seam. The REAL org-scoped binding lives in `server.ts` and is exercised
+/** In-memory collections seam. The REAL owner-scoped binding lives in `server.ts` and is exercised
  *  (and mutated) by `api/tests/security/achieve-compose-isolation.test.ts`; what this one supplies
- *  is the ROWS, so this suite is about the stage rather than about the scoping. */
-function collectionsOf(byName: Record<string, Record<string, unknown>[] | 'ambiguous'>): {
+ *  is the ROWS, so this suite is about the stage rather than about the scoping.
+ *
+ *  It answers ONLY the two variants the real binding can produce. An earlier version could also
+ *  return `ambiguous_collection`, which the real binding never returns - the store has one scope
+ *  per owner - so the test that asserted the ambiguity was asserting a value invented here. */
+function collectionsOf(byName: Record<string, Record<string, unknown>[]>): {
   seam: AppCollections;
   reads: string[];
 } {
@@ -142,9 +150,7 @@ function collectionsOf(byName: Record<string, Record<string, unknown>[] | 'ambig
       read: async (_actor, collection) => {
         reads.push(collection);
         const rows = byName[collection];
-        if (rows === undefined) return { kind: 'unknown_collection' };
-        if (rows === 'ambiguous') return { kind: 'ambiguous_collection', sources: ['app-a', 'app-b'] };
-        return { kind: 'rows', rows };
+        return rows === undefined ? { kind: 'unknown_collection' } : { kind: 'rows', rows };
       },
     },
   };
@@ -216,6 +222,23 @@ const submeterPeca: IntegrationAction = {
     bodyTemplate: { titulo: '{{titulo}}' },
   },
   argsSchema: { type: 'object', properties: { numero: { type: 'string' }, titulo: { type: 'string' } } },
+};
+
+/**
+ * AN AUTOMATION-BACKED WRITE - the fixture D1 used to have no answer for.
+ *
+ * It declares arguments and has NO `httpConfig`, so this platform cannot see where any of them
+ * lands. Under the old blocklist ("fill anything that is not `targeting`") every argument read
+ * `unused` and a model was free to choose which processo an `arquivar` acted on. There is no
+ * `mutates: false` here and there is no request to inspect: the only safe answer is to offer
+ * nothing.
+ */
+const arquivarProcesso: IntegrationAction = {
+  actionName: 'arquivar_processo',
+  description: 'Arquiva um processo',
+  mutates: true,
+  automationBinding: { automationId: 'citius-1', automationTemplate: 'arquivar' },
+  argsSchema: { type: 'object', properties: { numero: { type: 'string' }, motivo: { type: 'string' } } },
 };
 
 const CANONICAL_GOAL = 'todos os processos de clientes com menos de 40 anos';
@@ -364,6 +387,18 @@ describe('verifyPlannedArgs is the only check argsSchema ever gets', () => {
     expect(failed(v, 'declared_args')).toBe(true);
   });
 
+  it('…and that refusal is WHY the merge order in the rung is unobservable: the two are disjoint', () => {
+    // `runMatchedAction` spreads `callerArgs` last over `verdict.args`. That order can never matter,
+    // because a passing verdict's args share no key with what the caller sent - which is the fact
+    // worth pinning. (Reversing the spread is an equivalent mutant; this is the assertion that
+    // makes it one, rather than a test pretending to catch it.)
+    const v = verdictOn(submeterPeca, { args: { titulo: 'model' } }, { numero: 'human' });
+    expect(v.passed).toBe(true);
+    expect(v.args).not.toBeNull();
+    const shared = Object.keys(v.args ?? {}).filter((k) => k === 'numero');
+    expect(shared).toEqual([]);
+  });
+
   it('REFUSES a non-scalar value (a bare {{name}} body template passes objects through raw)', () => {
     const v = verdictOn(consultarProcesso, { args: { numero: { $ne: null } } });
     expect(v.passed).toBe(false);
@@ -500,6 +535,42 @@ describe('the parametrize rung fills arguments and then meets the same gate', ()
     expect(calls[0]?.args).toMatchObject({ tribunal: 'Coimbra' });
   });
 
+  it('D1 REACHES an automation-backed WRITE: no argument is offered, and a model picks nothing', async () => {
+    // THE HOLE THIS PINS. `arquivar_processo` writes and has no request this module can read, so
+    // every argument used to classify `unused` - "goes nowhere" - and sail past a rule that only
+    // refused `targeting`. A model then chose which processo got archived.
+    await seed([arquivarProcesso]);
+    await approveAction({ orgId: 'orgA', userId: 'ownerA' }, describeAction(PROBE_INTEGRATION, arquivarProcesso), 'always');
+    const { planner, turns } = plannerEmitting([argsBlock({ numero: 'model-picked', motivo: 'model-picked' })]);
+    const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner });
+
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'arquivar processo antigo do cliente'));
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    // The model was never asked, and the request carries NOTHING it chose.
+    expect(turns()).toBe(0);
+    expect(res.filledArgs).toBeUndefined();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.args).toEqual({});
+    expect(res.ladder?.find((s) => s.rung === 'parametrize')?.detail).toContain('numero');
+  });
+
+  it('D1 BACKSTOP: the suite refuses those same arguments even when handed them directly', async () => {
+    // The pre-filter and the suite are one predicate (`mayBeModelFilled`); this asserts the suite
+    // half on its own, so a caller that forgot to filter is still refused rather than obeyed.
+    const v = verifyPlannedArgs({
+      action: arquivarProcesso,
+      definition: { configSchema: [] },
+      planned: { args: { numero: 'model-picked' } },
+      callerArgs: {},
+      allowedOrigins: [],
+    });
+    expect(v.passed).toBe(false);
+    expect(v.args).toBeNull();
+    const targeting = v.checks.find((c) => c.name === 'targeting');
+    expect(targeting?.ok).toBe(false);
+    expect(targeting?.detail).toContain('unknown');
+  });
+
   it('a plan that breaks the guardrails REFUSES the whole call and sends nothing', async () => {
     await seed([consultarProcesso]);
     // Two identical bad replies so the repair turn is exercised and still fails.
@@ -576,12 +647,34 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
     }
   });
 
-  it('a key absent on either side matches nothing (it does not match every other absent key)', () => {
+  /**
+   * EACH SIDE'S NULL GUARD IS ASSERTED ON ITS OWN, and the fixtures are built so that it has to be.
+   *
+   * An earlier single case gave EVERY collection row an absent-or-null key, which emptied the key
+   * set outright - so `items` was `[]` whatever the ACTION side did, and deleting the action-side
+   * guard changed nothing. The absent key has to collide with a REAL one to be load-bearing, and
+   * the collision is exact: `String(undefined)` is `'undefined'` and `String(null)` is `'null'`,
+   * so a collection row genuinely keyed on those strings is what an unguarded absent key joins to.
+   */
+  it('an ABSENT key on the ACTION side matches nothing - not even a row keyed "null"/"undefined"', () => {
     const out = composeRows({
       plan: CANONICAL_PLAN as never,
       actionRows: [{ numeroProcesso: 'x' }, { numeroProcesso: 'y', clienteId: null }],
-      collectionRows: [{ id: null, idade: 20 }, { idade: 20 }],
+      // Real, present keys - the set is NOT empty, so only the action-side guard can exclude these.
+      collectionRows: [{ id: 'undefined', idade: 20 }, { id: 'null', idade: 20 }],
     });
+    expect(out.summary.matchedCollectionRows).toBe(2);
+    expect(out.items).toEqual([]);
+  });
+
+  it('an ABSENT key on the COLLECTION side keys nothing - not even a row keyed "null"/"undefined"', () => {
+    const out = composeRows({
+      plan: CANONICAL_PLAN as never,
+      // Real, present keys on the action side, spelled as the strings an unguarded null becomes.
+      actionRows: [{ numeroProcesso: 'x', clienteId: 'undefined' }, { numeroProcesso: 'y', clienteId: 'null' }],
+      collectionRows: [{ idade: 20 }, { id: null, idade: 20 }],
+    });
+    expect(out.summary.matchedCollectionRows).toBe(2);
     expect(out.items).toEqual([]);
   });
 
@@ -613,7 +706,6 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
 
   it('verifyComposePlan refuses a comparison this platform does not perform', () => {
     const v = verifyComposePlan({
-      action: processos,
       planned: { ...CANONICAL_PLAN, where: { field: 'idade', op: 'regex', value: '^4' } },
     });
     expect(v.passed).toBe(false);
@@ -622,13 +714,13 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
 
   it('verifyComposePlan refuses a reserved or malformed collection name', () => {
     for (const bad of ['usr.someone', '__system', 'has spaces', '']) {
-      const v = verifyComposePlan({ action: processos, planned: { ...CANONICAL_PLAN, collection: bad } });
+      const v = verifyComposePlan({ planned: { ...CANONICAL_PLAN, collection: bad } });
       expect(v.passed).toBe(false);
     }
   });
 
   it('`{ "compose": false }` is a well-formed answer that yields no plan', () => {
-    const v = verifyComposePlan({ action: processos, planned: { compose: false } });
+    const v = verifyComposePlan({ planned: { compose: false } });
     expect(v.passed).toBe(true);
     expect(v.plan).toBeNull();
   });
@@ -704,19 +796,31 @@ describe('CANONICAL: "todos os processos de clientes com menos de 40 anos"', () 
 // ---------------------------------------------------------------------------------------------
 
 describe('compose refuses rather than guesses', () => {
-  it('a composed WRITE is refused with its own code, and the action never runs', async () => {
-    // `submeter_peca` is matched lexically by this goal, and the goal has residue, so the rung is
-    // entered - which is what makes the refusal reachable rather than decorative.
-    await seed([submeterPeca]);
-    await approveAction({ orgId: 'orgA', userId: 'ownerA' }, describeAction(PROBE_INTEGRATION, submeterPeca), 'always');
-    const { planner } = plannerEmitting([composeBlock({ ...CANONICAL_PLAN, collection: 'clients' })]);
-    const { seam } = collectionsOf({ clients: CLIENT_ROWS });
+  it('a WRITE never ENTERS the compose rung: it executes as it always did, and no model is asked', async () => {
+    // THE REGRESSION THIS PINS. `submeter_peca` is matched lexically by this goal and the goal has
+    // residue, so the old shape asked a model for a plan and then refused the whole call when one
+    // came back - turning a call that ran under a standing human approval into something that
+    // depended on a model's judgement to run at all. The rung must only ever ADD an answer.
+    // An automation-backed write, so the execution is real and observable here without a network:
+    // it lands on the automation seam. The caller supplies every declared argument, so PARAMETRIZE
+    // skips for a reason of its own and this test is about COMPOSE alone.
+    await seed([arquivarProcesso]);
+    await approveAction({ orgId: 'orgA', userId: 'ownerA' }, describeAction(PROBE_INTEGRATION, arquivarProcesso), 'always');
+    const { planner, turns } = plannerEmitting([composeBlock({ ...CANONICAL_PLAN, collection: 'clients' })]);
+    const { seam, reads } = collectionsOf({ clients: CLIENT_ROWS });
     const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner, collections: seam });
 
-    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'submeter peca para clientes com menos de 40 anos', { numero: '1', titulo: 't' }));
-    if (res.outcome !== 'refused') throw new Error(`expected refused, got ${JSON.stringify(res)}`);
-    expect(res.code).toBe('composed_write_refused');
-    expect(calls).toHaveLength(0);
+    // The goal HAS residue (`clientes`, `menos`, `40`, `anos`), which is what used to enter the rung.
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'arquivar processo de clientes com menos de 40 anos', { numero: '1', motivo: 'x' }));
+    // It RAN - the approved write went out exactly as the caller shaped it.
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.args).toMatchObject({ numero: '1', motivo: 'x' });
+    // …and the rung cost nothing on the way past: no planning turn, no collection read.
+    expect(turns()).toBe(0);
+    expect(reads).toHaveLength(0);
+    expect(res.ladder?.find((s) => s.rung === 'compose')).toMatchObject({ verdict: 'skipped' });
+    expect(res.ladder?.find((s) => s.rung === 'compose')?.detail).toContain('can change data');
   });
 
   it('an unknown collection is refused by name', async () => {
@@ -728,18 +832,6 @@ describe('compose refuses rather than guesses', () => {
     const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
     if (res.outcome !== 'refused') throw new Error(`expected refused, got ${res.outcome}`);
     expect(res.code).toBe('compose_unknown_collection');
-  });
-
-  it('a collection the org holds in two places is AMBIGUOUS, not a coin flip', async () => {
-    await seed([processos]);
-    const { planner } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
-    const { seam } = collectionsOf({ clients: 'ambiguous' });
-    const { ctx } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: { processos: PROCESS_ROWS } });
-
-    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
-    if (res.outcome !== 'refused') throw new Error(`expected refused, got ${res.outcome}`);
-    expect(res.code).toBe('compose_ambiguous_collection');
-    expect(res.candidates).toEqual(['app-a', 'app-b']);
   });
 
   it('an action result with no single list is refused rather than reshaped', async () => {

@@ -291,6 +291,30 @@ server-side vault entries without a call cap (tiny, TTL-swept at 30 min; the cap
 path shares the same session_id behavior). Revisit with a dedicated cap bucket if abuse is observed; the anonymisation posture
 applies to it in full, so no content risk is added.
 
+**`achieve`'s compose rung reads only the caller's own owner-shared `app_data` (S5, 2026-08-20).**
+The rung is a NEW READ PATH into a tenant-scoped store: a model names a collection, and the platform
+turns that name into rows. Rule 5 therefore decides tenancy at the composition-root binding, and the
+unit is the OWNER, because that is the only unit `app_data` has for shared rows - `docId` and every
+read in `CollectionsEngine` bind on `scope.scopeKey` (`usr.<ownerUserId>`), and `Scope.appId` is
+never part of any query. The binding is `ownerSharedScope(actor.userId)`: the acting user's own
+namespace, derived from the verified actor, never from the request and never from anything a model
+said. Nothing a caller sends and nothing a model returns reaches the scope key; a name that does not
+resolve there answers `compose_unknown_collection`, byte-identical with a name nobody holds.
+
+Two failure modes were found and closed in verification (`docs/decisions.md` D-S5-1), both from
+reasoning per-ARTIFACT over data scoped per-OWNER: a peer's ORG-VISIBLE artifact resolved to
+`usr.<peer>` and opened that peer's entire owner-shared namespace - apps the caller cannot see,
+collections the visible artifact never names - and a second app owned by the caller made one
+namespace read twice count as two sources. **Artifact visibility is not entitlement to its owner's
+rows.** Consequence, accepted deliberately with a review date of 2026-11-20: composing against a
+COLLEAGUE'S app data is refused even where the app is shared org-wide, because the store has no
+per-app dimension with which to grant the narrow version.
+
+Isolation suite: `api/tests/security/achieve-compose-isolation.test.ts`, of the
+`memvault-isolation.test.ts` class, driven through the real app and the real binding. Proven a gate
+by DELETING the tenancy filter at the single query-binding point (`appId: scope.scopeKey`), which
+reds it in both directions - rows via `list`, collection names via `listCollections`.
+
 ## Incident response
 
 Solo-operator posture: the founder is incident commander. Detection sources, in order: **Registo**

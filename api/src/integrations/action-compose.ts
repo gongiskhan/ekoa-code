@@ -15,8 +15,8 @@
  *     IN-MEMORY filter, and its predicate is a SINGLE FIELD against a single value.
  *
  * So there is no join to point a prompt at. The smallest honest addition is this stage: run the
- * action that was already matched and trusted, then filter and join its rows against ONE tenant
- * collection using the recipe DSL's own predicate vocabulary - the SAME `matchesSimpleQuery`
+ * action that was already matched and trusted, then filter and join its rows against ONE collection
+ * OF THE CALLER'S OWN using the recipe DSL's own predicate vocabulary - the SAME `matchesSimpleQuery`
  * `store.query` uses (`data/simple-query.ts`), so artifacts gain no interpreter power they did not
  * already have and this rung invents none of its own.
  *
@@ -27,25 +27,28 @@
  * it cannot cause a write of any kind. The stage below is ordinary TypeScript, and it is the only
  * thing that runs.
  *
- * ================================ READS ONLY, AND THE REFUSAL THAT SAYS SO ==================
- * A composed WRITE is refused, in this module, before anything executes. Reading `mutates === false`
- * as a LITERAL is `action-consent.ts`'s fail-closed rule, and it matters here for a reason specific
- * to this rung: the stage's first move is to RUN the matched action, so a rung that composed over a
- * write would perform the write and then discuss the result. The refusal is reachable - the model
- * is asked for a plan whenever the goal carries intent the action's own name and description do not
- * cover, whether the action writes or not, so a plan proposing a join over a write arrives here and
- * is turned away with a code of its own.
+ * ================================ READS ONLY, AND WHERE THAT IS DECIDED =====================
+ * This rung is for READS. `integration-achieve.ts` does not enter it at all unless the matched
+ * action's `mutates` is a literal `false` - the fail-closed reading `action-consent.ts` fixed - and
+ * that gate sits BEFORE the model is consulted, so a write costs no planning turn and, decisively,
+ * cannot be turned into a refusal by anything a model says. A write goes down the execute path it
+ * always went down, byte for byte.
+ *
+ * THE GATE IS NOT RESTATED HERE, deliberately. Whether an ACTION may be composed over is a property
+ * of the call site, not of the plan; this module judges PLANS. An earlier shape asserted it in both
+ * places, which meant two statements of one rule where only one could ever fire - and the one that
+ * fired second turned an approved, previously-executing call into a model-dependent refusal.
  *
  * ================================ TENANCY ==================================================
- * This module never reads a collection. It is handed rows by an `AppCollectionReader` seam that the
- * composition root binds ORG-SCOPED (the `setArtifactResolver` precedent: an artifact outside the
- * acting org does not resolve, so its rows are not reachable), and it is `api/tests/security/
- * achieve-compose-isolation.test.ts` that proves the binding refuses a peer org's collection.
+ * This module never reads a collection. It is handed rows by an `AppCollections` seam that the
+ * composition root binds to the ACTING USER'S OWN owner-shared scope - the only unit `app_data` has
+ * for shared rows, since every read there binds on `usr.<ownerUserId>` and never on an app id.
+ * `api/tests/security/achieve-compose-isolation.test.ts` proves that binding refuses a peer org's
+ * collections AND a same-org colleague's, org-visible artifact or not.
  */
 import type { Actor } from '@ekoa/shared';
 import { matchesSimpleQuery, isSimpleQueryOp, SIMPLE_QUERY_OPS, type SimpleQuery } from '../data/simple-query.js';
 import { collectionName } from '../data/collections-engine.js';
-import type { IntegrationAction } from './definitions.js';
 
 /** The most rows this rung will EMIT. A composed answer is an answer, not a bulk export, and an
  *  unbounded array here would ride into a JSON response and a model's next prompt alike. */
@@ -72,7 +75,7 @@ export type ComposePlan =
       join: { resultField: string; collectionField: string };
     };
 
-export type ComposeCheckName = 'shape' | 'read_only' | 'collection_name' | 'predicate';
+export type ComposeCheckName = 'shape' | 'collection_name' | 'predicate';
 
 export interface ComposeCheck {
   name: ComposeCheckName;
@@ -95,11 +98,11 @@ function check(name: ComposeCheckName, ok: boolean, detail?: string): ComposeChe
  * THE GUARDRAIL SUITE for a composition plan. Deterministic and model-free, re-run over the parsed
  * plan whatever the drafting turn claimed - `authored-action.ts`'s rule, for its reason.
  *
- * `read_only` is checked SECOND, immediately after the plan is known to be a composition at all,
- * because everything after it describes work that would begin by executing the action.
+ * It judges the PLAN and nothing else. Whether this ACTION may be composed over at all was settled
+ * by the caller before a model was ever asked (see the module header), so no `mutates` check lives
+ * here to fire second and contradict it.
  */
 export function verifyComposePlan(input: {
-  action: Pick<IntegrationAction, 'actionName' | 'mutates'>;
   planned: unknown;
 }): ComposeVerdict {
   const checks: ComposeCheck[] = [];
@@ -141,13 +144,6 @@ export function verifyComposePlan(input: {
   checks.push(check('shape', shapeProblems.length === 0, shapeProblems.join('; ')));
   if (shapeProblems.length > 0) return done(null);
 
-  // READS ONLY. `mutates === false` as a LITERAL - see the module header.
-  checks.push(check(
-    'read_only',
-    input.action.mutates === false,
-    `"${input.action.actionName}" can write, and this rung begins by running it - a composed answer is only ever built from a read`,
-  ));
-
   // The collection NAME is judged by the store's own rule, not by a second one written here: the
   // charset guard and the two reserved prefixes (`__`, `usr.`) that `guardCollectionName` enforces.
   const nameCheck = collectionName.safeParse(obj.collection);
@@ -181,27 +177,28 @@ export function verifyComposePlan(input: {
 }
 
 /**
- * READ ONE TENANT COLLECTION. The seam the composition root binds ORG-SCOPED; absent, the rung
- * refuses rather than degrading into some other read path.
+ * READ ONE COLLECTION OF THE CALLER'S OWN. The seam the composition root binds to the acting
+ * user's owner-shared scope; absent, the rung is skipped rather than degrading into some other
+ * read path.
  *
- * `ambiguous` is a real answer and not an edge case: `app_data` is keyed per ARTIFACT, so one org
- * can hold two artifacts that both have a `clients` collection. Guessing between them is exactly
- * the coin flip `matchActionForGoal` refuses to make about actions, so this refuses too.
+ * TWO ANSWERS, because the store has one scope to give. Shared `app_data` rows are keyed
+ * `usr.<ownerUserId>` with no app dimension, so a name either resolves in the caller's own
+ * namespace or it is not a name they hold. An earlier shape carried an `ambiguous_collection`
+ * answer on the belief that `app_data` was keyed per artifact; it is not, so the "ambiguity" was
+ * one namespace counted twice, and every owner of a second app hit it.
  */
 export type AppCollectionRead =
   | { kind: 'rows'; rows: Record<string, unknown>[] }
-  | { kind: 'unknown_collection' }
-  | { kind: 'ambiguous_collection'; sources: string[] };
+  | { kind: 'unknown_collection' };
 
 /**
- * Both methods take the WHOLE `Actor`, not an `{orgId, userId}` pair, and that is the tenancy
- * decision rather than a convenience: the binding resolves the artifacts this actor may see with
- * the platform's own visibility predicate, which reads the role as well as the org. Handing it two
- * strings would have meant the binding re-deriving a visibility rule of its own - the drift this
- * repo has paid for more than once.
+ * Both methods take the WHOLE `Actor`, not a bare user id, and that is the tenancy decision rather
+ * than a convenience: the binding derives the scope from the VERIFIED actor the route built, so
+ * this module can neither name nor influence whose rows are read. Nothing the caller sends and
+ * nothing the model says reaches the scope key.
  */
 export interface AppCollections {
-  /** The collection names this tenant holds. Named for the prompt, so the model chooses from a
+  /** The collection names this caller holds. Named for the prompt, so the model chooses from a
    *  list instead of inventing one - and a name it invents anyway is refused by `verifyComposePlan`
    *  and then again by the reader. */
   list(actor: Actor): Promise<string[]>;

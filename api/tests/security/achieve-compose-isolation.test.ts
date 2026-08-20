@@ -42,10 +42,20 @@ import { AchieveIntegrationGoalResponse } from '@ekoa/shared';
  *   3. A SHARED COLLECTION NAME DOES NOT SHARE ROWS. Both orgs hold `clients`; the join must be
  *      built from the caller's rows only, and the assertion is a process row that would ONLY
  *      survive if the OTHER org's client had been read.
+ *   4/5. A SAME-ORG COLLEAGUE IS A STRANGER TO THIS RUNG, private artifact or org-visible one.
+ *      Test 5 is the blocker this suite was extended for: shared `app_data` is keyed
+ *      `usr.<ownerUserId>` with NO app dimension, so binding a peer's VISIBLE artifact resolved to
+ *      that peer's ENTIRE namespace - apps the caller cannot see, collections the artifact never
+ *      names. Artifact visibility is not entitlement to its owner's rows.
+ *   6. ONE OWNER IS ONE SCOPE. A second app owned by the caller must not make one namespace read
+ *      twice look like two sources; deciding ambiguity per ARTIFACT over data scoped per OWNER
+ *      refused every owner of a second app. Tests 5 and 6 were both verified RED against the
+ *      per-artifact binding before it was replaced.
  *
- * THE MUTATION THAT PROVES IT IS A GATE: replace `listArtifacts(actor)` in the `achieveCollections`
- * binding (`api/src/server.ts`) with an unscoped `artifacts.find({})`. Every test in this file goes
- * red, and nothing else in the estate notices. That was run, and the result is in the slice report.
+ * THE MUTATION THAT PROVES IT IS A GATE: DELETE THE TENANCY FILTER at the single query-binding
+ * point - drop `appId: scope.scopeKey` from `CollectionsEngine.list` (rows) or from
+ * `listCollections` (the names put in the prompt). The suite goes red in both directions and
+ * nothing else in the estate notices. Both were run; the results are in the slice report.
  */
 const upstream = vi.hoisted(() => ({ calls: [] as string[], body: '{}' }));
 vi.mock('../../src/services/url-fetcher.js', async (importOriginal) => {
@@ -152,9 +162,10 @@ async function seedApp(
   orgId: string,
   userId: string,
   collections: Record<string, Array<Record<string, unknown>>>,
+  visibility: 'private' | 'org' = 'private',
 ): Promise<void> {
   await artifacts.insert({
-    _id: artifactId, name: artifactId, slug: artifactId, userId, orgId, visibility: 'private',
+    _id: artifactId, name: artifactId, slug: artifactId, userId, orgId, visibility,
     status: 'ready', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
   } as never);
   const engine = new CollectionsEngine(deps);
@@ -254,5 +265,37 @@ describe('the compose rung cannot see another organisation\'s collections', () =
     expect(plans.sections.join('\n')).not.toContain('clients');
     expect(body.outcome).toBe('refused');
     expect(body.code).toBe('compose_unknown_collection');
+  });
+
+  it('5. a peer\'s ORG-VISIBLE artifact does not open that peer\'s owner-shared namespace', async () => {
+    await mkUser('userA2', 'orgA');
+    await seedApp('app-a', 'orgA', 'userA', { matters: [{ id: 'm1' }] });
+    // The artifact userA MAY see. `app_data`'s shared rows are keyed `usr.<owner>` with NO artifact
+    // dimension, so reading "this artifact's collections" reads the whole of userA2's namespace -
+    // every app they own, including the ones userA cannot see, and collections this artifact never
+    // names. Visibility of an ARTIFACT is not entitlement to its OWNER's data.
+    await seedApp('app-a2', 'orgA', 'userA2', { clients: [{ id: 'cA', idade: 31 }] }, 'org');
+
+    const body = await okBody(await achieve(await tokenFor('userA')));
+    expect(plans.sections.join('\n')).not.toContain('clients');
+    expect(body.outcome).toBe('refused');
+    expect(body.code).toBe('compose_unknown_collection');
+  });
+
+  it('6. an owner with TWO apps composes from their one owner-shared scope', async () => {
+    // `sharedScope(artifactId, ownerUserId)` keys on `usr.<ownerUserId>` alone - `Scope.appId` is
+    // carried but never queried on. So a SECOND app owned by the same person holds nothing of its
+    // own: both artifacts address one namespace. A rung that decided anything per-ARTIFACT here
+    // would see one collection as two sources and refuse a call that has no ambiguity in it.
+    await seedApp('app-a', 'orgA', 'userA', { clients: [{ id: 'cA', idade: 31 }] });
+    await seedApp('app-a-second', 'orgA', 'userA', { matters: [{ id: 'm1' }] });
+
+    const body = await okBody(await achieve(await tokenFor('userA')));
+    expect(body.outcome).toBe('composed');
+    expect((body.items as Array<{ numeroProcesso: string }>).map((r) => r.numeroProcesso)).toEqual(['111/24.0T8LSB']);
+    // Both collections are offered, once each: one namespace, not two sources of the same name.
+    const prompt = plans.sections.join('\n');
+    expect(prompt).toContain('clients');
+    expect(prompt).toContain('matters');
   });
 });

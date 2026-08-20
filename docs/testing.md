@@ -38,7 +38,12 @@ where they touch the dashboard.
   in-org sharing, rate/spend-cap, the anonymisation payload-capture harness,
   `locality-isolation.test.ts` (Rule 5 for execution locality: an org's run is never routed out
   through another org's machine, staged with real pairing + grant rows and asserted through both the
-  injected seam and selection itself), and the bridge S1-S6 scenarios (`fake-daemon/`). `migration/`
+  injected seam and selection itself), `achieve-compose-isolation.test.ts` (Rule 5 for the compose
+  rung's read into `app_data`: the collection NAMES a model is offered and the rows it joins are the
+  CALLER'S OWN, never another org's and never a same-org colleague's - org-visible artifact or not,
+  because shared rows are keyed `usr.<owner>` with no app dimension and artifact visibility is not
+  entitlement to its owner's data; proven a gate by deleting `appId: scope.scopeKey`, the single
+  query-binding point), and the bridge S1-S6 scenarios (`fake-daemon/`). `migration/`
   holds the protocol-parity replay suites.
 - **The P4 locality suites, and what each is for** (they overlap on purpose, and the overlap is the
   point - a decision this slice makes wrong is an account lock, so each layer proves a different

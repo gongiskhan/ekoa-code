@@ -242,6 +242,42 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   S9. WHAT IS NOT: the Citius path itself is NOT claimed as proven by this slice, and a real session
   is still the only thing that can prove it.
 
+- **`compose-rung-scoped-its-decisions-to-a-unit-app_data-does-not-have`** (**FIXED 2026-08-20**,
+  S5 verification round two, was CRITICAL x2 + MAJOR x2; see `docs/decisions.md` D-S5-1). Four
+  defects, one root cause: decisions taken per ARTIFACT, per PLAN or per SLOT-TABLE over things
+  scoped per OWNER, per CALL-SITE or with no slot table at all.
+  (a) CROSS-TENANT, blocker: a peer's ORG-VISIBLE artifact resolved to `usr.<peerUserId>`, opening
+  that peer's entire owner-shared namespace - apps the caller cannot see, collections the visible
+  artifact never names. Artifact visibility is not entitlement to its owner's rows.
+  (b) blocker, and the label is worth stating precisely because the brief and the code differ here:
+  its PRIMARY consequence is AVAILABILITY, not exposure. Ambiguity was decided per artifact while
+  shared `app_data` is keyed `usr.<owner>` with `Scope.appId` never queried, so one namespace read
+  N times counted as N sources, and any owner of a second app - holding anything at all - was
+  permanently refused `compose_ambiguous_collection`. Its cross-tenant edge is real but narrower
+  than (a): the refusal's `candidates` listed artifact ids, including a PEER'S, so it leaked which
+  apps exist and hold a given collection name to someone entitled to none of their rows.
+  (c) MAJOR: D1 never engaged for automation-backed actions. With no `httpConfig`, every argument
+  classified `unused` and the rule was a blocklist, so a model could choose which resource a WRITE
+  acted on.
+  (d) MAJOR: the compose rung was entered for writes, so a model's plan could refuse a call that
+  had been executing under a standing human approval.
+  CLOSED BY: `ownerSharedScope(actor.userId)` at the binding; `mayBeModelFilled` as one allowlist
+  predicate shared by the pre-filter and the suite; the `mutates === false` gate moved to the first
+  line of `planComposition`. Proven by `api/tests/security/achieve-compose-isolation.test.ts` tests
+  5 and 6 (both verified RED against the unfixed binding) and by deleting the tenancy filter at the
+  single query-binding point (`appId: scope.scopeKey`), which reds the suite in both directions.
+
+- **`two-assertions-in-the-reuse-ladder-suite-could-not-fail`** (**FIXED 2026-08-20**, S5
+  verification round two, LOW severity but a process finding). Found by mutating each safety-critical
+  assertion rather than by reading the suite.
+  (a) `composeRows`' ACTION-side null-key guard was unfailable: the fixture gave every COLLECTION row
+  an absent/null key, emptying the key set, so the result was `[]` however the action side behaved.
+  Split into two cases, each keying the opposite side on the literal strings `'null'`/`'undefined'`.
+  (b) The caller-args-win spread order is a TRUE equivalent mutant - `declared_args` refuses any
+  overlap upstream, so the objects are always disjoint. No test can distinguish the order; recorded
+  as unobservable in the source, with the disjointness invariant asserted instead. Dismissal rather
+  than a test, in writing, per the ledger rule.
+
 - **`resolve-step-origin-runs-twice-per-gated-browser-step`** (**FIXED 2026-08-19**, round seven;
   see the round-seven fixed section). The walk still runs two to three times per gated browser step -
   that is inherent to resolving locality before the gate and re-resolving after it - but its

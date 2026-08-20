@@ -178,7 +178,7 @@ invoke), artifact-backend notify (`apps/` -> `events/`).
 
 `achieve` adds two more of the same shape (S4/S5): `planStep` (`integrations/` -> `agents/`'s shared
 authoring core, the third specialisation of `authorWithRepair`) and `appCollections` (`integrations/`
--> the tenant's `app_data`, org-scoped at the binding by the platform's own visibility predicate).
+-> `app_data`, bound to the ACTING USER'S OWN owner-shared scope - see the reuse-ladder section).
 Both are ABSENT-MEANS-SKIP: without them `achieve` behaves exactly as it did before the reuse ladder.
 
 ## Agent execution surface
@@ -902,25 +902,38 @@ is inherited on the same terms every other rail meets it.
   itself declares and the caller left out. `argsSchema` is documentation everywhere else in this repo
   - the executor never reads it, and `buildVars` merges every key of `args` into the one `{{name}}`
   namespace the templates interpolate from - so `verifyPlannedArgs` is the only check there is.
-  Decision D1 lives in its `targeting` check: an argument landing in the request BODY is covered by
-  the standing shape+destination approval; one landing in the resolved TARGET (path, query, or a
-  header) selects the resource under an approval whose dialog only ever showed `{{arg}}`, so it is
-  model-fillable only on a literal `mutates: false`.
+  Decision D1 is ONE predicate, `mayBeModelFilled`, shared by the rung's pre-filter and the
+  `targeting` check so the two cannot drift. It is an ALLOWLIST: a model may fill an argument when
+  the action cannot write (a literal `mutates: false`), or when the argument lands in the request
+  BODY - the shape the human approved. Everything else on a write is withheld, including arguments
+  of an action with no `httpConfig` at all, whose slot is `unknown` rather than `unused` because
+  this platform cannot see where an automation-backed action's arguments land.
 - **COMPOSE** (`integrations/action-compose.ts`) runs the matched trusted READ and narrows its rows
-  against ONE of the tenant's `app_data` collections with a `SimpleQuery`-class predicate. There is no
-  server-side join anywhere else in this repo (`CollectionsEngine` is list/get/write; `store.query` is
-  list plus an in-memory single-field filter), so the stage IS the addition: the model names the
-  collection, the field, the comparison and the join keys, and TypeScript moves every row. Reads only;
-  a composed write is refused before anything runs.
+  against ONE of the caller's own `app_data` collections with a `SimpleQuery`-class predicate. There
+  is no server-side join anywhere else in this repo (`CollectionsEngine` is list/get/write;
+  `store.query` is list plus an in-memory single-field filter), so the stage IS the addition: the
+  model names the collection, the field, the comparison and the join keys, and TypeScript moves every
+  row. READS ONLY, and the gate is at the ENTRY: an action that can write never enters the rung, so
+  no model turn is paid for and - decisively - no answer a model gives can turn a call that was
+  executing under a standing approval into a refusal.
 
 The predicate itself is ONE implementation, `data/simple-query.ts` (tier 2), shared with the recipe
 DSL's `store.query` - `integrations/` may not import `automation/`, and two copies of nine comparison
 semantics drift.
 
+TENANCY (Rule 5) is decided at the `appCollections` binding, and its unit is the OWNER because that
+is the only unit `app_data` has for shared rows: every read in `CollectionsEngine` binds on
+`scope.scopeKey` (`usr.<ownerUserId>`) and `Scope.appId` is never part of any query. The binding is
+`ownerSharedScope(actor.userId)` - the acting user's own namespace, the same one their own apps read
+and write through the served plane - so the rung reaches no colleague's rows and no other org's.
+Reasoning per-ARTIFACT here is a category error the store cannot support, and it cost this slice a
+round in both directions (D-S5-1). Isolation suite:
+`api/tests/security/achieve-compose-isolation.test.ts`.
+
 Both rungs arrive as seams bound once in `server.ts` (`planStep`, a third `authorWithRepair`
-specialisation; `appCollections`, org-scoped through `listArtifacts(actor)`), and an absent seam,
-a refused allowance, a model outage or a goal with no residual intent SKIPS the rung rather than
-failing the call - so `achieve` degrades to exactly its pre-ladder behaviour (Rule 7).
+specialisation; `appCollections`, owner-scoped as above), and an absent seam, a refused allowance, a
+model outage, a write, or a goal with no residual intent SKIPS the rung rather than failing the call
+- so `achieve` degrades to exactly its pre-ladder behaviour (Rule 7).
 
 ## Billing
 

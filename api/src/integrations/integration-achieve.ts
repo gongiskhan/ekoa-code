@@ -95,9 +95,9 @@ import {
 import { actionEvidenceStore } from './action-evidence-store.js';
 import {
   argsOutputContractFor,
+  mayBeModelFilled,
   missingDeclaredArgs,
   parseArgsPlan,
-  slotOf,
   verifyPlannedArgs,
   type PlannedArgValue,
 } from './action-parametrize.js';
@@ -174,8 +174,9 @@ export interface AchieveContext extends CapabilityContext {
   /** The planning seam. Absent ⇒ BOTH upper rungs are skipped and `achieve` behaves exactly as it
    *  did before they existed - an honest default, never a silent degradation. */
   planStep?: PlanDrafter;
-  /** The tenant's own collections (the compose rung's data side). Absent ⇒ that rung is skipped.
-   *  Bound ORG-SCOPED by the composition root; this module never reaches a store itself. */
+  /** The CALLER'S OWN collections (the compose rung's data side). Absent ⇒ that rung is skipped.
+   *  Bound to the acting user's owner-shared scope by the composition root - the only unit `app_data`
+   *  has for shared rows; this module never reaches a store itself. */
   appCollections?: AppCollections;
   /** Injected clock, so the persisted timestamps are deterministic under test. */
   now?: () => number;
@@ -213,14 +214,16 @@ export interface AchieveContext extends CapabilityContext {
  *
  *   `parametrize_refused`   a model-filled ARGUMENT plan arrived and did not pass
  *                           `verifyPlannedArgs`. Nothing was sent. Includes the D1 case: an
- *                           argument that selects the resource, on an action that can write.
- *   `composed_write_refused` a COMPOSITION was proposed over an action that is not a literal read.
- *                           The rung's first move is to RUN the action, so it never begins.
+ *                           argument that does not land in the body, on an action that can write.
  *   `compose_refused`       a composition arrived and did not pass `verifyComposePlan`.
- *   `compose_unknown_collection`   the named collection is not one this tenant holds.
- *   `compose_ambiguous_collection` the tenant holds that collection in more than one place, and
- *                           choosing between them is a coin flip about whose data is answered with.
+ *   `compose_unknown_collection`   the named collection is not one this caller holds.
  *   `compose_unshaped_result`      the action's answer carries no single list to compose over.
+ *
+ * THERE IS NO "COMPOSED WRITE" REFUSAL, and its absence is the point: the compose rung is not
+ * entered for an action that can write, so a write cannot be refused by it. An earlier shape asked
+ * a model first and refused afterwards, which took a call that ran under a standing human approval
+ * and made it depend on a model's judgement to run at all. A rung that can only ADD an answer must
+ * never be able to SUBTRACT one.
  */
 export type AchieveRefusalCode =
   | 'ambiguous_goal'
@@ -237,10 +240,8 @@ export type AchieveRefusalCode =
   | 'verification_failed'
   | 'persist_failed'
   | 'parametrize_refused'
-  | 'composed_write_refused'
   | 'compose_refused'
   | 'compose_unknown_collection'
-  | 'compose_ambiguous_collection'
   | 'compose_unshaped_result';
 
 /**
@@ -263,7 +264,7 @@ export type AchieveResult =
   /** An existing TRUSTED action satisfied the goal and was run through the gated executor. */
   | { outcome: 'executed'; actionName: string; result: ExecuteIntegrationActionResult; ladder?: AchieveLadderStep[]; filledArgs?: string[] }
   /**
-   * A trusted READ was run and its rows JOINED against one of the tenant's own collections. NOTHING
+   * A trusted READ was run and its rows JOINED against one of the CALLER'S OWN collections. NOTHING
    * WAS MINTED and nothing was written: `items` is a subset of what the action itself returned.
    */
   | {
@@ -272,6 +273,7 @@ export type AchieveResult =
       items: Record<string, unknown>[];
       composition: ComposeSummary;
       ladder?: AchieveLadderStep[];
+      filledArgs?: string[];
     }
   /** No action satisfied it; one was authored, verified and persisted as PROVISIONAL. */
   | {
@@ -706,9 +708,10 @@ export async function achieveIntegrationGoal(
  * THE ORDER IS LOAD-BEARING:
  *   1. PARAMETRIZE fills arguments the action DECLARES and the caller LEFT OUT. Its output changes
  *      what the one request carries, so it must be settled before the request exists.
- *   2. COMPOSE decides whether the answer needs a join. Its output changes nothing about the
- *      request - it decides what happens to the ROWS afterwards - but it is planned BEFORE the
- *      execute so that `composed_write_refused` can refuse without having run anything.
+ *   2. COMPOSE decides whether the answer needs a join, and ONLY for an action that cannot write.
+ *      Its output changes nothing about the request - it decides what happens to the ROWS
+ *      afterwards - but it is planned BEFORE the execute so that a plan which cannot be honoured
+ *      costs nothing to discover and so that no refusal is ever a comment on a call already made.
  *   3. EXECUTE, once, through `executeIntegrationCapabilityAction`. C2's write gate sits inside it,
  *      before any credential is read, exactly as on every other rail. Neither rung reaches past it,
  *      neither rung re-implements it, and a `mutates` action still answers `awaiting_consent` here
@@ -734,13 +737,17 @@ async function runMatchedAction(
 
   // --- RUNG 2: PARAMETRIZE ------------------------------------------------------------------
   const missing = missingDeclaredArgs(action, callerArgs);
-  // D1, applied BEFORE the model is asked rather than after: an argument that selects the resource
-  // on an action that can write is never OFFERED to the model. Not asking is cheaper than refusing,
-  // and it keeps a write whose targeting the caller omitted behaving exactly as it does today
-  // (the request goes out as the caller shaped it) instead of turning into a new refusal.
-  const isRead = action.mutates === false;
-  const fillable = missing.filter((name) => isRead || slotOf(action.httpConfig, name) !== 'targeting');
-  const withheld = missing.filter((name) => !fillable.includes(name));
+  // D1, applied BEFORE the model is asked rather than after: an argument a model may not fill on
+  // this action is never OFFERED to it. Not asking is cheaper than refusing, and it keeps a write
+  // whose targeting the caller omitted behaving exactly as it does today (the request goes out as
+  // the caller shaped it) instead of turning into a new refusal.
+  //
+  // `mayBeModelFilled` is the ONE statement of D1, shared with `verifyPlannedArgs` so the filter and
+  // the suite cannot drift. It is an allowlist - a write offers only its BODY arguments - which is
+  // what makes it correct for an automation-backed action, whose request this module cannot read at
+  // all and whose arguments therefore used to slip through a "not targeting" test.
+  const fillable = missing.filter((name) => mayBeModelFilled(action, name));
+  const withheld = missing.filter((name) => !mayBeModelFilled(action, name));
 
   if (missing.length === 0) {
     ladder.push({ rung: 'parametrize', verdict: 'skipped', detail: 'the caller supplied every argument the action declares' });
@@ -748,7 +755,7 @@ async function runMatchedAction(
     ladder.push({
       rung: 'parametrize',
       verdict: 'skipped',
-      detail: `every missing argument selects which resource is acted on and "${action.actionName}" can write, so a person supplies them: ${withheld.sort().join(', ')}`,
+      detail: `"${action.actionName}" can write, so only a person supplies arguments that do not land in its request body: ${withheld.sort().join(', ')}`,
     });
   } else if (!ctx.planStep) {
     ladder.push({ rung: 'parametrize', verdict: 'skipped', detail: 'the planning seam is not wired in this deployment' });
@@ -805,9 +812,16 @@ async function runMatchedAction(
             );
           }
           filledArgs = Object.keys(verdict.args).sort();
-          // THE CALLER'S OWN ARGUMENTS WIN, spread last. `verifyPlannedArgs` already refuses a plan
-          // that names one of them, so this is the second of two statements of the same rule rather
-          // than the only one.
+          // THE CALLER'S OWN ARGUMENTS WIN, spread last.
+          //
+          // HONEST NOTE: this order is UNOBSERVABLE, and saying so is better than implying a second
+          // enforced rule. `verifyPlannedArgs`'s `declared_args` check refuses any plan naming a key
+          // the caller supplied, so `verdict.args` and `callerArgs` are disjoint by the time we get
+          // here and either spread order produces the same object. Reversing it is an equivalent
+          // mutant - no test can distinguish it, and none pretends to. What IS asserted is the
+          // invariant that makes it unobservable (see the `declared_args` overwrite case, and the
+          // disjointness assertion beside it); the order below is kept because it is the one that
+          // stays correct if that check is ever weakened.
           args = { ...(verdict.args as Record<string, PlannedArgValue>), ...callerArgs };
           ladder.push({
             rung: 'parametrize',
@@ -832,15 +846,8 @@ async function runMatchedAction(
     if (collection.kind === 'unknown_collection') {
       return refused(
         'compose_unknown_collection',
-        `there is no "${composePlan.plan.collection}" collection in your organisation to narrow this by`,
+        `you hold no "${composePlan.plan.collection}" collection to narrow this by`,
         { ladder: [...ladder, { rung: 'compose', verdict: 'refused' }] },
-      );
-    }
-    if (collection.kind === 'ambiguous_collection') {
-      return refused(
-        'compose_ambiguous_collection',
-        `your organisation holds "${composePlan.plan.collection}" in more than one place - name the one you mean`,
-        { candidates: collection.sources, ladder: [...ladder, { rung: 'compose', verdict: 'refused' }] },
       );
     }
     const rows = rowsOf(out.value.data);
@@ -858,6 +865,9 @@ async function runMatchedAction(
         items: composed.items,
         composition: composed.summary,
         ladder,
+        // Reported here for the same reason it is reported on `executed`: an answer that was BOTH
+        // model-parametrized and model-narrowed is the one an auditor most needs to see whole.
+        ...(filledArgs.length > 0 ? { filledArgs } : {}),
       },
     };
   }
@@ -876,8 +886,19 @@ async function runMatchedAction(
 }
 
 /**
- * PLAN THE JOIN, or decline to. Returns before anything has executed, so the write refusal below is
- * a refusal to BEGIN rather than a comment on what already happened.
+ * PLAN THE JOIN, or decline to. Returns before anything has executed.
+ *
+ * READS ONLY, AND THE GATE IS FIRST. v1 composes over reads; an action that can write leaves this
+ * function before the residue is computed, before the collections are listed, before the allowance
+ * is checked and above all before a model is asked. That ORDER is the fix for a regression, not a
+ * micro-optimisation: while the gate sat downstream of the model turn, a `mutates` action with a
+ * wordy goal could be refused outright on the strength of a plan a model volunteered - so a call
+ * that had been executing for months under a standing human approval started depending on a
+ * model's judgement to run at all. A rung that only ever ADDS an answer must never SUBTRACT one,
+ * and the only way to guarantee that is to not enter it.
+ *
+ * `mutates === false` as a LITERAL is `action-consent.ts`'s fail-closed reading: an absent or
+ * malformed `mutates` is a write, and a write is not composed over.
  *
  * THE PRE-FILTER IS DETERMINISTIC AND FREE. The model is consulted only when the goal carries
  * tokens the action's own name and description do not account for - i.e. when the caller asked for
@@ -895,6 +916,14 @@ async function planComposition(
   | { kind: 'plan'; plan: NonNullable<ReturnType<typeof verifyComposePlan>['plan']> }
   | { kind: 'refused'; outcome: CapabilityOutcome<AchieveResult> }
 > {
+  if (action.mutates !== false) {
+    ladder.push({
+      rung: 'compose',
+      verdict: 'skipped',
+      detail: `"${action.actionName}" can change data, and a composed answer is only ever built from a read`,
+    });
+    return { kind: 'none' };
+  }
   const accounted = new Set([...goalTokens(action.actionName), ...goalTokens(action.description ?? '')]);
   const residue = goalTokens(goal).filter((t) => !accounted.has(t));
   if (residue.length === 0) {
@@ -930,11 +959,8 @@ async function planComposition(
     return { kind: 'none' };
   }
 
-  const verdict = verifyComposePlan({ action, planned: turn.draft });
+  const verdict = verifyComposePlan({ planned: turn.draft });
   if (!verdict.passed) {
-    // The read-only refusal gets its OWN code, because it is the one refusal on this rung that is
-    // about the ACTION rather than about the plan's shape.
-    const readOnly = verdict.checks.find((c) => c.name === 'read_only' && !c.ok);
     const violations = [
       ...turn.violations,
       ...verdict.checks.filter((c) => !c.ok).map((c) => c.detail ?? `${c.name} failed`),
@@ -942,10 +968,8 @@ async function planComposition(
     return {
       kind: 'refused',
       outcome: refused(
-        readOnly ? 'composed_write_refused' : 'compose_refused',
-        readOnly
-          ? `"${action.actionName}" can change data, and narrowing its result would mean running it first - ask for the reading you want, or run the action on its own`
-          : 'the way this goal would have been narrowed did not pass the guardrails and nothing ran',
+        'compose_refused',
+        'the way this goal would have been narrowed did not pass the guardrails and nothing ran',
         { violations, ladder: [...ladder, { rung: 'compose', verdict: 'refused' }] },
       ),
     };
@@ -996,7 +1020,7 @@ function parametrizeSections(
   ];
 }
 
-/** Facts the compose turn is given: the action, and the NAMES of the tenant's collections. No row
+/** Facts the compose turn is given: the action, and the NAMES of the caller's own collections. No row
  *  of anybody's data is put in a prompt to decide whether to look at that data. */
 function composeSections(action: IntegrationAction, collections: readonly string[]): string[] {
   return [

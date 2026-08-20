@@ -96,13 +96,21 @@ export interface PlannedArgs {
  *   `targeting` - the authority, the path, a query parameter or a header: it participates in
  *                 selecting the resource, and is not shown resolved in the consent dialog.
  *   `body`      - the request body only: the SHAPE the human approved.
- *   `unused`    - the action's templates never name it. Not an error by itself (the argument is
- *                 simply inert), but it is not `body` either, so it cannot buy a targeting pass.
+ *   `unused`    - this action HAS a request and none of its templates name the argument. The
+ *                 argument is genuinely inert.
+ *   `unknown`   - THE ACTION HAS NO REQUEST TO READ. An automation-backed action's arguments go to
+ *                 a recipe, and this module cannot see where any of them land.
+ *
+ * `unknown` IS NOT `unused`, and collapsing the two is how D1 came to be skipped for a whole
+ * backing type: with `argSlotsOf(undefined)` returning `{}`, every argument of an automation-backed
+ * action read `unused` - "goes nowhere" - so a model was free to fill the arguments of a WRITE and
+ * choose what it acted on. "This module cannot see where it goes" is the opposite conclusion, and
+ * it is the one the code now draws (see `mayBeModelFilled`).
  *
  * TARGETING WINS. A name appearing in both the path and the body is targeting, because the path
  * occurrence is the one that decides what gets acted on.
  */
-export type ArgSlot = 'targeting' | 'body' | 'unused';
+export type ArgSlot = 'targeting' | 'body' | 'unused' | 'unknown';
 
 function namesIn(value: unknown, into: Set<string>): void {
   if (typeof value === 'string') {
@@ -134,9 +142,31 @@ export function argSlotsOf(http: IntegrationActionHttpConfig | undefined): Recor
   return slots;
 }
 
-/** The slot a single name lands in, `unused` when the templates never name it. */
+/** The slot a single name lands in: `unknown` when there is no request to read at all, `unused`
+ *  when there is one and it never names the argument. */
 export function slotOf(http: IntegrationActionHttpConfig | undefined, name: string): ArgSlot {
+  if (!http) return 'unknown';
   return argSlotsOf(http)[name] ?? 'unused';
+}
+
+/**
+ * DECISION D1, as ONE predicate, so the rung's pre-filter and the guardrail suite cannot drift.
+ *
+ * A model may fill an argument when the action CANNOT WRITE - a read's targeting is still only a
+ * read - or when the argument lands in the request BODY, which is the shape the human approved when
+ * they approved this action sending this shape to this destination.
+ *
+ * IT IS AN ALLOWLIST, not "anything but targeting", and that is the whole repair. The old blocklist
+ * passed `unused` and, fatally, `unknown`: an automation-backed action has no request for this
+ * module to read, so EVERY argument read as not-targeting and a model could pick what a write acted
+ * on. Under an allowlist the same action simply offers nothing on a write - `unknown` is never
+ * `body` - and the call proceeds exactly as it did before this rung existed, with the caller's own
+ * arguments. `unused` on a write is refused too, and costs nothing to refuse: an argument no
+ * template names changes no request.
+ */
+export function mayBeModelFilled(action: Pick<IntegrationAction, 'mutates' | 'httpConfig'>, name: string): boolean {
+  if (action.mutates === false) return true; // a LITERAL false - `action-consent.ts`'s fail-closed reading
+  return slotOf(action.httpConfig, name) === 'body';
 }
 
 /**
@@ -244,15 +274,25 @@ export function verifyPlannedArgs(input: VerifyPlannedArgsInput): ParametrizeVer
   }
   checks.push(check('declared_args', declaredProblems.length === 0, declaredProblems.join('; ')));
 
-  // 3. TARGETING - decision D1. A literal `mutates === false` is the only read.
-  const slots = argSlotsOf(input.action.httpConfig);
-  const targeting = names.filter((n) => (slots[n] ?? 'unused') === 'targeting').sort();
-  const isRead = input.action.mutates === false;
-  checks.push(check(
-    'targeting',
-    targeting.length === 0 || isRead,
-    `these arguments select which resource is acted on (they land in the URL, the query string or a header) and "${input.action.actionName}" can write, so a person supplies them: ${targeting.join(', ')}`,
-  ));
+  // 3. TARGETING - decision D1, through the SAME predicate the rung's pre-filter uses, so a plan
+  // that reaches here naming an argument the rung would not have offered is still refused. The two
+  // messages differ because the two causes do: an argument this module watched land in the URL, and
+  // an argument whose destination this module cannot see at all.
+  const refusedNames = names.filter((n) => !mayBeModelFilled(input.action, n));
+  const seen = refusedNames.filter((n) => slotOf(input.action.httpConfig, n) !== 'unknown').sort();
+  const unseen = refusedNames.filter((n) => slotOf(input.action.httpConfig, n) === 'unknown').sort();
+  const targetingProblems: string[] = [];
+  if (seen.length > 0) {
+    targetingProblems.push(
+      `these arguments do not land in the request body of "${input.action.actionName}", which can write, so a person supplies them: ${seen.join(', ')}`,
+    );
+  }
+  if (unseen.length > 0) {
+    targetingProblems.push(
+      `"${input.action.actionName}" can write and addresses no request this platform can read, so where these arguments land is unknown and a person supplies them: ${unseen.join(', ')}`,
+    );
+  }
+  checks.push(check('targeting', targetingProblems.length === 0, targetingProblems.join('; ')));
 
   // 4. NO PASTED SECRET - `authored-action.ts` check 7, applied to values. Two passes, because the
   // repo's scrub has two, and each anchors POSITIONALLY (a bare 24-char token is not a secret; a
@@ -360,9 +400,10 @@ export function argsOutputContractFor(action: IntegrationAction, fillable: reado
     '5. You are not choosing the action. The action below was already selected and confirmed by a',
     '   person; you are only supplying the values it declares.',
     // The slot table is stated ONLY for an action that has a request to state it about. An
-    // automation-backed action addresses no URL from here, so every name would read `unused` -
-    // which is not "this argument goes nowhere", it is "this module cannot see where it goes", and
-    // telling a model the first when the second is true is how a prompt starts lying to it.
+    // automation-backed action addresses no URL from here, so every name reads `unknown` - "this
+    // module cannot see where it goes", never "this argument goes nowhere" - and a table of
+    // `unknown` tells a model nothing it can act on. (On such an action that WRITES, `fillable` is
+    // empty and this contract is never built at all: D1 leaves the whole rung unentered.)
     ...(action.httpConfig
       ? ['', '# Where each argument lands in the request', ...fillable.map((n) => `- ${n}: ${slots[n] ?? 'unused'}`)]
       : []),

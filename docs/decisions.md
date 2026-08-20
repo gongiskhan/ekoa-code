@@ -4116,3 +4116,101 @@ DIAGRAM CHECK (FIXED-12): `docs/diagrams/02-module-map.excalidraw` (two new tier
 tier-2 module, one new runtime edge, two new seams and their bindings) and
 `docs/diagrams/05-data-model.excalidraw` (no new collection and no new stored field - the check made,
 plus the additive wire shape and the one new activity type). Both appended, both append-only.
+
+---
+
+## 2026-08-20 - D-S5-1: the compose rung's unit is the OWNER, and the write path is left alone
+
+Verification of the S4/S5 branch returned two cross-tenant blockers and two majors on the write path.
+All four were one family: **a decision scoped to a unit the thing being decided about does not have.**
+This entry supersedes the four claims named below in the preceding S4+S5 entry, which described code
+that no longer exists.
+
+**SUPERSEDED:** (a) "AMBIGUITY IS AN ANSWER: a collection name two of the org's artifacts both hold
+refuses rather than picking one"; (b) "Per-artifact scope is `sharedScope(artifactId, ownerUserId)`
+… bound through `listArtifacts(actor)`"; (c) "`composed_write_refused` is a refusal to BEGIN …
+reachable because the rung is entered for writes too"; (d) D1 described as refusing `targeting`.
+
+**BLOCKER 1 - the ambiguity was fabricated, and it bricked the rung for anyone with two apps.**
+`sharedScope(appId, ownerUserId)` returns `{ scopeKey: 'usr.<ownerUserId>', appId }`, and **`Scope.appId`
+is never part of any query**: `docId` and all six reads in `CollectionsEngine` bind on `scope.scopeKey`
+alone. So `app_data`'s shared rows have no artifact dimension. The binding looped visible artifacts
+and read `sharedScope(art._id, art.userId)` per artifact - reading ONE namespace N times and counting
+the identical answers as N sources. Reproduced end-to-end before the fix: an owner with `clients` in
+app-a and only `matters` in a second app got `compose_ambiguous_collection` with candidates
+`["app-a","app-a-second"]`, naming an app that never held `clients` at all. Every owner of a second
+app, holding anything, could never compose.
+
+**BLOCKER 2 - artifact visibility was treated as entitlement to its owner's data.** `listArtifacts`
+→ `listVisible` returns own artifacts plus peers' `visibility: 'org'` ones. For a peer's org-visible
+artifact the binding resolved `usr.<peerUserId>` - that peer's ENTIRE owner-shared namespace, spanning
+apps the caller cannot see and collections the visible artifact never names. A read rung that can
+enumerate a colleague's collections is an enumeration primitive, not a reuse ladder. Reproduced
+before the fix: `userA` was offered `clients` from `userA2`'s namespace in the planning prompt.
+
+**THE FIX, for both: bind the unit the store actually has.** `ownerSharedScope(actor.userId)` -
+the acting user's own namespace, derived from the verified actor and nothing else. It is exactly the
+scope this user's own apps read and write through the served plane, so the rung grants no reach they
+did not already have, and none over anybody else's rows. One scope means no ambiguity to report, so
+`AppCollectionRead.ambiguous_collection` and the `compose_ambiguous_collection` code are gone (`code`
+is a free string on the wire, so this is not a schema break). `ownerSharedScope` is added to
+`collections-engine.ts` so the per-owner unit is stated in the type rather than reconstructed by each
+caller from an `appId` the store ignores.
+
+**ACCEPTED, WITH A REVIEW DATE (Rule 10).** Composing against a COLLEAGUE'S app data is now refused
+outright, including where the colleague deliberately shared the app org-wide. That is a real product
+restriction, and it is deliberate: the store has no per-app dimension to grant, so "this app's
+collections, not its owner's whole namespace" is not expressible today. Widening it needs an
+entitlement model, not a looser binding. **Review by 2026-11-20**; if no user has asked by then, it
+stays as it is.
+
+**MAJOR 1 - D1 did not reach automation-backed actions, so a model could pick a write's target.**
+`argSlotsOf(undefined)` returns `{}`, so every argument of an action with no `httpConfig` read
+`unused`, and the rule was a BLOCKLIST ("fill anything that is not `targeting`"). An automation-backed
+`arquivar_processo` therefore offered a model every argument it declared, including which processo to
+archive - the sentence the module's own header says this product must never be able to say. D1 is now
+ONE predicate, `mayBeModelFilled`, shared by the pre-filter and the `targeting` check, and it is an
+ALLOWLIST: fillable iff the action cannot write, or the argument lands in the BODY. `ArgSlot` gains
+`unknown` (no request to read) as distinct from `unused` (a request that does not name it), because
+"this module cannot see where it goes" and "it goes nowhere" are opposite conclusions.
+
+**MAJOR 2 - entering the compose rung for writes made an approved call model-dependent.** The rung
+was entered whenever the goal had residue, write or not, and refused the WHOLE call if a model
+proposed a join. A `mutates` action that had been executing under a standing human approval could
+therefore start failing on a model's judgement. The `mutates === false` gate moved to the FIRST line
+of `planComposition` - before the residue scan, the collection listing, the allowance check and any
+model turn. A rung that can only ADD an answer must never be able to SUBTRACT one. Consequently
+`composed_write_refused` no longer exists, and the `read_only` check left `verifyComposePlan`: whether
+an ACTION may be composed over is a property of the call site, not of the plan, and two statements of
+one rule where only one can fire is what produced the regression.
+
+**TWO UNFAILABLE TESTS, re-derived by mutation rather than by inspection.**
+1. `composeRows`' ACTION-side null-key guard: the fixture gave every collection row an absent/null
+   key, which emptied the key set outright, so `items` was `[]` however the action side behaved.
+   Deleting the guard killed nothing. Split into two cases, each keying the OPPOSITE side on the
+   literal strings `'null'`/`'undefined'` - the exact collision an unguarded absent key produces -
+   so each guard is now independently failable.
+2. The caller-args-win spread in `runMatchedAction` is a TRUE EQUIVALENT MUTANT: `declared_args`
+   refuses any plan naming a key the caller supplied, so the two objects are always disjoint and
+   either spread order yields the same result. No test can distinguish it. Recorded as such in the
+   source instead of implying a second enforced rule, and the invariant that MAKES it unobservable
+   (disjointness) is now asserted.
+
+**THE CANONICAL TEST IS STILL NOT A CITIUS PROOF**, unchanged from the previous entry and restated
+because it is the kind of claim that drifts: `get-ongoing-processes` does not exist in this repo, the
+canonical case runs against a deterministic local fixture of the same shape, and the Citius path is
+NOT claimed as proven. See `docs/findings.md`.
+
+**A CLASSIFICATION CORRECTION, because the brief and the code differ and the code wins.** The
+verification brief called both blockers "cross-tenant exposure". BLOCKER 2 is exactly that. BLOCKER 1's
+primary consequence is AVAILABILITY - the rung was permanently unusable for anyone owning two apps -
+and its exposure edge is narrower but real: the `candidates` array of the refusal listed artifact ids,
+a peer's among them, so it disclosed which apps exist and hold a given collection name to a caller
+entitled to none of their rows. Both are fixed by the same change; only the label differs.
+
+DIAGRAM CHECK (FIXED-12): BOTH appended, both append-only, `rawText` and `originalText` carried.
+`docs/diagrams/02-module-map.excalidraw` - the corrected binding, the D1 allowlist, the compose entry
+gate. `docs/diagrams/05-data-model.excalidraw` - no store change to record (no new collection, no new
+stored field, no new scope key: `usr.<owner>` is the one that already existed), but the WIRE shrinks
+by two refusal codes and `filledArgs` now appears on `composed`, so the earlier note's counts are
+superseded there.

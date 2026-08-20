@@ -765,7 +765,7 @@ export type AuthoredActionVerification = z.infer<typeof AuthoredActionVerificati
  *
  * `achieve` answers on one of four rungs - reuse an action as it stands, PARAMETRIZE it (fill
  * arguments it declares that the caller left out), COMPOSE (run a read and narrow its rows against
- * one of the tenant's own collections), or MINT a new action. A client reading only `outcome`
+ * one of the caller's own collections), or MINT a new action. A client reading only `outcome`
  * cannot tell which rung answered, nor what the ones above it decided, and "why did it not
  * parametrize" is the first question anybody asks of a rung that quietly did not fire.
  *
@@ -847,8 +847,7 @@ export const AchieveIntegrationGoalResponse = z.object({
   message: z.string().optional(),
   /** `verification_failed` — the guardrails that were not met, in words a caller can act on. */
   violations: z.array(z.string()).optional(),
-  /** `ambiguous_goal` / `provisional_match` - the actions the goal could have meant;
-   *  `compose_ambiguous_collection` - the places the named collection was found in. */
+  /** `ambiguous_goal` / `provisional_match` - the actions the goal could have meant. */
   candidates: z.array(z.string()).optional(),
   /** `composed` only - the rows that survived the narrowing, capped. */
   items: z.array(z.record(z.unknown())).optional(),
@@ -857,8 +856,9 @@ export const AchieveIntegrationGoalResponse = z.object({
   /** Which rung answered, and what the ones above it decided. Present on every outcome the ladder
    *  reached; absent on the refusals that happen before a rung is entered at all. */
   ladder: z.array(AchieveLadderStep).optional(),
-  /** `executed` - the argument NAMES a model supplied because the caller left them out. Names
-   *  only: the values are in the request that was sent, and this is not a second copy of them. */
+  /** `executed` / `composed` - the argument NAMES a model supplied because the caller left them
+   *  out. Names only: the values are in the request that was sent, and this is not a second copy
+   *  of them. */
   filledArgs: z.array(z.string()).optional(),
 });
 export type AchieveIntegrationGoalResponse = z.infer<typeof AchieveIntegrationGoalResponse>;

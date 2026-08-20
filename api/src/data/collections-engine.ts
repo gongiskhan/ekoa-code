@@ -257,7 +257,7 @@ export class CollectionsEngine {
    *
    * Read-only, additive, and built on the SAME single query-binding point every other read uses
    * (`appId: scope.scopeKey`), so it cannot reach a scope the other reads cannot. It exists because
-   * `achieve`'s compose rung has to NAME the tenant's collections in a prompt, and discovering them
+   * `achieve`'s compose rung has to NAME the caller's own collections in a prompt, and discovering them
    * by listing every row of each and looking at what came back would be a read of everybody's data
    * to answer a question about labels.
    */
@@ -284,4 +284,23 @@ export function appScope(appId: string): Scope {
 /** Resolve a shared owner scope. The owner comes from the server (registry), never the client. */
 export function sharedScope(appId: string, ownerUserId: string): Scope {
   return { scopeKey: `usr.${ownerUserId}`, appId };
+}
+
+/**
+ * THE SHARED SCOPE BY ITS ONLY REAL UNIT: the OWNER.
+ *
+ * `sharedScope` takes an `appId` and carries it on the returned `Scope`, which reads as though a
+ * shared collection belonged to an app. IT DOES NOT, and the code above is unambiguous about it:
+ * `docId` and every filter in this class bind on `scope.scopeKey` (`usr.<ownerUserId>`), while
+ * `Scope.appId` is never part of any query. Two apps owned by the same person therefore address ONE
+ * namespace - the owner's - and "the collections of app X" is not a question `app_data` can answer.
+ *
+ * A caller that reasons per-APP over shared rows is deciding on a unit the store does not have: it
+ * sees one namespace as N sources, and it mistakes "an app I may see" for "its owner's data I may
+ * read". Both are wrong, and both cost `achieve`'s compose rung a round (`docs/decisions.md`,
+ * D-S5-1). A caller whose unit is the OWNER says so by calling THIS function; `sharedScope` stays
+ * for the serving planes, which genuinely have an app in hand and pass it through.
+ */
+export function ownerSharedScope(ownerUserId: string): Scope {
+  return { scopeKey: `usr.${ownerUserId}`, appId: `usr.${ownerUserId}` };
 }

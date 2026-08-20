@@ -51,7 +51,7 @@ import { AchieveIntegrationGoalResponse, ErrorEnvelope } from '@ekoa/shared';
  * assertion about the REAL executor, and what lets the URL be inspected). `authoring-core.ts` is
  * mocked so no test makes a model call - and only the model TURN is faked: the mock drives the
  * caller's own `parse` seam, so both output contracts, both parsers, both deterministic guardrail
- * suites, the org-scoped collection reader and the join stage are all real.
+ * suites, the owner-scoped collection reader and the join stage are all real.
  */
 const upstream = vi.hoisted(() => ({
   calls: [] as Array<{ url: string; method?: string }>,
@@ -381,7 +381,7 @@ describe('the composition root binds both new seams', () => {
     plans.compose = composeBlock(COMPOSE_PLAN);
     const body = await okBody(await achieve(await tokenFor('ownerA'), CANONICAL_GOAL));
     // Reaching `composed` at all requires BOTH the list (to get past the "no collections" skip)
-    // and the read (to get rows) - i.e. the whole org-scoped binding, not a stub.
+    // and the read (to get rows) - i.e. the whole owner-scoped binding, not a stub.
     expect(body.outcome).toBe('composed');
   });
 });

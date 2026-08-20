@@ -17,7 +17,7 @@ import { loadConfig, type Config } from './config.js';
 import { securityHeaders } from './security-headers.js';
 import { connectMongo } from './data/mongo.js';
 import { users, triggers } from './data/stores.js';
-import { CollectionsEngine, sharedScope, appScope } from './data/collections-engine.js';
+import { CollectionsEngine, sharedScope, ownerSharedScope, appScope } from './data/collections-engine.js';
 import { loadActivation } from './data/activation.js';
 import { loadRevocations } from './auth/revocation.js';
 import { seedAdmin } from './auth/service.js';
@@ -211,7 +211,6 @@ import {
 import { AppDataAccess } from './apps/app-data-access.js';
 import { listEmailIntegrations, sendAppEmail, type AppEmailDeps, type AppEmailContext } from './integrations/app-email.js';
 import { getArtifactById, projectDirFor } from './apps/app-paths.js';
-import { listArtifacts } from './apps/artifacts-service.js';
 import { listVisibleMemories } from './memory/index.js';
 import { getSharedBrowser } from './services/browser-pool.js';
 import type { Browser } from 'playwright';
@@ -1263,36 +1262,40 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   const planStep: PlanDrafter = (input) => authorWithRepair({ ...input, emptyReply: 'unavailable' });
   // The compose rung's DATA side, and the ONE place its tenancy is decided.
   //
-  // `listArtifacts(actor)` is the tenancy filter, and it is deliberately the platform's OWN
-  // visibility predicate rather than an `orgId` comparison written here: an artifact this actor may
-  // not see does not appear, so its collections are neither named in a prompt nor readable, and the
-  // rule cannot drift from the one `/api/v1/artifacts` answers with. (Deleting it - listing every
-  // artifact instead - is what `api/tests/security/achieve-compose-isolation.test.ts` mutates to
-  // prove the suite is a gate and not a decoration.)
+  // THE UNIT IS THE OWNER, because that is the only unit `app_data` HAS for shared rows. Every read
+  // in `CollectionsEngine` binds on `scope.scopeKey` - `usr.<ownerUserId>` - and `Scope.appId` is
+  // never part of any query. An earlier shape of this binding looped `listArtifacts(actor)` and
+  // built a `sharedScope(artifactId, art.userId)` per artifact, which was wrong twice over and is
+  // the pair of holes `api/tests/security/achieve-compose-isolation.test.ts` tests 5 and 6 pin:
   //
-  // The per-artifact scope is `sharedScope(artifactId, ownerUserId)`, byte-identical to the
-  // `setAppDataStore` binding above, so the compose rung reads exactly the rows the recipe DSL's
-  // `store.list` reads for the same app and no others.
+  //   - it decided AMBIGUITY per ARTIFACT over data scoped per OWNER, so anyone owning a second app
+  //     - holding anything at all, `clients` or not - saw one namespace as two sources and could
+  //     never compose;
+  //   - it treated "an artifact I may SEE" as "its owner's data I may READ". A peer's org-visible
+  //     app resolved to `usr.<peer>`: that peer's ENTIRE owner-shared namespace, spanning apps the
+  //     caller cannot see and collections the visible artifact never names. Artifact visibility is
+  //     not an entitlement to its owner's rows, and a read rung that can enumerate a colleague's
+  //     collections is not a reuse ladder.
+  //
+  // So the scope is the ACTING USER'S OWN, resolved from the verified actor and from nothing else.
+  // Rule 5: per-user scoped storage, enforced here. It is exactly the scope this user's own apps
+  // read and write through the served plane (`sharedScope(appId, ownerUserId)` for an app they
+  // own), so the rung grants no reach their own app does not already have - and none over anybody
+  // else's rows. Widening this to a colleague's app is a real product question with no answer in
+  // the store today (there is no per-app dimension to grant); it is D-S5-1 in `docs/decisions.md`,
+  // with a review date, not a default.
+  //
+  // (The MUTATION that proves this is a gate, and it was RUN rather than asserted: delete the
+  // tenancy filter at the single query-binding point - drop `appId: scope.scopeKey` from
+  // `CollectionsEngine.list`, and separately from `listCollections`. The isolation suite reds in
+  // both directions, rows and prompt names, and nothing else in the estate notices.)
   const achieveCollections: AppCollections = {
-    list: async (actor) => {
-      const names = new Set<string>();
-      for (const art of (await listArtifacts(actor)).items) {
-        for (const c of await automationAppData.listCollections(sharedScope(art._id, art.userId))) names.add(c);
-      }
-      return [...names].sort();
-    },
-    // AMBIGUITY IS AN ANSWER. `app_data` is keyed per ARTIFACT, so one org can legitimately hold a
-    // `clients` collection in two apps; answering from the first would silently pick whose data the
-    // caller was told about. The refusal names the artifacts and asks.
+    list: (actor) => automationAppData.listCollections(ownerSharedScope(actor.userId)),
     read: async (actor, collection) => {
-      const hits: Array<{ artifactId: string; rows: Record<string, unknown>[] }> = [];
-      for (const art of (await listArtifacts(actor)).items) {
-        const rows = await automationAppData.list(sharedScope(art._id, art.userId), collection);
-        if (rows.length > 0) hits.push({ artifactId: art._id, rows });
-      }
-      if (hits.length === 0) return { kind: 'unknown_collection' };
-      if (hits.length > 1) return { kind: 'ambiguous_collection', sources: hits.map((h) => h.artifactId).sort() };
-      return { kind: 'rows', rows: (hits[0] as { rows: Record<string, unknown>[] }).rows };
+      const rows = await automationAppData.list(ownerSharedScope(actor.userId), collection);
+      // ONE scope means one answer: rows, or the name is not one this caller holds. There is no
+      // ambiguity to report, because there are no longer two places for a name to be found in.
+      return rows.length > 0 ? { kind: 'rows', rows } : { kind: 'unknown_collection' };
     },
   };
   // The PLATFORM seam for the public capability rail. The org comes from the VERIFIED principal
