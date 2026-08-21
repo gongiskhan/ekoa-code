@@ -533,6 +533,47 @@ describe('PROMOTION is a human act, and it is what makes the state load-bearing'
       .toEqual({ verdict: 'unvalidated' });
   });
 
+  /**
+   * A ROW THAT RECORDS A RUN THAT FAILED DOES NOT GRADUATE THE ACTION (slice S1, round eight),
+   * proved through the REAL store and the REAL promotion path.
+   *
+   * WHERE SUCH A ROW COMES FROM, SAID PLAINLY. Both write sites refuse to record a failure today -
+   * `executeHttpAction` captures inside its 2xx branch only, and the automation rail has
+   * `if (!automationResult.success) return null;`. This fixture is therefore what the writer produces
+   * WITHOUT one of those guards, and that is exactly the point: the previous cut of this gate read
+   * PRESENCE plus `shape` and nothing else, so "an action may only graduate on a run that WORKED"
+   * lived entirely in one deletable line of `action-executor.ts` and was pinned nowhere.
+   * `recordEvidence` is a production API of a Rule 5 store and it accepts this row; the GATE is what
+   * has to refuse it.
+   */
+  it('a row recording a run that FAILED does not graduate the action (slice S1)', async () => {
+    const authored = await authorOne();
+    await actionEvidenceStore.recordEvidence(
+      { orgId: 'orgA', ownerUserId: 'ownerA', integrationKey: PROBE_INTEGRATION, actionName: 'arquivar_processo' },
+      {
+        backingType: 'api-call',
+        // The SHAPE is honest - it really is this action's bytes - so the refusal can only come from
+        // the outcome term, not from the shape gate the case above already covers.
+        shape: actionShape(PROBE_INTEGRATION, authored),
+        evidence: {
+          kind: 'api-call',
+          request: { method: 'POST', url: 'https://probe.example/processos/9/arquivar', headers: {} },
+          response: { status: 500, body: '{"error":"upstream is down"}', bodyIsJson: true },
+        },
+      },
+    );
+    // The store DERIVED the verdict off the sample rather than taking a caller's word for it.
+    const row = await actionEvidenceStore.getEvidence({
+      orgId: 'orgA', ownerUserId: 'ownerA', integrationKey: PROBE_INTEGRATION, actionName: 'arquivar_processo',
+    });
+    expect(row!.outcome).toBe('failed');
+
+    expect(await trustAuthoredAction(actor('ownerA', 'orgA'), PROBE_INTEGRATION, 'arquivar_processo', authored.authoring!.shape, integrationDefinitionStore, fixedNow))
+      .toEqual({ verdict: 'unvalidated' });
+    const still = (await storedActions('orgA', PROBE_INTEGRATION)).find((a) => a.actionName === 'arquivar_processo')!;
+    expect(still.authoring?.state).toBe('provisional');
+  });
+
   it('promotion flips the state AND lets the declared mutates take effect', async () => {
     const authored = await authorOne();
     await validateRun(authored);

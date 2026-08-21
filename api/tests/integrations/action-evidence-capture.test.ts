@@ -6,6 +6,8 @@ import {
   integrationDefinitions,
   approvedIntegrationActions,
   integrationActionEvidence,
+  automations,
+  automationRuns,
 } from '../../src/data/stores.js';
 import { loadConfig, __resetConfigForTests } from '../../src/config.js';
 import { integrationDefinitionStore } from '../../src/integrations/definition-store.js';
@@ -16,8 +18,14 @@ import {
   actionEvidenceStore,
   MAX_EVIDENCE_EXCERPT_CHARS,
   type ApiCallEvidence,
+  type AutomationEvidence,
 } from '../../src/integrations/action-evidence-store.js';
 import type { IntegrationAction } from '../../src/integrations/definitions.js';
+import { automationBackedActionHandler } from '../../src/automation/service.js';
+import { automationRunStore } from '../../src/automation/persistence.js';
+import { collectRunEvidence } from '../../src/automation/action-evidence.js';
+import type { RunAutomationOptions, RunAutomationResult, RunContext } from '../../src/automation/engine.js';
+import type { RunStatus, StepRecord } from '../../src/automation/types.js';
 
 /**
  * SLICE S1 - EVIDENCE CAPTURE, through the REAL executor.
@@ -115,6 +123,128 @@ const evidenceOf = async (orgId = ORG, actionName = readAction.actionName, owner
  */
 const bodyJson = (ev: ApiCallEvidence): unknown => JSON.parse(ev.response.body!);
 
+// ---------------------------------------------------------------------------------------------
+// THE AUTOMATION HALF of the same property (round eight). Everything below `deps.run` is real: the
+// executor, the production seam mapping, the real run store, the real collector, the real evidence
+// store, real Mongo.
+// ---------------------------------------------------------------------------------------------
+
+const AUTOMATION_ID = 'auto-probe';
+
+/**
+ * A browser-steps action on the SAME integration, so the definition still declares `HOST` through
+ * `readAction` and the egress binding this rail resolves is a non-empty allow-list rather than the
+ * `origin_refused` a definition with no declared host would produce. A READ, for the same reason
+ * `readAction` is one: no approval is needed, so the case is about the capture alone.
+ */
+const browserAction: IntegrationAction = {
+  actionName: 'abrir_processo',
+  description: 'Abre o processo no portal',
+  mutates: false,
+  automationBinding: { automationId: AUTOMATION_ID },
+};
+
+/** The automation the binding names, owned by the caller - `runAutomationForAction` refuses
+ *  `unknown_automation` without it and `forbidden` if somebody else owns it. */
+async function seedAutomation(): Promise<void> {
+  await automations.insert({
+    _id: AUTOMATION_ID,
+    id: AUTOMATION_ID,
+    name: 'abrir o processo',
+    description: 'abre o portal e abre o processo',
+    ownerUserId: OWNER,
+    orgId: ORG,
+    steps: [{ id: 's1', description: 'abrir o processo', type: 'browser' }],
+    createdAt: '2026-08-21T08:00:00.000Z',
+    updatedAt: '2026-08-21T08:00:00.000Z',
+  } as never);
+}
+
+/** One real `StepRecord`. `completed`/`failed` are members of `StepStatus` and `cache` of
+ *  `StepTier`; a browser step carries a `screenshotPath` and no `output`. */
+const step = (index: number, status: StepRecord['status'], file: string): StepRecord => ({
+  stepId: `s${index}`,
+  index,
+  status,
+  tier: 'cache',
+  durationMs: 1,
+  screenshotPath: `automation-runs/${AUTOMATION_ID}/${file}`,
+  ...(status === 'failed'
+    ? { error: { message: 'o portal respondeu com um ecrã de sessão expirada', recoverable: false } }
+    : {}),
+});
+
+/**
+ * THE ENGINE, STOOD IN FOR AT ITS OWN INJECTED SEAM (`ActionRunDeps.run`) - and writing its run
+ * record through the PRODUCTION WRITER.
+ *
+ * FIXTURE HONESTY, WHICH IS THE WHOLE REASON THIS IS SHAPED LIKE THIS. The `automationRuns`
+ * document is not hand-inserted: it is created at `running` and then patched to its terminal status
+ * through `automationRunStore`, which is the exact pair of calls `runOrRehearse` makes
+ * (`automation/engine.ts`, "Run records persist at EVERY status transition"). So what
+ * `collectRunEvidence` reads afterwards is a document of the shape the engine really leaves behind,
+ * and the run id is the one the SERVICE minted and handed in - the same id that rides out on
+ * `ActionRunEnvelope.runId` and inside `automation_failed`'s `data`.
+ *
+ * The engine itself cannot be driven here: a real run needs a paired machine, a browser and the
+ * vision resolver. What is being tested is not the engine but what the EXECUTOR does with the two
+ * answers it can get back, so the seam is filled and everything downstream of it is production.
+ */
+function engineEnding(status: RunStatus, steps: StepRecord[]): { run: (a: string, c: RunContext, o?: RunAutomationOptions) => Promise<RunAutomationResult>; minted: string[] } {
+  const minted: string[] = [];
+  return {
+    minted,
+    run: async (automationId, ctx, options = {}) => {
+      if (!options.runId) {
+        // The service mints the id and passes it in; a stand-in that minted its own would be
+        // testing a wiring production does not have.
+        throw new Error('expected the service to mint the run id and hand it to the engine');
+      }
+      const runId = options.runId;
+      minted.push(runId);
+      await automationRunStore.create({
+        id: runId,
+        automationId,
+        startedAt: '2026-08-21T09:00:00.000Z',
+        status: 'running',
+        inputs: {},
+        steps: [],
+        triggeredBy: ctx.triggeredBy,
+        ownerUserId: ctx.ownerUserId,
+        orgId: ctx.orgId,
+      });
+      await automationRunStore.update(automationId, runId, { status, steps, endedAt: '2026-08-21T09:00:05.000Z' });
+      return {
+        runId,
+        status,
+        durationMs: 5_000,
+        summary: status === 'completed' ? 'abriu o processo' : 'o passo 0 falhou',
+        lastStepIndex: steps.length - 1,
+        ...(status === 'completed' ? {} : { error: 'a automação não completou' }),
+      };
+    },
+  };
+}
+
+/** The action, entered where production enters it, with the production seam mapping and BOTH real
+ *  evidence seams bound exactly as `server.ts` binds them. */
+const runBrowserAction = (engine: { run: (a: string, c: RunContext, o?: RunAutomationOptions) => Promise<RunAutomationResult> }) =>
+  executeUserIntegrationAction(
+    { orgId: ORG, ownerUserId: OWNER, integrationKey: KEY, actionName: browserAction.actionName, args: {} },
+    {
+      ...evidenceDeps,
+      collectRunEvidence: (runId) => collectRunEvidence(runId),
+      runAutomationBackedAction: automationBackedActionHandler({ run: engine.run }),
+    },
+  );
+
+const automationEvidenceOf = async (): Promise<AutomationEvidence | undefined> => {
+  const row = await actionEvidenceStore.getEvidence({
+    orgId: ORG, ownerUserId: OWNER, integrationKey: KEY, actionName: browserAction.actionName,
+  });
+  return row?.evidence as AutomationEvidence | undefined;
+};
+
 beforeAll(async () => {
   process.env.ENCRYPTION_KEY = 'test-encryption-key-32-characters!';
   process.env.JWT_SECRET = 's';
@@ -127,7 +257,7 @@ beforeAll(async () => {
 afterAll(async () => { await closeMongo(); await mem.stop(); });
 
 beforeEach(async () => {
-  for (const s of [integrationConfigs, integrationDefinitions, approvedIntegrationActions, integrationActionEvidence]) {
+  for (const s of [integrationConfigs, integrationDefinitions, approvedIntegrationActions, integrationActionEvidence, automations, automationRuns]) {
     await s.deleteMany({});
   }
   const { cofreItems, cofreGrants } = await import('../../src/cofre/store.js');
@@ -221,6 +351,99 @@ describe('evidence is the LAST VALIDATED run, so a failure is not one', () => {
     expect(res.success).toBe(false);
     expect(await evidenceOf()).toBeNull();
   });
+});
+
+/**
+ * …AND THE SAME PROPERTY ON THE AUTOMATION RAIL (round eight), where it was pinned ZERO ways.
+ *
+ * THE THREE CASES ABOVE ARE ALL `api-call`. The automation rail reaches the identical write through
+ * a different door, and its guard - `if (!automationResult.success) return null;` in the executor's
+ * evidence closure - could be DELETED with the entire fourteen-file S1 estate staying green
+ * (258/258, measured twice). It is load-bearing in production and only in production:
+ * `runAutomationForAction` answers a failed ENGINE run with
+ * `{success: false, code: 'automation_failed', data: {runId, status}}`, and that run id names a REAL
+ * `automationRuns` document. Without the guard `runIdOf` resolves it, the collector returns the
+ * FAILED trace, and `recordEvidence` PUTs it at the same deterministic `_id` - superseding the last
+ * successful sample with `validatedAt: now` and pinning the failed run's screenshots out of the
+ * 7-day sweep.
+ *
+ * WHY NOTHING NOTICED. The only other suite binding these seams for real
+ * (`tests/automation/composition-root-action-seam.test.ts`) points its binding at `auto-never-runs`,
+ * an automation that does not exist. That refusal is `unknown_automation`, it carries no `data`,
+ * `runIdOf` answers `undefined`, and the mutant is a no-op there. So the case below insists on the
+ * one thing that suite cannot have: a REAL automation, owned by the caller, whose ENGINE run fails.
+ */
+describe('the same property on the AUTOMATION rail: a failed run is not a validated run', () => {
+  it('a SUCCESSFUL automation run records the trace, and pins its screenshots', async () => {
+    // THE CONTROL, and the row every case below is about. Without it "the good sample survived"
+    // would also be satisfied by a chain that never records anything at all.
+    await seed([readAction, browserAction]);
+    await seedAutomation();
+    const engine = engineEnding('completed', [step(0, 'completed', 'step-0.png')]);
+
+    const res = await runBrowserAction(engine);
+
+    expect(res.success).toBe(true);
+    const ev = await automationEvidenceOf();
+    expect(ev).toMatchObject({
+      kind: 'automation',
+      runId: engine.minted[0],
+      status: 'completed',
+      steps: [{ stepIndex: 0, status: 'completed', screenshotUrl: `/automation-screenshots/${AUTOMATION_ID}/step-0.png` }],
+    });
+    expect(await actionEvidenceStore.pinnedRunIdsForRetention()).toEqual(new Set([engine.minted[0]]));
+  }, 30_000);
+
+  it('a FAILED automation run does NOT replace the evidence of the last successful one', async () => {
+    await seed([readAction, browserAction]);
+    await seedAutomation();
+    const good = engineEnding('completed', [step(0, 'completed', 'step-0.png')]);
+    expect((await runBrowserAction(good)).success).toBe(true);
+    const before = await actionEvidenceStore.getEvidence({
+      orgId: ORG, ownerUserId: OWNER, integrationKey: KEY, actionName: browserAction.actionName,
+    });
+    expect(before).not.toBeNull();
+
+    // The SAME action, the SAME automation, and this time the engine ends `failed` - a real run,
+    // with a real run record and real failed steps behind a real run id.
+    const bad = engineEnding('failed', [step(0, 'failed', 'step-0.png')]);
+    const res = await runBrowserAction(bad);
+
+    // The executor answers the failure honestly…
+    expect(res.success).toBe(false);
+    expect(res.code).toBe('automation_failed');
+    // …and the run it names really is a different, resolvable run, so the mutant has something to
+    // find. Without this the case would also pass if the failed leg had answered no run id at all,
+    // which is the exact reason the existing seam suite could not see the defect.
+    expect(bad.minted[0]).not.toBe(good.minted[0]);
+    expect(await automationRunStore.findByRunId(bad.minted[0]!)).toMatchObject({ status: 'failed' });
+
+    // THE ASSERTION THE CASE EXISTS FOR: the row is byte-for-byte the one the successful run wrote.
+    // Deep equality rather than a field-by-field check, because "survives untouched" includes
+    // `validatedAt` (a supersede re-stamps it to now) and `outcome`.
+    const after = await actionEvidenceStore.getEvidence({
+      orgId: ORG, ownerUserId: OWNER, integrationKey: KEY, actionName: browserAction.actionName,
+    });
+    expect(after).toEqual(before);
+    // …and the failed run's screenshots were never pinned out of the 7-day sweep. A supersede
+    // releases the old pin and takes a new one in the same write, so this is the retention half of
+    // the same defect and it is not recoverable by any gate downstream.
+    expect(await actionEvidenceStore.pinnedRunIdsForRetention()).toEqual(new Set([good.minted[0]]));
+  }, 30_000);
+
+  it('a FAILED first run records nothing at all - there is no sample to fall back to', async () => {
+    // The automation mirror of "a 4xx records nothing at all". With no previous row, the supersede
+    // argument does not apply and what is at stake is whether a failure can BECOME the sample.
+    await seed([readAction, browserAction]);
+    await seedAutomation();
+    const bad = engineEnding('failed', [step(0, 'failed', 'step-0.png')]);
+
+    const res = await runBrowserAction(bad);
+
+    expect(res.success).toBe(false);
+    expect(await automationEvidenceOf()).toBeUndefined();
+    expect(await actionEvidenceStore.pinnedRunIdsForRetention()).toEqual(new Set());
+  }, 30_000);
 });
 
 describe('one live row per action, superseded wholesale', () => {

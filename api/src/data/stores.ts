@@ -182,7 +182,14 @@ export const integrationCapturedCalls = new Store<Doc>('integration_captured_cal
  *
  * RETENTION IS BOUNDED, which is what lets every collector on this collection fail towards KEEPING:
  * `sweepExpiredEvidence` at boot ends every row not re-validated within `EVIDENCE_RETENTION_DAYS`,
- * whether or not anything ever noticed its action had stopped resolving for its owner.
+ * whether or not anything ever noticed its action had stopped resolving for its owner. Read
+ * "re-validated" literally - a REPLAYING browser-steps action refreshes nothing, and that gap is OPEN
+ * in docs/findings.md rather than implied away here.
+ *
+ * THE ROW SAYS WHETHER ITS RUN WORKED, and the store DERIVES that rather than believing a caller:
+ * `outcome` is `'succeeded' | 'failed'`, computed in `recordEvidence` off the stored sample.
+ * `promoteToTrusted` refuses anything but `succeeded`, so the graduation gate no longer rests on a
+ * guard at the write site. See `ActionEvidenceDoc.outcome`.
  *
  * NOT THE SAME THING AS `integration_captured_calls` ABOVE, and the difference is the reason both
  * exist: that one is the unbounded MACHINE-facing trace a recipe is compiled out of and then

@@ -640,9 +640,10 @@ export async function deleteConfig(actor: Actor, integrationKey: string): Promis
     //
     // WHAT IT ACTUALLY KEEPS OUT IS `undefined`, and the consequence runs the OTHER WAY: an
     // `undefined` inside `$nin` serialises to `null`, and `$nin: [null]` spares exactly the rows
-    // that carry NO `ownerUserId` - the migrated rows from this collection's org-only first cut,
-    // which `discardEvidenceForDisconnectedConfig`'s own note says must go here because nothing can
-    // ever supersede them. So the filter protects a DELETION, not a sparing.
+    // that carry NO `ownerUserId` - a shape `recordEvidence` refuses to write, so one can only have
+    // been hand-written or restored, and `discardEvidenceForDisconnectedConfig`'s own note says it
+    // must go here because nothing can ever supersede it. So the filter protects a DELETION, not a
+    // sparing.
     //
     // AND ITS RUNTIME EFFECT IS UNOBSERVABLE THROUGH THIS FUNCTION, which is said out loud rather
     // than left to look load-bearing. The only row that could contribute `undefined` is another

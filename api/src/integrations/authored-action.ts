@@ -483,6 +483,25 @@ export interface ValidatedRunEvidence {
   /** The action SHAPE the validated run actually exercised. */
   shape?: string;
   validatedAt: string;
+  /**
+   * DID THAT RUN SUCCEED - `ActionEvidenceDoc.outcome`, which the store DERIVES from the stored
+   * sample (slice S1, round eight).
+   *
+   * Typed `string` rather than imported as `ActionEvidenceOutcome` for the reason the whole shape is
+   * structural: this module is pure and holds no edge to the evidence store. The doc is assignable
+   * because its own field is narrower.
+   *
+   * WHY THE GATE NEEDED A TERM AT ALL. Until this existed the promotion read PRESENCE plus `shape`,
+   * neither of which carries any success signal, so "an action may only graduate on a run that
+   * WORKED" was true only because of a guard at the WRITE SITE - one line in `action-executor.ts`
+   * refusing to record a failed automation run. That line is correct and is pinned in its own right,
+   * but a gate that depends on a guard living inside the thing it gates is not a gate: delete the
+   * line and a failed run's trace supersedes the last successful sample at the same `_id`, and this
+   * function would have promoted on it while reading nothing that disagreed. ABSENT IS REFUSED, the
+   * same reading this function already takes of a shapeless row: "we cannot tell how the run ended"
+   * must not share a code path with "the run worked".
+   */
+  outcome?: string;
 }
 
 /**
@@ -536,6 +555,12 @@ export function promoteToTrusted(
   // idempotently. Nothing is granted here that was not already granted.
   if (record.state === 'trusted') return { ok: true, action, alreadyTrusted: true };
   if (!evidence) return { ok: false, reason: 'unvalidated' };
+  // A ROW THAT RECORDS A RUN THAT DID NOT WORK IS NOT A VALIDATED RUN. Asked BEFORE the shape,
+  // because it is the coarser question: the shape says WHICH bytes ran, this says whether running
+  // them worked, and a failed run of exactly the right bytes is still not evidence that the action
+  // does what its description claims. See `ValidatedRunEvidence.outcome` for why the gate reads a
+  // stored term instead of trusting the executor not to write one.
+  if (evidence.outcome !== 'succeeded') return { ok: false, reason: 'unvalidated' };
   if (!evidence.shape || evidence.shape !== actionShape(integrationKey, action)) {
     return { ok: false, reason: 'unvalidated' };
   }

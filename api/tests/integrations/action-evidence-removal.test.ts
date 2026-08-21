@@ -524,11 +524,17 @@ describe('the OWNER\'s durable signals: an explicit erasure, and a disconnected 
    * `discardEvidenceForDisconnectedConfig`'s `$nin` note makes, and nothing pinned it.
    *
    * THE SHAPE IS REAL AND THE CURRENT WRITER CANNOT MAKE IT, which is the point rather than a
-   * loophole. This collection's FIRST CUT keyed a row on (orgId, integrationKey, actionName) with no
-   * `ownerUserId` - the defect `action-evidence-store.ts`'s tenancy section records, and the shape
-   * `getEvidence`'s re-check exists to fail closed on. `recordEvidence` refuses to write it now
-   * (`assertKey`), so every such row in a real deployment is a survivor of that key change and can
-   * only be inserted here the way the migration left it: directly.
+   * loophole - AND ITS PROVENANCE IS NOT A MIGRATION (corrected, round eight). The previous revision
+   * of this paragraph said "every such row in a real deployment is a survivor of that key change",
+   * describing a migration that cannot have happened: this collection HAS NEVER SHIPPED, and the
+   * org-only key (orgId, integrationKey, actionName) was an earlier round of this same unmerged
+   * branch, never a released shape. No deployment holds one and nothing migrated anything.
+   *
+   * WHY IT IS STILL WORTH DEFENDING: `recordEvidence` refuses to write the shape (`assertKey`), so a
+   * row carrying no `ownerUserId` can only arrive by hand, by a partial restore, or from a future
+   * writer - which is exactly when a fail-closed rule matters and exactly when nobody is watching.
+   * `getEvidence`'s re-check serves it to nobody; this `$nin` arm erases it with the shared
+   * credential. The insert below is direct because there is no writer that could produce it.
    *
    * AND IT CAN NEVER BE SUPERSEDED. A re-run writes under the new four-term `_id`, so it lands
    * beside this row rather than over it, and TTL is the only other thing that reaches it - up to
@@ -621,9 +627,17 @@ describe('TIME is the collector: the retention sweep ends what nobody re-validat
   });
 
   it('a run inside the window keeps the row alive - the window measures USE, not age', async () => {
-    // THE CONTROL for both cases above: an integration in real use never ages out, because every
-    // successful run rewrites `validatedAt`. Without this, "the sweep removes things" would also be
-    // satisfied by a sweep that removed everything.
+    // THE CONTROL for both cases above: a run that really happens rewrites `validatedAt`, so the
+    // window measures use. Without this, "the sweep removes things" would also be satisfied by a
+    // sweep that removed everything.
+    //
+    // AND READ THE SCOPE LITERALLY - `run` here is the api-call rail, which is the rail where a
+    // success always records. It is NOT true of every rail: a browser-steps READ action is
+    // `storable`, so after its first pass every later run REPLAYS, the answer carries a `replay-…`
+    // id with no `automationRuns` document behind it, `collectRunEvidence` answers null and nothing
+    // is recorded. Such an action can be run successfully every day for ninety days and still be
+    // swept. See `EVIDENCE_RETENTION_DAYS`'s own docblock and
+    // `evidence-of-a-replaying-action-ages-out-while-the-action-is-in-daily-use` in docs/findings.md.
     await integrationDefinitionStore.create(definitionRow([SURVIVOR]), { actor: author });
     await createConfig(author, { integrationKey: KEY, configValues: { api_key: 'k' }, secretKeys: ['api_key'] }, cfgDeps);
     await record({ actionName: SURVIVOR }, apiCall('an old sample'));

@@ -518,13 +518,13 @@ describe('promotion requires a last validated run', () => {
 
   it('REFUSES evidence whose shape names different bytes', () => {
     const action = provisional();
-    expect(promoteToTrusted(KEYNAME, action, actor, { shape: 'some-other-shape', validatedAt: 'x' }))
+    expect(promoteToTrusted(KEYNAME, action, actor, { shape: 'some-other-shape', validatedAt: 'x', outcome: 'succeeded' }))
       .toEqual({ ok: false, reason: 'unvalidated' });
   });
 
   it('REFUSES evidence carrying no shape at all (a pre-field row is not a proof)', () => {
     const action = provisional();
-    expect(promoteToTrusted(KEYNAME, action, actor, { validatedAt: 'x' }))
+    expect(promoteToTrusted(KEYNAME, action, actor, { validatedAt: 'x', outcome: 'succeeded' }))
       .toEqual({ ok: false, reason: 'unvalidated' });
   });
 
@@ -533,6 +533,7 @@ describe('promotion requires a last validated run', () => {
     const out = promoteToTrusted(KEYNAME, action, actor, {
       shape: actionShape(KEYNAME, action),
       validatedAt: '2026-08-20T00:00:00.000Z',
+      outcome: 'succeeded',
     }, () => 1_700_000_000_000);
     expect(out.ok).toBe(true);
     if (!out.ok) return;
@@ -547,7 +548,94 @@ describe('promotion requires a last validated run', () => {
       ...action,
       authoring: { ...action.authoring, verification: { passed: false } },
     } as unknown as IntegrationAction;
-    expect(promoteToTrusted(KEYNAME, unverified, actor, { shape: actionShape(KEYNAME, action), validatedAt: 'x' }))
+    expect(promoteToTrusted(KEYNAME, unverified, actor, { shape: actionShape(KEYNAME, action), validatedAt: 'x', outcome: 'succeeded' }))
       .toEqual({ ok: false, reason: 'unverified' });
+  });
+
+  /**
+   * THE OUTCOME TERM (round eight) - the gate stops resting on a WRITE-SITE INVARIANT.
+   *
+   * Until this term existed, `promoteToTrusted` read PRESENCE plus `shape` and nothing else, so
+   * "an action may only graduate on a run that WORKED" was true only because of one line in
+   * `action-executor.ts` refusing to record a failed automation run. Delete that line - which the
+   * whole S1 estate survived - and a failed run's trace supersedes the last successful sample at the
+   * same `_id`, and this function would have promoted on it while reading nothing that disagreed.
+   *
+   * The three cases below are the term at its own level: refuse `failed`, refuse ABSENT, and accept
+   * `succeeded` so the gate stays a gate.
+   */
+  describe('the run also has to have WORKED', () => {
+    const matching = (action: IntegrationAction) => ({ shape: actionShape(KEYNAME, action), validatedAt: 'x' });
+
+    it('REFUSES a row whose run FAILED, even when it names exactly these bytes', () => {
+      const action = provisional();
+      expect(promoteToTrusted(KEYNAME, action, actor, { ...matching(action), outcome: 'failed' }))
+        .toEqual({ ok: false, reason: 'unvalidated' });
+    });
+
+    it('REFUSES a row that says NOTHING about how the run ended', () => {
+      // Fail-closed, the same reading this function already takes of a shapeless row: "we cannot
+      // tell how it ended" must not share a code path with "it worked". Also the reading that makes
+      // a hand-written or restored row unable to buy a promotion.
+      const action = provisional();
+      expect(promoteToTrusted(KEYNAME, action, actor, matching(action)))
+        .toEqual({ ok: false, reason: 'unvalidated' });
+    });
+
+    it('and PROMOTES on `succeeded`, so the term is a gate and not a ban', () => {
+      const action = provisional();
+      const out = promoteToTrusted(KEYNAME, action, actor, { ...matching(action), outcome: 'succeeded' });
+      expect(out.ok).toBe(true);
+    });
+  });
+});
+
+/**
+ * …AND THE TERM IS DERIVED BY THE STORE, WHICH IS WHY IT CANNOT BE THE WRITE SITE'S OPINION.
+ *
+ * A term the executor PASSED IN would restate the write site's own belief, so a write site that
+ * recorded a failure would label it `succeeded` and the gate would be exactly as dependent on that
+ * site as it was before. These cases go through `recordEvidence` - a production API of this store -
+ * and read the label off the stored document.
+ */
+describe('the outcome term is read off the sample, not asserted by the caller', () => {
+  it('a 2xx api-call sample is `succeeded`; a 5xx one is `failed`', async () => {
+    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence(200) });
+    expect((await store.getEvidence(KEY))!.outcome).toBe('succeeded');
+
+    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence(503, 'upstream is down') });
+    expect((await store.getEvidence(KEY))!.outcome).toBe('failed');
+  });
+
+  it('the 2xx window is the window, at both edges', async () => {
+    // Straddled rather than sampled: `>= 200 && < 300` has two bounds and a single 200/500 pair
+    // leaves either free to move. 204 and 302 are both ordinary answers from a real API.
+    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence(204, '') });
+    expect((await store.getEvidence(KEY))!.outcome).toBe('succeeded');
+    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence(299, '') });
+    expect((await store.getEvidence(KEY))!.outcome).toBe('succeeded');
+    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence(199, '') });
+    expect((await store.getEvidence(KEY))!.outcome).toBe('failed');
+    await store.recordEvidence(KEY, { backingType: 'api-call', evidence: apiCallEvidence(300, '') });
+    expect((await store.getEvidence(KEY))!.outcome).toBe('failed');
+  });
+
+  it('an automation sample is `succeeded` only on `completed` - the ONE success member of RunStatus', async () => {
+    const automation = (status?: string) => ({
+      kind: 'automation' as const,
+      runId: 'run-1',
+      ...(status !== undefined ? { status } : {}),
+      steps: [{ stepIndex: 0, status: status === 'completed' ? 'completed' : 'failed' }],
+    });
+
+    await store.recordEvidence(KEY, { backingType: 'browser-steps', evidence: automation('completed') });
+    expect((await store.getEvidence(KEY))!.outcome).toBe('succeeded');
+    // `failed`, `cancelled` and every halt (`needs_credentials`, `awaiting_daemon`, …) are members of
+    // `RunStatus` that are not a run that worked. A run whose status is ABSENT is `failed` too, which
+    // is the fail-closed direction: "we cannot tell" is not "it worked".
+    for (const status of ['failed', 'cancelled', 'needs_credentials', 'awaiting_daemon', undefined]) {
+      await store.recordEvidence(KEY, { backingType: 'browser-steps', evidence: automation(status) });
+      expect((await store.getEvidence(KEY))!.outcome).toBe('failed');
+    }
   });
 });

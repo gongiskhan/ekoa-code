@@ -140,6 +140,65 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   `the-retention-window-was-a-number-no-test-could-tell-from-any-other` below. The WINDOW itself is
   unchanged and this entry stays OPEN.
 
+- **`evidence-of-a-replaying-action-ages-out-while-the-action-is-in-daily-use`** (2026-08-21, OPEN,
+  **LOW on this branch, MEDIUM the moment S2/S3 mounts**; S1 round eight. Found by reading the
+  `EVIDENCE_RETENTION_DAYS` docblock against the discovery spine, not by a failing test - nothing
+  could have failed, because the claim was not asserted anywhere).
+
+  **THE CLAIM THAT WAS FALSE.** `EVIDENCE_RETENTION_DAYS`'s docblock read *"Every successful run
+  rewrites `validatedAt`, so an integration in real use never ages out - only one nobody has run for
+  a quarter of a year"*, and four documents rest their accepted-cost argument on the shape of that
+  sentence (this file's `evidence-orphan-window-until-ttl`, `docs/decisions.md`,
+  `docs/architecture.md`, and the store's own header). It is FALSE for exactly the path this platform
+  is built around. A `browser-steps` READ action is `storable` (`automation/service.ts`:
+  `named && !mutating`), so its FIRST run compiles a recipe and every later run REPLAYS. A replay
+  answers with a `replay-<uuid>` id that by construction has no `automationRuns` document behind it,
+  so `collectRunEvidence` returns null, the executor's capture closure returns null, and NOTHING IS
+  RECORDED. An action run successfully every single day for ninety days keeps the stamp of its first
+  run, is deleted at the next boot after that, and releases its screenshot pin on the way out.
+
+  **WHAT IS AND IS NOT AFFECTED.** Refreshing paths: every `api-call` action; a mutating
+  automation-backed action (never `storable`, so it never replays); an automation-backed read whose
+  passes have compiled nothing yet. No user-visible impact on THIS branch: the evidence row has no
+  production reader (the detail page is S2/S3), and authored actions are api-call-backed only
+  (`authored-action.ts` refuses an `automationBinding`), so every promotion-relevant success does
+  still record. It lands the moment either mounts.
+  CONSEQUENCE IF NOT CLOSED: the detail page of a healthy, daily-driven browser-steps integration
+  shows an empty evidence panel after 90 days, and a promotion gate that ever covers automation-backed
+  actions refuses one that has demonstrably been working all along.
+  CLOSE BY: a RE-STAMP operation on `ActionEvidenceStore` - "the sample I already hold is still
+  current", bumping `validatedAt` and leaving `evidence` untouched - called from the replay leg with
+  the same (org, owner, key, action) tuple. It cannot be closed by re-collecting: there is no run to
+  collect, which is precisely what the collector's null means. **NOT by widening what
+  `collectRunEvidence` accepts** - a `replay-…` id names no run record, and inventing a sample for it
+  would put a trace nobody produced into a durable row.
+
+- **`evidence-of-a-shared-credential-survives-its-disconnection`** (2026-08-21, OPEN, **LOW**; S1
+  round eight. A docblock asserting an invariant the code does not have, in the retaining direction).
+
+  **THE CLAIM THAT WAS FALSE.** `DisconnectedConfigScope`'s docblock said the org-shared exclusion
+  list is safe because *"a member holding their own config for the key never resolved the deleted one
+  and their sample is a sample of a credential they still have"*. ORDERING breaks it. Member M runs
+  the action while the org-shared credential is the only one there is, so M's row holds the SHARED
+  account's request and response. M later connects a credential of their own. An admin disconnects
+  the shared one: `stillOwnTheirOwn` (`integrations/service.ts`) now contains M, M's row is excluded
+  from the `$nin` erasure, and a sample of the DISCONNECTED account outlives the disconnection.
+
+  **WHY IT IS NOT FIXED HERE.** The exclusion list is a statement about who would resolve this row
+  NOW, and no list computed at the instant of the delete can be right about a durable row's past: the
+  row records `ownerUserId`, `backingType` and `shape`, never WHICH credential produced it. The
+  alternative - erase every owner in the org - is the round-four defect this arm exists to correct,
+  which destroyed the samples of credentials people still hold. It is the same "one instant cannot
+  answer a question about a durable row" shape the store header spends forty lines on, and it errs the
+  same way: towards retaining.
+  CONSEQUENCE IF NOT CLOSED: one org-shared account's real request and response body survive that
+  account's disconnection - bounded by `EVIDENCE_RETENTION_DAYS`, and closable at any moment by the
+  row's owner (`DELETE /api/v1/integrations/:key/actions/:actionName/evidence`).
+  CLOSE BY (only with a DURABLE signal): stamping the evidence row with the CONFIG it ran under at
+  write time, so the disconnect erasure is keyed on a fact about the row rather than on a
+  reconstruction of who resolves what today. **NOT by widening the erasure back to every owner in the
+  org.**
+
 - **`resolve-step-origin-runs-twice-per-gated-browser-step`** (**FIXED 2026-08-19**, round seven;
   see the round-seven fixed section). The walk still runs two to three times per gated browser step -
   that is inherent to resolving locality before the gate and re-resolving after it - but its
@@ -3278,6 +3337,92 @@ silently absorbed into a ledger note):
   `sales-crm.png` ("Página não encontrada" 404 instead of the dashboard) - `booking-system` is
   disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
   `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
+
+## Recently fixed - 2026-08-21 action evidence round EIGHT (one major + three minors)
+
+The S1 verification pass repeated a seventh time. Its finding is a property pinned three ways on one
+rail and zero ways on the other, and a graduation gate that turned out to rest on the unpinned half.
+
+- **`a-failed-automation-run-could-supersede-the-last-good-sample-and-nothing-noticed`**
+  (**FIXED 2026-08-21**, S1 round eight, **MAJOR** - the guard was real, load-bearing in production,
+  and pinned by nothing; and the gate that matters most rested on it).
+
+  **THE MUTANT, MEASURED TWICE.** Delete `if (!automationResult.success) return null;` from the
+  evidence build closure in `api/src/integrations/action-executor.ts` and the entire S1 estate stays
+  green: 14 files, 258/258.
+
+  **WHY THE LINE IS LOAD-BEARING.** `runAutomationForAction` answers a failed ENGINE run with
+  `{success: false, code: 'automation_failed', data: {runId, status}}`, and that run id is REAL - a
+  genuine `automationRuns` document with the failed trace and its screenshots behind it. Without the
+  line `runIdOf` resolves it, `collectRunEvidence` returns the FAILED trace, and `recordEvidence`
+  PUTs it at the same deterministic `_id`: the last SUCCESSFUL sample is superseded by a failure,
+  stamped `validatedAt: now`, and the failed run's screenshots are pinned out of the 7-day sweep by
+  the same write.
+
+  **WHY NOTHING NOTICED.** The only suite binding the real evidence seams
+  (`tests/automation/composition-root-action-seam.test.ts`) points its binding at `auto-never-runs`,
+  an automation that does not exist. That refusal is `unknown_automation`, it carries **no `data`**,
+  `runIdOf` answers `undefined`, and the mutant is a no-op there. Meanwhile the api-call half of the
+  identical property was pinned THREE ways in `tests/integrations/action-evidence-capture.test.ts`
+  ("a 4xx records nothing at all", "a failing run does NOT replace the evidence of the last
+  successful one", "a transport error records nothing"). The automation half was pinned zero ways.
+
+  **AND IT WAS WORSE THAN A COVERAGE GAP.** `promoteToTrusted` / `ValidatedRunEvidence` read PRESENCE
+  plus `shape` and carried **no success signal at all**, so the graduation gate - the thing that makes
+  an action auto-runnable by `achieve` - rested entirely on that one unpinned line. A gate that
+  depends on a guard living inside the thing it gates is not a gate.
+
+  **CLOSED IN BOTH HALVES.** (1) `tests/integrations/action-evidence-capture.test.ts` gains the
+  automation rail: a REAL automation owned by the caller, driven to `automation_failed` through the
+  PRODUCTION seam mapping (`automationBackedActionHandler`) with the real collector and the real
+  store bound, the run record written through the production writer (`automationRunStore.create` then
+  `update`, the pair `runOrRehearse` makes), asserting the previous successful row survives
+  **byte-for-byte** (deep equality, so `validatedAt` and the pin are covered too) and that the failed
+  run's screenshots were never pinned. (2) `ActionEvidenceDoc.outcome` is a `'succeeded' | 'failed'`
+  term **DERIVED IN THE STORE** from the stored sample (2xx window for `api-call`; `RunStatus`'s one
+  success member `completed` for `automation`; absent status is `failed`, fail-closed), and
+  `promoteToTrusted` refuses anything but `succeeded`. Derived rather than carried on purpose: a term
+  the executor passed in would restate the write site's own belief, and the gate would be exactly as
+  dependent as before.
+
+  **MUTANTS.** Deleting the executor guard reddens 2 (both new automation cases); deleting the
+  promotion's outcome check reddens 4 across 3 suites; `outcome: outcomeOf(evidence)` ->
+  `outcome: 'succeeded'` reddens 4 including the end-to-end achieve case; the 2xx window mutated at
+  BOTH bounds (200 -> 199, 300 -> 301) reddens the edge case each way; the automation branch forced
+  to `'succeeded'` reddens 1. Each restored, `git diff` clean.
+
+- **`the-retention-claim-was-false-for-the-rail-the-platform-is-built-around`**
+  (**FIXED 2026-08-21** as a CLAIM; the underlying gap is OPEN as
+  `evidence-of-a-replaying-action-ages-out-while-the-action-is-in-daily-use`, S1 round eight,
+  **MINOR**). `EVIDENCE_RETENTION_DAYS`'s docblock said every successful run rewrites `validatedAt`,
+  so an integration in real use never ages out. A `browser-steps` READ action is `storable`, so after
+  its first pass every later run REPLAYS and the collector answers null by construction - the stamp
+  is never refreshed. The docblock now says which paths refresh and which do not, and names exactly
+  what would have to change (a re-stamp operation called from the replay leg) for the retired
+  sentence to become true. The over-broad control comment in
+  `tests/integrations/action-evidence-removal.test.ts` is narrowed to the rail it actually exercises.
+
+- **`the-org-shared-erasure-rationale-asserted-an-invariant-the-code-does-not-have`**
+  (**FIXED 2026-08-21** as a CLAIM; the underlying gap is OPEN as
+  `evidence-of-a-shared-credential-survives-its-disconnection`, S1 round eight, **MINOR**).
+  `DisconnectedConfigScope`'s docblock claimed a member holding their own config never resolved the
+  deleted org-shared row. Under ordering they may have: run under the shared credential, connect your
+  own later, and your row - holding the shared account's data - is spared when the shared credential
+  is disconnected. The docblock now states what the code actually guarantees (a statement about who
+  would resolve the row NOW, not about whose account the sample holds), names the ordering, and
+  records that it errs towards retaining and is bounded.
+
+- **`two-disclosure-items-a-future-round-would-otherwise-rediscover`** (**FIXED 2026-08-21**, S1 round
+  eight, **MINOR**, both raised by the verifier and both recorded in place rather than in a document
+  nobody reads next to the code). (1) `capEvidence`'s per-STEP `|| step.truncated` disjunct is an
+  EQUIVALENT MUTANT - `...step` has already spread the incoming flag through, so deleting it changes
+  no stored byte for any input and no test can kill it. It is now labelled as one, so it is not
+  mistaken for the carrier the way the RUN-level disjunct was for six rounds. (2) The "MIGRATED row"
+  fixture in `tests/integrations/action-evidence-removal.test.ts` described a migration that cannot
+  have happened: this collection has never shipped, and the org-only key was an earlier round of the
+  same unmerged branch. The provenance is corrected in the fixture and in the two places in `api/src`
+  that echoed it; the shape is still defended, for the honest reason (a hand-written row, a partial
+  restore, or a future writer).
 
 ## Recently fixed - 2026-08-21 action evidence round SEVEN (one major + three minors)
 

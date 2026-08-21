@@ -520,11 +520,12 @@ describe('the executor remains the second net, so the authoring check is defence
         },
       },
     };
-    // Slice S1: every promotion now also needs a validated run, so the fixtures state one. It is
-    // supplied HERE (rather than left absent) precisely so this case still isolates `passed` - an
-    // absent evidence row would refuse for the S1 reason and the assertion below would stop being
-    // about the verification verdict at all.
-    const validated = { shape: actionShape(PROBE_INTEGRATION, base), validatedAt: '2026-08-04T00:00:00.000Z' };
+    // Slice S1: every promotion now also needs a validated run, so the fixtures state one - and
+    // state it in FULL, both terms. It is supplied HERE (rather than left absent) precisely so this
+    // case still isolates `passed`: an absent evidence row, or one that says nothing about how its
+    // run ended (round eight's `outcome`), would refuse for the S1 reason and the assertion below
+    // would stop being about the verification verdict at all.
+    const validated = { shape: actionShape(PROBE_INTEGRATION, base), validatedAt: '2026-08-04T00:00:00.000Z', outcome: 'succeeded' };
 
     expect(promoteToTrusted(PROBE_INTEGRATION, failedVerification, actor('ownerA', 'orgA'), validated))
       .toEqual({ ok: false, reason: 'unverified' });
@@ -583,7 +584,7 @@ describe('the executor remains the second net, so the authoring check is defence
     it('refuses evidence whose run exercised DIFFERENT bytes', () => {
       // The hole this closes: author, run once, re-author into something else, graduate on the old
       // run. Same shape check `record.shape` already performs for the draft, applied to the proof.
-      const stale = { shape: 'sha256-of-some-other-action', validatedAt: '2026-08-04T00:00:00.000Z' };
+      const stale = { shape: 'sha256-of-some-other-action', validatedAt: '2026-08-04T00:00:00.000Z', outcome: 'succeeded' };
       expect(promoteToTrusted(PROBE_INTEGRATION, promotable(), actor('ownerA', 'orgA'), stale))
         .toEqual({ ok: false, reason: 'unvalidated' });
     });
@@ -591,16 +592,30 @@ describe('the executor remains the second net, so the authoring check is defence
     it('refuses evidence that names no shape at all', () => {
       // A row written before the field existed. "We cannot tell which bytes ran" must not share a
       // code path with "these bytes ran".
-      const shapeless = { validatedAt: '2026-08-04T00:00:00.000Z' };
+      const shapeless = { validatedAt: '2026-08-04T00:00:00.000Z', outcome: 'succeeded' };
       expect(promoteToTrusted(PROBE_INTEGRATION, promotable(), actor('ownerA', 'orgA'), shapeless))
         .toEqual({ ok: false, reason: 'unvalidated' });
     });
 
     it('promotes on evidence of THIS action, so the gate is a gate and not a ban', () => {
-      const matching = { shape: actionShape(PROBE_INTEGRATION, s1Base), validatedAt: '2026-08-04T00:00:00.000Z' };
+      const matching = { shape: actionShape(PROBE_INTEGRATION, s1Base), validatedAt: '2026-08-04T00:00:00.000Z', outcome: 'succeeded' };
       const promoted = promoteToTrusted(PROBE_INTEGRATION, promotable(), actor('ownerA', 'orgA'), matching);
       if (!promoted.ok) throw new Error(`expected promotion, got ${promoted.reason}`);
       expect(promoted.action.authoring?.state).toBe('trusted');
+    });
+
+    it('refuses evidence of a run that FAILED, and one that does not say (round eight)', () => {
+      // The bytes are right and the run really happened; what it did was fail. Before this term the
+      // gate could not tell those apart, and the only thing that kept a failed automation run out of
+      // this collection was one line at the WRITE SITE - deletable with the whole S1 estate green.
+      // A guard on the gated thing is not a gate.
+      const failed = { shape: actionShape(PROBE_INTEGRATION, s1Base), validatedAt: '2026-08-04T00:00:00.000Z', outcome: 'failed' };
+      expect(promoteToTrusted(PROBE_INTEGRATION, promotable(), actor('ownerA', 'orgA'), failed))
+        .toEqual({ ok: false, reason: 'unvalidated' });
+      // Silence is refused too - the same fail-closed reading as a shapeless row.
+      const silent = { shape: actionShape(PROBE_INTEGRATION, s1Base), validatedAt: '2026-08-04T00:00:00.000Z' };
+      expect(promoteToTrusted(PROBE_INTEGRATION, promotable(), actor('ownerA', 'orgA'), silent))
+        .toEqual({ ok: false, reason: 'unvalidated' });
     });
 
     it('re-confirming an ALREADY-trusted action does not need evidence again', () => {

@@ -3283,3 +3283,89 @@ descriptor, route or auth class changes, so OpenAPI and the generated cortex-cli
 and `EXPECTED_PENDING_COUNT` is unmoved. FIXED-12: the stored shape of an automation evidence row
 changes ADDITIVELY (`truncated` can now be true), so `05-data-model` and `02-module-map` each carry an
 append-only AS-BUILT (f) note.
+
+- 2026-08-21 - **S1 round eight: a property pinned three ways on one rail and zero ways on the other,
+and the graduation gate that turned out to be standing on the unpinned half.** Round seven was about
+what an evidence row SAYS. This round is about which runs are allowed to become one, and about where
+that rule is enforced.
+
+**A FAILED AUTOMATION RUN COULD SUPERSEDE THE LAST GOOD SAMPLE, AND THE WHOLE ESTATE STAYED GREEN.**
+Delete `if (!automationResult.success) return null;` from the evidence build closure in
+`action-executor.ts` and 14 files / 258 tests pass, measured twice. The line is load-bearing in
+production and only in production: `runAutomationForAction` answers a failed ENGINE run with
+`{success: false, code: 'automation_failed', data: {runId, status}}`, and that run id is REAL - a
+genuine `automationRuns` document with the failed trace and its screenshots behind it. Without the
+line `runIdOf` resolves it, `collectRunEvidence` returns the failed trace, and `recordEvidence` PUTs
+it at the same deterministic `_id`: the last successful sample superseded by a failure, re-stamped
+`validatedAt: now`, with the failed run's screenshots pinned out of the 7-day sweep by the same write.
+
+**WHY SEVEN ROUNDS OF SUITES COULD NOT SEE IT, AND THE RULE THAT LEAVES.** The only suite binding the
+real evidence seams points its binding at `auto-never-runs`, an automation that does not exist. That
+refusal is `unknown_automation`, it carries **no `data`**, `runIdOf` answers `undefined`, and the
+mutant is a no-op there. The api-call half of the identical property was pinned THREE ways. **The rule,
+beside round six's and round seven's: a property that holds on two rails needs a case on each. A
+fixture chosen so the code under test cannot reach its interesting branch is the same defect as a
+fixture the production writer cannot produce - the case passes for a reason that is not the property.**
+
+**AND THE GATE WAS RESTING ON IT.** `promoteToTrusted` / `ValidatedRunEvidence` read PRESENCE plus
+`shape` and carried no success signal at all, so "an action may only graduate on a run that WORKED" -
+the thing that makes an action auto-runnable by `achieve` - was true only because of that one
+deletable line at the WRITE SITE. **A gate that depends on a guard living inside the thing it gates is
+not a gate.** So the row now carries `outcome: 'succeeded' | 'failed'` and the promotion refuses
+anything but `succeeded`, with ABSENT refused too (the same fail-closed reading it already takes of a
+shapeless row).
+
+**DERIVED IN THE STORE, NOT CARRIED FROM THE EXECUTOR, AND THAT IS THE WHOLE POINT.** A term the write
+site passed in would restate the write site's own belief: a site that recorded a failure would label it
+`succeeded` and the gate would be exactly as dependent as before. `outcomeOf` reads the bytes that were
+actually stored - the 2xx window for `api-call` (the same predicate `executeHttpAction` branches on),
+`RunStatus`'s one success member `completed` for `automation`, and `failed` for an absent status. The
+`failed` value is unreachable from production today because both write sites refuse to record a
+failure, and that is stated in the docblock rather than left to look like the mechanism: this term is
+what the gate reads **if either refusal is ever lost**, and it is reachable through `recordEvidence`,
+which is a production API of a Rule 5 store.
+
+**BOTH HALVES ARE PINNED, AND THE AUTOMATION CASE IS BUILT TO BE ENTERABLE.** The new cases in
+`action-evidence-capture.test.ts` seed a REAL automation owned by the caller and drive it to
+`automation_failed` through the PRODUCTION seam mapping (`automationBackedActionHandler`) with the real
+collector and the real store bound; the engine is stood in for at its own injected `ActionRunDeps.run`
+seam and writes its run record through the PRODUCTION writer (`automationRunStore.create` then
+`update` - the pair `runOrRehearse` makes at every status transition), so what the collector reads
+afterwards is a document of the shape the engine really leaves behind. The assertion is DEEP EQUALITY
+of the whole row before and after, so `validatedAt` and the screenshot pin are covered rather than just
+the run id.
+
+**THREE CLAIMS CORRECTED, ALL IN THE RETAINING DIRECTION, ALL RECORDED AS OPEN RATHER THAN QUIETLY
+FIXED.** (1) `EVIDENCE_RETENTION_DAYS` said every successful run rewrites `validatedAt` so an
+integration in real use never ages out. FALSE for the rail this platform is built around: a
+`browser-steps` READ action is `storable`, so after its first pass every later run REPLAYS, the answer
+carries a `replay-…` id with no run record behind it, and the collector answers null by construction -
+an action run successfully every day for ninety days is swept. No user-visible impact on this branch
+(the detail page is S2/S3; authored actions are api-call-only), and the docblock now names exactly what
+would have to change - a RE-STAMP operation called from the replay leg, since there is no run to
+re-collect. OPEN as `evidence-of-a-replaying-action-ages-out-while-the-action-is-in-daily-use`.
+(2) The org-shared erasure rationale claimed a member holding their own config never resolved the
+deleted shared row. Ordering breaks it: run under the shared credential, connect your own later, and
+your row - holding the shared account's data - is spared when the shared credential is disconnected.
+The exclusion list is a statement about NOW and no such list can be right about a durable row's past;
+the alternative is the round-four defect. OPEN as
+`evidence-of-a-shared-credential-survives-its-disconnection`.
+(3) The "MIGRATED row" fixture described a migration that cannot have happened - this collection has
+never shipped, and the org-only key was an earlier round of this same unmerged branch. Provenance
+corrected in the fixture and in the two places in `api/src` that echoed it; the shape is still
+defended, for the honest reason.
+
+**AND ONE EQUIVALENT MUTANT DISCLOSED IN PLACE.** `capEvidence`'s per-STEP `|| step.truncated`
+disjunct changes no stored byte for any input - `...step` has already spread the flag through - so no
+test can kill it. It is labelled as an equivalent mutant so a future round does not mistake it for the
+carrier the way the RUN-level disjunct was mistaken for six rounds. **Disclosing a guard no test can
+kill is the same obligation as disclosing one the type checker enforces (round seven): the reader has
+to be able to tell a mechanism from a decoration.**
+
+Rule 7: nothing on the wire moves - `outcome` is an internal document field on a collection with no
+production reader and no response schema, so no descriptor, route, auth class or zod shape changes,
+OpenAPI and the generated cortex-cli are byte-identical, and `EXPECTED_PENDING_COUNT` is unmoved.
+Rule 5: the isolation suite is untouched; the new cases add no tenancy leg. FIXED-12: the stored shape
+of an evidence row changes ADDITIVELY (a derived `outcome` term), so `05-data-model` carries an
+append-only AS-BUILT (g) note; no module, seam or flow moves, so `02-module-map` needs none and saying
+so is part of the rule rather than an exemption from it.

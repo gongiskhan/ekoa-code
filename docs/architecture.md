@@ -673,15 +673,23 @@ Three DURABLE signals end a row, and nothing else does:
 
 1. **TIME.** `sweepExpiredEvidence` at boot ends every row not re-validated within
    `EVIDENCE_RETENTION_DAYS` (90), orphan or not. It was the backstop; it is now THE collector, and
-   its virtue is that **no vantage has to be right about anything**.
+   its virtue is that **no vantage has to be right about anything**. Read "re-validated" literally:
+   only a run that really HAPPENS refreshes `validatedAt`. A `browser-steps` READ action is
+   `storable`, so after its first pass every later run REPLAYS and the collector answers null by
+   construction - such an action can be in daily use and still be swept
+   (`evidence-of-a-replaying-action-ages-out-while-the-action-is-in-daily-use` in `findings.md`).
 2. **THE OWNER.** `DELETE /api/v1/integrations/:key/actions/:actionName/evidence` (`auth: 'user'`,
    idempotent, key built from the verified actor) - the reason `discardEvidence` is a public method.
    `deleteConfig`'s erasure is the same signal one step out and is KEPT for that reason: it is not a
    reachability guess (the definition still resolves afterwards), it is the durable removal of the
    credential whose third-party account the sample holds, by the person who connected it. Its
    org-shared arm is an EXCLUSION LIST, not "everyone": `findConfigForOwner` answers a member's own
-   row before falling back to the custodian-less shared one, so a member holding their own credential
-   was never served by the deleted row.
+   row before falling back to the custodian-less shared one, so the deleted row is not the one it
+   resolves for such a member. That is a statement about who resolves what NOW, and not about whose
+   account a stored sample holds: a member who ran under the shared credential and connected their own
+   later keeps a sample of the disconnected account
+   (`evidence-of-a-shared-credential-survives-its-disconnection` in `findings.md`, retaining direction,
+   bounded by the window above and closable by its owner).
 3. **A NEWER SAMPLE.** `recordEvidence` supersedes wholesale because the `_id` IS the tuple, so a
    validated run replaces the previous sample and releases its screenshot pin in one write.
 
@@ -732,6 +740,18 @@ the slice: `CollectedRunEvidence.truncated` is set in the same statement that cu
 caller that forgets to cap, recorded as unreachable-from-production rather than as the mechanism. It
 matters because the row is durable for `EVIDENCE_RETENTION_DAYS` and is what a person reads before
 granting `trusted`, which makes an action auto-runnable by `achieve`.
+
+**AND AN EVIDENCE ROW SAYS WHETHER ITS RUN WORKED** (round eight). `ActionEvidenceDoc.outcome`
+(`'succeeded' | 'failed'`) is DERIVED by the store from the stored sample - the 2xx window for an
+`api-call` row, `RunStatus`'s one success member `completed` for an `automation` row, `failed` for an
+absent status - and `promoteToTrusted` refuses anything but `succeeded`, refusing an absent term too.
+Before it, the promotion read PRESENCE plus `shape` and carried no success signal at all, so **the
+whole graduation gate rested on a guard at the WRITE SITE**: one line in `action-executor.ts`
+(`if (!automationResult.success) return null;`) whose deletion left the entire S1 estate green while a
+failed run's trace superseded the last successful sample at the same `_id` and pinned its screenshots.
+That line is correct, is load-bearing for the supersede and the pin, and is now pinned in its own right
+on the automation rail; the term is what stops the GATE depending on it. It is derived rather than
+carried for the same reason - a term the executor passed in would restate the write site's own belief.
 
 `DEFAULT_SCREENSHOT_RETENTION_DAYS` (7) is the second number the trade rests on and is now enforced
 the way `EVIDENCE_RETENTION_DAYS` is: the security suite exercises the sweep WITHOUT passing

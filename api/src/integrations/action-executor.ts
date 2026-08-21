@@ -565,6 +565,25 @@ export async function executeUserIntegrationAction(
       actionShape(input.integrationKey, action),
       deps,
       async () => {
+        // A FAILED RUN IS NOT A VALIDATED RUN, AND THIS LINE IS THE ONLY THING THAT SAYS SO ON THIS
+        // RAIL. It is not defensive tidiness. `runAutomationForAction` answers a failed ENGINE run
+        // with `{success: false, code: 'automation_failed', data: {runId, status}}`, and that run id
+        // is REAL - a genuine `automationRuns` document with the failed trace and its screenshots
+        // behind it. Without this line `runIdOf` resolves it, `collectRunEvidence` returns the FAILED
+        // trace, and `recordEvidence` PUTs it at the SAME deterministic `_id`: the last SUCCESSFUL
+        // sample is superseded by a failure, stamped `validatedAt: now`, and the failed run's
+        // screenshots are pinned out of the 7-day sweep by the same write. That row is what a person
+        // reads before granting `trusted`.
+        //
+        // IT WENT UNPINNED FOR SEVEN ROUNDS because the only suite binding the real seams pointed at
+        // an automation that does not exist: that refusal is `unknown_automation`, it carries no
+        // `data`, `runIdOf` answers undefined, and deleting this line was a no-op there. The cases
+        // that kill the mutant drive a REAL automation to `automation_failed` - `the same property on
+        // the AUTOMATION rail` in tests/integrations/action-evidence-capture.test.ts.
+        //
+        // THE GRADUATION GATE NO LONGER RESTS ON IT (round eight): `ActionEvidenceDoc.outcome` is
+        // derived in the store and `promoteToTrusted` refuses anything but `succeeded`. The SUPERSEDE
+        // and the SCREENSHOT PIN still do, and neither is something a gate downstream can undo.
         if (!automationResult.success) return null;
         const runId = runIdOf(automationResult.data);
         if (runId === undefined) return null;

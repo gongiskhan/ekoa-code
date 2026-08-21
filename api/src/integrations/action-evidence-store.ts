@@ -181,12 +181,30 @@ export interface ActionEvidenceKey {
  * the fallback `findConfigForOwner` hands to every member of the org that has no row of their own.
  *
  * `everyOwnerExcept` IS THAT SECOND ARM, AND ITS SHAPE IS THE ROUND-FOUR CORRECTION. It used to read
- * `'every-owner-in-org'`, which erased the samples of peers whose OWN credential was never the
- * deleted row: `findConfigForOwner` returns `rows.find(c => c.ownerUserId === owner)` BEFORE it
- * falls back to the shared row, so a member holding their own config for the key never resolved the
- * deleted one and their sample is a sample of a credential they still have. The correct scope is
- * "every owner for whom `findConfigForOwner` would have resolved THIS row", i.e. every owner in the
- * org except those still holding a config of their own - which is what the caller passes.
+ * `'every-owner-in-org'`, which erased the samples of peers the deleted row was not serving:
+ * `findConfigForOwner` returns `rows.find(c => c.ownerUserId === owner)` BEFORE it falls back to the
+ * shared row, so a member holding a config of their own is not resolving the shared one, and erasing
+ * their sample was one member's disconnect destroying another member's data. The scope the caller
+ * passes is therefore "every owner for whom `findConfigForOwner` WOULD resolve this row AT THE MOMENT
+ * OF THE DISCONNECT" - every owner in the org except those holding a config of their own.
+ *
+ * ── AND THAT IS A STATEMENT ABOUT NOW, NOT ABOUT WHOSE ACCOUNT THE SAMPLE HOLDS (round eight) ──
+ *
+ * The previous revision of this note claimed the stronger thing - "a member holding their own config
+ * for the key never resolved the deleted one, and their sample is a sample of a credential they still
+ * have" - and ORDERING makes that false. Member M runs the action while the org-shared credential is
+ * the only one there is, so M's row holds the SHARED account's request and response. M later connects
+ * a credential of their own. An admin then disconnects the shared one: M is now in
+ * `everyOwnerExcept`, M's row is spared, and a sample of the DISCONNECTED account outlives the
+ * disconnection. Nothing on this rail re-reads whose account a stored sample actually came from -
+ * the row records `ownerUserId`, `backingType` and `shape`, never which credential produced it - so
+ * no exclusion list computed at the instant of the delete can be right about a durable row's past.
+ *
+ * IT IS THE RETAINING DIRECTION AND IT IS BOUNDED, which is why it is recorded rather than fixed
+ * here: the alternative (erase every owner in the org) is the round-four defect, which destroyed the
+ * samples of credentials people still hold. The surviving row is closable by its owner at any moment
+ * (`discardEvidence`, `DELETE …/evidence`) and goes on its own inside `EVIDENCE_RETENTION_DAYS`.
+ * OPEN in docs/findings.md as `evidence-of-a-shared-credential-survives-its-disconnection`.
  */
 export type DisconnectedConfigScope = {
   orgId: string;
@@ -203,8 +221,32 @@ export type DisconnectedConfigScope = {
  * 90 DAYS, AND THE NUMBER IS A TRADE RATHER THAN A ROUND FIGURE. Shorter than the screenshot sweep's
  * 7 days is wrong (an automation row's pointers would outlive nothing, but the graduation
  * prerequisite would evaporate between a run and the human who confirms it); much longer stops
- * bounding anything. Every successful run rewrites `validatedAt`, so an integration in real use
- * never ages out - only one nobody has run for a quarter of a year.
+ * bounding anything.
+ *
+ * ── WHAT ACTUALLY REFRESHES `validatedAt`, AND WHAT DOES NOT (round eight) ────────────────────
+ *
+ * This paragraph used to read "every successful run rewrites `validatedAt`, so an integration in real
+ * use never ages out - only one nobody has run for a quarter of a year". THAT IS FALSE FOR EXACTLY
+ * THE PATH THIS PLATFORM IS BUILT AROUND. A `browser-steps` READ action is `storable`
+ * (`automation/service.ts`: `named && !mutating`), so its FIRST run compiles a recipe and every later
+ * run REPLAYS - the answer carries a `replay-<uuid>` id, there is by construction no `automationRuns`
+ * document behind it, `collectRunEvidence` therefore answers null, and the executor records nothing.
+ * An action run successfully every single day for ninety days keeps the stamp of its FIRST run, is
+ * deleted at the next boot after that, and releases its screenshot pin on the way out.
+ *
+ * The paths that DO refresh are the ones where a run really happens: every `api-call` action; a
+ * mutating automation-backed action (never `storable`, so it never replays); and an automation-backed
+ * read whose passes have compiled nothing yet.
+ *
+ * WHAT WOULD HAVE TO CHANGE for the retired sentence to become true: the replay leg would have to
+ * RE-STAMP the row. It can never re-collect one - there is no run to collect, which is precisely what
+ * `collectRunEvidence`'s null means - so this has to be a second, separate operation on this store
+ * ("the sample I already hold is still current"), bumping `validatedAt` and leaving `evidence`
+ * untouched, called from the replay leg with the same (org, owner, key, action) tuple. It is NOT
+ * written here: on this branch the row has no production reader at all (the detail page is S2/S3) and
+ * authored actions are api-call-backed only (`authored-action.ts` refuses an `automationBinding`), so
+ * every promotion-relevant success does still record. It lands the moment either mounts. OPEN in
+ * docs/findings.md as `evidence-of-a-replaying-action-ages-out-while-the-action-is-in-daily-use`.
  *
  * CHANGING THIS NUMBER IS A TRIPWIRE ON PURPOSE. Round five made TTL the SOLE automatic collector,
  * which turned this constant from a backstop into the thing every "bounded gap" argument in
@@ -285,6 +327,16 @@ export interface AutomationEvidence {
 
 export type ActionEvidence = ApiCallEvidence | AutomationEvidence;
 
+/**
+ * THE ROW'S OWN VERDICT ON THE RUN IT HOLDS.
+ *
+ * NOT `AutomationEvidence.status` (the engine's `RunStatus`) and not `ApiCallEvidence.response.status`
+ * (an HTTP code). Those are the raw facts; this is the one question every reader of this collection
+ * actually asks - "is this a sample of the action WORKING?" - answered once, in the same vocabulary,
+ * whichever kind the row is.
+ */
+export type ActionEvidenceOutcome = 'succeeded' | 'failed';
+
 export interface ActionEvidenceDoc extends Doc, ActionEvidenceKey {
   /** `api-call` | `browser-steps` | `bash-cli` - how the action ran when it produced this. */
   backingType: string;
@@ -299,6 +351,31 @@ export interface ActionEvidenceDoc extends Doc, ActionEvidenceKey {
   shape?: string;
   /** When the validated run happened. THE graduation prerequisite reads this. */
   validatedAt: string;
+  /**
+   * DID THIS RUN SUCCEED - DERIVED FROM THE SAMPLE, NEVER ASSERTED BY THE CALLER (round eight).
+   *
+   * WHY IT EXISTS. `promoteToTrusted` - the one producer of `state: 'trusted'`, which is what makes
+   * an action auto-runnable by `achieve` - read PRESENCE plus `shape` and nothing else. So the whole
+   * graduation gate rested on a WRITE-SITE INVARIANT: one line in `action-executor.ts`
+   * (`if (!automationResult.success) return null;`) being the only thing that stopped a FAILED
+   * automation run from being recorded as the last validated run. Delete that line and the failed
+   * run's trace supersedes the last successful sample at the same deterministic `_id`, with a fresh
+   * `validatedAt` - and the gate would have promoted on it, because nothing it read carried a success
+   * signal. A gate must not depend on a guard living in the thing it is gating.
+   *
+   * DERIVED AND NOT CARRIED, for the same reason. A term the executor passed in would restate the
+   * write site's own belief, so a write site that recorded a failure would label it `succeeded` and
+   * the gate would be exactly as dependent as before. `outcomeOf` reads the bytes that were actually
+   * stored, so the label cannot disagree with the sample it labels.
+   *
+   * THE `failed` VALUE IS UNREACHABLE FROM PRODUCTION TODAY, AND THAT IS THE POINT rather than dead
+   * code: both write sites refuse to record a failure (the executor line above, and `executeHttpAction`
+   * only capturing inside its 2xx branch), and those refusals are pinned in their own right
+   * (`tests/integrations/action-evidence-capture.test.ts`). This term is what the gate reads if either
+   * refusal is ever lost, and it is reachable through `recordEvidence`, which is a production API of
+   * this store.
+   */
+  outcome: ActionEvidenceOutcome;
   evidence: ActionEvidence;
 }
 
@@ -355,6 +432,11 @@ export class ActionEvidenceStore {
    */
   async recordEvidence(key: ActionEvidenceKey, input: RecordEvidenceInput): Promise<ActionEvidenceDoc> {
     assertKey(key);
+    // Capped FIRST, and the verdict derived from what is actually stored rather than from what was
+    // offered. Neither cap can change the two fields `outcomeOf` reads, so the two orders agree
+    // today; deriving from the stored bytes is what keeps them agreeing if a later cap ever touches
+    // one - see `ActionEvidenceDoc.outcome`.
+    const evidence = capEvidence(input.evidence);
     const doc: ActionEvidenceDoc = {
       _id: actionEvidenceIdFor(key),
       orgId: key.orgId,
@@ -364,7 +446,8 @@ export class ActionEvidenceStore {
       backingType: input.backingType,
       ...(input.shape !== undefined ? { shape: input.shape } : {}),
       validatedAt: this.now().toISOString(),
-      evidence: capEvidence(input.evidence),
+      outcome: outcomeOf(evidence),
+      evidence,
     };
     // THE LAST GATE, over the WHOLE document rather than the fields a redaction pass knew about.
     // `captured-calls-store.ts` makes the argument; it holds identically here.
@@ -377,10 +460,16 @@ export class ActionEvidenceStore {
     if (!isTenantScoped(key)) return null;
     const doc = await this.store.get(actionEvidenceIdFor(key));
     // The id already binds the row to the tenant AND the owner; this re-check covers a document
-    // whose stored `orgId`/`ownerUserId` disagrees with the id it lives under (hand-written or
-    // migrated), and it fails closed. Both terms are checked because both are in the id: a row
-    // migrated from the org-only key of the first cut carries NO `ownerUserId`, and must not be
-    // handed to whichever member of the org asks for it first.
+    // whose stored `orgId`/`ownerUserId` disagrees with the id it lives under, and it fails closed.
+    // Both terms are checked because both are in the id: a row carrying NO `ownerUserId` at all must
+    // not be handed to whichever member of the org asks for it first.
+    //
+    // WHERE SUCH A ROW COMES FROM, STATED HONESTLY (round eight): NOT from a migration. This
+    // collection has never shipped - the org-only key was an earlier round of this same unmerged
+    // branch, so no deployment holds a pre-owner row and nothing migrated anything. `recordEvidence`
+    // refuses to write the shape (`assertKey`), so it can only arrive by hand, by a partial restore,
+    // or from a future writer. That is exactly when a fail-closed re-check is worth having and
+    // exactly when nobody is watching, which is why it is pinned rather than trusted.
     if (!doc) return null;
     return doc.orgId === key.orgId && doc.ownerUserId === key.ownerUserId ? doc : null;
   }
@@ -405,7 +494,7 @@ export class ActionEvidenceStore {
    * shape (a projection, an `$in`, a re-sort) would otherwise silently remove the only tenancy term.
    *
    * CONTRAST `getEvidence`, WHERE THE RE-CHECK IS NOT REDUNDANT: that lookup is by deterministic
-   * `_id` and never consults the stored fields at all, so a hand-written or migrated row whose
+   * `_id` and never consults the stored fields at all, so a hand-written or restored row whose
    * stored org/owner disagrees with the id it lives under WOULD be returned without it. That mutant
    * dies.
    */
@@ -453,10 +542,10 @@ export class ActionEvidenceStore {
       integrationKey: scope.integrationKey,
       ...('userId' in scope.owner
         ? { ownerUserId: scope.owner.userId }
-        // `$nin` also matches a row carrying NO `ownerUserId` at all (a hand-written or pre-owner
-        // migrated one). That is the right side to err on here: such a row names an account inside
-        // this org for this integration and can never be superseded, since no writer produces that
-        // shape any more.
+        // `$nin` also matches a row carrying NO `ownerUserId` at all - a shape `recordEvidence`
+        // refuses to write, so it can only have been hand-written or restored. That is the right
+        // side to err on here: such a row names an account inside this org for this integration and
+        // can never be superseded, since no writer produces that shape.
         : { ownerUserId: { $nin: [...scope.owner.everyOwnerExcept] } }),
     });
   }
@@ -579,6 +668,13 @@ function capEvidence(evidence: ActionEvidence): ActionEvidence {
     return {
       ...step,
       ...(excerpt.text !== undefined ? { excerpt: excerpt.text } : {}),
+      // `|| step.truncated` HERE IS AN EQUIVALENT MUTANT, and it is recorded as one so a future round
+      // does not mistake it for the carrier the way the RUN-LEVEL disjunct below was mistaken for six
+      // rounds. `...step` has already spread the incoming `truncated` through, so deleting this half
+      // changes no stored byte for any input: the flag arrives on the step and leaves on the step. It
+      // is kept only so the two `truncated` computations in this function read the same way; nothing
+      // depends on it, and no test can kill it. (The RUN-level flag is a different story - it is
+      // computed rather than spread, and its production carrier is `evidence.truncated`.)
       ...(excerpt.truncated || step.truncated ? { truncated: true } : {}),
     };
   });
@@ -596,6 +692,28 @@ function capEvidence(evidence: ActionEvidence): ActionEvidence {
     // recorded as unreachable-from-production rather than left looking like the mechanism.
     ...(evidence.steps.length > MAX_EVIDENCE_STEPS || evidence.truncated ? { truncated: true } : {}),
   };
+}
+
+/**
+ * THE ROW'S VERDICT, read off the sample itself.
+ *
+ * `api-call`: the 2xx window, which is exactly the `Response.ok` predicate `executeHttpAction`
+ * branches on - the same reading, applied to the number that was stored rather than to a live
+ * `Response` this module never sees.
+ *
+ * `automation`: `RunStatus`'s ONE success member is `completed` (`automation/types.ts`); `failed`,
+ * `cancelled` and every `awaiting_*` / `needs_credentials` halt are not a run that worked.
+ * `automation/service.ts` writes the same reading as `status === 'completed' || status === 'succeeded'`
+ * - its second disjunct is unreachable, because `RunAutomationResult.status` is `RunStatus` and
+ * `succeeded` is not a member of it - so the two cannot actually disagree. A row whose `status` is
+ * ABSENT is `failed` here, and that is the fail-closed direction on purpose: "we cannot tell how this
+ * run ended" must not be answered with "it worked".
+ */
+function outcomeOf(evidence: ActionEvidence): ActionEvidenceOutcome {
+  if (evidence.kind === 'api-call') {
+    return evidence.response.status >= 200 && evidence.response.status < 300 ? 'succeeded' : 'failed';
+  }
+  return evidence.status === 'completed' ? 'succeeded' : 'failed';
 }
 
 function capText(raw: string | undefined): { text?: string; truncated: boolean } {
