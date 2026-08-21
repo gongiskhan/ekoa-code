@@ -769,13 +769,29 @@ export type AuthoredActionVerification = z.infer<typeof AuthoredActionVerificati
  * cannot tell which rung answered, nor what the ones above it decided, and "why did it not
  * parametrize" is the first question anybody asks of a rung that quietly did not fire.
  *
- * `skipped` and `refused` are DIFFERENT and the difference is the Rule-7 promise: a skipped rung
- * did not apply (nothing was missing, no seam is wired, the model was unreachable, the goal asked
- * for nothing extra) and the call behaved exactly as it did before the ladder existed. A refused
- * rung ran, got an answer, and the deterministic suite rejected it.
+ * THE THREE WAYS A RUNG CAN FAIL TO ANSWER ARE THREE DIFFERENT FACTS, and a caller cannot act on
+ * them the same way. That is why there are three words for them rather than two:
  *
- * A REFUSED RUNG IS NOT A REFUSED CALL, on either rung, and that is why the verdict travels BESIDE
- * an answer rather than instead of one:
+ *   `skipped`     - THE RUNG DID NOT APPLY. Nothing was missing, no seam is wired in this
+ *                   deployment, the goal asked for nothing extra, this action may not be
+ *                   model-filled at all. Retrying changes nothing, and nothing went wrong.
+ *   `refused`     - "WE WOULD NOT." The rung ran, got an answer, and the deterministic guardrail
+ *                   suite rejected it - a plan naming a field nobody has, a collection the caller
+ *                   does not hold, an argument the action does not declare. Retrying the same goal
+ *                   is expected to be refused again; `violations` says exactly why.
+ *   `unavailable` - "WE COULD NOT RIGHT NOW." The rung's own work could not be done: the caller's
+ *                   allowance does not currently cover a planning turn, the planning model was
+ *                   unreachable, the credential could not be resolved to a host, a store the rung
+ *                   reads rejected. NOTHING WAS JUDGED. Retrying later may well succeed, and the
+ *                   caller has been told nothing about their goal.
+ *
+ * Collapsing the last two is the defect this split fixed: a database blip inside the compose
+ * post-stage used to be recorded as `refused`, which is the platform saying it had considered the
+ * caller's goal and declined it - and a user out of allowance was told the same word as a user
+ * whose plan broke a guardrail (`docs/decisions.md` D-S4-3/D-S5-6).
+ *
+ * NEITHER A REFUSED NOR AN UNAVAILABLE RUNG IS A REFUSED CALL, and that is why the verdict travels
+ * BESIDE an answer rather than instead of one:
  *
  *   - when `parametrize` refuses, the model's arguments are discarded and the request goes out
  *     carrying exactly what the CALLER sent;
@@ -789,17 +805,26 @@ export type AuthoredActionVerification = z.infer<typeof AuthoredActionVerificati
  * A rung that can only ADD an answer must never be able to SUBTRACT one, and the check on that
  * claim is a count: `AchieveRefusalCode` carries exactly the author-arm codes that pre-date the
  * ladder. `violations` says what the discarded plan got wrong.
+ *
+ * RULE 7 ON `unavailable`: it is a widening of a field that has never been published. `ladder`
+ * itself is new in this same unreleased slice, so no consumer has ever received an
+ * `AchieveLadderStep` at all, and `clients/cortex-cli` regenerates from this schema in the same
+ * commit. Every value that could previously appear still appears, on exactly the steps it appeared
+ * on, except the ones that were being MISREPORTED - which is the point of the change.
  */
 export const AchieveRung = z.enum(['reuse', 'parametrize', 'compose', 'mint']);
 export type AchieveRung = z.infer<typeof AchieveRung>;
 
 export const AchieveLadderStep = z.object({
   rung: AchieveRung,
-  verdict: z.enum(['taken', 'skipped', 'refused']),
+  verdict: z.enum(['taken', 'skipped', 'refused', 'unavailable']),
+  /** ONE SENTENCE, ALWAYS THE PLATFORM'S OWN. Never an error message from a store, a driver or a
+   *  provider: those name this platform's internals (a namespace, a host, a query shape) and this
+   *  is a caller-facing field. An operator's copy of the real cause goes to the process log. */
   detail: z.string().optional(),
   /** `refused` only - the deterministic guardrails the discarded answer did not meet, in the same
    *  words the top-level `violations` uses. Present so a rung that was thrown away is diagnosable
-   *  from the answer it did NOT prevent. */
+   *  from the answer it did NOT prevent. An `unavailable` rung judged nothing, so it carries none. */
   violations: z.array(z.string()).optional(),
 });
 export type AchieveLadderStep = z.infer<typeof AchieveLadderStep>;

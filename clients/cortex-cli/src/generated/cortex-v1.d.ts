@@ -630,7 +630,7 @@ export interface components {
             detail?: string;
             rung: components["schemas"]["AchieveRung"];
             /** @enum {string} */
-            verdict: "taken" | "skipped" | "refused";
+            verdict: "taken" | "skipped" | "refused" | "unavailable";
             violations?: string[];
         };
         /** @enum {string} */

@@ -128,6 +128,93 @@ export interface ComposeCollection {
 }
 
 /**
+ * THE LONGEST FIELD NAME THIS RUNG WILL PUT IN A PROMPT, in characters.
+ *
+ * 64 is chosen against what field names ARE, not against what a prompt can hold: Mongo's own
+ * identifier guidance, every ORM's column limit and every REST payload in this repo sit far inside
+ * it, so a name past 64 is not a field name that lost a narrowing - it is a string that arrived in
+ * the key position. Both directions cost something and both are pinned:
+ *
+ *   LOWER  - a legitimate long key (`numero_do_processo_no_tribunal_de_comarca`) stops being
+ *            offered, and because the offered set is also the ENFORCED set, the narrowing it would
+ *            have keyed is refused. A cap that is too tight silently narrows what the product can
+ *            answer.
+ *   HIGHER - more third-party text per name in a system prompt, and a longer runway for a payload
+ *            that is trying to read as an instruction rather than as an identifier.
+ */
+export const COMPOSE_MAX_FIELD_NAME_CHARS = 64;
+
+/**
+ * THE MOST FIELD NAMES THIS RUNG WILL PUT IN A PROMPT, per side.
+ *
+ * 100 is chosen against what a ROW is: no honest record in this product carries a hundred distinct
+ * keys, and a response that does is a document rather than a row. (It coincides with the
+ * `collectionName` length limit next door, but that is a limit on a NAME's characters and this is a
+ * count of names - the same number for unrelated reasons, which is worth saying so nobody derives
+ * one from the other.) Same two directions, same pinning:
+ *
+ *   LOWER  - a wide-but-legitimate row (a spreadsheet import, a CRM export) loses its tail, and the
+ *            fields in that tail become unnarrowable.
+ *   HIGHER - an unbounded set is a third party choosing how many tokens of the caller's allowance
+ *            this prompt spends, and how much text it contains.
+ */
+export const COMPOSE_MAX_FIELDS = 100;
+
+/**
+ * THE FIELD NAMES THIS RUNG IS WILLING TO SHOW A MODEL - bounded, sanitised, and ORDER-PRESERVING.
+ *
+ * ================================ WHY A FILTER EXISTS AT ALL ================================
+ * Both field sets this rung renders are written by somebody who is not the caller and not us:
+ *
+ *   - the ACTION side is `fieldsOf(rows)` over the JSON a THIRD-PARTY HTTP API just returned. Every
+ *     key in that response is chosen by the remote system, and nothing between their server and
+ *     this line inspects it.
+ *   - the COLLECTION side is `CollectionsEngine.listCollectionFields`. Collection NAMES are guarded
+ *     on every write (`guardCollectionName`: charset, length, reserved prefixes); FIELD names are
+ *     guarded NOWHERE - `create`/`importCreate`/`upsert` spread the caller's body straight into
+ *     `item` - and a served app that ingests an external feed writes that feed's keys verbatim.
+ *
+ * So an unbounded, unsanitised, third-party-writable string was being interpolated into a system
+ * prompt. That is the classic injection surface, and it had no length bound, no count bound and no
+ * charset: a key that begins with a newline and a `# Hard rules` heading renders as its own prompt
+ * section, and a response with ten thousand keys spends the caller's allowance on a prompt written
+ * by the remote.
+ *
+ * ================================ WHAT IS BOUNDED, AND WHY THAT =============================
+ * A name is offered only if it is short enough (`COMPOSE_MAX_FIELD_NAME_CHARS`) and carries no
+ * character that can restructure the text it is embedded in - C0/C1 control characters, which is
+ * where newline and carriage return live, DEL, and the backtick that opens and closes every fenced
+ * block in both output contracts. Then the set is capped at `COMPOSE_MAX_FIELDS`.
+ *
+ * NOT A CHARACTER ALLOWLIST, deliberately. `número`, `Fälligkeitsdatum` and `datosCliente` are
+ * ordinary keys in this product's actual market, and an ASCII allowlist would refuse the narrowings
+ * they key while stopping nothing that a length cap plus a control-character ban does not already
+ * stop. A one-line, 64-character identifier has nowhere to put an instruction.
+ *
+ * ================================ THE SET SHOWN IS THE SET ENFORCED =========================
+ * THIS IS THE LOAD-BEARING PROPERTY, and it is why the filter is applied to the value that feeds
+ * BOTH the prompt and `verifyComposePlan` rather than to the prompt alone. Filter only the prompt
+ * and a dropped name is still ACCEPTED by the suite - the guard would be cosmetic. Filter only the
+ * suite and a name the model was shown is refused when it uses it - an arbitrary refusal. Filtered
+ * once, upstream of both, a dropped name is simply not offered and not accepted, and the caller is
+ * told which names were available in the same `violations` every other field refusal uses.
+ */
+export function promptSafeFields(names: readonly string[]): string[] {
+  return names
+    .filter((n) => n.length > 0 && n.length <= COMPOSE_MAX_FIELD_NAME_CHARS && !UNSAFE_IN_PROMPT.test(n))
+    .slice(0, COMPOSE_MAX_FIELDS);
+}
+
+/** Control characters (C0 and C1, so newline, carriage return and tab included), DEL, and the
+ *  backtick that delimits every fenced block the two output contracts ask for.
+ *
+ *  The `no-control-regex` disable is the ONE case that rule exists to be disabled for: this pattern
+ *  is not accidentally matching a control character, it is deliberately REFUSING every one of them
+ *  before a third party's string reaches a system prompt. */
+// eslint-disable-next-line no-control-regex
+const UNSAFE_IN_PROMPT = /[\u0000-\u001F\u007F-\u009F`]/;
+
+/**
  * The field names carried by a set of rows - the union over all of them, sorted.
  *
  * THE UNION, not the first row's keys: a list endpoint that omits an absent optional field on some
@@ -313,21 +400,33 @@ export function verifyComposePlan(input: {
   const resultField = (joinObj as Record<string, unknown>).resultField as string;
   const collectionField = (joinObj as Record<string, unknown>).collectionField as string;
   const unknownFields: string[] = [];
+  // THE WORDING IS ABOUT OFFEREDNESS, NOT ABOUT EXISTENCE, and that is load-bearing rather than
+  // pedantic. These messages used to say "is not a field of X", which was true only while the
+  // offered set was the WHOLE set. `promptSafeFields` now bounds and sanitises both sets before
+  // either the prompt or this suite sees them, so a real field CAN be absent from the set - a key
+  // past the count cap, or one carrying a control character - and telling a caller that `idade` is
+  // "not a field of your own clients collection" would be the platform stating a falsehood about
+  // their own data. `docs/findings.md` dismissed a cap for exactly that reason before this wording
+  // existed; the dismissal is answered here rather than ignored.
   if (!input.resultFields.includes(resultField)) {
     unknownFields.push(
-      `"join.resultField": "${resultField}" is not a field of the rows the action returned (${input.resultFields.join(', ')})`,
+      `"join.resultField": "${resultField}" is not among the fields offered for the rows the action returned (${input.resultFields.join(', ')})`,
     );
   }
   // The collection's fields can only be judged when the collection resolved. Naming a set for a
   // collection the caller does not hold would be this suite inventing the artifact it judges - the
   // rule the `shape` short-circuit above states, applied one level down.
   if (held) {
+    // `'none'` IS UNREACHABLE THROUGH THE PRODUCT and is labelled rather than pretended otherwise:
+    // it needs a collection whose rows carry no keys at all, which no `CollectionsEngine` write path
+    // can produce (see `listCollectionFields`). It is the correct rendering for a caller that hands
+    // this exported function such a set directly, not a branch anything exercises.
     const offered = held.fields.length > 0 ? held.fields.join(', ') : 'none';
     if (!held.fields.includes(whereField)) {
-      unknownFields.push(`"where.field": "${whereField}" is not a field of "${held.name}" (${offered})`);
+      unknownFields.push(`"where.field": "${whereField}" is not among the fields offered for "${held.name}" (${offered})`);
     }
     if (!held.fields.includes(collectionField)) {
-      unknownFields.push(`"join.collectionField": "${collectionField}" is not a field of "${held.name}" (${offered})`);
+      unknownFields.push(`"join.collectionField": "${collectionField}" is not among the fields offered for "${held.name}" (${offered})`);
     }
   }
   checks.push(check('fields', unknownFields.length === 0, unknownFields.join('; ')));

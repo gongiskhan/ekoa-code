@@ -7432,3 +7432,96 @@ re-implemented a live control had it trusted this heading over the code.
   collection COUNT, which the prompt has carried unbounded since the rung shipped. Revisit if a real
   tenant's prompt approaches the model's context budget; the honest fix then is to narrow the
   COLLECTION list first (the rung joins exactly one), not to half-show a field list.
+
+- **`s4-parametrize-rung-had-no-worker-recorder-split`** (CLOSED 2026-08-21, HIGH, a rung could end a
+  call that would otherwise have executed). The compose rung got a worker/recorder split in round
+  five (D-S5-4); the parametrize rung never did, and it sits ABOVE the one gated execute. Its seam
+  calls were inline in `runMatchedAction` inside no `try`, and two reject in production - `checkAllowance`
+  is three Mongo operations (`ensureAccount`, the lazy-reset write, `readGlobalOverageEnabled`), and
+  `ctx.planStep` reaches the LLM chokepoint over a socket. A rejection left `runMatchedAction` before
+  the action was called, left `achieveIntegrationGoal`, and reached the route as a 500: a trusted
+  action, the caller's own arguments and a human's standing approval answered with an error envelope
+  because a billing account read blipped. The compose rung's version of this destroys an answer
+  already in hand; this one prevented the answer from ever being obtained. Closed with
+  `parametrizeArgs` (recorder: one `try`, one ladder step, returns arguments - never a refusal, never
+  a throw) over `draftParametrizedArgs` (worker: touches the seams, may throw, writes nothing), the
+  same division `planComposition`/`draftCompositionPlan` and `applyComposition`/`attemptComposition`
+  already have. `resolveCredentialEgressBinding` is NOT part of the fix and the code says why: it
+  catches its own body and answers `refused` on any failure, deliberately, so it cannot reject.
+  Journal: D-S4-3/D-S5-6. Mutants: removing the `try` and each of the rung's five stand-down verdicts,
+  all KILLED.
+
+- **`s4s5-an-infrastructure-rejection-read-as-a-deliberate-refusal`** (CLOSED 2026-08-21, HIGH, the
+  platform told callers it had declined goals it had never looked at). `AchieveLadderStep.verdict`
+  carried three words for four facts, and the mapping was wrong in both directions. The compose
+  POST-STAGE recorded a REJECTED MONGO QUERY as `refused` - the platform stating it had considered
+  the caller's goal and declined it, when the plan had passed every guardrail and a database had
+  blipped. In the other direction, a billing-locked tenant, an unreachable model, an unresolvable
+  credential and a rejected store read all read `skipped`, which is the word for "did not apply" and
+  is what a caller is told when nothing went wrong; the billing branch's whole `detail` was the bare
+  word `'billing'`, which is not a sentence anybody can act on. A caller cannot route on that:
+  `refused` should send them to change their goal and everything else should send them to try again.
+  Closed with a fourth verdict, `unavailable` ("we could not right now"), carrying no `violations`
+  because nothing was judged - and with every branch that IS a judgement (unknown collection,
+  unshaped result, a collection that drifted, both guardrail suites) deliberately left `refused`.
+  Rule 7: a widening of a field no consumer has ever received, regenerated into openapi + cortex-cli
+  in the same commit and safeParsed off the real wire by the contract suite. Journal: D-S4-3/D-S5-6.
+
+- **`s5-third-party-field-names-entered-the-prompt-unbounded`** (CLOSED 2026-08-21, MEDIUM-HIGH,
+  prompt-injection surface and a token bill somebody else chose the size of). D-S5-5 put both field
+  sets into the compose planning prompt, and both are written by somebody who is neither the caller
+  nor us: the ACTION side is a third-party HTTP API's own JSON keys, and the COLLECTION side is
+  `app_data` field names, which - unlike collection NAMES, guarded on every write by
+  `guardCollectionName` - pass no guard on ANY write path, so a served app ingesting an external feed
+  writes that feed's keys verbatim. No length bound, no count bound, no charset: a key beginning with
+  a newline and a `# Hard rules` heading renders as its own prompt section, and a response with ten
+  thousand keys spends the caller's allowance on a prompt written by the remote. Closed with
+  `promptSafeFields`: 100 names per side, at most 64 characters each, no C0/C1 control character, no
+  DEL, no backtick. Applied where the sets are PRODUCED so the array the prompt renders is the array
+  `verifyComposePlan` enforces - filtering only the prompt leaves a cosmetic guard, filtering only the
+  suite refuses names the model was shown. Not a character allowlist: `número` and
+  `Fälligkeitsdatum` are ordinary keys in this product's market. Journal: D-S4-3/D-S5-6.
+
+- **`s5-compose-prompt-field-cap`** (DISMISSAL OVERTURNED 2026-08-21). Last round,
+  `s5-the-compose-prompt-is-larger-and-deliberately-uncapped` above
+  dismissed a per-collection field cap, on the grounds that a truncated list makes the
+  refusal message FALSE - it would tell a caller that `idade` is not a field of their own `clients`
+  collection, and a false statement about somebody's own data is worse than a long prompt. The
+  reasoning about the MESSAGE was right and is answered rather than ignored; what the dismissal did
+  not weigh is that the same list is a third-party-writable injection surface, which changes the
+  balance. So the cap exists now, and the objection is closed on its own terms: the three field
+  refusals state OFFEREDNESS ("is not among the fields offered for …") instead of existence, which is
+  the claim the platform can support once a set can legitimately be a subset. A test drives a real
+  field dropped by the sanitiser through the suite and requires the message not to deny it exists.
+  The dismissal's own fallback advice ("narrow the COLLECTION list first, not to half-show a field
+  list") remains the right next move if a real tenant's prompt approaches the context budget.
+
+- **`s5-listcollectionfields-empty-fields-claim-is-unexercisable`** (CLOSED 2026-08-21, LOW, a comment
+  stating a consequence nothing proves). `listCollectionFields`' `preserveNullAndEmptyArrays: true`
+  carried the claim that "a collection whose rows carry no fields at all still appears, with an empty
+  `fields`". Deleting the option leaves the entire estate green, and no honest fixture can change
+  that: `create`, `importCreate` and both branches of `upsert` build `item` as
+  `{ id, createdAt, updatedAt, ...fields }`, so no row this engine has ever written is fieldless, and
+  a fixture would have to reach past the engine to the driver. Closed by CORRECTING THE STATEMENT
+  rather than by writing that fixture - the option stays as a defensive default, documented as one,
+  and the two renderings that inherit its unreachability (`composeSections`' `(no fields)`,
+  `verifyComposePlan`'s `'none'`) are labelled with the same status.
+
+- **`s4-render-check-claimed-a-coded-refusal-that-cannot-exist`** (CLOSED 2026-08-21, LOW, same
+  class). `action-parametrize.ts`'s `render` check claimed the rung "refuses with a coded refusal the
+  caller can act on". Since the discard rule landed there is no such refusal on this path and there
+  cannot be one: the ladder introduces no `AchieveRefusalCode` at all, and its own suite pins that by
+  counting them. Corrected to what the check actually buys, which is better than the claim it
+  replaced: without it a re-authoritied path argument is merged and the EXECUTOR refuses the call, so
+  the caller's own good request fails because a model wrote a bad argument; with it the plan is
+  dropped before the write gate and before any credential is decrypted, and the caller keeps their
+  answer.
+
+- **`s4s5-the-two-prompt-bound-tests-were-tautologies`** (CLOSED 2026-08-21, MEDIUM, a method defect
+  worth recording because it will recur). The first version of the `COMPOSE_MAX_FIELD_NAME_CHARS` and
+  `COMPOSE_MAX_FIELDS` boundary tests built their fixtures FROM the constants
+  (`'f'.repeat(COMPOSE_MAX_FIELD_NAME_CHARS)`), so the fixture moved with the bound and the assertion
+  could not fail: `64 -> 63`, `64 -> 65`, `100 -> 99` and `100 -> 101` all SURVIVED a sweep that was
+  run specifically to kill them. A bound asserted against itself is not a bound. Both are rewritten
+  with literals, with the constant checked against the literal beside them. Recorded because the
+  tautology is invisible on reading and only a mutation sweep finds it.

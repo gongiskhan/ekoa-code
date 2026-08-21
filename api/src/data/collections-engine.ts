@@ -285,10 +285,22 @@ export class CollectionsEngine {
    * this scope, which is the same order as the `distinct` this replaced, on a path that is about to
    * spend a model call.
    *
-   * A COLLECTION WHOSE ROWS CARRY NO FIELDS AT ALL STILL APPEARS, with an empty `fields` - it exists,
-   * and a lister that dropped it would tell the caller they hold less than they do. (Every row this
-   * engine writes carries `id`/`createdAt`/`updatedAt`, so that is a shape only a direct driver write
-   * can produce; it is handled rather than assumed away.)
+   * `preserveNullAndEmptyArrays` IS A DEFENSIVE DEFAULT, AND NOTHING PROVES IT. An earlier version
+   * of this comment stated it as a consequence - "a collection whose rows carry no fields at all
+   * still appears, with an empty `fields`" - and that is a consequence no test can exercise, which
+   * was established the only honest way: the option was deleted and the whole estate stayed green.
+   *
+   * It cannot be exercised because THIS ENGINE CANNOT WRITE SUCH A ROW. Every write path -
+   * `create`, `importCreate`, and both branches of `upsert` - builds `item` as
+   * `{ id, createdAt, updatedAt, ...fields }`, so every row this product has ever stored carries at
+   * least three keys. A fixture with a fieldless row would have to reach past the engine to the
+   * driver, and a fixture of a shape the production writer structurally cannot produce proves
+   * nothing about production.
+   *
+   * The option stays - dropping a collection the caller does hold would tell them they hold less
+   * than they do, and that is the wrong way to be wrong - but it is documented as a DEFAULT rather
+   * than as a behaviour. Two renderings downstream inherit exactly the same status, and say so:
+   * `composeSections`' `(no fields)` and `verifyComposePlan`'s `offered = 'none'`.
    */
   async listCollectionFields(scope: Scope): Promise<CollectionFields[]> {
     const grouped = await col()

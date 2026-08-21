@@ -343,7 +343,33 @@ a peer's field names as well as of their collection names, before any row moves.
 is unchanged: `listCollectionFields` matches on `appId: scope.scopeKey` and nothing else, and the
 static guard requires exactly one `$match` and no `$lookup` in it. What still never reaches a prompt
 is a VALUE: both listers answer keys, and no row of anybody's data is put in a prompt to decide
-whether to look at that data.
+whether to look at that data - which is now ASSERTED on the rendered prompt for both sides rather
+than only stated, because the isolation suite proves the SCOPE and nothing proved the PROJECTION.
+
+AND THOSE FIELD NAMES ARE THIRD-PARTY WRITABLE, WHICH MAKES THEM PROMPT INPUT RATHER THAN METADATA
+(D-S4-3/D-S5-6). Neither set is written by us or by the caller. The ACTION side is
+`fieldsOf(rows)` over the JSON a remote HTTP API just returned - every key chosen by the remote
+system, inspected by nothing on the way. The COLLECTION side is `app_data` field names, and while
+collection NAMES pass `guardCollectionName` on every write (charset, length, reserved prefixes),
+FIELD names pass NO guard on any write path: `create`, `importCreate` and `upsert` spread the
+caller's body straight into `item`, so a served app that ingests an external feed writes that feed's
+keys verbatim. Interpolating an unbounded, unsanitised string of that provenance into a system
+prompt is an injection surface and a token bill somebody else chooses the size of.
+
+`promptSafeFields` (`integrations/action-compose.ts`) bounds both sets to 100 names of at most 64
+characters and drops any name carrying a C0/C1 control character, DEL, or a backtick - the
+characters that let a key restructure the text it is embedded in or close a fence the output
+contract opened. It is deliberately NOT a character allowlist: `número` and `Fälligkeitsdatum` are
+ordinary keys in this product's market, and refusing them would lose narrowings the caller is
+entitled to while stopping nothing a length cap plus a control-character ban does not already stop.
+
+THE FILTER RUNS WHERE THE SETS ARE PRODUCED, feeding the prompt and `verifyComposePlan` from one
+array, and that is the property to preserve if this is ever changed: filter only the prompt and a
+dropped name is still ACCEPTED by the suite, so the guard is cosmetic; filter only the suite and a
+name the model was shown is refused when it uses it. Because a set can now legitimately be a subset
+of what exists, the three field refusals state OFFEREDNESS ("is not among the fields offered for
+…") rather than existence - a platform that tells a caller `idade` is not a field of their own
+`clients` collection is stating a falsehood about their data.
 
 ## Incident response
 

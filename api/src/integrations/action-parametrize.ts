@@ -49,12 +49,22 @@
  * 4. `render` - the resolved URL is put through `assertOriginAllowed`, the same assertion the
  *    executor makes at call time. HONEST NOTE, because this one is defence in depth and not the
  *    only line: `action-executor.ts` already asserts the origin of the resolved URL before the
- *    request goes out. What this adds is WHEN and WHAT: the rung refuses with a coded refusal the
- *    caller can act on, before the write gate is consulted and before any credential is decrypted,
- *    instead of letting a plan that cannot be sent be discovered by trying to send it. The escape
- *    it actually catches is real - a path argument of `@evil.example` on a base of
- *    `https://api.host.example` re-authorities the URL - and it is caught here without unwrapping
- *    a credential.
+ *    request goes out. The escape it catches is real - a path argument of `@evil.example` on a base
+ *    of `https://api.host.example` re-authorities the URL - and it is caught here without
+ *    unwrapping a credential.
+ *
+ *    WHAT THIS CHECK ACTUALLY BUYS, CORRECTED. An earlier version of this note said the rung
+ *    "refuses with a coded refusal the caller can act on", and that is a consequence THIS CODE
+ *    CANNOT HAVE: since the discard rule landed there is no refusal code on this path and no test
+ *    could exercise one, because the ladder introduces no `AchieveRefusalCode` at all - a fact its
+ *    own suite pins by counting them. A failing `render` makes the VERDICT fail, which discards the
+ *    model's arguments and lets the call go out with the caller's own.
+ *
+ *    So what it buys is the OPPOSITE of a refusal, and that is the better story: without this
+ *    check the re-authoritied argument is merged, the request is built from it, and
+ *    `action-executor.ts` refuses the call - so the caller's own perfectly good request FAILS
+ *    because a model wrote a bad argument. With it, the plan is dropped here (before the write gate
+ *    is consulted and before any credential is decrypted) and the caller still gets their answer.
  *
  * 5. `shape` - the plan is an object of SCALARS. `interpolateObj` passes a non-string raw value
  *    THROUGH into a JSON body when a template is exactly one bare `{{name}}`, so allowing objects

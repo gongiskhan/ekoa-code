@@ -106,6 +106,7 @@ import {
   composeRows,
   fieldsOf,
   parseComposePlan,
+  promptSafeFields,
   rowsOf,
   verifyComposePlan,
   type AppCollections,
@@ -264,15 +265,35 @@ export type AchieveRung = 'reuse' | 'parametrize' | 'compose' | 'mint';
 
 export interface AchieveLadderStep {
   rung: AchieveRung;
-  /** `taken` - this rung produced the answer. `skipped` - it did not apply (or its seam is absent).
-   *  `refused` - it applied, ran, and its deterministic suite threw its answer away.
+  /**
+   * `taken` - this rung produced the answer.
    *
-   *  A `refused` RUNG IS NOT A REFUSED CALL. On `parametrize` it means the model's arguments were
-   *  discarded and the request went out as the caller shaped it. */
-  verdict: 'taken' | 'skipped' | 'refused';
+   * THE OTHER THREE ARE THREE DIFFERENT FACTS, and separating them is what this word is for:
+   *
+   *   `skipped`     - the rung DID NOT APPLY. Nothing was missing, no seam is wired, the goal asked
+   *                   for nothing extra, D1 leaves this action nothing to offer. Nothing failed.
+   *   `refused`     - "WE WOULD NOT." It applied, it ran, and its DETERMINISTIC SUITE threw the
+   *                   answer away. `violations` says exactly what was wrong with it.
+   *   `unavailable` - "WE COULD NOT RIGHT NOW." Its own work could not be done at all: the caller's
+   *                   allowance does not cover a planning turn, the model was unreachable, the
+   *                   credential would not resolve to a host, a store it reads rejected. NOTHING
+   *                   WAS JUDGED, so there is nothing to report as a violation - and a caller who
+   *                   retries later may get the rung's answer.
+   *
+   * A caller cannot act on those three the same way, and until this split they could not tell them
+   * apart: the compose post-stage recorded A REJECTED MONGO QUERY as `refused` - the platform saying
+   * it had considered the goal and declined it - and a billing-locked tenant was handed the bare
+   * word "billing" on a rung that had judged nothing about them at all.
+   *
+   * NONE OF THE THREE IS A REFUSED CALL. On `parametrize` each of them means the request went out
+   * as the caller shaped it; on `compose`, that the action answered unnarrowed.
+   */
+  verdict: 'taken' | 'skipped' | 'refused' | 'unavailable';
+  /** ONE SENTENCE, ALWAYS THIS PLATFORM'S OWN WORDS - never a store's, a driver's or a provider's
+   *  own message. See `applyComposition` for the rule and its reason. */
   detail?: string;
   /** `refused` - what the discarded answer got wrong, in the same words the top-level `violations`
-   *  uses. */
+   *  uses. An `unavailable` rung judged nothing and carries none. */
   violations?: string[];
 }
 
@@ -748,15 +769,32 @@ export async function achieveIntegrationGoal(
  *     caller does not hold, an answer with no single list in it - falls through to that same exit
  *     rather than to a refusal. Two of those three used to refuse AFTER the request had gone out
  *     and come back 200, which spent the side effect and then discarded the result;
- *   - AND SO DOES A THROW. `applyComposition` and `planComposition` each convert a rejection out of
- *     their seams into a ladder step and a null/none, because a refusal, a swallowed answer and an
- *     exception are three exits from the same wrong idea. The store read behind the compose rung is
- *     a live Mongo query; before this, a dropped connection between the remote's 200 and the join
- *     turned the caller's successful call into a 500 from us.
+ *   - AND SO DOES A THROW, ON BOTH RUNGS. `parametrizeArgs`, `planComposition` and
+ *     `applyComposition` each convert a rejection out of their seams into a ladder step and a
+ *     nothing-answer, because a refusal, a swallowed answer and an exception are three exits from
+ *     the same wrong idea.
  *
- * The discarded rung is recorded on the ladder, with its `violations` where it has any, BESIDE the
- * answer it did not prevent. Nothing on this ladder may take away an answer the product already
- * has - not by returning one, not by refusing one, and not by throwing.
+ *     THE PARAMETRIZE RUNG WAS THE LAST ONE WITHOUT THAT SPLIT, and its position made it the worse
+ *     of the two. `checkAllowance` is three store operations (`ensureAccount`, a lazy-reset write,
+ *     the global overage read) and `ctx.planStep` reaches the LLM chokepoint over a socket; both
+ *     reject on an ordinary bad day, and neither was caught. The rejection left `runMatchedAction`
+ *     BEFORE the one gated execute, so `achieveIntegrationGoal` never called the action at all: a
+ *     trusted action, the caller's own arguments and a human's standing approval came back as a 500
+ *     error envelope because a billing account read blipped. The compose rung throws AFTER the
+ *     answer exists and destroys it; this one threw BEFORE it exists and prevents it. Both are the
+ *     rung taking the call away.
+ *
+ *     `resolveCredentialEgressBinding` is NOT in that list, and the difference is a fact about that
+ *     function rather than an oversight: it wraps its own body in a `try` and answers `refused` on
+ *     any failure, deliberately, so that a resolver error can never WIDEN a binding. It therefore
+ *     cannot reject - and the price is that a LOCKED credential and a FAILED RESOLVER reach this
+ *     rung as the same value. The rung says so in one sentence for both rather than inventing a
+ *     distinction it does not have (see `draftParametrizedArgs`).
+ *
+ * The stood-down rung is recorded on the ladder - with its `violations` where it JUDGED something,
+ * and with `unavailable` where it judged nothing and simply could not run - BESIDE the answer it
+ * did not prevent. Nothing on this ladder may take away an answer the product already has or is
+ * about to get: not by returning one, not by refusing one, and not by throwing.
  */
 async function runMatchedAction(
   ctx: AchieveContext,
@@ -768,121 +806,22 @@ async function runMatchedAction(
   config: Parameters<typeof resolveCredentialEgressBinding>[1],
 ): Promise<CapabilityOutcome<AchieveResult>> {
   const ladder: AchieveLadderStep[] = [];
-  let args = callerArgs;
-  let filledArgs: string[] = [];
 
   // --- RUNG 2: PARAMETRIZE ------------------------------------------------------------------
-  const missing = missingDeclaredArgs(action, callerArgs);
-  // D1, applied BEFORE the model is asked rather than after: an argument a model may not fill on
-  // this action is never OFFERED to it. Not asking is cheaper than refusing, and it keeps a write
-  // whose targeting the caller omitted behaving exactly as it does today (the request goes out as
-  // the caller shaped it) instead of turning into a new refusal.
   //
-  // `mayBeModelFilled` is the ONE statement of D1, shared with `verifyPlannedArgs` so the filter and
-  // the suite cannot drift. It is an allowlist - a write offers only its BODY arguments - which is
-  // what makes it correct for an automation-backed action, whose request this module cannot read at
-  // all and whose arguments therefore used to slip through a "not targeting" test.
-  const fillable = missing.filter((name) => mayBeModelFilled(action, name));
-  const withheld = missing.filter((name) => !mayBeModelFilled(action, name));
-
-  if (missing.length === 0) {
-    ladder.push({ rung: 'parametrize', verdict: 'skipped', detail: 'the caller supplied every argument the action declares' });
-  } else if (fillable.length === 0) {
-    ladder.push({
-      rung: 'parametrize',
-      verdict: 'skipped',
-      detail: `"${action.actionName}" can write, so only a person supplies arguments that do not land in its request body: ${withheld.sort().join(', ')}`,
-    });
-  } else if (!ctx.planStep) {
-    ladder.push({ rung: 'parametrize', verdict: 'skipped', detail: 'the planning seam is not wired in this deployment' });
-  } else {
-    // THE RENDER PROBE NEEDS A PRE-IMAGE, AND ONLY AN HTTP ACTION HAS ONE. An automation-backed
-    // action addresses no URL from this module, so `assertOriginAllowed` has nothing to say about
-    // it either way, and requiring a granted binding would disable the rung for a whole backing
-    // type on the strength of a check that does not apply to it.
-    const binding = action.httpConfig ? await resolveCredentialEgressBinding(ctx.actor, config, integrationKey) : null;
-    if (binding !== null && binding.kind !== 'granted') {
-      // No pre-image to probe the rendered URL against. Skipping is right rather than refusing:
-      // this is the executor's own `unbound` branch, and the request the caller already asked for
-      // is unchanged by our declining to add to it.
-      ladder.push({ rung: 'parametrize', verdict: 'skipped', detail: `this credential has no bound host to check a filled argument against (${binding.kind})` });
-    } else {
-      const allowance = await checkAllowance(ctx.actor.userId);
-      if (!allowance.ok) {
-        ladder.push({ rung: 'parametrize', verdict: 'skipped', detail: 'billing' });
-      } else {
-        const turn = await ctx.planStep({
-          contentSections: parametrizeSections(definition, action, fillable, withheld, callerArgs),
-          outputContract: argsOutputContractFor(action, fillable),
-          userText: repairableUserText(`Supply the arguments this action needs for the goal:\n\n${goal}`),
-          decision: decideForTask(goal, undefined, 'WORKHORSE'),
-          attribution: authoringAttribution(ctx.actor),
-          parse: parseArgsPlan,
-          // ONE repair turn, the author arm's rule: a generic retry produces identical garbage, and
-          // the violations are what make a retry fix anything.
-          repairs: 1,
-        });
-        if (turn.status === 'unavailable') {
-          // An outage is not a refusal. The call proceeds with the caller's own arguments, which is
-          // precisely what it did before this rung existed.
-          ladder.push({ rung: 'parametrize', verdict: 'skipped', detail: `the planning model was unavailable (${turn.reason})` });
-        } else {
-          const verdict = verifyPlannedArgs({
-            action,
-            definition,
-            planned: turn.draft,
-            callerArgs,
-            allowedOrigins: binding?.kind === 'granted' ? binding.origins : [],
-          });
-          if (!verdict.passed || !verdict.args) {
-            // THE PLAN IS THROWN AWAY, THE CALL IS NOT.
-            //
-            // This used to `return refused('parametrize_refused', …)`, and that was the same defect
-            // the compose rung had one rung down: an `achieve` that EXECUTED before this slice -
-            // the caller's own arguments, an action a human trusted, a standing approval behind any
-            // write - stopped executing because a model proposed a bad argument. The rung was added
-            // to give MORE answers; a rung that can subtract one is a regression however good its
-            // reason.
-            //
-            // Nothing unsafe survives the discard: `verdict.args` is null, so not one model-supplied
-            // value reaches `args`, and the request that goes out is byte-for-byte the request the
-            // caller asked for. What the guardrails caught is REPORTED rather than acted on - the
-            // ladder step carries the violations, so a client sees "your arguments were not filled,
-            // here is why" BESIDE the answer rather than in place of it.
-            ladder.push({
-              rung: 'parametrize',
-              verdict: 'refused',
-              detail: 'the arguments proposed for this action did not pass the guardrails and were discarded; the call ran with the arguments you supplied',
-              violations: [
-                ...turn.violations,
-                ...verdict.checks.filter((c) => !c.ok).map((c) => c.detail ?? `${c.name} failed`),
-              ],
-            });
-            // `args` is deliberately UNTOUCHED - still exactly `callerArgs`. Execution continues
-            // below, on the rung underneath this one.
-          } else {
-            filledArgs = Object.keys(verdict.args).sort();
-            // THE CALLER'S OWN ARGUMENTS WIN, spread last.
-            //
-            // HONEST NOTE: this order is UNOBSERVABLE, and saying so is better than implying a
-            // second enforced rule. `verifyPlannedArgs`'s `declared_args` check refuses any plan
-            // naming a key the caller supplied, so `verdict.args` and `callerArgs` are disjoint by
-            // the time we get here and either spread order produces the same object. Reversing it
-            // is an equivalent mutant - no test can distinguish it, and none pretends to. What IS
-            // asserted is the invariant that makes it unobservable (see the `declared_args`
-            // overwrite case, and the disjointness assertion beside it); the order below is kept
-            // because it is the one that stays correct if that check is ever weakened.
-            args = { ...(verdict.args as Record<string, PlannedArgValue>), ...callerArgs };
-            ladder.push({
-              rung: 'parametrize',
-              verdict: filledArgs.length > 0 ? 'taken' : 'skipped',
-              detail: filledArgs.length > 0 ? `filled: ${filledArgs.join(', ')}` : 'the model determined no argument from the goal',
-            });
-          }
-        }
-      }
-    }
-  }
+  // `parametrizeArgs` returns ARGUMENTS. It has no way to return a refusal, and it cannot throw -
+  // the worker/recorder split below says both - so this statement can only ever leave `args` equal
+  // to what the caller sent or to what the caller sent plus values a deterministic suite admitted.
+  const { args, filledArgs } = await parametrizeArgs(
+    ctx,
+    integrationKey,
+    goal,
+    action,
+    callerArgs,
+    definition,
+    config,
+    ladder,
+  );
 
   // --- RUNG 1: REUSE - the ONE gated execute, whatever the rung above decided ----------------
   const out = await executeIntegrationCapabilityAction(ctx, integrationKey, action.actionName, args);
@@ -940,6 +879,264 @@ async function runMatchedAction(
 }
 
 /**
+ * ONE REPAIR TURN, for both new rungs, and it is a NUMBER rather than two literals.
+ *
+ * A generic retry produces identical garbage - the violations are what make a retry fix anything -
+ * so one turn of feedback on a deterministic suite is the whole budget the author arm allows itself
+ * and the whole budget these two get. The bound is stated once because it is a bound in BOTH
+ * directions and the two are different failures:
+ *
+ *   HIGHER - every extra turn is another metered chokepoint call on somebody's allowance, and
+ *            another chance for a model to talk itself out of a plan the suite had already
+ *            accepted. The rung exists to add an answer, not to keep buying attempts at one.
+ *   LOWER  - zero repairs means a reply the PARSER rejected (a missing fence, malformed JSON) ends
+ *            the rung. The model never learns what was wrong with a mistake it would usually fix on
+ *            being told, so the caller pays for a turn and gets nothing for it.
+ *
+ * It is a budget for PARSE violations only. A plan that parses and then fails the deterministic
+ * suite is NOT re-prompted: it lands on the ladder, beside the answer, naming what it got wrong.
+ */
+const PLAN_REPAIR_BUDGET = 1;
+
+/**
+ * WHAT THE PARAMETRIZE RUNG PRODUCED. Two members, and the absence of a third is the same point the
+ * compose rung's two attempt types make: a stage that fills in blanks the caller left has no way to
+ * say "and therefore there is no call".
+ *
+ * `none` carries the LADDER WORDING rather than pushing it, so every step this rung records is
+ * written at ONE place - see `parametrizeArgs`. That is not tidiness: it is what makes "a throw
+ * cannot leave a half-written ladder behind" true by construction rather than by reading every
+ * branch and checking that each push is followed by a return.
+ */
+type ParametrizeAttempt =
+  | { kind: 'filled'; args: Record<string, PlannedArgValue>; filled: string[] }
+  | {
+      kind: 'none';
+      verdict: 'skipped' | 'refused' | 'unavailable';
+      detail: string;
+      /** `refused` only: the deterministic guardrails the discarded plan did not meet. */
+      violations?: string[];
+    };
+
+/**
+ * THE PARAMETRIZE RUNG, whole: decide what the one request will carry, before that request exists.
+ *
+ * IT RETURNS ARGUMENTS. Never a refusal - the return type has nowhere to put one - and never an
+ * exception, which the type alone did not buy and which is the defect this split closes.
+ *
+ * WHAT COULD THROW HERE, IN THE CODE RATHER THAN IN PRINCIPLE. `checkAllowance` is three store
+ * operations (`ensureAccount`, the lazy-reset write, the global overage read) and `ctx.planStep`
+ * reaches the LLM chokepoint over a socket. Either rejects on a dropped connection, a timeout, a
+ * replica-set election. Neither was caught, and this rung sits ABOVE the one gated execute - so the
+ * rejection left `runMatchedAction` before the action was ever called, out of `achieveIntegrationGoal`
+ * and into the route's error handler as a 500. A trusted action, the caller's own arguments and a
+ * human's standing approval, answered with an error envelope because a billing account read blipped.
+ *
+ * That is the compose rung's defect one rung up and one step worse. The compose post-stage throws
+ * AFTER the answer exists and destroys it; this threw BEFORE it exists and prevented it. "A rung
+ * that can only ADD an answer must never be able to SUBTRACT one" was true of everything this rung
+ * RETURNS and false of what it could throw.
+ *
+ * SO THE WORK IS IN `draftParametrizedArgs`, which touches the seams and MAY throw, and this
+ * function converts every one of its outcomes - a rejection included - into ONE ladder step plus
+ * the caller's own arguments. There is no expression in this body that can escape.
+ *
+ * WHAT A THROW PUTS ON THE WIRE IS FIXED TEXT, `applyComposition`'s rule for `applyComposition`'s
+ * reason: a store rejection's message names a namespace, a host and a query shape, and the ladder
+ * is a caller-facing field. The error's own message goes to the process log for an operator.
+ */
+async function parametrizeArgs(
+  ctx: AchieveContext,
+  integrationKey: string,
+  goal: string,
+  action: IntegrationAction,
+  callerArgs: Record<string, unknown>,
+  definition: IntegrationDefinition,
+  config: Parameters<typeof resolveCredentialEgressBinding>[1],
+  ladder: AchieveLadderStep[],
+): Promise<{ args: Record<string, unknown>; filledArgs: string[] }> {
+  let attempt: ParametrizeAttempt;
+  try {
+    attempt = await draftParametrizedArgs(ctx, integrationKey, goal, action, callerArgs, definition, config);
+  } catch (err) {
+    console.warn(
+      `[integration-achieve] parametrize rung failed for ${integrationKey}.${action.actionName}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    attempt = {
+      kind: 'none',
+      // `unavailable`, NOT `refused`: nothing was judged. No plan was seen, no guardrail fired, and
+      // nothing at all was decided about the caller's goal - so the one word that would tell them
+      // otherwise is the one word this branch may not use.
+      verdict: 'unavailable',
+      detail: 'the arguments for this action could not be planned, so the call runs with the arguments you supplied',
+    };
+  }
+  if (attempt.kind === 'none') {
+    ladder.push({
+      rung: 'parametrize',
+      verdict: attempt.verdict,
+      detail: attempt.detail,
+      ...(attempt.violations ? { violations: attempt.violations } : {}),
+    });
+    // `callerArgs` BY IDENTITY, not a copy of it: the request that goes out is byte-for-byte the
+    // request the caller asked for, on every one of these paths.
+    return { args: callerArgs, filledArgs: [] };
+  }
+  ladder.push({ rung: 'parametrize', verdict: 'taken', detail: `filled: ${attempt.filled.join(', ')}` });
+  // THE CALLER'S OWN ARGUMENTS WIN, spread last.
+  //
+  // HONEST NOTE: this order is UNOBSERVABLE, and saying so is better than implying a second enforced
+  // rule. `verifyPlannedArgs`'s `declared_args` check refuses any plan naming a key the caller
+  // supplied, so `attempt.args` and `callerArgs` are disjoint by the time we get here and either
+  // spread order produces the same object. Reversing it is an equivalent mutant - no test can
+  // distinguish it, and none pretends to. What IS asserted is the invariant that makes it
+  // unobservable (see the `declared_args` overwrite case, and the disjointness assertion beside it);
+  // the order below is kept because it is the one that stays correct if that check is ever weakened.
+  return { args: { ...attempt.args, ...callerArgs }, filledArgs: attempt.filled };
+}
+
+/**
+ * The parametrize rung's WORK. Touches both seams, MAY throw, and writes nothing - no ladder step,
+ * no state at all. See `attemptComposition` and `draftCompositionPlan` for the same division and
+ * its reason.
+ *
+ * D1 IS APPLIED BEFORE THE MODEL IS ASKED rather than after: an argument a model may not fill on
+ * this action is never OFFERED to it. Not asking is cheaper than refusing, and it keeps a write
+ * whose targeting the caller omitted behaving exactly as it does today - the request goes out as
+ * the caller shaped it - instead of turning into a new refusal. `mayBeModelFilled` is the ONE
+ * statement of D1, shared with `verifyPlannedArgs` so the filter and the suite cannot drift. It is
+ * an ALLOWLIST - a write offers only its BODY arguments - which is what makes it correct for an
+ * automation-backed action, whose request this module cannot read at all and whose arguments
+ * therefore used to slip through a "not targeting" test.
+ */
+async function draftParametrizedArgs(
+  ctx: AchieveContext,
+  integrationKey: string,
+  goal: string,
+  action: IntegrationAction,
+  callerArgs: Record<string, unknown>,
+  definition: IntegrationDefinition,
+  config: Parameters<typeof resolveCredentialEgressBinding>[1],
+): Promise<ParametrizeAttempt> {
+  const missing = missingDeclaredArgs(action, callerArgs);
+  if (missing.length === 0) {
+    return { kind: 'none', verdict: 'skipped', detail: 'the caller supplied every argument the action declares' };
+  }
+  const fillable = missing.filter((name) => mayBeModelFilled(action, name));
+  const withheld = missing.filter((name) => !mayBeModelFilled(action, name));
+  if (fillable.length === 0) {
+    return {
+      kind: 'none',
+      verdict: 'skipped',
+      detail: `"${action.actionName}" can write, so only a person supplies arguments that do not land in its request body: ${withheld.sort().join(', ')}`,
+    };
+  }
+  if (!ctx.planStep) {
+    // A DEPLOYMENT FACT, not a failure: this process was built without the seam, retrying changes
+    // nothing, and the call behaves exactly as it did before the ladder existed.
+    return { kind: 'none', verdict: 'skipped', detail: 'the planning seam is not wired in this deployment' };
+  }
+
+  // THE RENDER PROBE NEEDS A PRE-IMAGE, AND ONLY AN HTTP ACTION HAS ONE. An automation-backed action
+  // addresses no URL from this module, so `assertOriginAllowed` has nothing to say about it either
+  // way, and requiring a granted binding would disable the rung for a whole backing type on the
+  // strength of a check that does not apply to it.
+  const binding = action.httpConfig ? await resolveCredentialEgressBinding(ctx.actor, config, integrationKey) : null;
+  if (binding !== null && binding.kind === 'unbound') {
+    // The executor's own `unbound` class: a templated base URL this platform cannot read a host out
+    // of. There is no pre-image to probe a filled argument against and there never will be for this
+    // definition, so this is `skipped` - nothing failed, and nothing is going to.
+    return {
+      kind: 'none',
+      verdict: 'skipped',
+      detail: 'this integration declares no fixed host, so there is no bound origin to check a filled argument against',
+    };
+  }
+  if (binding !== null && binding.kind !== 'granted') {
+    // `refused`, WHICH IS TWO FACTS THIS RUNG CANNOT TELL APART, and the sentence says only what is
+    // true of both. `resolveCredentialEgressBinding` wraps its whole body in a `try` and answers
+    // `refused` on any failure - deliberately, so a resolver error can never WIDEN a binding - so a
+    // credential that is genuinely locked or revoked and a resolver that simply fell over arrive
+    // here as the same value. Naming either one would be this rung asserting a distinction it does
+    // not have; `unavailable` is the honest verdict for the pair, and it is also the actionable one
+    // (both are fixed by the caller or by time, neither is a judgement on their goal).
+    return {
+      kind: 'none',
+      verdict: 'unavailable',
+      detail: "this integration's credential could not be resolved to a host, so the call runs with the arguments you supplied",
+    };
+  }
+
+  const allowance = await checkAllowance(ctx.actor.userId);
+  if (!allowance.ok) {
+    // NOT `refused`, AND NOT THE BARE WORD "billing". A tenant out of allowance has had nothing
+    // judged about their goal - the rung never ran - and telling them it was refused says the
+    // platform considered what they asked for and declined it. What is true is that an optional
+    // extra could not be bought right now, and that the call they made ran anyway.
+    return {
+      kind: 'none',
+      verdict: 'unavailable',
+      detail: 'your plan allowance does not currently cover a planning turn, so the call runs with the arguments you supplied',
+    };
+  }
+
+  const turn = await ctx.planStep({
+    contentSections: parametrizeSections(definition, action, fillable, withheld, callerArgs),
+    outputContract: argsOutputContractFor(action, fillable),
+    userText: repairableUserText(`Supply the arguments this action needs for the goal:\n\n${goal}`),
+    decision: decideForTask(goal, undefined, 'WORKHORSE'),
+    attribution: authoringAttribution(ctx.actor),
+    parse: parseArgsPlan,
+    repairs: PLAN_REPAIR_BUDGET,
+  });
+  if (turn.status === 'unavailable') {
+    // An outage is not a refusal, and now it does not read like one either. The call proceeds with
+    // the caller's own arguments, which is precisely what it did before this rung existed.
+    return { kind: 'none', verdict: 'unavailable', detail: `the planning model was unavailable (${turn.reason})` };
+  }
+
+  const verdict = verifyPlannedArgs({
+    action,
+    definition,
+    planned: turn.draft,
+    callerArgs,
+    allowedOrigins: binding?.kind === 'granted' ? binding.origins : [],
+  });
+  if (!verdict.passed || !verdict.args) {
+    // THE PLAN IS THROWN AWAY, THE CALL IS NOT.
+    //
+    // This used to `return refused('parametrize_refused', …)`, and that was the same defect the
+    // compose rung had one rung down: an `achieve` that EXECUTED before this slice - the caller's
+    // own arguments, an action a human trusted, a standing approval behind any write - stopped
+    // executing because a model proposed a bad argument. The rung was added to give MORE answers; a
+    // rung that can subtract one is a regression however good its reason.
+    //
+    // Nothing unsafe survives the discard: `verdict.args` is null, so not one model-supplied value
+    // reaches the request, which goes out byte-for-byte as the caller asked for it. What the
+    // guardrails caught is REPORTED rather than acted on - the ladder step carries the violations,
+    // so a client sees "your arguments were not filled, here is why" BESIDE the answer.
+    //
+    // AND THIS ONE REALLY IS `refused`: a deterministic suite looked at a real plan and rejected it.
+    // Retrying the same goal is expected to be rejected again, which is exactly what distinguishes
+    // it from the three `unavailable` branches above.
+    return {
+      kind: 'none',
+      verdict: 'refused',
+      detail: 'the arguments proposed for this action did not pass the guardrails and were discarded; the call ran with the arguments you supplied',
+      violations: [
+        ...turn.violations,
+        ...verdict.checks.filter((c) => !c.ok).map((c) => c.detail ?? `${c.name} failed`),
+      ],
+    };
+  }
+  const filled = Object.keys(verdict.args).sort();
+  if (filled.length === 0) {
+    return { kind: 'none', verdict: 'skipped', detail: 'the model determined no argument from the goal' };
+  }
+  return { kind: 'filled', args: verdict.args, filled };
+}
+
+/**
  * WHAT THE POST-STAGE PRODUCED. Two members, and the absence of a third is the point: a stage that
  * post-processes an answer has no way to say "and therefore the answer is gone".
  *
@@ -950,7 +1147,7 @@ async function runMatchedAction(
  */
 type CompositionAttempt =
   | { kind: 'composed'; items: Record<string, unknown>[]; summary: ComposeSummary }
-  | { kind: 'not_applied'; verdict: 'skipped' | 'refused'; detail: string };
+  | { kind: 'not_applied'; verdict: 'skipped' | 'refused' | 'unavailable'; detail: string };
 
 /**
  * THE WHOLE COMPOSE RUNG, in the one place `runMatchedAction` calls it: PLAN, then APPLY, over the
@@ -1039,7 +1236,12 @@ async function applyComposition(
     );
     attempt = {
       kind: 'not_applied',
-      verdict: 'refused',
+      // `unavailable`, and it used to say `refused` - the exact conflation this rung's own header
+      // warns about elsewhere. A rejected Mongo query is not the platform having considered the
+      // caller's goal and declined it: NOTHING WAS JUDGED. The plan passed every guardrail; a
+      // database blipped. Telling the caller "refused" invites them to change their goal, when the
+      // only useful thing they can do is ask again.
+      verdict: 'unavailable',
       // No `err` in this string, deliberately - see the header.
       detail: `the data this goal would have been narrowed by could not be read, so "${action.actionName}" answers unnarrowed`,
     };
@@ -1119,7 +1321,7 @@ type CompositionPlanAttempt =
        *  second reading of the same answer, and the two could drift. */
       actionRows: Record<string, unknown>[];
     }
-  | { kind: 'none'; verdict: 'skipped' | 'refused'; detail: string; violations?: string[] };
+  | { kind: 'none'; verdict: 'skipped' | 'refused' | 'unavailable'; detail: string; violations?: string[] };
 
 /**
  * PLAN THE JOIN, or decline to. Runs with the executed answer already in hand.
@@ -1200,7 +1402,11 @@ async function planComposition(
     );
     attempt = {
       kind: 'none',
-      verdict: 'skipped',
+      // `unavailable` rather than `skipped`, for the reason `applyComposition`'s catch is not
+      // `refused`: a rejected store query or a dropped chokepoint socket is neither "this did not
+      // apply" nor "we looked and said no". It is "we could not, right now", and it is the one of
+      // the three a caller can usefully retry.
+      verdict: 'unavailable',
       // Fixed text; the error's own message is an operator's fact, not a caller's - see
       // `applyComposition`'s header for the same rule on the post-stage.
       detail: 'the composition could not be planned, so the action runs and answers as it always did',
@@ -1270,14 +1476,33 @@ async function draftCompositionPlan(
   // THE ACTION-SIDE FIELD SET, exact and from the rows themselves. This is the half the rung never
   // had: without it `join.resultField` was accepted as any non-empty string, and a wrong one emptied
   // the join silently.
-  const resultFields = fieldsOf(rows.rows);
-  const collections = await ctx.appCollections.list(ctx.actor);
+  //
+  // BOTH SETS GO THROUGH `promptSafeFields` HERE, AT THE ONE PLACE THEY ARE PRODUCED, and that
+  // position is the whole guarantee rather than a convenience. These names are third-party writable
+  // - the action side is a remote API's own JSON keys, the collection side is whatever a served app
+  // wrote into `app_data`, where field names pass no guard at any write path - and they are
+  // interpolated into a system prompt. Bounding them where they are BORN means the value the prompt
+  // renders and the value `verifyComposePlan` enforces are the same array, so a name that is not
+  // offered is not accepted either; bounding them at the prompt alone would leave a cosmetic guard,
+  // and at the suite alone would refuse names the model was shown. See `action-compose.ts`.
+  const resultFields = promptSafeFields(fieldsOf(rows.rows));
+  const collections = (await ctx.appCollections.list(ctx.actor)).map((c) => ({
+    name: c.name,
+    fields: promptSafeFields(c.fields),
+  }));
   if (collections.length === 0) {
     return { kind: 'none', verdict: 'skipped', detail: 'your organisation holds no collections to narrow a result by' };
   }
   const allowance = await checkAllowance(ctx.actor.userId);
   if (!allowance.ok) {
-    return { kind: 'none', verdict: 'skipped', detail: 'billing' };
+    // THE SIBLING RUNG'S WORDING, and for its reason: a tenant out of allowance has had nothing
+    // judged about their goal, so they are not told it was refused - and "billing" on its own was
+    // never a sentence anybody could act on.
+    return {
+      kind: 'none',
+      verdict: 'unavailable',
+      detail: 'your plan allowance does not currently cover a planning turn, so the action answers unnarrowed',
+    };
   }
 
   const turn = await ctx.planStep({
@@ -1287,10 +1512,10 @@ async function draftCompositionPlan(
     decision: decideForTask(goal, undefined, 'WORKHORSE'),
     attribution: authoringAttribution(ctx.actor),
     parse: parseComposePlan,
-    repairs: 1,
+    repairs: PLAN_REPAIR_BUDGET,
   });
   if (turn.status === 'unavailable') {
-    return { kind: 'none', verdict: 'skipped', detail: `the planning model was unavailable (${turn.reason})` };
+    return { kind: 'none', verdict: 'unavailable', detail: `the planning model was unavailable (${turn.reason})` };
   }
 
   // JUDGED AGAINST THE VERY SETS THE TURN WAS SHOWN. Passing anything else here - a re-listed
@@ -1399,6 +1624,9 @@ function composeSections(
       '# Collections this organisation holds, and the fields on their rows',
       '# "collection" must be one of these names; "where.field" and "join.collectionField" must be',
       '# fields listed for the collection you choose.',
+      // `(no fields)` is the same unreachable-through-the-product default as
+      // `verifyComposePlan`'s `'none'`: every row the engine writes carries `id`/`createdAt`/
+      // `updatedAt` (see `listCollectionFields`), so no honest fixture renders this branch.
       ...collections.map((c) => `- ${c.name}: ${c.fields.length > 0 ? c.fields.join(', ') : '(no fields)'}`),
     ].join('\n'),
   ];

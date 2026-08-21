@@ -910,7 +910,10 @@ is inherited on the same terms every other rail meets it.
   this platform cannot see where an automation-backed action's arguments land.
   A plan the suite rejects is DISCARDED, never refused: `args` stays exactly what the caller sent,
   the request goes out as it always did, and the rung is recorded `refused` with its `violations` on
-  the ladder BESIDE the answer. See the ladder invariant below.
+  the ladder BESIDE the answer. `refused` is reserved for exactly that - a real plan a deterministic
+  suite judged and threw away. When the rung could not do its work at all (the allowance, the model,
+  an unresolvable credential, a store that rejected) the ladder says `unavailable` and carries no
+  violations, because nothing was judged. See the ladder invariant below.
 - **COMPOSE** (`integrations/action-compose.ts`) runs the matched trusted READ and narrows its rows
   against ONE of the caller's own `app_data` collections with a `SimpleQuery`-class predicate. There
   is no server-side join anywhere else in this repo (`CollectionsEngine` is list/get/write;
@@ -937,7 +940,9 @@ is inherited on the same terms every other rail meets it.
   lister and no store, and four cheap disqualifications - a failed execute, several lists, no list,
   no rows - now cost no planning turn at all. `where.value` is the one thing a model supplies that is
   a value rather than a name, so it cannot be chosen from a shown set; it is checked as a scalar,
-  which is the sibling rung's rule for the sibling reason.
+  which is the sibling rung's rule for the sibling reason. Both field sets pass `promptSafeFields`
+  where they are produced - bounded and sanitised before either the prompt or the suite sees them,
+  because both are third-party writable (`docs/security.md`).
   The rung is a POST-STAGE, NOT AN ERROR BOUNDARY, and it has no failure mode that costs the caller
   their answer. A failed execute, a collection name the caller does not hold, an action answer with
   no single list in it, a plan the deterministic suite rejects, AND A STORE READ THAT REJECTS: every
@@ -954,6 +959,29 @@ is inherited on the same terms every other rail meets it.
   rather than by checking that each branch remembered to return. What a throw puts on the wire is
   FIXED TEXT; the error's own message is logged for an operator and never travels, because a store
   rejection's message is this platform's internals and the ladder is a caller-facing field.
+  **EVERY RUNG IS A WORKER AND A RECORDER, AND THAT IS NOW TRUE OF ALL THREE STAGES**
+  (D-S4-3/D-S5-6). A stage that touches a seam is split in two: a WORKER that may throw and writes
+  nothing (`draftParametrizedArgs`, `draftCompositionPlan`, `attemptComposition`), and a RECORDER
+  that converts every outcome - a rejection included - into exactly ONE ladder step and a
+  nothing-answer (`parametrizeArgs`, `planComposition`, `applyComposition`). A half-written ladder is
+  then impossible by construction rather than by reading every branch. The parametrize rung was the
+  last one without it, and its position made that the worse place to be missing one: it runs ABOVE
+  the single gated execute, so a rejection out of `checkAllowance` (three Mongo operations) or
+  `ctx.planStep` (the chokepoint, over a socket) left `achieveIntegrationGoal` before the action was
+  ever called - the caller's goal answered with a 500 because a billing read blipped.
+  `resolveCredentialEgressBinding` is NOT in the may-throw set: it catches its own body and answers
+  `refused` on any failure so a resolver error can never WIDEN a binding, and the cost of that design
+  is that a locked credential and a fallen-over resolver arrive as one value the rung does not
+  pretend to see through.
+
+  **THE LADDER HAS FOUR VERDICTS BECAUSE THERE ARE FOUR FACTS.** `taken`; `skipped` (the rung did not
+  apply - nothing failed); `refused` ("we would not": a deterministic suite judged a real answer and
+  threw it away, with `violations`); `unavailable` ("we could not right now": allowance, model
+  outage, an unresolvable credential, a store that rejected - no violations, because nothing was
+  judged). A caller routes on that distinction: `refused` means change the goal, `unavailable` means
+  ask again. Collapsing them is what made a rejected Mongo query read as the platform declining
+  somebody's goal.
+
   TWO CAPS, BOTH REPORTED. `COMPOSE_MAX_ITEMS` (200) caps what is EMITTED
   (`composition.truncated`); `COMPOSE_MAX_COLLECTION_ROWS` (5000) caps how much of the collection
   the join KEY SET is built from, which caps the QUESTION rather than the answer - a subset served
@@ -969,7 +997,9 @@ than a promise: **the ladder introduces no refusal code at all.** `AchieveRefusa
 thirteen author-arm codes that pre-date it, every one of which refuses a call that could not have run
 in the first place. A rejected argument plan is discarded and the request goes out as the caller
 shaped it; a write never enters the compose rung; and every way the compose post-stage can fail to
-apply hands back the executed answer with the rung recorded `refused` beside it.
+apply hands back the executed answer with the rung recorded beside it - `refused` when a
+deterministic suite judged something and threw it away, `unavailable` when the rung's own work could
+not be done at all.
 
 A COUNT OF REFUSAL CODES IS NOT THE WHOLE INVARIANT, and round five is why that is written here
 rather than left implied: **an answer can be taken away by returning, by refusing, or by throwing,

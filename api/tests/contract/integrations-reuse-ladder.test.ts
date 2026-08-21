@@ -189,7 +189,10 @@ async function approveWrite(auth: string, actionName: string): Promise<void> {
   expect(res.status).toBe(200);
 }
 
-/** Every 2xx validates against its named shared schema; that is the contract half of this suite. */
+/** Every 2xx validates against its named shared schema; that is the contract half of this suite -
+ *  and it is what covers the ladder's new `unavailable` verdict under Rule 7: the store-failure
+ *  case below produces one on the real wire and it safeParses here, so a widened enum that the
+ *  schema did not widen with it reds. */
 async function okBody(res: Response): Promise<Record<string, unknown>> {
   expect(res.status).toBe(200);
   const body = (await res.json()) as Record<string, unknown>;
@@ -366,6 +369,27 @@ describe('the parametrize rung is wired, and its value reaches the request', () 
 // 2. COMPOSE - the canonical case, end to end, against the tenant's real app_data
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * WHAT THE CANONICAL CASE PROVES, AND WHAT IT DOES NOT.
+ *
+ * IT PROVES THE COMPOSE RUNG - the whole rung, through the real app: the router mount, the
+ * owner-scoped collections binding, both deterministic suites, the join stage and the wire shape,
+ * against the tenant's real `app_data` rows written by the production writer. IT DOES NOT PROVE THE
+ * CITIUS ONGOING-PROCESSES PATH, because that path does not exist: the plan this slice implements
+ * names a canonical action `get-ongoing-processes`, and no such action exists anywhere in `api/src`
+ * or `shared/src` (nor does any Citius integration definition declaring one) - so the case below is
+ * built against a LOCAL FIXTURE of the same shape, seeded into a probe integration by this file.
+ *
+ * Two things follow, and they are why the note is here rather than only in a report. First, the
+ * Citius half is net-new work needing a real portal session, tracked as such in `docs/decisions.md`
+ * and `docs/findings.md`; nobody should read a green run of this file as evidence that a lawyer can
+ * ask for their ongoing processes today. Second, the missing action could not have been used even
+ * if it existed: `matchActionForGoal` requires the goal to name EVERY token of the action's name,
+ * and the canonical Portuguese goal names neither `ongoing` nor `curso`, so
+ * `get-ongoing-processes` is unreachable from "todos os processos de clientes com menos de 40 anos"
+ * with or without a session. The module suite pins exactly that, so the finding lives in the
+ * estate rather than in anyone's memory.
+ */
 describe('CANONICAL, through the real app: "todos os processos de clientes com menos de 40 anos"', () => {
   it('runs the trusted read, joins the tenant\'s clients collection, and mints nothing', async () => {
     await seedDefinition([processos]);
@@ -557,7 +581,7 @@ describe('CANONICAL, through the real app: "todos os processos de clientes com m
     const step = (body.ladder as Array<{ rung: string; verdict: string; violations?: string[] }>).find((s) => s.rung === 'compose');
     expect(step?.verdict).toBe('refused');
     // The violation names the field AND the set that was offered, both off the tenant's real rows.
-    expect(step?.violations?.join(' ')).toContain('"where.field": "age" is not a field of "clients"');
+    expect(step?.violations?.join(' ')).toContain('"where.field": "age" is not among the fields offered for "clients"');
     expect(step?.violations?.join(' ')).toContain('idade');
     // No join happened, so no audit row claims one did.
     expect(await activityLogs.find({ type: 'capability_achieve_compose' })).toHaveLength(0);
@@ -580,7 +604,7 @@ describe('CANONICAL, through the real app: "todos os processos de clientes com m
     expect(body.items).toBeUndefined();
     expect((body.result as { data?: { processos?: unknown[] } }).data?.processos).toHaveLength(PROCESS_ROWS.length);
     const step = (body.ladder as Array<{ rung: string; verdict: string; violations?: string[] }>).find((s) => s.rung === 'compose');
-    expect(step?.violations?.join(' ')).toContain('"join.resultField": "clientId" is not a field of the rows the action returned');
+    expect(step?.violations?.join(' ')).toContain('"join.resultField": "clientId" is not among the fields offered for the rows the action returned');
     // The offered set is the UPSTREAM's own row keys, read off the answer this call produced.
     expect(step?.violations?.join(' ')).toContain('numeroProcesso');
   });
@@ -630,9 +654,18 @@ describe('CANONICAL, through the real app: "todos os processos de clientes com m
     expect(body.items).toBeUndefined();
     expect(body.composition).toBeUndefined();
     // The composition did not apply and the ladder SAYS so - not swallowed, not a refused call.
-    const step = (body.ladder as Array<{ rung: string; verdict: string; detail?: string }>).find((s) => s.rung === 'compose');
-    expect(step?.verdict).toBe('refused');
+    //
+    // AND IT SAYS SO IN THE RIGHT WORD, ON THE REAL WIRE. This branch used to answer `refused`,
+    // which is the platform telling a caller it had considered their goal and declined it, about a
+    // REJECTED MONGO QUERY that judged nothing. `unavailable` is the retryable half of the
+    // vocabulary and a client can route on it; `refused` sends them off to change a goal that was
+    // never the problem. The whole point of a run record is that these are not the same event.
+    const step = (body.ladder as Array<{ rung: string; verdict: string; detail?: string; violations?: string[] }>).find((s) => s.rung === 'compose');
+    expect(step?.verdict).toBe('unavailable');
     expect(step?.detail).toContain('could not be read');
+    // Nothing was judged, so nothing is reported as a violation - which is what makes the word
+    // mean something beside the `refused` step in the next test, which carries two.
+    expect(step?.violations).toBeUndefined();
     // The store's message names our host and our driver; it must not reach a caller's wire.
     expect(JSON.stringify(body)).not.toContain('MongoNetworkError');
     expect(JSON.stringify(body)).not.toContain('ekoa-primary.internal');

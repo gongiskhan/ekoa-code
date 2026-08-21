@@ -49,6 +49,13 @@ where they touch the dashboard.
   FIELD names as well as its name - it has to, or a model invents one and silently narrows somebody's
   answer - the same three tests assert the absence of a peer's FIELD names too, because "org B tracks
   salaries" is a leak before a single row moves), and the bridge S1-S6 scenarios (`fake-daemon/`).
+  Those same field names are also THIRD-PARTY WRITABLE - a remote API's own JSON keys on one side,
+  `app_data` field names on the other, which pass no guard on any write path - so what enters that
+  prompt is bounded and sanitised before it gets there. That is a PROMPT-CONTENT property rather
+  than a tenancy one, so it is pinned in the module suite
+  (`integrations/achieve-reuse-ladder.test.ts`, "the field names put in a prompt are bounded and
+  sanitised") rather than here: both bounds as literal pairs, the sanitiser over the whole banned
+  range, and the filter asserted on each side SEPARATELY so filtering one and not the other reds.
   `migration/` holds the protocol-parity replay suites.
 - **The P4 locality suites, and what each is for** (they overlap on purpose, and the overlap is the
   point - a decision this slice makes wrong is an account lock, so each layer proves a different

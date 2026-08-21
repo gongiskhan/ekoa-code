@@ -4768,3 +4768,184 @@ into the existing files rather than re-serialised, so the diff is exactly the ap
 `docs/diagrams/02-module-map.excalidraw` note (f) - the rung's new position and the two field sets.
 `docs/diagrams/05-data-model.excalidraw` note (f) - what the lister answers now, and the shape of the
 answer a guessed name used to produce.
+
+## 2026-08-21 - D-S4-3/D-S5-6: the parametrize rung gets a worker/recorder split, and "we would not" stops sounding like "we could not right now"
+
+**THE MAJOR: A RUNG THAT COULD STILL TAKE THE CALL AWAY, AND A WORD THAT NAMED THE WRONG SYSTEM.**
+
+Round five (D-S5-4) gave the COMPOSE rung a worker/recorder split - a worker that touches a seam and
+may throw, a recorder that converts every outcome including a rejection into one ladder step - and the
+module header has claimed ever since that "nothing on this ladder may take away an answer: not by
+returning one, not by refusing one, and not by throwing." That claim was true of the compose rung
+and false of the one above it.
+
+The PARAMETRIZE rung had no split. Its seam calls sat inline in `runMatchedAction`, in no `try` at
+all. Two of them reject in production:
+
+- `checkAllowance` is not a predicate. It is `ensureAccount` (a read, plus a write when the account
+  is new), the lazy-reset `billingAccounts.update`, and `readGlobalOverageEnabled` - three Mongo
+  operations, any of which rejects on a dropped connection, a timeout or a replica-set election.
+- `ctx.planStep` reaches the LLM chokepoint over a socket.
+
+And the rung runs ABOVE the one gated execute, so a rejection left `runMatchedAction` before the
+action was ever called, left `achieveIntegrationGoal`, and reached the route's error handler as a
+500. A trusted action, the caller's own arguments, a human's standing approval - answered with an
+error envelope because a billing account read blipped. The compose rung's version of this defect
+throws AFTER the answer exists and destroys it; this one threw BEFORE it exists and prevented it
+from ever being obtained, which is the same subtraction from the worse position.
+
+**WHAT THE CODE SAYS THAT THE BRIEF DID NOT.** The blocker named `resolveCredential` alongside
+`checkAllowance` as a rejecting sibling. IT IS NOT ONE, AND THE CODE WINS:
+`resolveCredentialEgressBinding` wraps its whole body in a `try` and answers `{ kind: 'refused' }` on
+any failure - deliberately, so a resolver error can never WIDEN a binding. It cannot reject. What it
+does instead is the second half of the same finding: it COLLAPSES a genuinely locked or revoked
+credential and a resolver that fell over into one value, and the rung then printed one sentence for
+both - "this credential has no bound host to check a filled argument against (refused)", which is
+also just false of a locked credential that has a perfectly good host. The rung now says only what is
+true of the whole class, and its comment names the collapse rather than pretending to see through it.
+
+**THE SECOND HALF: THREE FACTS, TWO WORDS.** `AchieveLadderStep.verdict` carried `taken | skipped |
+refused`, and the mapping was wrong in both directions:
+
+- the compose POST-STAGE recorded a REJECTED MONGO QUERY as `refused` - the platform telling a caller
+  it had considered their goal and declined it, when nothing had been judged at all and the plan had
+  passed every guardrail;
+- a billing-locked tenant got `skipped` with the bare detail `'billing'`, on both rungs. Not a
+  sentence, and `skipped` means "did not apply", which is what a caller is told when nothing went
+  wrong;
+- a model outage, an unresolvable credential and a rejected store read all read `skipped` too - the
+  same word as "you already supplied every argument".
+
+A caller cannot act on those the same way. `refused` should send them to change their goal;
+everything above should send them to try again later. So the enum gains `unavailable`:
+
+| verdict | meaning | violations | retry? |
+| --- | --- | --- | --- |
+| `taken` | this rung produced the answer | - | - |
+| `skipped` | DID NOT APPLY: nothing missing, no seam wired, no residue, D1 offers nothing | no | pointless |
+| `refused` | "WE WOULD NOT": a deterministic suite judged a real answer and threw it away | YES | expected to refuse again |
+| `unavailable` | "WE COULD NOT RIGHT NOW": allowance, outage, credential, a store that rejected | no | may succeed |
+
+`violations` is present exactly on `refused` and absent on `unavailable`, which is not a convention
+but the definition: an `unavailable` rung judged nothing, so it has nothing to report.
+
+Every stand-down that was a JUDGEMENT stays `refused` and was deliberately left alone: an unknown
+collection, an unshaped result, a collection that drifted between the list and the read, and both
+rungs' guardrail suites. Those are the platform looking at something and declining it.
+
+**WHAT DID NOT CHANGE.** `AchieveRefusalCode` still carries exactly the author-arm codes that
+pre-date the ladder; no rung produces a refusal of the CALL, and the count remains the check on that.
+The pick is still lexical. There is still exactly one call to the gated executor.
+
+**RULE 7.** `unavailable` is a widening of a field that has never been published: `ladder` is new in
+this same unreleased slice, so no consumer has ever received an `AchieveLadderStep`. Every previously
+possible value still appears on exactly the steps it appeared on, except the ones that were being
+misreported. `docs/openapi/cortex.v1.json` and `clients/cortex-cli` are regenerated in this commit
+(gate run, not assumed), and the contract suite's `okBody` safeParses an `unavailable` step off the
+real wire, so a widened enum the schema did not widen with it reds.
+
+**MINOR 1 - the repair budget is now a number, pinned both ways.** `repairs: 1` appeared as a literal
+on both new rungs and NEITHER direction reddened anything: `0` and `2` were both free. It is now
+`PLAN_REPAIR_BUDGET`, shared by the two rungs, and pinned by a fixture whose reply is ALWAYS
+malformed - so the loop runs the full budget instead of returning early and the turn count is exactly
+`budget + 1`. `0` makes it 1 and `2` makes it 3; both red. The two directions are different failures
+and the comment says which: higher is another metered chokepoint call on somebody's allowance and
+another chance to drift off a plan the suite had already accepted; lower means a reply the PARSER
+rejected ends the rung, so the model never learns what was wrong with a mistake it would usually fix
+on being told, and the caller pays for a turn and gets nothing.
+
+**MINOR 2 - what a third party may write into a system prompt is now bounded and sanitised.** Since
+D-S5-5 both field sets are interpolated into the compose planning prompt, and both are written by
+somebody who is neither the caller nor us: the ACTION side is a remote HTTP API's own JSON keys, and
+the COLLECTION side is `app_data` field names, which - unlike collection NAMES, guarded on every
+write by `guardCollectionName` - pass NO guard on any write path, so a served app that ingests an
+external feed writes that feed's keys verbatim. That was an unbounded, unsanitised, third-party
+writable string in a system prompt.
+
+Bounded to **100 names per side, of at most 64 characters each**, with any name carrying a C0/C1
+control character (newline and carriage return included), DEL, or a backtick dropped. 64 is chosen
+against what field names ARE - every ORM's column limit and every payload in this repo sit far inside
+it - so a name past it is a string that arrived in the key position, not a field that lost a
+narrowing; 100 matches the collection-name length limit next door and no honest row carries a hundred
+distinct keys. Deliberately NOT a character allowlist: `número` and `Fälligkeitsdatum` are ordinary
+keys in this product's market and an ASCII allowlist would refuse the narrowings they key while
+stopping nothing that a length cap plus a control-character ban does not already stop.
+
+THE FILTER IS APPLIED WHERE THE SETS ARE PRODUCED, feeding BOTH the prompt and `verifyComposePlan`
+from one array. Filter only the prompt and a dropped name is still ACCEPTED by the suite - the guard
+is cosmetic. Filter only the suite and a name the model was shown is refused when it uses it - an
+arbitrary refusal.
+
+AND IT OVERTURNS A DISMISSAL, WHICH IS SAID RATHER THAN GLOSSED. `docs/findings.md` dismissed a field
+cap last round on the grounds that a truncated list makes the refusal message FALSE - it would tell a
+caller that `idade` is not a field of their own `clients` collection. That objection was right about
+the message and is answered rather than ignored: the three field refusals now state OFFEREDNESS
+("is not among the fields offered for …") instead of existence, which is the claim the platform can
+actually support once a set can be a subset. A test drives a real field dropped by the sanitiser
+through the suite and requires the message not to deny that it exists.
+
+**MINOR 3 - two stated consequences that no test could exercise.** Both were found by mutation, not
+by reading, and each is handled the way it deserves rather than uniformly:
+
+1. MADE OBSERVABLE. `composeSections` claims "NAMES ONLY, STILL. No row and no VALUE from either side
+   is put in a prompt to decide whether to look at that data." Nothing exercised it. The isolation
+   suite asserts that a PEER's names are absent, which proves the scope, not the projection - so
+   `composeSections` could have rendered a sample row (the obvious "help the model choose" change
+   somebody will one day propose) with the whole estate green, and a client's age, a case number and
+   a court would have gone into a model turn bought to decide whether that data was worth looking at.
+   Now pinned on the rendered prompt for BOTH sides, and killed by a mutant that adds row values to
+   the offered set.
+2. CORRECTED. `listCollectionFields`' `preserveNullAndEmptyArrays: true` claimed a consequence - "a
+   collection whose rows carry no fields at all still appears, with an empty `fields`". Deleting the
+   option leaves the whole estate green, and it cannot be otherwise: `create`, `importCreate` and
+   both branches of `upsert` all build `item` as `{ id, createdAt, updatedAt, ...fields }`, so no row
+   this engine has ever written is fieldless. A fixture would have to reach past the engine to the
+   driver, and a fixture of a shape the production writer structurally cannot produce proves nothing.
+   The option stays - dropping a collection the caller does hold is the wrong way to be wrong - but
+   it is now documented as a DEFAULT rather than as a behaviour, and the two renderings that inherit
+   its unreachability (`composeSections`' `(no fields)`, `verifyComposePlan`'s `'none'`) say so too.
+
+   A third statement was corrected while the sweep was running: `action-parametrize.ts`'s `render`
+   check claimed the rung "refuses with a coded refusal the caller can act on". THE CODE CANNOT DO
+   THAT - the ladder introduces no `AchieveRefusalCode` at all, which its own suite pins by counting
+   them - and the check's real consequence is the opposite and better: without it the re-authoritied
+   argument is merged and the EXECUTOR refuses the call, so the caller's own good request fails
+   because a model wrote a bad argument; with it the plan is dropped and the caller keeps their
+   answer.
+
+**THE CANONICAL TEST, IN ONE SENTENCE, NOW CARRIED BY THE CODE.** The canonical case in
+`api/tests/contract/integrations-reuse-ladder.test.ts` PROVES THE COMPOSE RUNG end to end through
+the real app - router mount, owner-scoped collections binding, both deterministic suites, the join
+stage and the wire shape, against rows written by the production writer - and DOES NOT PROVE THE
+CITIUS ONGOING-PROCESSES PATH, which does not exist: `get-ongoing-processes` appears nowhere in
+`api/src` or `shared/src`, so the case runs against a LOCAL FIXTURE of the same shape, and the Citius
+half remains net-new work needing a real portal session. That sentence now sits at the head of the
+canonical `describe` in the test file itself, so the limit travels with the suite rather than with
+anybody's memory. (It could not have been used even if it existed: `matchActionForGoal` requires the
+goal to name EVERY token of the action's name, and the canonical Portuguese goal names neither
+`ongoing` nor `curso` - the module suite pins exactly that.)
+
+MUTATION EVIDENCE. Twenty-six mutants applied to the source, each run against the suites that claim
+it, each restored from a pre-mutation snapshot and verified byte-identical by md5. ALL TWENTY-SIX
+KILLED: the parametrize `try` itself; its catch verdict; the billing, credential-`refused`,
+credential-`unbound`, model-outage and guardrail branches of the parametrize rung; the post-stage
+catch, the plan-stage catch, the billing branch and the outage branch of the compose rung; the repair
+budget in both directions; both prompt-field bounds in both directions each, plus the `<=` boundary
+and the count `slice`; the backtick ban, the C1 half of the control range, and the control ban
+entire; the filter's application on the action side and on the collection side separately; the
+filter's order preservation; the row-values-in-the-prompt guard; and the offeredness wording. Two
+further probes were run to ESTABLISH the Minor-3 findings and are reported as SURVIVING by design:
+deleting `preserveNullAndEmptyArrays`, and collapsing the two `(no fields)`/`'none'` renderings.
+
+A METHOD NOTE, BECAUSE IT COST AN HOUR AND WILL COST THE NEXT PERSON ONE. Two of the first-pass
+bound tests were TAUTOLOGIES - `'f'.repeat(COMPOSE_MAX_FIELD_NAME_CHARS)` moves with the constant, so
+`64 -> 63` and `64 -> 65` both survived and the assertion could not fail. A bound asserted against
+itself is not a bound. Both are now written with LITERALS, with the constant checked against the
+literal beside them.
+
+DIAGRAM CHECK (FIXED-12): both appended, append-only, `rawText` AND `originalText` carried, spliced
+into the existing files rather than re-serialised, so the diff is exactly the appended element.
+`docs/diagrams/02-module-map.excalidraw` note (g) - the parametrize worker/recorder pair, what may
+throw and what deliberately cannot, and where the prompt filter sits.
+`docs/diagrams/05-data-model.excalidraw` note (g) - the fourth verdict, what each word means, and the
+branch-by-branch table of which mapping moved and which was already right.

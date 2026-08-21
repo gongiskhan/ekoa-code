@@ -4667,7 +4667,8 @@
             "enum": [
               "taken",
               "skipped",
-              "refused"
+              "refused",
+              "unavailable"
             ]
           },
           "detail": {
