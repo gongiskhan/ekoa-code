@@ -7038,3 +7038,34 @@ re-implemented a live control had it trusted this heading over the code.
   (to newest-first, or to publication time) would itself silently swap which package every consuming
   org resolves for existing data, which is the defect above wearing a different hat. Re-documented at
   `oldestGlobalFirst` as what it is rather than as an ownership rule.
+
+- **`s6-consuming-the-publish-request-broke-three-S1-fixtures-that-re-promoted-as-a-non-member`**
+  (CLOSED 2026-08-21, informational; a REAL interaction found by rebasing onto main, not a flake).
+  Rebasing this branch onto `aafba30` put it beside slice S1's action-evidence work, and three cases
+  in another stream's files went red: `tests/integrations/action-resolution.test.ts` (2) and
+  `tests/integrations/action-evidence-removal.test.ts` (1), all with `expected 'notfound' to be 'ok'`
+  at a bare `setVisibility(id, superAdmin, 'global')`.
+
+  **CAUSE, and it is this branch's change working as designed.** Those suites arrange "publish, then
+  the author edits, then re-promote" and their `superAdmin` is `org-platform` - a NON-MEMBER. Since
+  `publishSnapshot` consumes `publishRequest`, the un-publish leaves an `org` row with no standing
+  request, so `isDefinitionVisibleTo` correctly stops showing it to a platform actor and the bare
+  re-promotion answers the uniform `notfound`. That is precisely the exposure the change closes; the
+  fixtures were relying on the window staying open after the consent was spent.
+
+  **THE FIX IS THE ARRANGEMENT ACTOR, NOT THE ASSERTIONS, and the alternative was worse.** These
+  cases cannot re-promote through the publish DOOR, because the door RE-SCRUBS and their whole point
+  is that a consumer keeps resolving the artifact frozen BEFORE the author's edit - swapping in
+  `publish()` would have made them pass while proving nothing, which is the substitution their own
+  file header warns against. So the bare tier flip is performed by the authoring org's own
+  super-admin, who can see the row without a standing request. That is also the more honest reading
+  of a flip that deliberately does not re-scrub: an in-org operation rather than a cross-tenant
+  platform act, and `tests/security/integration-publish-scrub.test.ts` already used an `inOrgAdmin`
+  for exactly this. Every assertion in all three cases is untouched; only who performs the
+  arrangement changed, with the reason written at the new actor. Re-run: 27/27 green.
+
+  **AND A RESIDUAL, since the same rebase surfaced it.** `setVisibility(..., 'global')` at the STORE
+  does not consume a standing request, where `publishSnapshot` does - so a bare store-level promotion
+  can still leave a stale stamp on a `global` row. It is not reachable from a route (round three
+  folded `{global:true}` into `publishDefinition`), so this is the same in-process-writer class as
+  the legacy import, recorded rather than closed here.

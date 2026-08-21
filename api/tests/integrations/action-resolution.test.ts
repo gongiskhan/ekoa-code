@@ -76,6 +76,25 @@ const SURVIVOR = 'arquivar_processo';
 const author: Actor = { userId: OWNER, orgId: ORG, role: 'user' };
 const admin: Actor = { userId: 'u-admin', orgId: ORG, role: 'org-admin' };
 const superAdmin: Actor = { userId: 'u-super', orgId: 'org-platform', role: 'super-admin' };
+/**
+ * THE IN-ORG SUPER-ADMIN, and why the bare tier flip below needs one (S6 review round five).
+ *
+ * `publishSnapshot` now CONSUMES `publishRequest`: the stamp is what opens the cross-org review
+ * window (`isDefinitionVisibleTo`), and leaving it standing meant an un-publish silently handed the
+ * row back to every platform super-admin on a consent the tenant gave for a publication that had
+ * already happened. A consequence, and the right one: after `publish()` + un-publish, `u-super` -
+ * who is in `org-platform` - can no longer SEE this org's `org`-tier row, so a bare
+ * `setVisibility(..., 'global')` by them answers the uniform `notfound`.
+ *
+ * The re-promotion below cannot switch to the publish DOOR, because the door re-scrubs and these
+ * cases exist to prove the consumer keeps reading the artifact frozen BEFORE the author's edit. So
+ * the arrangement uses an actor who can see the row without a standing request - the authoring org's
+ * own super-admin - which is also the more honest reading of a bare tier flip that deliberately does
+ * not re-scrub: an in-org operation, not a cross-tenant platform act. `integration-publish-scrub.ts`
+ * already uses an `inOrgAdmin` for the same reason. NOTHING ASSERTED HERE CHANGED; only who performs
+ * the arrangement.
+ */
+const inOrgSuperAdmin: Actor = { userId: 'u-root', orgId: ORG, role: 'super-admin' };
 const consumer: Actor = { userId: CONSUMER, orgId: OTHER_ORG, role: 'user' };
 
 const actions = (names: string[]) => names.map((actionName) => ({
@@ -156,7 +175,7 @@ describe('axis 1: a consumer resolves the FROZEN SNAPSHOT, not the author\'s liv
     const id = definitionIdFor(ORG, KEY);
     expect((await integrationDefinitionStore.setVisibility(id, superAdmin, 'org')).verdict).toBe('ok');
     expect((await saveAuthoredDefinition(author, packageConfig([SURVIVOR]), `# ${KEY}\n`, integrationDefinitionStore)).ok).toBe(true);
-    expect((await integrationDefinitionStore.setVisibility(id, superAdmin, 'global')).verdict).toBe('ok');
+    expect((await integrationDefinitionStore.setVisibility(id, inOrgSuperAdmin, 'global')).verdict).toBe('ok');
 
     // THE CONTRAST, in one case. `getForActor` - what three rounds of collector asked - hands back
     // the LIVE row, which no longer names the action…
@@ -172,7 +191,7 @@ describe('axis 1: a consumer resolves the FROZEN SNAPSHOT, not the author\'s liv
     const id = definitionIdFor(ORG, KEY);
     await integrationDefinitionStore.setVisibility(id, superAdmin, 'org');
     await saveAuthoredDefinition(author, packageConfig([SURVIVOR]), `# ${KEY}\n`, integrationDefinitionStore);
-    await integrationDefinitionStore.setVisibility(id, superAdmin, 'global');
+    await integrationDefinitionStore.setVisibility(id, inOrgSuperAdmin, 'global');
 
     // Same row, same moment: the owner sees live (`crossOrgView` is a no-op inside the org), the
     // consumer sees the snapshot. That is why the answer cannot be a property of the definition.
