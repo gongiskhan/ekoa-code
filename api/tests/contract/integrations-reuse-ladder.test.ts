@@ -24,7 +24,7 @@ import { integrationDefinitionStore } from '../../src/integrations/definition-st
 import { CollectionsEngine, sharedScope, APP_DATA_COLLECTION } from '../../src/data/collections-engine.js';
 import { getDb } from '../../src/data/mongo.js';
 import type { IntegrationAction } from '../../src/integrations/definitions.js';
-import { AchieveIntegrationGoalResponse, ErrorEnvelope } from '@ekoa/shared';
+import { AchieveConsentDetails, AchieveIntegrationGoalResponse, ErrorEnvelope } from '@ekoa/shared';
 
 /**
  * Slices S4 + S5 - THE REUSE LADDER through the REAL app.
@@ -63,7 +63,10 @@ import { AchieveIntegrationGoalResponse, ErrorEnvelope } from '@ekoa/shared';
  * suites, the owner-scoped collection reader and the join stage are all real.
  */
 const upstream = vi.hoisted(() => ({
-  calls: [] as Array<{ url: string; method?: string }>,
+  // The REQUEST BODY is recorded as well as the URL, because a model may fill a WRITE's body
+  // arguments (D1 withholds only its targeting): "the value a model chose is the value the third
+  // party was sent" is a claim about the body and cannot be checked on the URL.
+  calls: [] as Array<{ url: string; method?: string; body?: string }>,
   status: 200,
   body: '{"ok":true}',
 }));
@@ -71,8 +74,8 @@ vi.mock('../../src/services/url-fetcher.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/services/url-fetcher.js')>();
   return {
     ...actual,
-    guardedFetch: async (url: string, opts: { method?: string } = {}) => {
-      upstream.calls.push({ url, method: opts.method });
+    guardedFetch: async (url: string, opts: { method?: string; body?: string } = {}) => {
+      upstream.calls.push({ url, method: opts.method, ...(opts.body === undefined ? {} : { body: opts.body }) });
       return new Response(upstream.body, { status: upstream.status, headers: { 'content-type': 'application/json' } });
     },
   };
@@ -363,6 +366,79 @@ describe('the parametrize rung is wired, and its value reaches the request', () 
     expect(details?.consentRequest?.actionName).toBe('submeter_peca');
     expect(upstream.calls).toHaveLength(0);
   });
+
+  /**
+   * THE ONE MOMENT A HUMAN IS IN THE LOOP ON A WRITE, and what they were being shown.
+   *
+   * This refusal is the LAST thing anybody sees about a call a model helped shape: the gate fires
+   * before the request goes out, so there is no 200 afterwards to carry the story. It used to carry
+   * the descriptor and nothing else - not which rung produced the call, and not one of the arguments
+   * a model had filled into it. A person was being asked to authorise a peça whose TITLE a model
+   * had written, and shown a destination and a fingerprint.
+   *
+   * Names alone would not close it either: `titulo` authorises nothing. The VALUE is the thing being
+   * approved, and it is the same value the sibling test below finds in the durable audit row - minor
+   * 2 and minor 3 are one defect seen from the two sides of the same write.
+   */
+  it('the consent 403 shows WHICH rung filled the call and WHAT it chose', async () => {
+    await seedDefinition([submeterPeca]);
+    plans.args = argsBlock({ titulo: 'Contestacao' });
+
+    const res = await achieve(await tokenFor('ownerA'), 'submeter peca de contestacao', { numero: '111/24.0T8LSB' });
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { details?: unknown } };
+    expect(ErrorEnvelope.safeParse(body).success).toBe(true);
+
+    // The refusal is a TYPED shape, not loose strings a client has to guess at.
+    const details = AchieveConsentDetails.safeParse(body.error.details);
+    expect(details.success, JSON.stringify(body.error.details)).toBe(true);
+    if (!details.success) return;
+    expect(details.data.consentRequest.actionName).toBe('submeter_peca');
+    // THE TWO FACTS THAT WERE MISSING.
+    expect(details.data.filledArgs).toEqual(['titulo']);
+    expect(details.data.filledArgValues).toEqual({ titulo: 'Contestacao' });
+    expect(details.data.ladder?.find((s) => s.rung === 'parametrize')?.verdict).toBe('taken');
+    // …about a call that has NOT happened. That is the whole point of showing them here.
+    expect(upstream.calls).toHaveLength(0);
+  });
+
+  /**
+   * THE AUDITOR'S SIDE OF THE SAME DEFECT, end to end: a model chose a value, an APPROVED write
+   * carried it to a third party, and the platform kept no record of what it was.
+   *
+   * Nothing else in the estate holds it - `capability_execute` records a verdict and a duration and
+   * no arguments, the 200 carries names, and the request is a socket write this platform keeps no
+   * copy of - so the load-bearing pair is that the value on the WIRE and the value in the ROW are
+   * asserted to be the same one. A row recording a value that never went out would be worse than
+   * no row.
+   */
+  it('a model-chosen value that reaches a third-party WRITE is reconstructable afterwards', async () => {
+    await seedDefinition([submeterPeca]);
+    const token = await tokenFor('ownerA');
+    await approveWrite(token, 'submeter_peca');
+    plans.args = argsBlock({ titulo: 'Contestacao' });
+
+    const body = await okBody(await achieve(token, 'submeter peca de contestacao', { numero: '111/24.0T8LSB' }));
+
+    expect(body.outcome).toBe('executed');
+    // IT WENT OUT, carrying the model's own value in the request body.
+    expect(upstream.calls).toHaveLength(1);
+    expect(JSON.parse(upstream.calls[0]?.body ?? '{}')).toEqual({ titulo: 'Contestacao' });
+
+    // AND IT IS DURABLE.
+    const rows = await activityLogs.find({ type: 'capability_achieve_parametrize' });
+    expect(rows).toHaveLength(1);
+    const meta = (rows[0] as unknown as { metadata?: Record<string, unknown> }).metadata ?? {};
+    expect(meta.filledArgs).toEqual({ titulo: 'Contestacao' });
+    expect(meta.actionName).toBe('submeter_peca');
+    expect(meta.mayWrite).toBe(true);
+    expect(meta.verdict).toBe('ok');
+
+    // THE 200 ITSELF STAYS NAMES-ONLY, which is the contract and is deliberate: the values live in
+    // the answer a human reads before authorising, and in the row an auditor reads afterwards.
+    expect(body.filledArgs).toEqual(['titulo']);
+    expect(JSON.stringify(body)).not.toContain('Contestacao');
+  });
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -423,6 +499,39 @@ describe('CANONICAL, through the real app: "todos os processos de clientes com m
     // NOTHING WAS MINTED.
     const doc = await integrationDefinitionStore.getForActor({ userId: 'ownerA', orgId: 'orgA', role: 'user' }, PROBE_INTEGRATION);
     expect((doc?.actions ?? []).map((a) => a.actionName)).toEqual(['processos']);
+  });
+
+  /**
+   * THE COMPOSITION IS A POST-STAGE, ON THE REAL WIRE: it may add a narrowing and it may not
+   * destroy the answer it narrowed. This is the same family as the spent-200 defect above, one
+   * field down - the composed arm carried `items` and nothing of what produced them, so the
+   * action's ENVELOPE went with it: the upstream status, and every field standing BESIDE the list
+   * inside `data`.
+   *
+   * The fixture is an ordinary PAGE - HTTP 206 with a `nextPage` cursor beside the list, which is
+   * what a paginated list endpoint answers when there is more. Neither fact is recoverable from
+   * `items` or from `composition` (whose `scanned: 4` describes the page, not the collection), so
+   * one page of somebody's processes came back indistinguishable from all of them.
+   */
+  it('a composed answer carries the action\'s own envelope, so an upstream PAGE is still a page', async () => {
+    await seedDefinition([processos]);
+    await seedClients();
+    plans.compose = composeBlock(COMPOSE_PLAN);
+    upstream.status = 206;
+    upstream.body = JSON.stringify({ processos: PROCESS_ROWS, nextPage: 'cursor-2' });
+
+    const body = await okBody(await achieve(await tokenFor('ownerA'), CANONICAL_GOAL));
+
+    expect(body.outcome).toBe('composed');
+    expect((body.items as unknown[]).length).toBe(2);
+    const result = body.result as { success: boolean; status?: number; data?: { nextPage?: string; processos?: unknown[] } };
+    // THE THREE FACTS THAT USED TO BE DESTROYED.
+    expect(result.success).toBe(true);
+    expect(result.status).toBe(206);
+    expect(result.data?.nextPage).toBe('cursor-2');
+    // The rows travel WHOLE rather than substituted: replacing them with the narrowed list under
+    // the third party's own key would hand the caller a document it never emitted.
+    expect(result.data?.processos).toHaveLength(PROCESS_ROWS.length);
   });
 
   /**

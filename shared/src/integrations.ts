@@ -709,6 +709,10 @@ export type ExecuteIntegrationActionResponse = z.infer<typeof ExecuteIntegration
  * What a human must be shown to answer the write gate. Rides inside the 403's `details` rather
  * than in a 2xx body: nothing executed, so there is no result to carry it. Declared here so a
  * client (and the contract suite) can type the refusal instead of reading loose strings.
+ *
+ * ON `achieve` THE SAME 403 CARRIES MORE, because more was decided before it: see
+ * `AchieveConsentDetails`. `/execute` carries only this, and that asymmetry is the truth of the two
+ * endpoints - an execute's arguments are the caller's own and no ladder ran above it.
  */
 export const IntegrationActionConsentRequest = z.object({
   integrationKey: z.string(),
@@ -873,6 +877,11 @@ export type AchieveComposition = z.infer<typeof AchieveComposition>;
  *                collections. NOTHING WAS MINTED and nothing was written: `items` is a subset of
  *                what the action itself returned, and `composition` says exactly how it was
  *                narrowed. Only ever reachable for an action whose `mutates` is a literal `false`.
+ *                IT CARRIES `result` TOO, exactly as `executed` does, because the composition is a
+ *                POST-STAGE: it adds a narrowing and may not destroy the answer it narrowed. What
+ *                it destroyed while it did not was the ENVELOPE - the upstream status, and every
+ *                field standing beside the list inside `data` - so a caller handed one PAGE of a
+ *                paginated read could not tell it from the whole of one.
  *   `authored` — nothing satisfied it, so one action was written, VERIFIED and persisted as
  *                PROVISIONAL. It has NOT run and cannot run yet: `requiresApproval` is always true
  *                for it, and a person must promote it (`POST …/trust`) before `achieve` will pick
@@ -889,13 +898,20 @@ export type AchieveComposition = z.infer<typeof AchieveComposition>;
  *                the rung recorded on `ladder`; see `AchieveLadderStep`.
  *
  * RULE 7: `composed` and the four optional fields below are ADDITIVE. Every field an older client
- * reads is produced exactly as it was, on exactly the outcomes it was produced on before.
+ * reads is produced exactly as it was, on exactly the outcomes it was produced on before - and
+ * `result` on `composed` is additive in the same sense twice over: the field itself is unchanged
+ * and unmoved on `executed`, and `composed` is new in this same unreleased slice, so no consumer
+ * has ever received a composed answer without it. `clients/cortex-cli` regenerates from this schema
+ * in the same commit, and its e2e suite drives a composed answer through the built binary.
  */
 export const AchieveIntegrationGoalResponse = z.object({
   outcome: z.enum(['executed', 'composed', 'authored', 'refused']),
   /** The action that ran, or the action that was written. Absent on a refusal. */
   actionName: z.string().optional(),
-  /** `executed` only — the same body `POST …/execute` returns. */
+  /** `executed` and `composed` — the same body `POST …/execute` returns, for the action that ran.
+   *  On `composed` it is the answer `items` was narrowed FROM, carried whole rather than replaced:
+   *  substituting the narrowed rows under the third party's own key would hand a caller a document
+   *  that third party never emitted. */
   result: ExecuteIntegrationActionResponse.optional(),
   /** `authored` only. Always `provisional`: this endpoint cannot mint a trusted action. */
   state: z.literal('provisional').optional(),
@@ -917,11 +933,46 @@ export const AchieveIntegrationGoalResponse = z.object({
    *  reached; absent on the refusals that happen before a rung is entered at all. */
   ladder: z.array(AchieveLadderStep).optional(),
   /** `executed` / `composed` - the argument NAMES a model supplied because the caller left them
-   *  out. Names only: the values are in the request that was sent, and this is not a second copy
-   *  of them. */
+   *  out. NAMES ONLY, and the two places the VALUES do live are named here rather than left to be
+   *  looked for: the `awaiting_consent` 403 (`AchieveConsentDetails.filledArgValues`), which is the
+   *  one answer where a person is being asked to authorise them before anything runs, and the
+   *  `capability_achieve_parametrize` activity row, which is the durable copy an auditor reads
+   *  afterwards. This response is not a third one. */
   filledArgs: z.array(z.string()).optional(),
 });
 export type AchieveIntegrationGoalResponse = z.infer<typeof AchieveIntegrationGoalResponse>;
+
+/**
+ * THE WRITE GATE'S 403, AS `achieve` ANSWERS IT - the `details` of the shared error envelope.
+ *
+ * The gate refuses BEFORE the request goes out, so this is the LAST thing anyone sees about a call
+ * a model helped shape and the only thing the authorising human sees at all. It used to carry the
+ * descriptor and nothing else: not which rung produced the call, and not one of the arguments a
+ * model had filled into it. A person was being asked to approve a write they could not see the
+ * making of, which is the same defect as an argument value that is recorded nowhere - the approving
+ * human and the later auditor were both being shown a shrug.
+ *
+ *   `filledArgs`      - the NAMES, the same field and the same meaning the 200 carries, so a client
+ *                       renders "a model filled: titulo" from ONE vocabulary rather than learning a
+ *                       second dialect for the refusal.
+ *   `filledArgValues` - WHAT IT CHOSE, and only this answer carries it. `titulo: "Contestação"` is
+ *                       the thing being authorised; the name alone authorises nothing. Values are
+ *                       scalars by construction (`verifyPlannedArgs` admits no object or array),
+ *                       and they are the model's own - never the caller's arguments, which are the
+ *                       caller's to know and are not echoed here.
+ *
+ * Both are absent when no argument was model-filled, and `ladder` is absent when no rung ran.
+ * `/execute` answers `IntegrationActionConsentRequest` and `code` alone: its arguments are the
+ * caller's own and nothing above it decided anything.
+ */
+export const AchieveConsentDetails = z.object({
+  code: z.literal('awaiting_consent'),
+  consentRequest: IntegrationActionConsentRequest,
+  ladder: z.array(AchieveLadderStep).optional(),
+  filledArgs: z.array(z.string()).optional(),
+  filledArgValues: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional(),
+});
+export type AchieveConsentDetails = z.infer<typeof AchieveConsentDetails>;
 
 /**
  * `shape` is REQUIRED for the same reason `ApproveIntegrationActionRequest` requires it: the human

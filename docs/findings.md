@@ -7525,3 +7525,52 @@ re-implemented a live control had it trusted this heading over the code.
   run specifically to kill them. A bound asserted against itself is not a bound. Both are rewritten
   with literals, with the constant checked against the literal beside them. Recorded because the
   tautology is invisible on reading and only a mutation sweep finds it.
+
+- **`s4s5-the-compose-rungs-answer-did-not-survive-the-generated-client`** (**FIXED 2026-08-21**,
+  S4/S5 round eight, was BLOCKER; see `docs/decisions.md` D-S4-4/D-S5-7). `cortex integrations
+  achieve` read `body.outcome === 'executed'` alone and treated everything else as "nothing ran", so
+  a `composed` answer - a trusted read that RAN, whose rows were then narrowed against one of the
+  caller's own collections, minting nothing - exited 1 with the code `authored` and the sentence "was
+  written ... as provisional and has NOT run", stdout EMPTY. Seven rounds made the rung correct at
+  the route and it was destroyed one layer out.
+  THE REAL FINDING IS THE TESTING GAP, and it is what the fix has to close: the route is not the
+  product's edge. Capabilities are exposed as versioned public APIs consumed by ordinary API clients
+  (Rule 1, Rule 3) and this repo SHIPS one, but both ladder suites stopped at `buildApp` and
+  `clients/cortex-cli/tests/e2e.test.ts` never touched `achieve` beyond its refusal paths - so
+  nothing in the estate could have caught it. NEW FILE
+  `clients/cortex-cli/tests/achieve-ladder.e2e.test.ts`: the ladder end to end through the BUILT
+  binary against `buildApp`, and the standing rule that follows it - a rung whose answer is correct
+  at the route and wrong at the client is wrong.
+  PROVEN BY MUTATION: restoring the one-outcome branch reds three of its cases; dropping `result`
+  from the ROUTE's composed projection leaves the module suite green and reds the contract and client
+  suites, which is the layer gap stated as a test result.
+
+- **`s4s5-the-composed-answer-discarded-the-actions-response-envelope`** (**FIXED 2026-08-21**,
+  S4/S5 round eight, was MAJOR; same journal entry). The composed exit carried `items` and nothing of
+  what produced them, so the action's ENVELOPE was destroyed by a stage that only ever meant to ADD a
+  narrowing: the executor's verdict, the upstream status, and every field standing BESIDE the list
+  inside `data`. An upstream answering `206 { processos: [...], nextPage }` came back as
+  `{ outcome: 'composed', items: [...], composition: { scanned: 4 } }` - one PAGE of somebody's
+  processes, indistinguishable from all of them, with a narrowing report implying 4 was the whole.
+  Same family as the spent-200 defect, one field down. `result` now rides `composed` exactly as it
+  rides `executed`, and the rows travel WHOLE rather than substituted: putting the narrowed list back
+  under the third party's own key would hand a caller a document it never emitted.
+  PROVEN BY MUTATION at both layers, module and route, separately.
+
+- **`s4s5-a-model-chosen-value-on-a-write-was-visible-to-nobody`** (**FIXED 2026-08-21**, S4/S5 round
+  eight, was MINOR x2 - one defect from two sides; same journal entry). D1 lets a model fill a
+  WRITE's body arguments, so a model can choose the `titulo` a peça is filed under. Where that value
+  was recorded: nowhere. `capability_execute` logs a verdict and a duration and no arguments, the 200
+  carries `filledArgs` as NAMES, and the request is a socket write this platform keeps no copy of -
+  and the `awaiting_consent` 403, the ONE moment a human is in the loop and fired BEFORE the request
+  goes out, carried the descriptor alone: not which rung produced the call, not one argument a model
+  had put in it. The approving human and the later auditor were both shown a shrug. FIXED as one
+  thing: the 403's `details` gains `ladder`, `filledArgs` and `filledArgValues` (typed by the new
+  shared `AchieveConsentDetails`, printed by `cortex-cli` at the gate), and a new activity type
+  `capability_achieve_parametrize` records the VALUES durably, whatever the call then did - a gate
+  that held is as much an audit fact as a write that went. The 200 stays names-only; its old
+  justification ("the values are in the request that was sent") was corrected, because that request
+  is one the caller never sees.
+  PROVEN BY MUTATION: the contract suite asserts the value in the REQUEST BODY the third party
+  received and the value in the durable row are the same one, and each field of each is separately
+  killable.

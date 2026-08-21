@@ -399,6 +399,15 @@ export function parseArgsPlan(text: string): { draft: PlannedArgs | null; violat
  * The output contract, ALWAYS the last system section (the authoring core's one prompt rule).
  * Every constraint stated here is ALSO enforced by `verifyPlannedArgs`; where the two could
  * disagree, the suite wins and the plan is refused.
+ *
+ * AND THE CONSEQUENCE IT STATES IS THE ONE THE CODE HAS. This section told the model that a plan
+ * breaking any hard rule "is refused and NOTHING runs", which was true of the rung as it shipped
+ * and false the moment the discard landed: `verifyPlannedArgs` failing no longer ends the call, it
+ * throws the PLAN away and the request goes out carrying exactly what the caller sent
+ * (`integration-achieve.ts`, D-S5-3). A model briefed on a mechanism the platform no longer has is
+ * being asked to weigh a cost that does not exist - the honest instruction here is that a bad
+ * argument is silently DROPPED, so guessing one buys nothing and omitting one costs nothing, which
+ * is the same conclusion the real mechanism supports and the reason rule 4 is worth obeying.
  */
 export function argsOutputContractFor(action: IntegrationAction, fillable: readonly string[]): string {
   const slots = argSlotsOf(action.httpConfig);
@@ -411,7 +420,8 @@ export function argsOutputContractFor(action: IntegrationAction, fillable: reado
     '{ "args": { "argument_name": "value" } }',
     '```',
     '',
-    '# Hard rules (a plan that breaks any of these is refused and NOTHING runs)',
+    '# Hard rules (a plan that breaks any of these is DISCARDED WHOLE - the call still runs, with',
+    '# only the arguments the person supplied, and nothing you wrote reaches it)',
     `1. You may name ONLY these arguments: ${fillable.join(', ')}.`,
     '2. Every value is a string, a number, a boolean or null. No objects, no arrays.',
     '3. Never write a credential, a token or a password as a value. Credentials are resolved by the',

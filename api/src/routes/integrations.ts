@@ -916,7 +916,13 @@ export function integrationsRouter(deps: {
     );
     if (!out.ok) return refuseCapability(res, out.refusal);
     const result = out.value;
-    if (result.outcome === 'executed') {
+    // ONE PROJECTION FOR BOTH ARMS THAT RAN THE ACTION. `composed` used to fall through to the bare
+    // `res.json(result)` below, which is how it reached the wire with no `result` at all - the
+    // action's own envelope (its upstream status, and every field beside the list inside `data`)
+    // destroyed by a stage that only ever meant to ADD a narrowing. Sharing `capabilityWireOutcome`
+    // rather than writing a second projection here is what keeps the two arms from drifting into
+    // two different renderings of the one executor result.
+    if (result.outcome === 'executed' || result.outcome === 'composed') {
       const wire = capabilityWireOutcome(result.result);
       if (wire.kind === 'not_found') return notFound(res);
       if (wire.kind === 'awaiting_consent') {
@@ -924,8 +930,34 @@ export function integrationsRouter(deps: {
           res,
           'FORBIDDEN',
           'Esta ação altera dados e precisa da autorização do titular antes de correr.',
-          { code: 'awaiting_consent', consentRequest: wire.consentRequest },
+          {
+            code: 'awaiting_consent',
+            consentRequest: wire.consentRequest,
+            // THE ONE MOMENT A HUMAN IS IN THE LOOP ON A WRITE, and until now they were asked to
+            // approve a call they could not see the making of. The gate refuses BEFORE the request
+            // goes out, so this refusal - never the 200 - is where "which rung produced this call"
+            // and "what did a model fill into it" have to be readable. `filledArgs` is the same
+            // field, the same names and the same meaning the 200 carries, so a client keeps ONE
+            // vocabulary across the two answers; `filledArgValues` is the part only this answer
+            // needs, because nobody can authorise "a model chose a titulo" without being shown the
+            // titulo. The keys of the second are the first by construction, and both are absent
+            // when no argument was model-filled.
+            ...(result.ladder ? { ladder: result.ladder } : {}),
+            ...(result.filledArgs ? { filledArgs: result.filledArgs } : {}),
+            ...(result.outcome === 'executed' && result.filledValues ? { filledArgValues: result.filledValues } : {}),
+          },
         );
+      }
+      if (result.outcome === 'composed') {
+        return res.json({
+          outcome: 'composed',
+          actionName: result.actionName,
+          result: wire.body,
+          items: result.items,
+          composition: result.composition,
+          ...(result.ladder ? { ladder: result.ladder } : {}),
+          ...(result.filledArgs ? { filledArgs: result.filledArgs } : {}),
+        });
       }
       return res.json({
         outcome: 'executed',
@@ -935,6 +967,9 @@ export function integrationsRouter(deps: {
         // arguments and then ran the action" are different events, and only one of them is worth
         // a person's attention.
         ...(result.ladder ? { ladder: result.ladder } : {}),
+        // NAMES ONLY, unchanged. The model's VALUES ride the consent refusal (where a person must
+        // read them before authorising) and the `capability_achieve_parametrize` audit row (where an
+        // auditor must, afterwards); this answer does not become a second copy of them.
         ...(result.filledArgs ? { filledArgs: result.filledArgs } : {}),
       });
     }

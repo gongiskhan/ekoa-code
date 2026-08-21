@@ -298,15 +298,43 @@ export interface AchieveLadderStep {
 }
 
 export type AchieveResult =
-  /** An existing TRUSTED action satisfied the goal and was run through the gated executor. */
-  | { outcome: 'executed'; actionName: string; result: ExecuteIntegrationActionResult; ladder?: AchieveLadderStep[]; filledArgs?: string[] }
+  /**
+   * An existing TRUSTED action satisfied the goal and was run through the gated executor.
+   *
+   * `filledValues` IS NOT ON THE 200 AND MUST NOT BE PUT THERE. It exists for the ONE answer where
+   * a model's chosen values have to be READ by a person rather than acted on: the `awaiting_consent`
+   * 403, where nothing has run and a human is being asked to authorise a write whose arguments a
+   * model filled. The 200 carries NAMES only, deliberately and unchanged (see
+   * `AchieveIntegrationGoalResponse.filledArgs`); the durable copy of the values is the
+   * `capability_achieve_parametrize` audit row, which is written whether the gate opened or not.
+   */
+  | {
+      outcome: 'executed';
+      actionName: string;
+      result: ExecuteIntegrationActionResult;
+      ladder?: AchieveLadderStep[];
+      filledArgs?: string[];
+      filledValues?: Record<string, PlannedArgValue>;
+    }
   /**
    * A trusted READ was run and its rows JOINED against one of the CALLER'S OWN collections. NOTHING
    * WAS MINTED and nothing was written: `items` is a subset of what the action itself returned.
+   *
+   * `result` IS THE ARM'S OWN ANSWER, VERBATIM, and it rides this outcome for the same reason it
+   * rides `executed`: the composition is a POST-STAGE, and a post-stage that hands back its
+   * narrowing INSTEAD of the answer it narrowed has destroyed one. What it destroyed was the
+   * ENVELOPE - the upstream status, and every field standing BESIDE the list inside `data`
+   * (`nextPage`, `total`, `hasMore`). Neither is recoverable from `items` or from `composition`, so
+   * ONE PAGE of somebody's processes came back indistinguishable from all of them.
+   *
+   * The rows travel WHOLE rather than substituted: putting the narrowed list back under the third
+   * party's own key would hand the caller a document that third party never emitted, under its
+   * name. `items` is the narrowing; `result` is what was narrowed.
    */
   | {
       outcome: 'composed';
       actionName: string;
+      result: ExecuteIntegrationActionResult;
       items: Record<string, unknown>[];
       composition: ComposeSummary;
       ladder?: AchieveLadderStep[];
@@ -812,7 +840,7 @@ async function runMatchedAction(
   // `parametrizeArgs` returns ARGUMENTS. It has no way to return a refusal, and it cannot throw -
   // the worker/recorder split below says both - so this statement can only ever leave `args` equal
   // to what the caller sent or to what the caller sent plus values a deterministic suite admitted.
-  const { args, filledArgs } = await parametrizeArgs(
+  const { args, filled } = await parametrizeArgs(
     ctx,
     integrationKey,
     goal,
@@ -822,10 +850,16 @@ async function runMatchedAction(
     config,
     ladder,
   );
+  // The NAMES, derived from the values rather than carried beside them: two fields for one fact is
+  // two fields that can disagree.
+  const filledArgs = Object.keys(filled).sort();
 
   // --- RUNG 1: REUSE - the ONE gated execute, whatever the rung above decided ----------------
   const out = await executeIntegrationCapabilityAction(ctx, integrationKey, action.actionName, args);
   if (!out.ok) return out;
+  // THE DURABLE COPY OF WHAT A MODEL CHOSE, written before either exit below and BEFORE the ladder
+  // can decide anything else about the answer. See `auditParametrized`.
+  await auditParametrized(ctx, integrationKey, action, filled, out.value);
 
   // --- RUNG 3: COMPOSE (planned and applied over the rows the execute returned) --------------
   //
@@ -846,6 +880,12 @@ async function runMatchedAction(
       value: {
         outcome: 'composed',
         actionName: action.actionName,
+        // THE ARM'S ANSWER, ON THE ARM THAT NARROWED IT. This exit used to carry `items` and nothing
+        // of what produced them, so the upstream status and every sibling of the list inside `data`
+        // - a `nextPage` cursor above all - were destroyed by a stage that only ever meant to ADD a
+        // narrowing. It is the single-exit rule of this function applied to the one return that was
+        // exempt from it: every exit for an admitted call now carries `out.value`.
+        result: out.value,
         items: composed.items,
         composition: composed.summary,
         ladder,
@@ -856,11 +896,13 @@ async function runMatchedAction(
     };
   }
 
-  // THE ONE EXIT FOR AN ADMITTED CALL THAT WAS NOT COMPOSED, and it always carries `out.value`.
-  // That is deliberate structure rather than tidiness: while the compose branches each returned for
-  // themselves, three of them returned a REFUSAL and the executor's answer was dropped on the floor
-  // - twice AFTER the request had gone out and come back 200. With one exit there is no branch left
-  // that could forget, and "the answer survives" is a property of the shape of this function.
+  // THE EXIT FOR AN ADMITTED CALL THAT WAS NOT COMPOSED. BOTH exits carry `out.value` now, which is
+  // the property this structure was built for and the one the composed branch above was quietly
+  // exempt from: while the compose branches each returned for themselves, three of them returned a
+  // REFUSAL and the executor's answer was dropped on the floor - twice AFTER the request had gone
+  // out and come back 200. There is no return left in this function that answers an admitted call
+  // without the answer the executor produced, and "the answer survives" is therefore a property of
+  // the shape of the function rather than of a reader checking each branch.
   //
   // The REUSE rung is what answered, and it says so: without this step a client reading the ladder
   // finds no rung `taken` at all beside an `executed` outcome, and "which rung answered" is the one
@@ -874,6 +916,9 @@ async function runMatchedAction(
       result: out.value,
       ladder,
       ...(filledArgs.length > 0 ? { filledArgs } : {}),
+      // NOT PUT ON THE 200 BY THE ROUTE - see `AchieveResult`. The write gate's 403 is projected off
+      // this same value, and it is the one answer where a human has to read what a model chose.
+      ...(filledArgs.length > 0 ? { filledValues: filled } : {}),
     },
   };
 }
@@ -954,7 +999,7 @@ async function parametrizeArgs(
   definition: IntegrationDefinition,
   config: Parameters<typeof resolveCredentialEgressBinding>[1],
   ladder: AchieveLadderStep[],
-): Promise<{ args: Record<string, unknown>; filledArgs: string[] }> {
+): Promise<{ args: Record<string, unknown>; filled: Record<string, PlannedArgValue> }> {
   let attempt: ParametrizeAttempt;
   try {
     attempt = await draftParametrizedArgs(ctx, integrationKey, goal, action, callerArgs, definition, config);
@@ -980,7 +1025,7 @@ async function parametrizeArgs(
     });
     // `callerArgs` BY IDENTITY, not a copy of it: the request that goes out is byte-for-byte the
     // request the caller asked for, on every one of these paths.
-    return { args: callerArgs, filledArgs: [] };
+    return { args: callerArgs, filled: {} };
   }
   ladder.push({ rung: 'parametrize', verdict: 'taken', detail: `filled: ${attempt.filled.join(', ')}` });
   // THE CALLER'S OWN ARGUMENTS WIN, spread last.
@@ -992,7 +1037,7 @@ async function parametrizeArgs(
   // distinguish it, and none pretends to. What IS asserted is the invariant that makes it
   // unobservable (see the `declared_args` overwrite case, and the disjointness assertion beside it);
   // the order below is kept because it is the one that stays correct if that check is ever weakened.
-  return { args: { ...attempt.args, ...callerArgs }, filledArgs: attempt.filled };
+  return { args: { ...attempt.args, ...callerArgs }, filled: attempt.args };
 }
 
 /**
@@ -1669,6 +1714,66 @@ async function auditComposed(
     );
   } catch (err) {
     console.warn(`[integration-achieve] compose audit write failed for ${integrationKey}.${actionName}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
+ * ONE activity row per PARAMETRIZED CALL, AND IT CARRIES THE VALUES.
+ *
+ * This is the only durable record that a MODEL, rather than the person or the script holding the
+ * key, decided what a call would act on. Nothing else in the estate holds it: `capability_execute`
+ * records the integration, the action, a verdict and a duration and no arguments at all; the 200
+ * carries `filledArgs` as NAMES; the request itself is a socket write to a third party that this
+ * platform keeps no copy of. So "the model chose the `titulo` this peça was filed under" was
+ * reconstructable from nothing, which is the difference between an audit trail and a shrug.
+ *
+ * VALUES, DELIBERATELY, and the reason they are safe to hold is a property of where they come from:
+ * every one was produced by the planning turn, which is shown the caller's goal, the action's
+ * argument names and no credential value at all (`parametrizeSections`), and every one passed
+ * `verifyPlannedArgs` - a scalar, on an argument the action declares, that the caller did not
+ * supply. The caller's OWN arguments are NOT recorded: they are the caller's to know, they can be
+ * anything at all, and they are not the fact this row exists to preserve.
+ *
+ * WRITTEN WHATEVER THE CALL THEN DID, including the write gate refusing it, because "a model chose
+ * these values and the gate held" is exactly as much an audit fact as "a model chose these values
+ * and they were filed". `verdict` and `code` are the executor's own, so the two are never confused
+ * for each other, and `mayWrite` is the same fail-closed reading of `mutates` the compose rung's
+ * entry uses (`!== false`), so an action whose definition omits the key counts as a write here too.
+ *
+ * NO ROW AT ALL WHEN NO ARGUMENT WAS MODEL-FILLED - not an empty one. The rung skipping is the
+ * ordinary case (the caller supplied everything, or the seam is unwired), and a row per call for it
+ * would bury the ones that matter under the ones that do not.
+ */
+async function auditParametrized(
+  ctx: AchieveContext,
+  integrationKey: string,
+  action: IntegrationAction,
+  filled: Record<string, PlannedArgValue>,
+  result: ExecuteIntegrationActionResult,
+): Promise<void> {
+  if (Object.keys(filled).length === 0) return;
+  try {
+    await logActivity(
+      { userId: ctx.actor.userId, username: ctx.username ?? ctx.actor.userId, orgId: ctx.actor.orgId },
+      'integrations',
+      'capability_achieve_parametrize',
+      ctx.deps,
+      {
+        integrationKey,
+        actionName: action.actionName,
+        mayWrite: action.mutates !== false,
+        filledArgs: filled,
+        verdict: result.success ? 'ok' : 'failed',
+        ...(result.code ? { code: result.code } : {}),
+        ...(ctx.principal ? { keyId: ctx.principal.keyId } : {}),
+        ...(ctx.principal?.xClient ? { xClient: ctx.principal.xClient } : {}),
+      },
+    );
+  } catch (err) {
+    // Swallowed exactly as the compose row's is, and for the stronger reason: this row is written
+    // AFTER the call has been made, so a rejecting audit store that escaped here would destroy an
+    // answer already in hand - the defect round five closed one function down.
+    console.warn(`[integration-achieve] parametrize audit write failed for ${integrationKey}.${action.actionName}: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

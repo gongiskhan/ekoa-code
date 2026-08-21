@@ -29,6 +29,9 @@ import { pad, printJson } from '../output.js';
 /** The execute body, taken from the generated contract rather than re-declared. */
 type ExecuteResponse = ResultData<'integrations.executeAction'>;
 
+/** The achieve body, likewise from the generated contract. */
+type AchieveResponse = ResultData<'integrations.achieve'>;
+
 /** The code reported when a failed action names no code of its own. */
 const UNSPECIFIED_FAILURE = 'action_failed';
 
@@ -141,9 +144,18 @@ async function achieve(ctx: Ctx, args: ParsedArgs): Promise<void> {
   const body = res.data;
   const what = `${key}/${body.actionName ?? '?'}`;
 
-  // The `executed` arm carries the IDENTICAL execute body, so a failed one is a failed command
-  // however it was reached - one rule for both subcommands, not two dialects.
-  if (body.outcome === 'executed') {
+  // THE TWO OUTCOMES THAT RAN THE ACTION, and `composed` is one of them.
+  //
+  // This branch used to read `outcome === 'executed'` alone, so a COMPOSED answer - a trusted read
+  // that ran, whose rows were then narrowed against one of the caller's own collections - fell into
+  // the "nothing ran" arm below and exited 1 with the code `authored` and the words "has NOT run",
+  // printing nothing at all on stdout. The platform had done the work, correctly, and the client
+  // reported it as a failed goal. A rung whose answer is right at the route and wrong here is
+  // wrong: this is where a script and a person actually meet it.
+  //
+  // Both arms carry the IDENTICAL execute body under `result`, so a failed one is a failed command
+  // however it was reached - one rule for both outcomes and both subcommands, not three dialects.
+  if (body.outcome === 'executed' || body.outcome === 'composed') {
     if (body.result) refuseFailedAction(what, body.result);
   } else {
     // NOTHING RAN, and it still arrived as HTTP 200. `authored` wrote a PROVISIONAL action that
@@ -161,6 +173,10 @@ async function achieve(ctx: Ctx, args: ParsedArgs): Promise<void> {
 
   if (ctx.json) {
     printJson(ctx.io, { ok: true, command: 'integrations achieve', status: res.status, data: body });
+    return;
+  }
+  if (body.outcome === 'composed') {
+    printComposedResult(ctx, what, body);
     return;
   }
   printActionResult(ctx, what, body.result);
@@ -193,12 +209,42 @@ function printActionResult(ctx: Ctx, what: string, body: ExecuteResponse | undef
 }
 
 /**
+ * A COMPOSED answer, for a person: the same verdict line, then how the rows were narrowed, then the
+ * rows that survived. The narrowing is printed rather than left implicit because a shorter list is
+ * indistinguishable from a complete one - which is the failure this whole rung is built around -
+ * and a person who is not told their answer was joined against `clients` cannot tell either.
+ *
+ * `--json` carries the arm's WHOLE envelope (`result`, with the upstream status and everything
+ * standing beside the list in `data`); this rendering is a projection for a human, and the upstream
+ * status is on it because a 206 means the answer was one page of several.
+ */
+function printComposedResult(ctx: Ctx, what: string, body: AchieveResponse): void {
+  const upstream = body.result?.status === undefined ? '' : `  (upstream HTTP ${body.result.status})`;
+  ctx.io.out(`ok  ${what}${upstream}`);
+  const c = body.composition;
+  if (c) {
+    // Both truncation flags share one clause because they are one fact for the reader: what is
+    // printed below is PART of the answer. Which cap did it is in `composition`, under --json.
+    const partial = c.truncated || c.collectionTruncated ? ' - PART of the answer, not all of it' : '';
+    ctx.io.out(`composed  ${c.matched} of ${c.scanned} rows kept, joined against "${c.collection}"${partial}`);
+  }
+  ctx.io.out(JSON.stringify(body.items ?? [], null, 2));
+}
+
+/**
  * Run one call and, in HUMAN mode, print the write gate's descriptor before the failure line.
  * `report()` prints a code and a message, and the descriptor is the part a person actually needs:
  * it names the real destination the call would have written to.
  *
- * Under `--json` nothing extra is written. The descriptor already travels intact in the error
- * document's `details`, and stderr must stay exactly one parseable document.
+ * AND, ON `achieve`, WHAT A MODEL PUT IN THE CALL. The gate refuses before the request goes out, so
+ * this is the one moment a human is in the loop on this write - and until the platform started
+ * sending them, the person was shown a destination and a fingerprint and no way at all to see that
+ * a model had chosen the `titulo` they were being asked to authorise. Names alone authorise
+ * nothing, so the VALUES are printed. Both are absent from an `/execute` refusal, whose arguments
+ * are the caller's own.
+ *
+ * Under `--json` nothing extra is written. All of it already travels intact in the error document's
+ * `details`, and stderr must stay exactly one parseable document.
  */
 async function reportingConsent<T>(ctx: Ctx, call: () => Promise<T>): Promise<T> {
   try {
@@ -213,6 +259,7 @@ async function reportingConsent<T>(ctx: Ctx, call: () => Promise<T>): Promise<T>
         ctx.io.err(`  description: ${consent.description}`);
         ctx.io.err(`  target:      ${consent.target}`);
         ctx.io.err(`  shape:       ${consent.shape}`);
+        for (const line of modelDecisionLines(error)) ctx.io.err(line);
         ctx.io.err('This CLI CANNOT grant that approval: POST /api/v1/integrations/:key/actions/:actionName/approval');
         ctx.io.err('is a platform-session endpoint and is deliberately not key-reachable, so a key refused at the');
         ctx.io.err('gate cannot approve itself. A person must approve this action in the Ekoa UI.');
@@ -220,6 +267,38 @@ async function reportingConsent<T>(ctx: Ctx, call: () => Promise<T>): Promise<T>
     }
     throw error;
   }
+}
+
+/**
+ * What a model decided about this call, from the refusal's own `details`: the arguments it filled
+ * with the values it chose, and the rungs that ran above the action. Every field is checked rather
+ * than trusted - `details` is server-supplied JSON, and this is text a person reads before
+ * authorising a write, so a half-shaped one prints nothing rather than the word `undefined`.
+ */
+function modelDecisionLines(error: CortexApiError): string[] {
+  if (error.details === null || typeof error.details !== 'object') return [];
+  const details = error.details as Record<string, unknown>;
+  const lines: string[] = [];
+  const values = details.filledArgValues;
+  if (values !== null && typeof values === 'object' && !Array.isArray(values)) {
+    const entries = Object.entries(values as Record<string, unknown>)
+      .filter(([, v]) => v === null || ['string', 'number', 'boolean'].includes(typeof v));
+    if (entries.length > 0) {
+      lines.push('  a model filled these arguments - you are approving these values:');
+      for (const [name, value] of entries.sort(([a], [b]) => a.localeCompare(b))) {
+        lines.push(`    ${name} = ${JSON.stringify(value)}`);
+      }
+    }
+  }
+  if (Array.isArray(details.ladder)) {
+    const rungs = details.ladder
+      .filter((s): s is { rung: string; verdict: string } =>
+        s !== null && typeof s === 'object' && typeof (s as { rung?: unknown }).rung === 'string'
+        && typeof (s as { verdict?: unknown }).verdict === 'string')
+      .map((s) => `${s.rung}: ${s.verdict}`);
+    if (rungs.length > 0) lines.push(`  ladder:      ${rungs.join(', ')}`);
+  }
+  return lines;
 }
 
 interface ConsentDescriptor {

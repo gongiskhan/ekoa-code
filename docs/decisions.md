@@ -4949,3 +4949,146 @@ into the existing files rather than re-serialised, so the diff is exactly the ap
 throw and what deliberately cannot, and where the prompt filter sits.
 `docs/diagrams/05-data-model.excalidraw` note (g) - the fourth verdict, what each word means, and the
 branch-by-branch table of which mapping moved and which was already right.
+
+## 2026-08-21 - D-S4-4/D-S5-7: the ladder's answer has to survive the client, and what a model chose has to survive the call
+
+**THE BLOCKER: `cortex-cli` TURNED EVERY `composed` ANSWER INTO A FAILED `authored` GOAL.**
+
+`clients/cortex-cli/src/commands/integrations.ts` read one outcome and treated every other as
+"nothing ran":
+
+```ts
+if (body.outcome === 'executed') { if (body.result) refuseFailedAction(what, body.result); }
+else { throw new RuntimeFailure(body.outcome === 'refused' ? ... : 'authored', ...); }
+```
+
+So a `composed` answer - a trusted read that RAN, whose rows were then narrowed against one of the
+caller's own collections, minting nothing - exited 1 with the code `authored` and the sentence "was
+written for <key> as provisional and has NOT run - a person must promote it first", with stdout
+EMPTY. Everything seven rounds made correct at the route was destroyed one layer out, and every one
+of those rounds verified at the route and stopped there.
+
+**THE TESTING GAP IS THE REAL FINDING, AND IT IS CLOSED THE ONLY WAY IT CAN BE.** The route is not
+the product's edge. A capability is exposed as a versioned public API whose consumers are ordinary
+API clients (Rule 1, Rule 3), and this repo SHIPS one. Both existing ladder suites stop at
+`buildApp`; `clients/cortex-cli/tests/e2e.test.ts` drives the built binary but never touches
+`achieve` beyond its refusal paths. Nothing in the estate could have caught this.
+
+NEW FILE: `clients/cortex-cli/tests/achieve-ladder.e2e.test.ts` - the ladder end to end through the
+BUILT binary, spawned as a child process against `buildApp` over mongodb-memory-server with a real
+`ekoa_gk_` gateway key: argv parsing, the generated client, HTTP, the real routers, the real gated
+executor, the real join stage and the process exit code. Two fakes, both at the edges (`guardedFetch`
+and `agents/authoring-core`), the same pair the api contract suite uses and for the same reasons.
+Five cases: the composed answer as a SUCCESS (exit 0, one document on stdout, the narrowed rows in
+it), the arm's envelope surviving the composition, human mode printing the narrowing rather than a
+failure line, the consent 403 showing a person what a model filled, and the executed arm unchanged.
+
+**THE MAJOR: THE COMPOSED ANSWER DISCARDED THE ACTION'S RESPONSE ENVELOPE.**
+
+Same family as the spent-200 defect D-S5-3 and D-S5-4 closed, one field down. The composed exit of
+`runMatchedAction` carried `items` and nothing of what produced them, and `routes/integrations.ts`
+fell through to a bare `res.json(result)` for it. What went with the answer was its ENVELOPE: the
+executor's verdict, the upstream status, and every field standing BESIDE the list inside `data`.
+
+    upstream answers  206  { "processos": [...], "nextPage": "cursor-2" }
+    old composed body      { outcome: 'composed', items: [2 rows], composition: { scanned: 4, ... } }
+
+Neither the 206 nor the cursor is recoverable from `items` or from `composition` - whose `scanned: 4`
+describes the PAGE, not the collection - so ONE PAGE of somebody's processes came back
+indistinguishable from all of them, with a narrowing report on top implying 4 was the whole. The
+composition is a POST-STAGE: it may ADD a narrowing and it may not destroy the answer it narrowed.
+
+`result` now rides `composed` exactly as it rides `executed`, and the rows travel WHOLE rather than
+substituted. Substituting the narrowed list back under the third party's own key was considered and
+rejected: it would hand a caller a document that third party never emitted, under its name - the
+"shorter list, delivered confidently" failure this whole rung exists to prevent. `items` is the
+narrowing; `result` is what was narrowed.
+
+The route now runs ONE projection for both arms that ran the action, through `capabilityWireOutcome`,
+so the two cannot drift into two renderings of one executor result. `runMatchedAction` no longer has
+a return for an admitted call that does not carry `out.value` - the single-exit property the function
+was built for, which the composed branch was quietly exempt from.
+
+**MINORS 2 AND 3 ARE ONE DEFECT FROM TWO SIDES: a model filled the arguments of a WRITE, and neither
+the approving human nor the later auditor could see what it chose.**
+
+D1 lets a model fill a write's BODY arguments (only its targeting is withheld), so a model can choose
+the `titulo` a peça is filed under at a court. Where that value was recorded: nowhere.
+`capability_execute` records integration, action, verdict, duration and NO arguments; the 200 carries
+`filledArgs` as NAMES; the request itself is a socket write to a third party this platform keeps no
+copy of. And the `awaiting_consent` 403 - the ONE moment a human is in the loop, fired BEFORE the
+request goes out - carried the descriptor and nothing else: not which rung produced the call, and not
+one argument a model had put in it.
+
+- THE HUMAN'S SIDE. The 403's `details` gains `ladder`, `filledArgs` (the NAMES, the same field and
+  meaning the 200 carries, so a client keeps one vocabulary) and `filledArgValues` (the VALUES).
+  Both were needed: `titulo` authorises nothing, the titulo does. NEW shared schema
+  `AchieveConsentDetails` types the whole `details` object, exactly as `IntegrationActionConsentRequest`
+  has typed its half since D1. `/execute` is unchanged - its arguments are the caller's own and no
+  rung ran above it. `cortex-cli` prints the values and the rungs to a person at the gate.
+- THE AUDITOR'S SIDE. New activity type `capability_achieve_parametrize`: `{ integrationKey,
+  actionName, mayWrite, filledArgs: { name: value }, verdict, code? }`, written once per call in
+  which a model actually filled something, after the one gated execute, WHATEVER the call then did -
+  a gate that held is as much an audit fact as a write that went. `mayWrite` is `mutates !== false`,
+  the same fail-closed reading `mayBeModelFilled` and the compose entry use. The caller's own
+  arguments are NOT recorded: they are the caller's to know and they are not the fact the row exists
+  to preserve. The contract suite asserts the load-bearing pair - the value in the request body the
+  third party received and the value in the row are asserted to be the same one.
+
+The 200 stays NAMES-ONLY, deliberately. Its old justification was corrected while doing this, because
+it was false: "the values are in the request that was sent" describes a request the caller never sees.
+The comment now names the two places the values actually live.
+
+**MINOR 1 - the parametrize output contract briefed the model on a mechanism this branch removed.**
+`argsOutputContractFor` told the model that a plan breaking a hard rule "is refused and NOTHING runs".
+That was true of the rung as it shipped and false the moment D-S5-3 landed the discard: a failed
+`verifyPlannedArgs` throws the PLAN away and the request goes out carrying exactly what the caller
+sent. A model weighing a cost that does not exist is being briefed wrongly, and the honest
+instruction supports the same conclusion better - a bad argument is silently DROPPED, so guessing one
+buys nothing and omitting one costs nothing. Asserted on the RENDERED PROMPT of a real run, beside
+the mechanism it describes, in one test: the model was told the call still runs, and the call ran.
+
+**RULE 7.** Both wire changes are additive and neither field is one any consumer has received.
+`result` is unchanged and unmoved on `executed` and is now produced on `composed`, which is new in
+this same unreleased slice. The 403's three fields are additive on a `details` object typed as
+`z.record(JsonValue)`. `docs/openapi/cortex.v1.json` and `clients/cortex-cli` were regenerated in
+this commit (gates run, not assumed) and produced NO DIFF - the honest outcome: `result` was already
+on `AchieveIntegrationGoalResponse`, and `AchieveConsentDetails` is not reachable from an endpoint
+descriptor, exactly like `IntegrationActionConsentRequest`. `gate:client-drift` is clean.
+
+**THE CANONICAL TEST, THE LIMIT CARRIED FORWARD IN ONE SENTENCE.** `get-ongoing-processes` does not
+exist in `api/src` or `shared/src`, so the canonical compose case runs against a LOCAL FIXTURE of the
+same shape and proves the COMPOSE RUNG, not the Citius path - which remains net-new work needing a
+real portal session. That sentence is now in the header of the new `cortex-cli` e2e file as well as
+in both api suites, so the limit travels with every suite that runs the canonical goal.
+
+MUTATION EVIDENCE. Seventeen mutants applied to the SOURCE, each run against the suites that claim
+it, each restored and verified byte-identical by md5. ALL SEVENTEEN KILLED: the client's `composed`
+arm (the blocker restored - 3 of the e2e cases red); the module's `result: out.value` on the composed
+exit (module + contract + e2e); the route's composed projection dropping `result` (contract + e2e,
+module GREEN - which is exactly the layer gap this round exists to close); the 403 dropping
+`filledArgValues`; the 403 dropping `ladder` + `filledArgs`; the audit row deleted entirely; the
+audit row recording names instead of values; `mayWrite` read as `=== true` (killed by an action whose
+`mutates` is ABSENT, seeded through the real writer - against a `mutates: true` fixture the two
+predicates are identical, the equivalent mutant this slice has been caught by before); the row always
+claiming the call ran (killed at the module level by the gated write; the contract case proves the
+other direction); the row written for a call that filled nothing; the new audit writer's own
+`try`/`catch` (a rejecting activity store otherwise escapes `runMatchedAction` as a 500 AFTER the
+request has been made - the round-five defect on a fifth exit, and this one sits on the WRITE path);
+the old NOTHING-runs prompt text; human mode printing a composed answer as an ordinary one; the
+consent refusal no longer showing what a model chose; the value list losing its order; the header
+printing over an empty list; and non-scalar values reaching a person as `[object Object]` just before
+they authorise a write. The last three are killed by a HOSTILE-ORIGIN case - `CORTEX_BASE_URL` is
+caller-supplied and deliberately unvalidated, the same threat model as the F1/F2 cases already in
+`clients/cortex-cli/tests/e2e.test.ts`, and the only honest way to exercise a shape the real route
+cannot emit. An eighteenth probe (dropping the `Array.isArray` narrowing on `ladder`) is reported as
+REFUSED BY THE COMPILER rather than as a survivor: `details` is `unknown`, so the mutant does not
+build and cannot ship. No numeric bound was added or changed this round, so there is none to mutate
+in both directions.
+
+DIAGRAM CHECK (FIXED-12): both appended, append-only, `rawText` AND `originalText` carried, spliced
+into the existing files so the diff is exactly the appended element.
+`docs/diagrams/02-module-map.excalidraw` note (h) - the map stopped at the route: the client edge,
+the one projection for both arms, the new audit writer, and the e2e file that stands on it.
+`docs/diagrams/05-data-model.excalidraw` note (h) - `result` on `composed`, the three new fields on
+the consent 403 with their new shared schema, and the one new activity type with every field of it.

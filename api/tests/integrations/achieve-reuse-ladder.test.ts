@@ -716,6 +716,179 @@ describe('the parametrize rung fills arguments and then meets the same gate', ()
     // THE LOAD-BEARING ASSERTION: the rung filled an argument and the gate still refused.
     expect(res.result.code).toBe('awaiting_consent');
     expect(calls).toHaveLength(0);
+    // AND THE HUMAN WHO ANSWERS THAT GATE IS OWED THE VALUE. The refusal is projected from this
+    // result by the route (`routes/integrations.ts`), and until it carried `filledValues` there was
+    // nothing to project: a person was asked to authorise a peça whose TITLE a model had chosen and
+    // was shown a destination and a fingerprint. Names would not do - `titulo` authorises nothing.
+    expect(res.filledArgs).toEqual(['titulo']);
+    expect(res.filledValues).toEqual({ titulo: 'Contestação' });
+  });
+
+  /**
+   * WHAT A MODEL CHOSE, DURABLY - minors 2 and 3 are one defect seen from two sides, and this is
+   * the auditor's side of it.
+   *
+   * Nothing in the estate held it. `capability_execute` records the integration, the action, a
+   * verdict and a duration and NO arguments; the 200 carries `filledArgs` as names; the request
+   * itself is a socket write to a third party that this platform keeps no copy of. So "a model
+   * chose the titulo this peça was filed under" was reconstructable from nothing at all - a shrug
+   * where an audit trail is supposed to be.
+   *
+   * The row is written whatever the call then did, INCLUDING the gate refusing it, because "a model
+   * chose these values and the gate held" is as much an audit fact as "and they were filed". The
+   * executor's own verdict and code are on the row so the two are never read for each other.
+   */
+  it('records what a model chose in a durable row - the VALUES, not the names', async () => {
+    await seed([consultarProcesso]);
+    const { planner } = plannerEmitting([argsBlock({ numero: '111/24.0T8LSB' })]);
+    const { ctx } = ctxWith('ownerA', 'orgA', { planner });
+
+    await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'consultar processo do cliente');
+
+    const rows = await activityLogs.find({ type: 'capability_achieve_parametrize' });
+    expect(rows).toHaveLength(1);
+    const meta = (rows[0] as { metadata?: Record<string, unknown> }).metadata ?? {};
+    expect(meta.integrationKey).toBe(PROBE_INTEGRATION);
+    expect(meta.actionName).toBe('consultar_processo');
+    // THE VALUE. A row carrying `['numero']` would say a model filled something and not what.
+    expect(meta.filledArgs).toEqual({ numero: '111/24.0T8LSB' });
+    expect(meta.mayWrite).toBe(false);
+  });
+
+  it('records it for a WRITE the gate refused too, with the gate\'s own verdict on the row', async () => {
+    await seed([submeterPeca]);
+    const { planner } = plannerEmitting([argsBlock({ titulo: 'Contestação' })]);
+    const { ctx } = ctxWith('ownerA', 'orgA', { planner });
+
+    await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'submeter peça de contestação', { numero: '111/24.0T8LSB' });
+
+    const rows = await activityLogs.find({ type: 'capability_achieve_parametrize' });
+    expect(rows).toHaveLength(1);
+    const meta = (rows[0] as { metadata?: Record<string, unknown> }).metadata ?? {};
+    expect(meta.filledArgs).toEqual({ titulo: 'Contestação' });
+    // `mayWrite` is the same fail-closed reading of `mutates` the compose rung's entry uses.
+    expect(meta.mayWrite).toBe(true);
+    // Nothing ran, and the row says so rather than reading like a completed write.
+    expect(meta.verdict).toBe('failed');
+    expect(meta.code).toBe('awaiting_consent');
+    // The CALLER's own argument is not on the row: it is theirs to know, and it is not the fact
+    // this row exists to preserve.
+    expect(JSON.stringify(meta)).not.toContain('111/24.0T8LSB');
+  });
+
+  /**
+   * `mayWrite` IS THE FIELD AN AUDITOR FILTERS ON, so it reads `mutates` the way the platform does -
+   * FAIL-CLOSED, `!== false`. Against an action declaring `mutates: true` that is the same predicate
+   * as `=== true`, so the case below uses one whose `mutates` is ABSENT, seeded through the REAL
+   * writer for the reason the compose-entry case gives at length: `definitions.ts` builds actions
+   * as `config.actions ?? []` off an unvalidated `config.json` and the store persists an
+   * agent-authored action verbatim, so this is a production shape rather than a fixture shortcut.
+   *
+   * Read as `=== true` and the row says a model filled the arguments of a READ, about a call every
+   * other part of the platform treated as a write - including the gate that refused it.
+   */
+  it('flags an action whose `mutates` is ABSENT as a write on the row, as everything else does', async () => {
+    const undeclared = { ...submeterPeca } as Record<string, unknown>;
+    delete undeclared.mutates;
+    await seed([undeclared as unknown as IntegrationAction]);
+    const { planner } = plannerEmitting([argsBlock({ titulo: 'Contestação' })]);
+    const { ctx } = ctxWith('ownerA', 'orgA', { planner });
+
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'submeter peça de contestação', { numero: '111/24.0T8LSB' }));
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    // The gate treated it as a write, which is the fact the row must agree with.
+    expect(res.result.code).toBe('awaiting_consent');
+
+    const rows = await activityLogs.find({ type: 'capability_achieve_parametrize' });
+    expect(rows).toHaveLength(1);
+    expect(((rows[0] as { metadata?: Record<string, unknown> }).metadata ?? {}).mayWrite).toBe(true);
+  });
+
+  /**
+   * AND THIS ROW'S OWN `catch` IS A GUARD TOO, pinned the way the compose row's was after it was
+   * found unexercised. `auditParametrized` is awaited in `runMatchedAction` AFTER the one gated
+   * execute and OUTSIDE any try of its own, so without the catch a rejecting activity write
+   * propagates out of `achieveIntegrationGoal` and into the route's error handler as a 500 - the
+   * caller's request already sent to a third party, already answered, and thrown away by a write
+   * that is nobody's answer. It is the same defect this branch spent three rounds closing, on a
+   * fifth exit, and it now sits on the WRITE PATH rather than the read path: on a `mutates` action
+   * the side effect is spent.
+   *
+   * The failure is injected at the store the single audit path really uses, and ONLY for this row -
+   * `mockRejectedValueOnce` would catch the EXECUTOR's own audit write instead and prove a
+   * different function's guard.
+   */
+  it('a FAILING audit write does not destroy the answer it was recording', async () => {
+    await seed([{ ...processos, argsSchema: { type: 'object', properties: { tribunal: {} } } }]);
+    const { planner } = plannerEmitting([argsBlock({ tribunal: 'Coimbra' })]);
+    const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner, data: { processos: PROCESS_ROWS } });
+
+    const realInsert = activityLogs.insert.bind(activityLogs);
+    const spy = vi.spyOn(activityLogs, 'insert').mockImplementation(async (doc) => {
+      if ((doc as { type?: string }).type === 'capability_achieve_parametrize') {
+        throw new Error('MongoNetworkError: connection 9 to ekoa-primary.internal:27017 closed');
+      }
+      return realInsert(doc);
+    });
+    let out: Awaited<ReturnType<typeof achieveIntegrationGoal>>;
+    try {
+      out = await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'processos do tribunal indicado');
+    } finally {
+      spy.mockRestore();
+    }
+
+    const res = valueOf(out);
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    // The call went out carrying the model's value, and its answer reached the caller whole.
+    expect(calls[0]?.args).toMatchObject({ tribunal: 'Coimbra' });
+    expect(res.result.data).toEqual({ processos: PROCESS_ROWS });
+    expect(JSON.stringify(res)).not.toContain('MongoNetworkError');
+    // …and the row really did not land, so this is not passing by the write having succeeded.
+    expect(await activityLogs.find({ type: 'capability_achieve_parametrize' })).toHaveLength(0);
+  });
+
+  it('writes NO row when the rung filled nothing - the ordinary call is not buried in noise', async () => {
+    await seed([consultarProcesso]);
+    const { planner } = plannerEmitting([argsBlock({ numero: 'model-picked' })]);
+    const { ctx } = ctxWith('ownerA', 'orgA', { planner });
+
+    // Every declared argument supplied, so the rung skips before the model is asked at all.
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'consultar processo', { numero: '222/24.0T8PRT' }));
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+    expect(res.filledArgs).toBeUndefined();
+    expect(await activityLogs.find({ type: 'capability_achieve_parametrize' })).toHaveLength(0);
+  });
+
+  /**
+   * MINOR: THE OUTPUT CONTRACT BRIEFED THE MODEL ON A MECHANISM THIS BRANCH REMOVED.
+   *
+   * "a plan that breaks any of these is refused and NOTHING runs" was true of the rung as it
+   * shipped and false the moment the discard landed: a failed `verifyPlannedArgs` no longer ends
+   * the call, it throws the PLAN away and the request goes out carrying exactly what the caller
+   * sent. Both halves are asserted together on ONE run, because the wording is only worth anything
+   * if it describes what actually happens: the prompt the model received says the call still runs,
+   * and the call still ran.
+   */
+  it('tells the model what a broken plan really costs: the plan is dropped, the call is not', async () => {
+    // The automation-backed fixture, so the request that goes out is inspectable at the seam rather
+    // than over a socket.
+    await seed([{ ...processos, argsSchema: { type: 'object', properties: { tribunal: {} } } }]);
+    // `api_base` is not a declared argument, so the suite refuses the whole plan.
+    const { planner, prompts } = plannerEmitting([argsBlock({ tribunal: 'Coimbra', api_base: 'https://elsewhere.example' })]);
+    const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner, data: { processos: PROCESS_ROWS } });
+
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'processos do tribunal indicado'));
+    if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
+
+    // The mechanism: discarded whole, and the call ran with the caller's own (empty) arguments.
+    expect(res.filledArgs).toBeUndefined();
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.args).toEqual({});
+    // The briefing, in the prompt the model was actually handed.
+    const rendered = prompts.join('\n');
+    expect(rendered).toContain('DISCARDED WHOLE');
+    expect(rendered).toContain('the call still runs');
+    expect(rendered).not.toContain('NOTHING runs');
   });
 
   it('a WRITE whose only missing argument is TARGETING is never even offered to the model', async () => {
@@ -1461,6 +1634,43 @@ describe('CANONICAL: "todos os processos de clientes com menos de 40 anos"', () 
     // NOTHING WAS MINTED: the definition still carries exactly the action it was seeded with.
     const doc = await integrationDefinitionStore.getForActor({ userId: 'ownerA', orgId: 'orgA', role: 'user' }, PROBE_INTEGRATION);
     expect((doc?.actions ?? []).map((a) => a.actionName)).toEqual(['processos']);
+  });
+
+  /**
+   * THE COMPOSITION IS A POST-STAGE, SO IT MAY NOT DESTROY THE ANSWER IT POST-PROCESSED.
+   *
+   * This is the same family as the spent-200 defect the last three rounds closed, one field down.
+   * `runMatchedAction` has exactly one exit for an admitted call that was not composed, and it
+   * always carries `out.value` - but the COMPOSED exit was exempt from that rule and carried
+   * `items` alone. What went with the answer was its ENVELOPE: the executor's own verdict, the
+   * upstream status, and every field standing BESIDE the list inside `data`.
+   *
+   * The fixture is an ordinary paginated read - `{ processos: [...], nextPage }` - which is what a
+   * third-party list endpoint answers when there is more. Neither `items` nor `composition` can
+   * carry that cursor, so ONE PAGE of somebody's processes came back indistinguishable from all of
+   * them, with a narrowing report on top saying `4 scanned` as if 4 were the whole.
+   *
+   * The rows travel WHOLE rather than substituted, and that is asserted too: putting the narrowed
+   * list back under `processos` would hand the caller a document the third party never emitted.
+   */
+  it('carries the action\'s OWN answer beside the narrowing, envelope and all', async () => {
+    await seed([processos]);
+    const { planner } = plannerEmitting([composeBlock(CANONICAL_PLAN)]);
+    const { seam } = collectionsOf({ clients: CLIENT_ROWS });
+    const page = { processos: PROCESS_ROWS, nextPage: 'cursor-2' };
+    const { ctx } = ctxWith('ownerA', 'orgA', { planner, collections: seam, data: page });
+
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, CANONICAL_GOAL));
+    if (res.outcome !== 'composed') throw new Error(`expected composed, got ${JSON.stringify(res)}`);
+
+    // The narrowing happened…
+    expect(res.items.map((r) => r.numeroProcesso)).toEqual(['111/24.0T8LSB', '333/24.0T8CBR']);
+    // …and the answer it narrowed is still here, exactly as the executed arm would have returned it.
+    expect(res.result.success).toBe(true);
+    expect(res.result.data).toEqual(page);
+    // THE LOAD-BEARING HALF: the cursor is recoverable from nothing else in this response.
+    expect((res.result.data as { nextPage?: string }).nextPage).toBe('cursor-2');
+    expect((res.result.data as { processos?: unknown[] }).processos).toHaveLength(PROCESS_ROWS.length);
   });
 
   it('the run record shows the planner\'s decision - the rungs considered and the one taken', async () => {
