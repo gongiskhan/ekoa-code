@@ -217,6 +217,17 @@ export type AutomationBackedHandler = (input: {
 export type RunEvidenceCollector = (runId: string) => Promise<{
   status?: string;
   steps: RunStepEvidence[];
+  /**
+   * THE COLLECTOR'S STEP-COUNT FLAG - the run had more steps than the collector's cap, so `steps` is
+   * a PREFIX of the trace rather than the trace.
+   *
+   * DECLARED HERE BECAUSE IT MUST BE FORWARDED, and forwarding is the only way it can arrive. The
+   * store re-applies an identical cap and asks `evidence.steps.length > MAX_EVIDENCE_STEPS`, but
+   * what reaches it has already been sliced to exactly that number, so it cannot re-derive the
+   * answer from anything it holds. See `CollectedRunEvidence.truncated` in
+   * `automation/action-evidence.ts` for why a silent prefix is not a cosmetic problem.
+   */
+  truncated?: boolean;
 } | null>;
 
 export interface ExecutorDeps {
@@ -535,8 +546,9 @@ export async function executeUserIntegrationAction(
       // gates from drifting apart.
       mutates: actionRequiresConsent(action),
     });
-    // EVIDENCE (slice S1). A run that SUCCEEDED is the "last validated run" the detail page renders
-    // and the graduation prerequisite reads. Pointers only - `{runId, stepIndex}` plus capped
+    // EVIDENCE (slice S1). A run that SUCCEEDED is the "last validated run" the graduation
+    // prerequisite reads - and what the integration detail page will render when slice S2/S3 mounts
+    // it, which on THIS branch is not yet a caller. Pointers only - `{runId, stepIndex}` plus capped
     // excerpts - never copies of the screenshots, which stay behind the authenticated screenshot
     // plane that already enforces org + owner on every byte.
     //
@@ -563,6 +575,12 @@ export async function executeUserIntegrationAction(
           runId,
           ...(collected.status !== undefined ? { status: collected.status } : {}),
           steps: collected.steps,
+          // THE CUT TRAVELS WITH THE STEPS. Dropping this line does not change a single stored step,
+          // which is exactly why it went missing: the store's own `evidence.steps.length >
+          // MAX_EVIDENCE_STEPS` test can never fire on what this hands it, because the collector has
+          // already sliced to that length. Without the forward, a 50-step prefix of a 200-step run is
+          // stored as, and renders as, a complete 50-step run.
+          ...(collected.truncated ? { truncated: true } : {}),
         };
       },
       // The values this run actually resolved, so the store's last gate is checked against a real

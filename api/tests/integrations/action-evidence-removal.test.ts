@@ -519,6 +519,55 @@ describe('the OWNER\'s durable signals: an explicit erasure, and a disconnected 
     expect(JSON.stringify(await rowsInCollection())).not.toContain(CLIENT_PII);
   });
 
+  /**
+   * A MIGRATED ROW CARRYING NO OWNER GOES WITH THE SHARED CREDENTIAL - the one claim
+   * `discardEvidenceForDisconnectedConfig`'s `$nin` note makes, and nothing pinned it.
+   *
+   * THE SHAPE IS REAL AND THE CURRENT WRITER CANNOT MAKE IT, which is the point rather than a
+   * loophole. This collection's FIRST CUT keyed a row on (orgId, integrationKey, actionName) with no
+   * `ownerUserId` - the defect `action-evidence-store.ts`'s tenancy section records, and the shape
+   * `getEvidence`'s re-check exists to fail closed on. `recordEvidence` refuses to write it now
+   * (`assertKey`), so every such row in a real deployment is a survivor of that key change and can
+   * only be inserted here the way the migration left it: directly.
+   *
+   * AND IT CAN NEVER BE SUPERSEDED. A re-run writes under the new four-term `_id`, so it lands
+   * beside this row rather than over it, and TTL is the only other thing that reaches it - up to
+   * `EVIDENCE_RETENTION_DAYS` later. It holds a real request and response of a third-party account
+   * inside this org, and the credential that produced it has just been disconnected by the person
+   * who connected it. Erring the other way would leave the oldest and least-supersedable rows in the
+   * collection as the only ones a disconnect does not clear.
+   *
+   * THIS IS ALSO WHAT `deleteConfig`'S EXCLUSION-LIST FILTER PROTECTS, one level up: an `undefined`
+   * reaching `$nin` serialises to `null` and spares exactly this row. That filter's runtime effect is
+   * unobservable at the end of `deleteConfig` (any peer row that could contribute `undefined` is
+   * itself deleted by its own iteration, and both orders converge - measured); `tsc` is what enforces
+   * it, and the erasure below is the behaviour it is there to keep true.
+   */
+  it('a MIGRATED row carrying no owner goes when the shared credential that produced it is disconnected', async () => {
+    const admin: Actor = { userId: 'u-admin', orgId: ORG, role: 'org-admin' };
+    await integrationDefinitionStore.create(definitionRow([DOOMED]), { actor: author });
+    await createConfig(admin, { integrationKey: KEY, configValues: { api_key: 'shared' }, secretKeys: ['api_key'] }, cfgDeps);
+    await integrationActionEvidence.insert({
+      _id: 'migrated-org-only-key',
+      orgId: ORG,
+      integrationKey: KEY,
+      actionName: DOOMED,
+      backingType: 'api-call',
+      validatedAt: '2026-08-19T00:00:00.000Z',
+      evidence: apiCall(CLIENT_PII),
+    } as never);
+    // THE CONTROLS: a member holding a credential of their own, and another tenant entirely. Without
+    // them this would also pass on an erasure that had simply stopped being scoped.
+    await createConfig({ userId: PEER, orgId: ORG, role: 'user' }, { integrationKey: KEY, configValues: { api_key: 'mine' }, secretKeys: ['api_key'] }, cfgDeps);
+    await record({ ownerUserId: PEER, actionName: DOOMED }, apiCall('the peer\'s own credential'));
+    await record({ orgId: OTHER_ORG, ownerUserId: CONSUMER, actionName: DOOMED }, apiCall('another tenant'));
+
+    expect((await deleteConfig(admin, KEY)).verdict).toBe('ok');
+
+    expect(await evidenceIndex()).toEqual([at(ORG, PEER, DOOMED), at(OTHER_ORG, CONSUMER, DOOMED)].sort());
+    expect(JSON.stringify(await rowsInCollection())).not.toContain(CLIENT_PII);
+  });
+
   it('a config delete that is REFUSED erases nothing', async () => {
     await integrationDefinitionStore.create(definitionRow([DOOMED]), { actor: author });
     await createConfig(author, { integrationKey: KEY, configValues: { api_key: 'k' }, secretKeys: ['api_key'] }, cfgDeps);

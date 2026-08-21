@@ -711,10 +711,15 @@ export function integrationsRouter(deps: {
    * decision to keep or destroy it is theirs rather than an agent's.
    *
    * IT IS WHY `discardEvidence` EXISTS AS A PUBLIC METHOD AT ALL. Every other removal on that
-   * collection is a consequence of something else - a later run supersedes it, the action stops
-   * resolving, the credential is disconnected, the retention window closes. None of those is "I do
-   * not want this kept", which is the one a person actually asks for, and until this route there was
-   * no way to ask it.
+   * collection is a consequence of something else - a later run supersedes it, the credential is
+   * disconnected, the retention window closes. None of those is "I do not want this kept", which is
+   * the one a person actually asks for, and until this route there was no way to ask it.
+   *
+   * "THE ACTION STOPS RESOLVING" IS NOT ON THAT LIST, AND USED TO BE. Round five deleted every
+   * collector that answered "is this action gone?", because a synchronous answer taken at one
+   * instant from one vantage cannot govern a row whose lifetime is durable - the removal rule in
+   * `action-evidence-store.ts`. An action that stops resolving now ends its row by ageing out of the
+   * retention window like any other, which is also why this control matters more than it did.
    *
    * TENANCY IS NOT A FILTER THIS HANDLER APPLIES. The key is built from the VERIFIED actor and
    * hashed into the deterministic `_id`, so the request cannot name a colleague's row or another

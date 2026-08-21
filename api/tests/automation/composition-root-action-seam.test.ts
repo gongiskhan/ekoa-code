@@ -137,6 +137,32 @@ function definitionRow(): IntegrationDefinitionCreate {
   };
 }
 
+/**
+ * A run of `n` REAL `StepRecord`s, for the step-cap cases below.
+ *
+ * FIXTURE HONESTY: this is a RUN, which is what the engine writes and what the evidence collector
+ * reads - not an evidence object, which is what only a test ever builds. `completed` / `cache` are
+ * members of `StepStatus` / `StepTier`, the same correction the case above records. Nothing caps a
+ * run's step count, so 200 is an ordinary length for a browser automation.
+ */
+function longRun(n: number) {
+  return {
+    id: 'r-long',
+    automationId: AUTOMATION_ID,
+    startedAt: '2026-08-17T00:00:00.000Z',
+    status: 'completed',
+    inputs: {},
+    triggeredBy: 'user',
+    steps: Array.from({ length: n }, (_, index) => ({
+      stepId: `s${index}`,
+      index,
+      status: 'completed',
+      tier: 'cache',
+      durationMs: 1,
+    })),
+  };
+}
+
 /** A recipe that replays cleanly, and NAMES its one call as the answer-bearing one. */
 const READ_RECIPE = {
   goal: 'read the cases',
@@ -300,6 +326,78 @@ describe('the integration-action executor bound by buildApp carries the discover
       // And it really landed - the store write is not merely attempted.
       const stored = await actionEvidenceStore.getEvidence({ orgId: ORG, ownerUserId: OWNER, integrationKey: KEY, actionName: READ_ACTION });
       expect(stored?.evidence).toMatchObject({ kind: 'automation', runId: findByRunId.mock.calls[0]![0] });
+    }, 30_000);
+
+    /**
+     * A CUT TRACE ARRIVES AS A CUT TRACE - through the real collector, the real executor forward,
+     * the real store and real Mongo.
+     *
+     * WHY THIS CASE IS HERE AND NOT IN THE STORE'S OWN SUITE. The store suite pins the step cap by
+     * handing `recordEvidence` a 62-step evidence object directly. Nothing production writes has
+     * that shape: `collectRunEvidence` slices to 50 BEFORE the seam, so what the store actually
+     * receives is always exactly 50 items, its `evidence.steps.length > MAX_EVIDENCE_STEPS` test is
+     * a comparison of equal numbers, and for six rounds the disjunct was unreachable on the only
+     * path production takes. Measured end to end before the fix: a 200-step run stored
+     * `steps.length === 50` and `truncated === undefined`, byte-indistinguishable from a complete
+     * 50-step run - while `AutomationEvidence.truncated`'s docblock, the store header and the store
+     * suite's own header all said truncation was recorded and never silent.
+     *
+     * So the fixture is a RUN, not an evidence object, and every stage after it is the production
+     * one. 200 steps is a real length for a browser automation; each entry is a real `StepRecord`
+     * (`completed`/`cache` are members of `StepStatus`/`StepTier`, the fixture-honesty rule the case
+     * above records).
+     *
+     * WHY IT MATTERS THAT THE FLAG SURVIVES: the row is durable for `EVIDENCE_RETENTION_DAYS` and is
+     * the evidence a human reads before granting `trusted`, which is what makes an action
+     * auto-runnable by `achieve`. "This is the first 50 steps of a longer run" is part of what they
+     * are judging.
+     */
+    it('carries the CUT across the whole chain: a 200-step run is stored as a 50-step PREFIX that says so', async () => {
+      expect((await recipes.putRecipe(ORG, KEY, READ_ACTION, READ_RECIPE, {})).verdict).toBe('ok');
+      // The store's cap, restated as a literal rather than imported - the discipline
+      // `tests/integrations/action-evidence.test.ts` records: importing the constant makes the
+      // assertion say "the cap is whatever the cap is", which is true of every value it could hold.
+      const MAX_STEPS = 50;
+
+      vi.spyOn(automationRunStore, 'findByRunId').mockResolvedValue(longRun(200) as never);
+
+      const result = await executeIntegrationAction({
+        integrationKey: KEY,
+        actionName: READ_ACTION,
+        args: { ref: '2024-1' },
+        ownerUserId: OWNER,
+      });
+      expect(result.success).toBe(true);
+
+      const stored = await actionEvidenceStore.getEvidence({ orgId: ORG, ownerUserId: OWNER, integrationKey: KEY, actionName: READ_ACTION });
+      const ev = stored!.evidence as { kind: string; steps: { stepIndex: number }[]; truncated?: boolean };
+      expect(ev.kind).toBe('automation');
+      expect(ev.steps).toHaveLength(MAX_STEPS);
+      // The FIRST steps, by index - a trace is read top-down, and this also kills a `slice(-n)` that
+      // would otherwise satisfy the length assertion.
+      expect(ev.steps[0]!.stepIndex).toBe(0);
+      expect(ev.steps[MAX_STEPS - 1]!.stepIndex).toBe(MAX_STEPS - 1);
+      // THE ASSERTION THE WHOLE CASE EXISTS FOR, and the one that was `undefined` in production.
+      expect(ev.truncated).toBe(true);
+    }, 30_000);
+
+    it('a run that FITS is stored with no cut flag - the flag distinguishes something', async () => {
+      // THE CONTROL. Without it, "truncated is true" is also satisfied by a chain that marks every
+      // automation row as cut, which would tell a reader exactly as little as marking none.
+      expect((await recipes.putRecipe(ORG, KEY, READ_ACTION, READ_RECIPE, {})).verdict).toBe('ok');
+      vi.spyOn(automationRunStore, 'findByRunId').mockResolvedValue(longRun(50) as never);
+
+      expect((await executeIntegrationAction({
+        integrationKey: KEY,
+        actionName: READ_ACTION,
+        args: { ref: '2024-1' },
+        ownerUserId: OWNER,
+      })).success).toBe(true);
+
+      const stored = await actionEvidenceStore.getEvidence({ orgId: ORG, ownerUserId: OWNER, integrationKey: KEY, actionName: READ_ACTION });
+      const ev = stored!.evidence as { steps: unknown[]; truncated?: boolean };
+      expect(ev.steps).toHaveLength(50);
+      expect(ev).not.toHaveProperty('truncated');
     }, 30_000);
 
     it('records NOTHING when the collector cannot resolve the run (the ordinary replay case)', async () => {

@@ -425,11 +425,14 @@ describe('achieve AUTHORS, and the key that authored cannot bless its own work',
  * `DELETE /api/v1/integrations/:key/actions/:actionName/evidence`.
  *
  * WHY IT HAS TO EXIST, on the wire rather than in a store: every other way an evidence row goes is a
- * consequence of something else - a later run supersedes it, the action stops resolving for its
- * reader, the credential is disconnected, the retention window closes. None of those is "I do not
- * want this sample of my third-party account kept", and until this endpoint a person who simply
- * wanted it gone had to disconnect the whole integration. It is also the reason `discardEvidence`
- * has a production caller at all.
+ * consequence of something else - a later run supersedes it, the credential is disconnected, the
+ * retention window closes. None of those is "I do not want this sample of my third-party account
+ * kept", and until this endpoint a person who simply wanted it gone had to disconnect the whole
+ * integration. It is also the reason `discardEvidence` has a production caller at all.
+ *
+ * "THE ACTION STOPS RESOLVING" IS NOT ON THAT LIST any more: round five deleted the collectors that
+ * asked it, so an unreachable action's row now ages out with everything else rather than being
+ * collected on a guess (`action-evidence-store.ts`'s removal rule).
  */
 describe('a person can erase the sample their own run left behind', () => {
   /** Run the read action once, over the wire, so the row under test is the one PRODUCTION writes. */

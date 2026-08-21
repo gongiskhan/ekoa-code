@@ -3217,3 +3217,69 @@ only in its `bounds` describe, which is not a tenancy leg; every tenancy case is
 green. Diagrams: no structural, flow or data-shape change - three comments, one docblock and two test
 files - so FIXED-12 requires no diagram edit, and stating that is part of the rule rather than an
 exemption from it.
+
+- 2026-08-21 - **S1 round seven: a promise three files made, that the code could not keep - and the
+fixture that made it look kept.** Rounds five and six argued at length about what ends an evidence
+row and pinned the numbers that argument rests on. This round is about what an evidence row SAYS.
+
+**THE STEP CAP CUT EVERY LONG TRACE SILENTLY, AND THE FLAG THE CONTRACT PROMISED COULD NOT FIRE.**
+Measured end to end through the real collector, the real store and real Mongo: a **200-step run
+stored `steps.length = 50` and `truncated = undefined`** - byte-indistinguishable from a complete
+50-step run. The cap is applied twice and both copies are 50. `collectRunEvidence` slices to
+`MAX_STEPS` and returned a `CollectedRunEvidence` carrying **no truncation field at all** (the
+per-step `truncated` it does set is the EXCERPT flag); the executor forwarded that verbatim; the
+store then tested `evidence.steps.length > MAX_EVIDENCE_STEPS || evidence.truncated` on a value that
+is always exactly 50. The disjunct was unreachable on the only path production takes, and three
+places said otherwise: `AutomationEvidence.truncated`'s docblock (*"Recorded, never silent"*), the
+store's own module promise, and the store suite's header.
+
+**AND THE FIXTURE IS WHY SIX ROUNDS MISSED IT.** The case that looked like coverage hands
+`recordEvidence` a hand-built **62-step** evidence object - a shape the production writer
+structurally cannot produce. It pinned the module's own ceiling and was read as pinning the
+production path. **The rule this leaves behind, beside round six's:** a fixture the production writer
+cannot produce proves the code you wrote, never the code that runs. Where the value under test is
+computed BEFORE a seam and consumed AFTER it, the case has to enter before the seam.
+
+**THE FIX CARRIES THE SIGNAL WITH THE SLICE**, because the slicer is the last thing that can see
+`run.steps.length`: `CollectedRunEvidence.truncated` is set in the same statement that slices,
+`RunEvidenceCollector` declares it, and the executor forwards it onto the `AutomationEvidence` it
+builds. `capEvidence` keeps both disjuncts, and the length test is now **recorded as
+unreachable-from-production** - the module's own ceiling against a future caller that forgets to cap,
+rather than the mechanism. Pinned end to end in `composition-root-action-seam.test.ts` (a 200-step
+`RunRecord` through the real chain, with a 50-step control), because dropping the executor forward
+reddens only there - which is precisely the mutant the seam-local suites survived. **Why it is not
+cosmetic:** the row is durable for 90 days and is what a human reads before granting `trusted`, which
+makes an action auto-runnable by `achieve`.
+
+**THE SECOND RETENTION NUMBER, ONE TREE OVER.** `DEFAULT_SCREENSHOT_RETENTION_DAYS` was the exact
+mirror of round six's `EVIDENCE_RETENTION_DAYS` finding: both suites that touch the sweeper passed
+`retentionDays: 7` **explicitly**, while the one production caller passes nothing and rides the
+default - so 7 -> 1 and 7 -> 36500 both left the estate green, and the only number production uses
+was the one nothing could fail for. Pinned as a literal, straddling the cutoff by half a day with no
+override. `sweepExpiredScreenshots` also gains the `retentionDays <= 0` guard its sibling
+`sweepExpiredEvidence` has always had: without it a 0, a negative or a `NaN` put the cutoff at or
+after `now` and the next boot deleted **every unpinned run directory in the tree**. An unusable
+retention setting is not an instruction to destroy the archive.
+
+**AND A COMMENT REPLACED BY A TRUER ONE, WITH ITS LIMITS STATED.** Round six replaced one false claim
+in `deleteConfig` with another: the exclusion-list filter does **not** stop a served member being
+spared - no served member can ever be in that list, because a served member is one holding no config
+row and their evidence row carries their own non-empty id (measured on real Mongo). What the filter
+keeps out is `undefined`, which inside `$nin` serialises to `null` and would spare exactly the
+MIGRATED rows carrying no `ownerUserId` - the opposite of the claim. Its runtime effect is
+nonetheless **unobservable through `deleteConfig`**, because any peer row that could contribute
+`undefined` is itself deleted by its own iteration and both orders converge (measured both ways). So
+the filter is kept, relabelled as the `id is string` narrowing that `DisconnectedConfigScope` requires
+- deleting it fails `tsc` with TS2322, verified - and the BEHAVIOUR it exists to protect is pinned
+where it is observable: a migrated row with no owner goes when its shared credential is disconnected,
+through the real `deleteConfig`. **Stating that a guard is enforced by the type checker and not by a
+test is part of the honesty rule, not an exemption from it.**
+
+Finally, round six reported its sweep of *"collected when the action stops resolving"* complete; the
+claim survived in two more live places (the production DELETE handler's docblock and a contract test)
+because the grep was for the unwrapped sentence and the survivors were line-wrapped across a `*`
+continuation. Re-swept with a newline-tolerant regex. Rule 7: nothing on the wire moves - no schema,
+descriptor, route or auth class changes, so OpenAPI and the generated cortex-cli are byte-identical
+and `EXPECTED_PENDING_COUNT` is unmoved. FIXED-12: the stored shape of an automation evidence row
+changes ADDITIVELY (`truncated` can now be true), so `05-data-model` and `02-module-map` each carry an
+append-only AS-BUILT (f) note.

@@ -15,8 +15,12 @@ export * from './platform-call.js';
 export * from './action-executor.js';
 export * from './pipedream.js';
 // Slice S1: the ONE LIVE PROOF that an action actually ran. The composition root binds
-// `recordEvidence` onto the executor's evidence seam; the detail-page read and the
-// graduation-to-trusted prerequisite both come through here.
+// `recordEvidence` onto the executor's evidence seam, and the graduation-to-trusted prerequisite
+// (`promoteToTrusted`) reads this collection.
+//
+// THE DETAIL-PAGE READ IS NOT A THIRD ONE ON THIS BRANCH, and this sentence used to say it was.
+// `listForIntegration` has no production caller here - see its own docblock - because the page is
+// slice S2/S3. Add it back when the page mounts, not before.
 export {
   actionEvidenceStore,
   ActionEvidenceStore,

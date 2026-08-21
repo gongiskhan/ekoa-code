@@ -3279,6 +3279,117 @@ silently absorbed into a ledger note):
   disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
   `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
 
+## Recently fixed - 2026-08-21 action evidence round SEVEN (one major + three minors)
+
+The S1 verification pass repeated a sixth time. Its finding is a claim three files made and the code
+could not keep, kept plausible by a fixture the production writer cannot produce.
+
+- **`the-step-cap-cut-every-trace-silently-and-the-flag-could-not-fire`** (**FIXED 2026-08-21**, S1
+  round seven, **MAJOR** - durable evidence that a human reads before granting `trusted` was
+  indistinguishable from complete evidence). Measured end to end through the real collector, the real
+  store and real Mongo: a **200-step run stored `steps.length = 50` and `truncated = undefined`**,
+  byte-indistinguishable from a complete 50-step run.
+
+  **WHY IT COULD NOT FIRE.** The step cap is applied TWICE and both copies are 50.
+  `collectRunEvidence` (`api/src/automation/action-evidence.ts`) does `run.steps.slice(0, MAX_STEPS)`
+  and returned a `CollectedRunEvidence` with **no truncation field at all** - the interface declared
+  only `{status?, steps[]}`, and the per-step `truncated` it does set is the EXCERPT flag, not the
+  step-count flag. The executor forwarded that verbatim. `capEvidence` then tested
+  `evidence.steps.length > MAX_EVIDENCE_STEPS || evidence.truncated`, and what it receives is
+  **exactly 50**, so the first disjunct compares equal numbers and the second was never set. The
+  disjunct was unreachable on the only path production takes.
+
+  **THREE CLAIMS IT FALSIFIED**: `AutomationEvidence.truncated`'s docblock (*"True when the run had
+  more steps than `MAX_EVIDENCE_STEPS`. Recorded, never silent."*), the store's own module promise
+  (*"truncation is recorded and never silent"*), and the store suite's header (*"the caps are real …
+  and truncation is RECORDED, never silent"*).
+
+  **AND THE FIXTURE IS WHAT HID IT.** The case claiming to cover this hand-built a **62-step**
+  evidence object and handed it to `recordEvidence` - a shape the production writer structurally
+  cannot produce, since the collector slices to 50 before the seam. The automation-side case asserted
+  the cut but no signal, because there was no field to assert.
+
+  **WHY IT MATTERS BEYOND TIDINESS.** The row is durable for `EVIDENCE_RETENTION_DAYS` = 90 and is
+  the human's basis for granting `trusted`, which makes an action auto-runnable by `achieve`. "These
+  are the first 50 steps of a longer run" is part of what is being judged.
+
+  **CLOSED BY CARRYING THE SIGNAL WITH THE SLICE**, because only the slicer can still see
+  `run.steps.length`: `CollectedRunEvidence.truncated` is set in the same statement that slices;
+  `RunEvidenceCollector` declares it; the executor's automation capture forwards it. `capEvidence`
+  keeps both disjuncts, with the length test recorded as the module's OWN ceiling against a future
+  caller that forgets to cap - unreachable from production, and said so rather than left looking like
+  the mechanism. **Pinned end to end** in `tests/automation/composition-root-action-seam.test.ts`: a
+  200-step `RunRecord` through the real collector, the real executor forward and the real store, plus
+  a 50-step control that must carry no flag. Mutants: collector flag forced `false` reddens 3 across
+  2 suites; `>` -> `>=` reddens 2; dropping the executor forward reddens **only** the end-to-end case
+  (which is exactly the mutant six rounds of seam-local suites survived); dropping
+  `|| evidence.truncated` reddens 2. Restored, `git diff` clean.
+
+- **`the-screenshot-window-was-the-same-unpinned-number-one-tree-over`** (**FIXED 2026-08-21**, S1
+  round seven, **MINOR**, exact mirror of round six's `EVIDENCE_RETENTION_DAYS` finding, in the
+  sibling constant, inside the same boot sweep). `DEFAULT_SCREENSHOT_RETENTION_DAYS` was unenforced
+  in **both** directions: 7 -> 36500 reddened nothing and 7 -> 1 reddened nothing (247/247 green).
+  Both suites that touch the sweeper passed `retentionDays: 7` **explicitly**, while the one
+  production caller - `sweepScreenshotsSparingPinnedEvidence` in `server.ts` - passes nothing and
+  rides the default. So the only number production uses was the one nothing could fail for.
+  Closed by restating 7 as a LITERAL in `screenshot retention (R-3)`
+  (`api/tests/security/screenshot-plane.test.ts`), straddling the cutoff by HALF a day either side
+  **with no `retentionDays` argument**; whole-day offsets let a 7 -> 6 mutant survive on the strict
+  `<`. Measured: 7 -> 1 and 7 -> 36500 each redden exactly this case.
+
+- **`the-screenshot-sweep-had-no-non-positive-guard-its-sibling-has`** (**FIXED 2026-08-21**, S1
+  round seven, **MINOR**, same line, second half). `sweepExpiredScreenshots` had no
+  `retentionDays <= 0` guard, so a 0, a negative or a `NaN` from a mis-parsed override put the cutoff
+  at or after `now` and the next boot deleted **every unpinned run directory in the tree** - an
+  unrecoverable erasure of authenticated client-portal screenshots triggered by a configuration slip.
+  Its sibling `sweepExpiredEvidence` has had that guard all along and its suite pins it (*"a
+  non-positive window sweeps NOTHING rather than everything"*). Guard and case mirrored; the case
+  also asserts the dir that WOULD have gone at 7 days survives, so it cannot pass on a sweeper that
+  had simply stopped finding anything. Measured: removing the guard reddens 1.
+
+- **`deleteconfig-replaced-one-false-comment-with-another`** (**FIXED 2026-08-21**, S1 round seven,
+  **MINOR**, documentation + one previously-unpinned behaviour). Round six's note claimed the
+  exclusion-list filter *"keeps the list to owners who genuinely hold a row of their own, so a peer
+  row carrying no custodian cannot land in the exclusion list and spare the very members the deleted
+  credential served."* **No served member can ever be spared by that list**: a served member is by
+  definition one holding no config row, so nothing contributes their id, and their evidence row
+  carries their own real non-empty `ownerUserId`, which is never in the exclusion set. Measured on
+  real Mongo - with the filter removed the served member's row is still deleted.
+
+  What the filter actually keeps out is `undefined`, and the consequence runs the **other way**: an
+  `undefined` inside `$nin` serialises to `null`, and `$nin: [null]` spares exactly the rows carrying
+  **no** `ownerUserId` - the migrated rows from this collection's org-only first cut, which
+  `discardEvidenceForDisconnectedConfig`'s own note says must go here because nothing can ever
+  supersede them. So it protects a DELETION, not a sparing.
+
+  **AND ITS RUNTIME EFFECT IS UNOBSERVABLE THROUGH `deleteConfig`, WHICH IS NOW SAID OUT LOUD RATHER
+  THAN CLAIMED AWAY.** The only row that can contribute `undefined` is another custodian-less row for
+  the same key, and every such row is itself in `writable`; its own iteration deletes it and then
+  discards with a list that no longer contains it, so both orders converge on the same end state
+  (measured both ways, two-shared-row and one-shared-row fixtures, through the real `createConfig`).
+  The `id is string` narrowing is what `DisconnectedConfigScope`'s `readonly string[]` requires, so
+  **`tsc`, not a test, is the enforcement** - deleting the filter outright fails
+  `tsc --noEmit -p api/tsconfig.json` with TS2322 (verified). The filter is kept and relabelled
+  rather than deleted, and the BEHAVIOUR it exists to keep true is now pinned end to end through the
+  real `deleteConfig`: `a MIGRATED row carrying no owner goes when the shared credential that
+  produced it is disconnected` in `api/tests/integrations/action-evidence-removal.test.ts`, with a
+  peer holding their own credential and another tenant as controls. Mutant: adding `$exists: true` to
+  the store's `$nin` arm - i.e. sparing rows with no owner - reddens exactly that case.
+
+- **`the-retired-collector-claim-survived-in-three-more-live-places`** (**FIXED 2026-08-21**, S1
+  round seven, **MINOR**, documentation-only; round six's sweep of the same claim reported itself
+  complete). *"Collected when the action stops resolving"* - the mechanism round five DELETED -
+  survived in the docblock on the **production DELETE handler** that mounts the very descriptor round
+  six corrected (`api/src/routes/integrations.ts`), and in the same sentence in
+  `api/tests/contract/integrations-achieve.test.ts`. Separately,
+  `api/src/integrations/index.ts` still asserted in the present tense that *"the detail-page read and
+  the graduation-to-trusted prerequisite both come through here"* when `listForIntegration` has no
+  production caller on this branch (S2/S3). All three corrected, plus the same present-tense
+  detail-page claim in `action-executor.ts`'s evidence comment. **The process lesson**: round six's
+  grep was for the unwrapped sentence, and the two surviving copies were line-wrapped across a `*`
+  continuation. A sweep is not complete until the wrapped form has been grepped for too - this round
+  re-swept with a regex tolerant of newline + `*` between every word.
+
 ## Recently fixed - 2026-08-20 action evidence round FIVE (one blocker + two majors)
 
 The S1 verification pass repeated a fourth time, and the same defect arrived in a fourth disguise.

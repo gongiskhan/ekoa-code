@@ -58,6 +58,24 @@ export interface CollectedStepEvidence {
 export interface CollectedRunEvidence {
   status?: string;
   steps: CollectedStepEvidence[];
+  /**
+   * THE STEP-COUNT FLAG - true when the run had MORE steps than `MAX_STEPS`, so the trace below is a
+   * PREFIX of the run rather than the run.
+   *
+   * NOT `CollectedStepEvidence.truncated`, WHICH IS THE EXCERPT FLAG, and the two being spelled the
+   * same is why this field did not exist for six rounds. The cut happens HERE - `run.steps.slice`
+   * below - and the count that proves it happened is `run.steps.length`, which nothing downstream
+   * can see: the store's `capEvidence` re-applies its own identical cap and tests
+   * `evidence.steps.length > MAX_EVIDENCE_STEPS`, but what it receives is ALREADY sliced to exactly
+   * 50, so that disjunct is unreachable from the only path production takes. A 50-step prefix of a
+   * 200-step run was byte-indistinguishable from a complete 50-step run, and the row is durable for
+   * 90 days and is the human's basis for granting `trusted` - which makes an action auto-runnable by
+   * `achieve`. The signal therefore has to travel with the slice, not be re-derived after it.
+   *
+   * `AutomationEvidence.truncated` in `integrations/action-evidence-store.ts` is the field this ends
+   * up in; `action-executor.ts` forwards it across the seam.
+   */
+  truncated?: boolean;
 }
 
 /**
@@ -79,8 +97,11 @@ export async function collectRunEvidence(
   const findRun = deps.findRun ?? ((id: string) => automationRunStore.findByRunId(id));
   const run = await findRun(runId);
   if (!run || !Array.isArray(run.steps)) return null;
+  // THE CUT AND ITS RECORD ARE TAKEN TOGETHER, from the one place that can still see the run's real
+  // length. Downstream sees exactly `MAX_STEPS` items and cannot tell a prefix from a whole trace.
+  const truncated = run.steps.length > MAX_STEPS;
   const steps = run.steps.slice(0, MAX_STEPS).map(stepEvidence);
-  return { status: run.status, steps };
+  return { status: run.status, steps, ...(truncated ? { truncated: true } : {}) };
 }
 
 function stepEvidence(step: StepRecord): CollectedStepEvidence {

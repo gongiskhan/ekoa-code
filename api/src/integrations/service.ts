@@ -625,14 +625,34 @@ export async function deleteConfig(actor: Actor, integrationKey: string): Promis
     // revision of this note claimed the opposite ("read back AFTER the delete so the list is what
     // the resolver would see now"). It cannot be: this branch runs only when `c.ownerUserId` is
     // falsy - `c` IS the custodian-less org-shared row - so `c` contributes nothing to the list
-    // either way, dropped by the `id !== ''` filter below whether or not it is still in the
-    // collection. Hoisting the read above `integrationConfigs.delete` leaves all thirteen S1 suites
-    // green (measured), and no input can make the two orders differ. The read is here because it
-    // belongs with the erasure it feeds, not because it changes the answer.
+    // either way, dropped by the `typeof id === 'string'` half of the filter below whether or not it
+    // is still in the collection. Hoisting the read above `integrationConfigs.delete` leaves every
+    // S1 suite green (measured), and no input can make the two orders differ. The read is here
+    // because it belongs with the erasure it feeds, not because it changes the answer.
     //
-    // WHAT IS LOAD-BEARING is that filter: it keeps the list to owners who genuinely hold a row of
-    // their own, so a peer row carrying no custodian - another legacy shared row for the same key -
-    // cannot land in the exclusion list and spare the very members the deleted credential served.
+    // THE FILTER IS A TYPE GUARD, NOT A RUNTIME RULE, and round six's note claimed the opposite:
+    // that without it "a peer row carrying no custodian … cannot land in the exclusion list and
+    // spare the very members the deleted credential served". NO SERVED MEMBER CAN EVER BE SPARED BY
+    // THIS LIST. A served member is precisely one who holds no config row, so nothing here ever
+    // contributes their id; their evidence row carries their own real, non-empty `ownerUserId`,
+    // which is never in the exclusion set, so it is deleted with or without the filter (measured on
+    // real Mongo).
+    //
+    // WHAT IT ACTUALLY KEEPS OUT IS `undefined`, and the consequence runs the OTHER WAY: an
+    // `undefined` inside `$nin` serialises to `null`, and `$nin: [null]` spares exactly the rows
+    // that carry NO `ownerUserId` - the migrated rows from this collection's org-only first cut,
+    // which `discardEvidenceForDisconnectedConfig`'s own note says must go here because nothing can
+    // ever supersede them. So the filter protects a DELETION, not a sparing.
+    //
+    // AND ITS RUNTIME EFFECT IS UNOBSERVABLE THROUGH THIS FUNCTION, which is said out loud rather
+    // than left to look load-bearing. The only row that could contribute `undefined` is another
+    // custodian-less row for the same key, and every such row is itself in `writable`, so its own
+    // iteration deletes it and then discards with an exclusion list that no longer contains it: both
+    // orders converge on the same end state, measured both ways. The `id is string` narrowing is
+    // what `DisconnectedConfigScope`'s `readonly string[]` requires, so `tsc` - not a test - is what
+    // stops this from becoming a `$nin` full of `null`s. The behaviour it protects IS pinned, one
+    // level down and end to end through this function: `a MIGRATED row carrying no owner` in
+    // tests/integrations/action-evidence-removal.test.ts.
     const stillOwnTheirOwn = c.ownerUserId
       ? []
       : ((await integrationConfigs.find({ orgId: c.orgId, integrationKey: c.integrationKey })) as IntegrationConfigDoc[])

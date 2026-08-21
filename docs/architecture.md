@@ -720,6 +720,26 @@ therefore not something the caller's `.catch` could degrade. Pinning is an age-s
 NOT an erasure path - there is no erasure path over this tree (see
 `screenshot-erasure-path-has-no-production-caller` in `findings.md`).
 
+**AN EVIDENCE ROW SAYS WHEN IT IS A PREFIX** (round seven). The per-run step cap is applied twice and
+both copies are 50: `collectRunEvidence` slices before the executor seam, and the store re-applies its
+own ceiling to what arrives. That made the store's `steps.length > MAX_EVIDENCE_STEPS` test a
+comparison of equal numbers on every row production writes, so a 200-step run was stored - measured
+end to end - as `steps.length = 50` with no flag, byte-indistinguishable from a complete 50-step run,
+under three docblocks promising truncation was recorded and never silent. The signal now travels WITH
+the slice: `CollectedRunEvidence.truncated` is set in the same statement that cuts, the
+`RunEvidenceCollector` seam declares it, and `action-executor.ts` forwards it onto the
+`AutomationEvidence` it builds. The store keeps its own length test as a ceiling against a future
+caller that forgets to cap, recorded as unreachable-from-production rather than as the mechanism. It
+matters because the row is durable for `EVIDENCE_RETENTION_DAYS` and is what a person reads before
+granting `trusted`, which makes an action auto-runnable by `achieve`.
+
+`DEFAULT_SCREENSHOT_RETENTION_DAYS` (7) is the second number the trade rests on and is now enforced
+the way `EVIDENCE_RETENTION_DAYS` is: the security suite exercises the sweep WITHOUT passing
+`retentionDays`, straddling the cutoff by half a day either side, because the one production caller
+rides the default while every suite used to override it. `sweepExpiredScreenshots` also carries the
+non-positive guard its sibling `sweepExpiredEvidence` always had - a `0`, a negative or a `NaN` put
+the cutoff at or after `now` and swept the entire unpinned tree on the next boot.
+
 ## Billing
 
 Four tiers (`config.ts`, env-overridable models/efforts/weights): FAST (`claude-haiku-4-5-20251001`,

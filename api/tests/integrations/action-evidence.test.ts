@@ -2,10 +2,16 @@
  * ACTION EVIDENCE (slice S1): the one live proof that an action actually ran.
  *
  * The tenancy attack surface has its own suite (tests/security/action-evidence-isolation.test.ts).
- * This one pins the behaviour the detail page and the graduation prerequisite are built on:
+ * This one pins the behaviour the graduation prerequisite is built on today, and the detail page
+ * will be built on when S2/S3 mounts it:
  *   - ONE live row per (org, integration, action), superseded WHOLESALE by each validated run -
  *     the `idFor` discipline, so nothing has to remember to delete the previous evidence;
- *   - the caps are real (excerpt bytes, step count) and truncation is RECORDED, never silent;
+ *   - THE STORE'S OWN caps are real (excerpt bytes, step count) and truncation is recorded. Read
+ *     that scope literally: every case here calls `recordEvidence` directly, so what it pins is the
+ *     ceiling this module applies to what it is HANDED. The step cap in particular is unreachable
+ *     from production through this door - `collectRunEvidence` slices to the same 50 before the seam
+ *     - and the end-to-end claim, that a cut run is STORED as a cut run, is pinned where the whole
+ *     chain is real: `tests/automation/composition-root-action-seam.test.ts`;
  *   - the last gate refuses a row that still carries a live credential value ANYWHERE in it,
  *     including in a field no redaction pass knew about;
  *   - the retention pins name automation runs ONLY, and carry no tenant data;
@@ -266,7 +272,7 @@ describe('discardEvidenceForDisconnectedConfig - what a credential produced', ()
   });
 });
 
-describe('the caps are real and truncation is recorded', () => {
+describe('the STORE\'S OWN caps are real and truncation is recorded', () => {
   it(`caps a response body at ${MAX_EXCERPT_CHARS} chars and says so`, async () => {
     const huge = 'x'.repeat(MAX_EXCERPT_CHARS + 5_000);
     await store.recordEvidence(KEY, {
@@ -279,7 +285,20 @@ describe('the caps are real and truncation is recorded', () => {
     expect(ev.response.truncated).toBe(true);
   });
 
-  it(`caps the step count at ${MAX_STEPS} and records that the trace was cut`, async () => {
+  /**
+   * THE MODULE'S OWN CEILING, AND NOT THE PRODUCTION PATH - said out loud because this case used to
+   * be cited as covering the production path, and it is exactly what hid the defect.
+   *
+   * A 62-step `AutomationEvidence` is a shape the production writer STRUCTURALLY CANNOT PRODUCE:
+   * `collectRunEvidence` slices to 50 before the executor forwards anything, so `capEvidence`
+   * receives exactly 50 items and its `evidence.steps.length > MAX_EVIDENCE_STEPS` disjunct compares
+   * equal numbers. What this pins is the belt-and-braces guarantee that a FUTURE caller which
+   * forgets to cap cannot grow the document past what the collection promises. The claim about real
+   * runs - a 200-step run stored as a 50-step prefix that SAYS it is one - is pinned end to end in
+   * `tests/automation/composition-root-action-seam.test.ts`, through the real collector, the real
+   * executor forward and this real store.
+   */
+  it(`caps the step count at ${MAX_STEPS} and records that the trace was cut (the module's own ceiling)`, async () => {
     const steps = Array.from({ length: MAX_STEPS + 12 }, (_, i) => ({ stepIndex: i }));
     await store.recordEvidence(KEY, {
       backingType: 'browser-steps',
@@ -293,6 +312,34 @@ describe('the caps are real and truncation is recorded', () => {
     expect(ev.steps[0]!.stepIndex).toBe(0);
     expect(ev.steps[MAX_STEPS - 1]!.stepIndex).toBe(MAX_STEPS - 1);
     expect(ev.truncated).toBe(true);
+  });
+
+  it('KEEPS a cut flag that arrived with an already-capped trace - the production shape', async () => {
+    // THE SHAPE THE PRODUCTION WRITER REALLY HANDS THIS: exactly `MAX_STEPS` steps (the collector
+    // sliced) plus the collector's own record that the run was longer. `capEvidence`'s length test
+    // is false here - 50 is not > 50 - so the ONLY thing that can carry the cut through is the
+    // `|| evidence.truncated` disjunct. Delete it and the flag is dropped on every real run.
+    await store.recordEvidence(KEY, {
+      backingType: 'browser-steps',
+      evidence: {
+        kind: 'automation',
+        runId: 'run-1',
+        steps: Array.from({ length: MAX_STEPS }, (_, i) => ({ stepIndex: i })),
+        truncated: true,
+      },
+    });
+    const ev = (await store.getEvidence(KEY))!.evidence as { steps: unknown[]; truncated?: boolean };
+    expect(ev.steps).toHaveLength(MAX_STEPS);
+    expect(ev.truncated).toBe(true);
+  });
+
+  it('an automation trace that FITS and says nothing carries no cut flag', async () => {
+    await store.recordEvidence(KEY, {
+      backingType: 'browser-steps',
+      evidence: { kind: 'automation', runId: 'run-1', steps: [{ stepIndex: 0 }] },
+    });
+    const ev = (await store.getEvidence(KEY))!.evidence as { truncated?: boolean };
+    expect(ev).not.toHaveProperty('truncated');
   });
 
   it('a body that FITS is not marked truncated (the flag means something)', async () => {

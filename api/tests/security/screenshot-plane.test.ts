@@ -163,6 +163,60 @@ describe('screenshot retention (R-3)', () => {
     expect(existsSync(join(root, 'a1', 'fresh'))).toBe(true);
   });
 
+  /**
+   * THE DEFAULT WINDOW IS 7 DAYS, PINNED IN THE DIRECTION THAT DESTROYS DATA.
+   *
+   * The case above passes `retentionDays: 7` explicitly, and so did every other sweeper case in the
+   * estate - which left `DEFAULT_SCREENSHOT_RETENTION_DAYS` completely unenforced: 7 -> 36500
+   * reddened nothing and 7 -> 1 reddened nothing (measured). The ONE production caller,
+   * `sweepScreenshotsSparingPinnedEvidence` in `server.ts`, passes no `retentionDays` at all and
+   * rides the default, so the number nothing could fail for was the only number production uses.
+   * Shortening it silently destroys days of every tenant's screenshots of an AUTHENTICATED client
+   * portal session at the next boot, and there is exactly one copy of each.
+   *
+   * SO THIS CASE PASSES NO `retentionDays` and straddles the cutoff by HALF a day either side. Half,
+   * not a whole one, for the reason `sweepExpiredEvidence - the retention bound` records: with
+   * whole-day offsets a 7 -> 6 mutant survives, because the dir stamped 6 days back would sit exactly
+   * on the new cutoff and the comparison is strict `<`. Straddling by half a day moves one of these
+   * two directories across the line for ANY integer change.
+   */
+  it('the DEFAULT window is 7 days: half a day inside survives, half a day outside goes', async () => {
+    const RETENTION_DAYS = 7;
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    const now = Date.parse('2026-08-20T00:00:00.000Z');
+    const boundary = now - RETENTION_DAYS * DAY_MS;
+    for (const [name, mtime] of [['inside', boundary + DAY_MS / 2], ['outside', boundary - DAY_MS / 2]] as const) {
+      mkdirSync(join(root, 'a1', name), { recursive: true });
+      writeFileSync(join(root, 'a1', name, 'step-0.png'), 'x');
+      utimesSync(join(root, 'a1', name), new Date(mtime), new Date(mtime));
+    }
+
+    // No `retentionDays` - the production call shape.
+    await sweepExpiredScreenshots({ root, pinnedRunIds: new Set(), now: () => now });
+
+    expect(existsSync(join(root, 'a1', 'inside'))).toBe(true);
+    expect(existsSync(join(root, 'a1', 'outside'))).toBe(false);
+  });
+
+  /**
+   * A NON-POSITIVE WINDOW SWEEPS NOTHING RATHER THAN EVERYTHING - the guard `sweepExpiredEvidence`
+   * has had all along and this sibling did not.
+   *
+   * Same line, second half of the same defect: with no guard, `0` or a negative (or a `NaN` out of a
+   * mis-parsed override) puts the cutoff at or after `now`, and the next boot deletes EVERY unpinned
+   * run directory in the tree. That is the dangerous misconfiguration read as an instruction.
+   */
+  it('a non-positive or unusable window sweeps NOTHING rather than everything', async () => {
+    for (const retentionDays of [0, -1, Number.NaN]) {
+      expect(await sweepExpiredScreenshots({ retentionDays, root, pinnedRunIds: new Set() }))
+        .toEqual({ removed: 0, scanned: 0, pinned: 0 });
+    }
+    // Including the one that WOULD have gone at 7 days - so this cannot pass on a sweeper that had
+    // simply stopped finding anything.
+    expect(existsSync(join(root, 'a1', 'old'))).toBe(true);
+    expect(existsSync(join(root, 'a1', 'fresh'))).toBe(true);
+  });
+
   it('is a safe no-op when the tree does not exist', async () => {
     await expect(sweepExpiredScreenshots({ root: join(root, 'missing'), pinnedRunIds: new Set() })).resolves.toEqual({
       removed: 0,

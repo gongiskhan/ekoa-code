@@ -32,7 +32,24 @@ import { resolveContained, PathContainmentError } from '../security/path-contain
 import { automationRunStore, automationRunsRoot } from './persistence.js';
 import { automationStore } from './persistence.js';
 
-/** Default retention for per-step screenshots. Overridable per deployment. */
+/**
+ * Default retention for per-step screenshots. Overridable per caller.
+ *
+ * CHANGING THIS NUMBER IS A TRIPWIRE, for the same reason `EVIDENCE_RETENTION_DAYS` is one and with
+ * the same measured history. These are screenshots of an AUTHENTICATED session on a client portal
+ * and there is exactly one copy of each; the boot sweep is the only thing that reads this, and its
+ * production caller (`sweepScreenshotsSparingPinnedEvidence` in `server.ts`) passes no
+ * `retentionDays` at all and rides the default. Every suite that touched the sweeper passed
+ * `retentionDays: 7` EXPLICITLY, so the default was unenforced in both directions: 7 -> 36500
+ * reddened nothing and 7 -> 1 reddened nothing - and the second silently destroys six days of every
+ * tenant's screenshots at the next boot, including runs an evidence row points at whenever the pin
+ * read degrades to the empty set.
+ *
+ * `screenshot retention (R-3)` in `api/tests/security/screenshot-plane.test.ts` now restates 7 as a
+ * LITERAL and straddles the cutoff by half a day either side WITHOUT passing `retentionDays`, so any
+ * integer change here reddens it. Shortening the window deliberately means changing that literal in
+ * the same commit and saying why in docs/decisions.md.
+ */
 export const DEFAULT_SCREENSHOT_RETENTION_DAYS = 7;
 
 export interface ScreenshotPlaneDeps {
@@ -158,6 +175,13 @@ export async function sweepExpiredScreenshots(opts: {
   pinnedRunIds: ReadonlySet<string>;
 }): Promise<{ removed: number; scanned: number; pinned: number }> {
   const retentionDays = opts.retentionDays ?? DEFAULT_SCREENSHOT_RETENTION_DAYS;
+  // A NON-POSITIVE WINDOW SWEEPS NOTHING, RATHER THAN EVERYTHING - the same guard, for the same
+  // reason, as `ActionEvidenceStore.sweepExpiredEvidence`, whose sibling constant this mirrors.
+  // Without it a `0`, a negative, or a `NaN` from a mis-parsed override put the cutoff at or after
+  // `now`, and the very next boot deleted EVERY unpinned run directory in the tree - an unrecoverable
+  // erasure of authenticated portal sessions, triggered by a configuration slip rather than by a
+  // decision. Read as "an unusable retention setting is not an instruction to destroy the archive".
+  if (!Number.isFinite(retentionDays) || retentionDays <= 0) return { removed: 0, scanned: 0, pinned: 0 };
   const now = opts.now?.() ?? Date.now();
   const root = opts.root ?? automationRunsRoot();
   const pinnedRunIds = opts.pinnedRunIds;

@@ -240,9 +240,39 @@ describe('the bounds are the module\'s own, applied before the seam is crossed',
     expect(out!.steps[MAX_STEPS - 1]!.stepIndex).toBe(MAX_STEPS - 1);
   });
 
-  it('a run at exactly MAX_STEPS is not cut', async () => {
+  /**
+   * …AND THE CUT IS RECORDED, which for six rounds it was not.
+   *
+   * After the slice, `steps.length` is exactly `MAX_STEPS` whether the run had 51 steps or 200, so
+   * NOTHING downstream can re-derive that a cut happened: the store's own
+   * `evidence.steps.length > MAX_EVIDENCE_STEPS` test compares equal numbers on every row this
+   * writer produces. This function is the last place that can still see `run.steps.length`, so the
+   * flag is set here or it does not exist at all.
+   *
+   * The consequence is not cosmetic. The row is durable for 90 days and is what a human reads before
+   * granting `trusted`, which makes the action auto-runnable by `achieve`; a 50-step prefix of a
+   * 200-step run was byte-indistinguishable from a complete 50-step run.
+   */
+  it('RECORDS that the trace was cut, which no later stage can re-derive', async () => {
+    const out = await collect(run(Array.from({ length: 200 }, (_, i) => step(i))));
+    expect(out!.steps).toHaveLength(MAX_STEPS);
+    expect(out!.truncated).toBe(true);
+  });
+
+  it('one step over the cap is ALREADY a cut - the flag is not reserved for big runs', async () => {
+    const out = await collect(run(Array.from({ length: MAX_STEPS + 1 }, (_, i) => step(i))));
+    expect(out!.steps).toHaveLength(MAX_STEPS);
+    expect(out!.truncated).toBe(true);
+  });
+
+  it('a run at exactly MAX_STEPS is not cut, and carries no cut flag', async () => {
     const out = await collect(run(Array.from({ length: MAX_STEPS }, (_, i) => step(i))));
     expect(out!.steps).toHaveLength(MAX_STEPS);
+    // THE BOUNDARY, PINNED BOTH WAYS. With the case above, a `>=` mutant dies here (an honest whole
+    // trace reported as a prefix) and a `false`/dropped mutant dies there (a prefix reported as
+    // whole). Only the second is a lie about the data, but a flag true of every automation row tells
+    // a reader nothing at all, so both directions are held.
+    expect(out!).not.toHaveProperty('truncated');
   });
 
   it('cuts an over-long excerpt and RECORDS that it did', async () => {

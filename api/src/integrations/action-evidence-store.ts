@@ -263,7 +263,23 @@ export interface AutomationEvidence {
   runId: string;
   status?: string;
   steps: RunStepEvidence[];
-  /** True when the run had more steps than `MAX_EVIDENCE_STEPS`. Recorded, never silent. */
+  /**
+   * True when the RUN had more steps than were kept, so `steps` is a PREFIX of the trace.
+   *
+   * IT IS CARRIED IN, NOT DERIVED HERE, and that is the round-seven correction rather than a
+   * stylistic note. `capEvidence` below can only compare the length of what it was HANDED against
+   * `MAX_EVIDENCE_STEPS`, and the production writer - `automation/action-evidence.ts`'s
+   * `collectRunEvidence`, through `action-executor.ts` - has already sliced to exactly that number.
+   * So the length test never fired on the only path production takes, and a 50-step prefix of a
+   * 200-step run was stored byte-for-byte as a complete 50-step run: no flag, no count, nothing a
+   * reader could notice. The row is durable for `EVIDENCE_RETENTION_DAYS` and is the human's basis
+   * for granting `trusted`, which makes an action auto-runnable by `achieve` - so "the trace you are
+   * reading is not the whole trace" is not decoration.
+   *
+   * The end-to-end pin is `the EVIDENCE seams (slice S1)` in
+   * `api/tests/automation/composition-root-action-seam.test.ts`, which drives a run longer than the
+   * cap through the real collector, the real executor and this real store.
+   */
   truncated?: boolean;
 }
 
@@ -571,6 +587,13 @@ function capEvidence(evidence: ActionEvidence): ActionEvidence {
     runId: evidence.runId,
     ...(evidence.status !== undefined ? { status: evidence.status } : {}),
     steps,
+    // TWO DISJUNCTS, AND ONLY THE SECOND ONE IS ON THE PRODUCTION PATH. `evidence.truncated` is the
+    // flag the collector set at the moment it did the cutting, forwarded across the executor seam;
+    // it is the only thing that can be true of a row this product writes, because the collector
+    // slices to `MAX_STEPS` (== `MAX_EVIDENCE_STEPS`) before this ever sees the steps, making the
+    // length comparison exactly-equal and therefore false. The length test is kept as the module's
+    // OWN ceiling - the guarantee a future caller that forgets to cap cannot silently break - and is
+    // recorded as unreachable-from-production rather than left looking like the mechanism.
     ...(evidence.steps.length > MAX_EVIDENCE_STEPS || evidence.truncated ? { truncated: true } : {}),
   };
 }
