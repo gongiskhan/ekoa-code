@@ -6664,13 +6664,32 @@ re-implemented a live control had it trusted this heading over the code.
   contains it. The only content it preserved was the secret-bearing fixture block and the
   secret-bearing ledger paragraph, both already proved equivalent to their replacements
   (`git diff <replayed> backup/s6-pre-secret-scrub` is those two hunks and nothing else), and the
-  reflog still holds the old tip. MEASURED with the CONFIGURED gate, 2026-08-21: with the ref present
-  `npm run gate:secrets` reports 2; scoped to `main feat/s6-publish-doors` - which is exactly what
-  remains once the ref is gone - it reports 1, the pre-existing `PAGE_STATE_TOKEN` on main below.
+  reflog still holds the old tip. MEASURED with the CONFIGURED gate, 2026-08-21, all three scopes and
+  the commit count read off every one of them: all refs (`npm run gate:secrets` as written) = **2**
+  over 792 commits; every ref that will remain once `backup/` is deleted (the four live branches) =
+  **1** over 788, that one being the pre-existing `PAGE_STATE_TOKEN` on main below; `main..HEAD`, what
+  the PR introduces = **0**.
+
+  **AND THE REFLOG DOES NOT KEEP IT IN THE GATE, which was assumed both ways and is now measured.**
+  `gitleaks detect`'s default log-opts is `--all`, and `git log --all` does not read the reflog (that
+  needs `--reflog`). Checked against three commits this branch's rewrite orphaned - `f089f37`,
+  `5b50a55`, `d0317f9`: each appears in the reflog, is named by NO ref, and is reached by
+  `git log --all` zero times. So the reflog keeps the objects alive for GC purposes and contributes
+  nothing to the scan; deleting the ref really does take the gate from 2 to 1, with nothing left
+  reachable for a reason nobody can name.
+
   **THE REF MUST BE DELETED: `git -C <worktree> branch -D backup/s6-pre-secret-scrub`.** It was not
   deleted from inside this round: the branch deletion was refused by the sandbox's permission
   classifier, twice, and working around a refused permission is not something to do quietly. Recorded
   here as the one remaining action rather than left as an unexplained red gate.
+
+  **A MEASUREMENT TRAP, recorded because it produced a WRONG CLEAN NUMBER in this very round.** A
+  first attempt at the "four remaining refs" scope built the ref list in a shell variable with a
+  trailing space and reported `no leaks found`. It had scanned ZERO commits. Only re-running with the
+  commit count visible ("788 commits scanned") showed the real answer of 1. A secrets gate that
+  scanned nothing is indistinguishable from a secrets gate that found nothing, and this is the third
+  distinct way this branch has now been told a clean number by a gate that was not looking. **Read the
+  commit count, every time.**
 
 - **`gitleaks-flags-a-deliberately-non-credential-viewstate-fixture`** (OPEN 2026-08-20, LOW, not
   this stream's file). `npm run gate:secrets` also reports `generic-api-key` at
@@ -6872,7 +6891,22 @@ re-implemented a live control had it trusted this heading over the code.
   is genuinely NOT separable - deleting the pre-check application alone leaves 50/50 green, and
   deleting the in-mutator application alone leaves 50/50 green, because the survivor reaches the
   identical verdict and row state. The mitigation is structural (both applications call ONE named
-  predicate, so there is one place to delete from) and no test is claimed for it. Separately,
+  predicate, so there is one place to delete from) and no test is claimed for it.
+  **ROUND FIVE WENT FURTHER, because the disclosure above only covered SINGLE deletions and an
+  independent verifier asked the obvious next question.** Deleting BOTH in-mutator re-asserts at once
+  also leaves the suite green (0 red across 55 cases), and so does deleting only the VISIBILITY term
+  of both while leaving the membership term (also 0 red) - so nothing in this estate pins the
+  in-mutator re-assert on these two doors at all. The membership half is not merely untested, it is
+  STRUCTURALLY UNREACHABLE, which is the more useful fact: `canWriteOwnPublishRequest` reads
+  `doc.orgId`, `doc.userId` and the actor, and for a fixed `_id` the first is pinned by identity
+  (`definitionIdFor(orgId, key)`) while the second is carried forward verbatim by every writer in the
+  repo (`definition-save.ts:136`, `integration-achieve.ts:656` and `:797` all re-save
+  `userId: existing.userId`). No write can flip that term between the pre-check and the mutator, so no
+  honest test can redden it. The VISIBILITY term is reachable in principle - visibility changes all
+  the time - but exercising it needs a genuine interleave inside `Store.update`'s CAS window, which
+  nothing here constructs. **Both terms are KEPT** and neither is claimed as tested: a defence-in-depth
+  check removed because it is unreachable today is how the writer that changes `userId` tomorrow finds
+  an open door. Separately,
   `sendPublishRefusal`'s `model_pass_required` arm is DEAD from the `/global` door, which never asks
   for `requireModelPass`; the docblock now names that door rather than implying coverage.
 
@@ -6962,3 +6996,45 @@ re-implemented a live control had it trusted this heading over the code.
   duplicated implementation is a claim with no gate behind it, and mutation testing is what turns
   that from an opinion into a measurement. This one was found only because a mutant that SHOULD have
   reddened did not - which is the signal to chase rather than to shrug at.
+
+- **`s6-un-publishing-a-shadowed-key-silently-swapped-every-tenants-package`** (CLOSED 2026-08-21,
+  HIGH, unreviewed cross-tenant code swap - the LATENT half of the wrong-unit defect above, and the
+  worse one). Refusing a cross-org collision at the publish door stops NEW pairs; it does nothing
+  about the pairs already in the data, and `legacy-runtime-import.ts` and any in-process
+  `IntegrationDefinitionStore.create({visibility:'global'})` can still make one. For such a pair the
+  DEMOTION was the dangerous operation, not the publication. `getForActor` resolves one `global` row
+  per key, so `{global:false}` on the holder promoted the shadowed row: every consuming org silently
+  began resolving - and executing - a DIFFERENT tenant's package, at a moment when no reviewer was
+  looking at that package, with no publication event and nothing recorded in any lineage. A reviewer
+  performing a routine un-publish had no way to know they were performing a handover.
+
+  **AND IT WAS NEVER AN UNFORESEEN STATE, which is the part worth saying plainly.** `getForActor`
+  (definition-store.ts) falls through to "a `global` definition of that key authored in ANY other
+  org", picked by a deterministic oldest-first sort with an `orgId` tiebreak. That sort EXISTS because
+  several globals per key are possible. The RESOLVER always knew; the publish and review surfaces
+  never did. This is a surface gap, not a surprise state - which is also why the fix belongs on the
+  surfaces rather than in the resolver.
+
+  Closed by making the demotion take the shadowed siblings with it (`demoteShadowedSiblings`, called
+  from the single `setVisibility` chokepoint, so the tenant route and `{global:false}` both get it).
+  `{global:false}` means this key stops being published, not "hand it to whoever is next in line", and
+  each sibling must be published AGAIN to come back - which puts a review event exactly where there
+  was none. Siblings are demoted BEFORE the target, deliberately: with no multi-document transactions
+  the order decides the crash state, and stopping half way must leave the key MORE published rather
+  than newly handed over. The write only ever narrows (`global -> org`, never `private`), so no tenant
+  loses its own definition. Verified by mutation: dropping the sibling demotion reddens 1.
+
+- **`the-oldest-first-global-pick-is-a-tiebreak-for-a-degenerate-state-not-an-ownership-rule`**
+  (DECIDED 2026-08-21, informational - the question an independent verifier asked, answered rather
+  than deferred). Asked whether oldest-first is the RIGHT ownership rule for a `global` key or merely
+  the current one. **It is neither an ownership rule nor wrong: it is a deterministic tiebreak for a
+  state the doors no longer create, and it is KEPT.** Ownership is now expressed by the doors - a row
+  holds a key because it was published into a free key and stays the holder until it stops being
+  `global` - and with the collision refused and the demotion taking siblings down, the door-driven
+  population is at most one `global` row per key. What remains is data the doors did not write, and
+  for that oldest-first is the right recovery order for two reasons, both about NOT moving:
+  (1) it is stable under new writes, so a newly created row can never displace an incumbent by
+  existing - which is the anti-squatting property the whole refusal is about; and (2) changing it
+  (to newest-first, or to publication time) would itself silently swap which package every consuming
+  org resolves for existing data, which is the defect above wearing a different hat. Re-documented at
+  `oldestGlobalFirst` as what it is rather than as an ownership rule.

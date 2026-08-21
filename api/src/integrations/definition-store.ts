@@ -441,6 +441,20 @@ function canWriteOwnPublishRequest(doc: VisibilityView, actor: Actor): boolean {
  * that: `getForActor` and the catalog drop the actor's own org (each has already considered that
  * row), the holder lookup drops nothing (it answers on behalf of every org that has no row of its
  * own).
+ *
+ * IT IS A TIEBREAK FOR A DEGENERATE STATE, NOT AN OWNERSHIP RULE, and the difference is worth stating
+ * because the name reads like one. Ownership of a `global` key is expressed by the DOORS: a row holds
+ * a key because it was published into a free key, and holds it until it stops being `global` - the
+ * publish refuses a key another org holds (`key-taken`) and a demotion takes the shadowed siblings
+ * down with it, so the door-driven population is at most one `global` row per key. This comparator
+ * only ever decides among rows the doors did NOT write: a legacy-runtime import, an in-process
+ * `create({visibility:'global'})`.
+ *
+ * KEPT AS OLDEST-FIRST, deliberately, and both reasons are about NOT MOVING. (1) It is stable under
+ * new writes: a newly created row can never displace an incumbent merely by existing, which is the
+ * anti-squatting property the publish refusal is also about. (2) Changing it - to newest-first, or to
+ * publication time - would itself silently swap which package every consuming org resolves for data
+ * already on disk, which is precisely the defect `demoteShadowedSiblings` exists to prevent.
  */
 export function oldestGlobalFirst(a: IntegrationDefinitionDoc, b: IntegrationDefinitionDoc): number {
   if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
@@ -717,12 +731,40 @@ export class IntegrationDefinitionStore {
    * (rather than through `publishSnapshot`) the SAFE one: cross-org readers get the previously
    * scrubbed, reviewed artifact instead of the row's live, only-floor-scrubbed content. Clearing it
    * would turn an un-publish/re-publish cycle into a way to widen what other orgs read.
+   *
+   * AND UN-PUBLISHING A KEY UN-PUBLISHES THE KEY (S6 review round five, the LATENT half). Refusing a
+   * cross-org collision at the publish door stops NEW ones; it does nothing about the pairs already in
+   * the data, which `legacy-runtime-import.ts` and any in-process `create({visibility:'global'})` can
+   * still produce. For such a pair the demotion here was the dangerous operation, not the publication:
+   * `getForActor` picks ONE `global` row per key, so demoting the holder promoted the SHADOWED row -
+   * every consuming org silently swapped to a different tenant's code, at a moment when no reviewer
+   * was looking at that package, with nothing written down. So the demotion takes the shadowed
+   * siblings with it. That is what the caller asked for: `{global:false}` means this key stops being
+   * published, not "hand it to whoever is next in line". Each sibling must be published again to come
+   * back, which puts a review event where there was none.
+   *
+   * IT WRITES ANOTHER TENANT'S ROW, DELIBERATELY AND NARROWLY. The gate that admitted this call is the
+   * one for a `global` row - `canWriteDefinition` (every actor can SEE a global row) plus
+   * `touchesGlobal -> super-admin` - and it says nothing about `row.orgId`, so the same actor passes
+   * the identical gate for every sibling. Re-running it per sibling would be theatre; what IS
+   * re-asserted, inside each mutator, is that the sibling is still `global`. And the write only ever
+   * NARROWS (`global -> org`, never `private`, so no tenant loses its own definition - the E1 F1
+   * trapdoor rule), which is the safe direction to move a row nobody asked you to touch.
    */
   async setVisibility(id: string, actor: Actor, visibility: DefinitionVisibility): Promise<SetVisibilityResult> {
     const row = await this.store.get(id);
     if (!row || !isDefinitionVisibleTo(row, actor)) return { verdict: 'notfound' };
     const verdict = this.visibilityWriteVerdict(row, actor, visibility);
     if (verdict) return verdict;
+    // SIBLINGS FIRST, AND THAT ORDER IS THE FAIL-SAFE ONE. There are no multi-document transactions
+    // here (data/store.ts), so this is two writes and one of them can be the last thing that happens.
+    // Demote the target first and stop: a shadowed row is live, unreviewed, resolving for every org -
+    // the exact state this exists to prevent. Demote the siblings first and stop: the target is still
+    // the holder, so nothing a consumer reads has changed. Same argument `create` makes for discarding
+    // evidence AFTER the put. The one cost is the narrow `raced` window below, where the target's CAS
+    // aborts after the siblings are already down; that leaves the key MORE published than it needs to
+    // be by exactly one row, and nothing newly readable.
+    if (row.visibility === 'global' && visibility !== 'global') await this.demoteShadowedSiblings(row);
     // RE-ASSERT INSIDE THE MUTATOR (E1 review F4b). `Store.update` is CAS with retry: it re-reads
     // `cur` on each attempt, so the row it finally writes may be in a state that was never the one
     // authorised above (e.g. an org-admin's in-flight demotion landing after a super-admin promoted
@@ -745,6 +787,27 @@ export class IntegrationDefinitionStore {
     // the way back up restores no bytes. A durable row governed by a decision that reverts is the
     // whole shape of this slice's five defects. `publishSnapshot` below is the same argument.
     return { verdict: 'ok', doc: updated };
+  }
+
+  /**
+   * Take every OTHER `global` row for this key down to `org` - see `setVisibility`'s docblock for why
+   * a demotion has to do this and why it is entitled to.
+   *
+   * Reads through `globalHoldersForKeys`' collection rather than that method itself, because this
+   * needs ALL the siblings and that answers with the winner: the two are the same question asked for
+   * opposite purposes ("who resolves" versus "who else could"). The `visibility === 'global'` re-check
+   * inside the mutator is the meaningful re-assert - a sibling demoted concurrently must not be
+   * written a second time and have its `updatedAt` moved for nothing.
+   */
+  private async demoteShadowedSiblings(row: IntegrationDefinitionDoc): Promise<void> {
+    const siblings = (await this.store.find({ key: row.key, visibility: 'global' })).filter((s) => s._id !== row._id);
+    for (const sibling of siblings) {
+      await this.store.update(sibling._id, (cur) =>
+        (cur as IntegrationDefinitionDoc).visibility === 'global'
+          ? { ...cur, visibility: 'org', updatedAt: this.nowIso() }
+          : cur,
+      );
+    }
   }
 
   /**

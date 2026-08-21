@@ -871,6 +871,15 @@ Publishing also CONSUMES `publishRequest`. The stamp is what opens the cross-org
 every platform super-admin on a consent the tenant gave for a publication that had already happened.
 Asking again is the tenant's act.
 
+AND UN-PUBLISHING A KEY UN-PUBLISHES THE KEY. Refusing the collision stops new pairs; the pairs the
+legacy import and any in-process `create({visibility:'global'})` already wrote still exist, and for
+those the DEMOTION was the dangerous operation - `{global:false}` on the holder promoted the shadowed
+row, so every consuming org silently swapped to a different tenant's package with no publication
+event and no lineage. `setVisibility` now takes the shadowed siblings down with the holder (`global ->
+org`, never `private`), so each must be published again to come back. `oldestGlobalFirst` is therefore
+a deterministic tiebreak for rows the doors did not write, not an ownership rule; ownership is what
+the doors express.
+
 ## Billing
 
 Four tiers (`config.ts`, env-overridable models/efforts/weights): FAST (`claude-haiku-4-5-20251001`,

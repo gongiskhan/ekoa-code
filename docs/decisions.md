@@ -3491,12 +3491,25 @@ direction - widening an auth class later is additive (Rule 7). CONSEQUENCE, chec
 assumed: the OpenAPI document is generated from the `user-or-key` descriptors and nothing else, so it
 and the cortex-cli client are byte-unchanged by five new endpoints.
 
-**SUPERSEDE IS THE NORMAL CASE.** A definition has exactly one `publishedSnapshot` field, so
-publishing a key that already has a live snapshot REPLACES it wholesale and stamps the replaced one's
-provenance into `supersedes`. That is the brief's "promoting a user-built integration may replace the
-existing public one", and it is total rather than a version chain readers would have to choose
-between. Tenant copies are unaffected: a consuming org that extended the package forked its own row
-at that moment and reads that instead.
+**SUPERSEDE IS THE NORMAL CASE - WITHIN ONE ORG'S ROW, WHICH IS NOT WHAT THIS ENTRY SAID.**
+*(Corrected in place 2026-08-21, S6 review round five. The original text is preserved in the entry
+below it; it is corrected here rather than caveated because a reader who stops at this paragraph got
+the wrong answer, and the wrong answer is the one the brief's phrase most naturally carries.)*
+
+A definition has exactly one `publishedSnapshot` field, so publishing a row that already has a live
+snapshot REPLACES it wholesale and stamps the replaced one's provenance into `supersedes`. That is
+total rather than a version chain readers would have to choose between, and tenant copies are
+unaffected: a consuming org that extended the package forked its own row and reads that instead.
+
+WHAT WAS FALSE: "publishing a KEY that already has a live snapshot". Replacement is per `(org, key)`
+ROW. Across orgs there is no replacement at all - `getForActor` picks ONE `global` row per key and
+the other is simply never read - so a second org publishing an already-published key wrote a snapshot
+nobody could reach, stamped nothing, and was answered 200. The brief's "promoting a user-built
+integration may replace the existing public one" reads most naturally as the CROSS-ORG case, and that
+is exactly the case this paragraph did not describe. Since round five the cross-org collision is
+REFUSED (`key-taken`, 409) rather than silently written, and un-publishing a key that has a shadowed
+sibling demotes the sibling too, so a demotion can never hand a key to a different tenant without a
+review. See the 2026-08-21 entry.
 
 **`requireModelPass` IS ON THE WIRE, DEFAULT OFF.** The 2026-08-03 decision stands (a failed second
 net publishes the floor result with the degradation recorded on the artifact, because the floor is
@@ -3948,6 +3961,50 @@ the applicant. One exported `oldestGlobalFirst`, imported up the dependency edge
 already fixed, and the property is pinned rather than the refactor. **Review rule:** a mutant that
 SHOULD redden and does not is the finding - chase it rather than logging the survivor and moving on.
 
+**AND THE LATENT HALF WAS WORSE THAN THE ONE THAT WAS REPORTED.** Refusing the collision at the door
+stops NEW pairs and does nothing about the pairs already on disk, which the legacy import and any
+in-process `create({visibility:'global'})` still produce. For such a pair the DEMOTION was the
+dangerous operation: `{global:false}` on the holder promoted the shadowed row, so every consuming org
+silently began executing a different tenant's package - no publication event, no reviewer, no
+lineage. A routine un-publish was a handover and looked like nothing. Decided: **a demotion takes the
+shadowed siblings with it.** `{global:false}` means this key stops being published, not "hand it to
+whoever is next in line", and each sibling must be published again to come back, which puts a review
+event where there was none. Siblings go down BEFORE the target, because with no multi-document
+transactions the ORDER is what the crash state is: stopping half way must leave the key more
+published, never newly handed over. It writes another tenant's row, narrowly and only downward
+(`global -> org`, never `private`), on exactly the authority the admitting gate already granted.
+**Review rule:** when a fix removes a bad WRITE, ask what happens on the DELETE or the demotion - the
+same defect usually has a second half there, and it is the half with no event attached to it.
+
+**AND OLDEST-FIRST IS A TIEBREAK, NOT AN OWNERSHIP RULE - asked, and answered rather than deferred.**
+`getForActor`'s deterministic sort exists BECAUSE several globals per key are possible, so the
+resolver always knew about a state the publish and review surfaces did not: this was a surface gap,
+not an unforeseen state, and that is why the fix belongs on the surfaces. The sort is KEPT, and
+re-documented as what it is: it now only ever decides among rows the doors did not write. Both
+reasons to keep it are about not moving - it is stable under new writes, so a new row cannot displace
+an incumbent by existing (the anti-squatting property the refusal is also about); and changing it
+would itself silently swap what every consuming org resolves for data already on disk, which is the
+defect above wearing a different hat.
+
+**AND THE F4b DISCLOSURE WAS TOO NARROW.** It covered single deletions. Measured this round: deleting
+BOTH in-mutator re-asserts at once is also green, and so is deleting only the visibility term of
+both - nothing in the estate pins that re-assert on these two doors. The membership half is
+STRUCTURALLY UNREACHABLE rather than merely untested: `canWriteOwnPublishRequest` reads `doc.orgId`
+(pinned by `definitionIdFor`) and `doc.userId` (carried forward verbatim by every writer), so no
+write can flip it between the pre-check and the mutator. Both terms are kept and neither is claimed as
+tested. **Review rule:** when a mutant survives, keep going until you can say WHY - "not separable" is
+a description, "the inputs cannot change" is a finding.
+
+**A GATE THAT SCANNED NOTHING READS EXACTLY LIKE A GATE THAT FOUND NOTHING.** Measuring the secrets
+gate's scopes this round, one invocation reported `no leaks found` because a malformed ref list made
+it scan ZERO commits; the real answer for that scope was 1, and only re-running with the commit count
+visible showed it. That is the third distinct way this branch has been handed a clean number by a gate
+that was not looking - after the working-tree-versus-history mistake and the path allowlist.
+**Standing rule:** a gate's output is its finding count AND its denominator; quote both or quote
+neither. Recorded with the numbers in `docs/findings.md`, and separately: the reflog does NOT feed
+`gitleaks detect` (its default is `--all`, which does not read the reflog - verified against three
+commits this branch's own rewrite orphaned), so deleting the backup ref really does move the number.
+
 **DIAGRAM CHECK (FIXED-12):** `12-org-tenancy` gains an append-only block for the two publish
-refusals and the consumed request - the cross-org resolution edge is the one it already draws. No
-collection, module or wire shape changed, so 02 and 05 are unaffected.
+refusals, the consumed request and the demotion taking its siblings - the cross-org resolution edge is
+the one it already draws. No collection, module or wire shape changed, so 02 and 05 are unaffected.

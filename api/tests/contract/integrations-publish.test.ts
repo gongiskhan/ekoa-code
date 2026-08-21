@@ -1046,6 +1046,62 @@ describe('S6 - the publish refuses what no consumer would read, and says which',
     ).toBe(resolved[0]!.description);
   });
 
+  it('un-publishing the holder does NOT hand the key to the shadowed tenant - it un-publishes the key', async () => {
+    // THE LATENT HALF, AND THE WORSE ONE. The no-op approval above is a wasted write; THIS is an
+    // unreviewed cross-tenant code swap. With two `global` rows for one key, demoting the holder used
+    // to promote the shadowed one: every consuming org silently starts executing a DIFFERENT tenant's
+    // package, at a moment when no reviewer is looking at that package and with nothing written down
+    // anywhere. Refusing the collision at the publish door does not touch this - the pairs already in
+    // the data (a legacy-runtime import, an in-process `create({visibility:'global'})`) still exist,
+    // which is why the fixture plants one directly rather than through a door that now refuses it.
+    // That is the honest fixture for a state only a non-door writer can produce.
+    //
+    // AND IT WAS NEVER AN UNFORESEEN STATE: `getForActor`'s deterministic oldest-first sort EXISTS
+    // because several `global` rows per key are possible. The resolver always knew; the publish and
+    // review surfaces did not.
+    await mkUser('userC', 'orgC', 'user');
+    const rootA = await tokenFor('rootA');
+    const userC = await tokenFor('userC');
+    const B_ROW = definitionIdFor('orgB', KEY);
+
+    await seedDefinition('org', { description: 'ORG A EDITION' });
+    await submit(await tokenFor('ownerA'), DEF_ID, 'ours');
+    await expectSchema<PublishDefinitionResponse>(await publish(rootA, DEF_ID), PublishDefinitionResponse);
+    await integrationDefinitionStore.create(
+      {
+        orgId: 'orgB', userId: 'userB', visibility: 'global', key: KEY,
+        displayName: 'Org B rival probe', description: 'ORG B EDITION',
+        configSchema: [], actions: [], skillMd: '# org b probe\n',
+      },
+      { actor: { userId: 'rootA', orgId: 'orgB', role: 'super-admin' }, onConflict: 'replace' },
+    );
+
+    const catalogFor = async (t: string) =>
+      ((await (await api('/api/v1/integrations', t)).json()) as { items: Array<{ key: string; description?: string }> })
+        .items.filter((d) => d.key === KEY);
+
+    // THE CONTROL: org C reads the incumbent while the incumbent is published.
+    expect((await catalogFor(userC))[0]?.description).toBe('ORG A EDITION');
+
+    expect((await setGlobal(rootA, DEF_ID, false)).status).toBe(200);
+
+    // AND THE KEY IS GONE FOR ORG C - not reassigned. This is the assertion the old behaviour failed:
+    // it read 'ORG B EDITION' here, with no review event anywhere between the two reads.
+    expect(await catalogFor(userC), 'un-publishing removed the key rather than swapping its owner').toEqual([]);
+
+    // BOTH ROWS LANDED ON `org`, never `private`: the shadowed tenant keeps its own definition inside
+    // its own org (the E1 F1 trapdoor rule), it simply stops being published.
+    expect((await storedDoc(DEF_ID))!.visibility).toBe('org');
+    expect((await storedDoc(B_ROW))!.visibility, 'the sibling came down too, and only to `org`').toBe('org');
+
+    // AND THE WAY BACK IS A PUBLICATION, which is the whole point: org B's package can become the
+    // holder, but only through the door, with a reviewer in the loop. Also the non-vacuity half - the
+    // assertions above would pass against a demotion that had simply broken publishing.
+    await submit(await tokenFor('userB'), B_ROW, 'ours now');
+    await expectSchema<PublishDefinitionResponse>(await publish(rootA, B_ROW), PublishDefinitionResponse);
+    expect((await catalogFor(userC))[0]?.description, 'and now it resolves, because it was published').toBe('ORG B EDITION');
+  });
+
   it('a key the publish FLOOR redacts is refused - it is the one field a snapshot cannot clean', async () => {
     // REACHABLE THROUGH THE PRODUCTION WRITER, not planted. `saveAuthoredDefinition` is the function
     // the builder save route calls, and its `SAVE_KEY_RE` is a CHARSET rule

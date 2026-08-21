@@ -668,11 +668,18 @@ export function integrationsRouter(deps: {
    * `publishDefinition` too, so there is ONE way a definition crosses an org boundary and it always
    * writes a snapshot. This door is the one that can also demand the model pass.
    *
-   * SUPERSEDE IS THE NORMAL CASE. One snapshot field per definition means a re-publish REPLACES it
-   * wholesale and stamps the replaced one's provenance into `supersedes`. That is the brief's
-   * "promoting a user-built integration may replace the existing public one", and it is total rather
-   * than a version chain readers would have to choose between. A consuming org that extended the
-   * package is untouched: self-extension forked it a row of its own, which it reads instead.
+   * SUPERSEDE IS THE NORMAL CASE - WITHIN ONE ORG'S ROW. One snapshot field per definition means a
+   * re-publish of THAT ROW replaces it wholesale and stamps the replaced one's provenance into
+   * `supersedes`, total rather than a version chain readers would have to choose between. A consuming
+   * org that extended the package is untouched: self-extension forked it a row of its own.
+   *
+   * ACROSS ORGS THERE IS NO REPLACEMENT AT ALL, and this comment used to imply otherwise (S6 review
+   * round five). `getForActor` resolves ONE `global` row per key, so a second org's publication of a
+   * key someone else holds is not a supersede - it is a write nobody can read. The brief's "promoting
+   * a user-built integration may replace the existing public one" reads most naturally as that
+   * cross-org case, which is exactly the one this paragraph did not cover. It is now REFUSED
+   * (`key-taken`), and un-publishing a key takes its shadowed siblings down with it, so no demotion
+   * can hand a key to a different tenant without a review.
    *
    * `model_pass_required` is `SECRET_GUARD_BLOCKED` (422) and not a new code: a guard protecting
    * secrets refused the write, which is exactly what that code already names on the config-save and
