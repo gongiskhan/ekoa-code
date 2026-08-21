@@ -420,6 +420,35 @@ function canWriteOwnPublishRequest(doc: VisibilityView, actor: Actor): boolean {
 }
 
 /**
+ * THE CROSS-ORG PICK, stated ONCE: oldest `createdAt` first, `orgId` as the tiebreak.
+ *
+ * THREE callers need it and must never disagree, and until S6 review round five there were three
+ * COPIES of it. `getForActor` decides which of several `global` rows for one key a consuming org
+ * RESOLVES. `definition-registry.ts`'s `listDefinitionsFor` decides which one the same org SEES in
+ * its catalog - its local copy carried a comment claiming "the SAME order `getForActor` uses",
+ * maintained by having been typed out identically, which is not a mechanism. And
+ * `globalHoldersForKeys` below decides which row already HOLDS the key, which is what the publish
+ * door refuses against and what the review queue shows the reviewer.
+ *
+ * MEASURED, which is why it is exported rather than merely deduplicated: reversing this comparator
+ * while the registry kept its copy left the whole suite GREEN. List and resolve would have quietly
+ * disagreed about which tenant's package a key names, and the publish door would have refused a row
+ * other than the one actually being shadowed. Exported UP the existing dependency edge - the registry
+ * imports this file and this file cannot import the registry without closing a cycle (see
+ * `setLessons`) - so the direction was already decided.
+ *
+ * A comparator rather than a sort helper, because the three differ in their FILTERING and only in
+ * that: `getForActor` and the catalog drop the actor's own org (each has already considered that
+ * row), the holder lookup drops nothing (it answers on behalf of every org that has no row of its
+ * own).
+ */
+export function oldestGlobalFirst(a: IntegrationDefinitionDoc, b: IntegrationDefinitionDoc): number {
+  if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -1 : 1;
+  if (a.orgId !== b.orgId) return a.orgId < b.orgId ? -1 : 1;
+  return 0;
+}
+
+/**
  * The actor-scoped definition store. Wraps the `integrationDefinitions` collection; every tenant-safe
  * read goes through `getForActor` / `listForActor`. `getById` is the RAW primitive (unscoped by
  * design, the analogue of `OrgScoped.getAnyOrg`) that A2 uses to follow `origin.sourceDefinitionId`
@@ -590,14 +619,11 @@ export class IntegrationDefinitionStore {
       (g) => g.orgId !== actor.orgId, // the actor's own org row was already considered above
     );
     if (globals.length > 0) {
-      // Deterministic pick so the resolver is a pure function of the data: oldest first, orgId tiebreak.
-      globals.sort((a, b) =>
-        a.createdAt < b.createdAt ? -1
-          : a.createdAt > b.createdAt ? 1
-            : a.orgId < b.orgId ? -1
-              : a.orgId > b.orgId ? 1
-                : 0,
-      );
+      // Deterministic pick so the resolver is a pure function of the data - `oldestGlobalFirst`, and
+      // it is that named comparator rather than an inline one so `globalHoldersForKeys` below answers
+      // with the SAME order. The two are one rule seen from opposite ends: this decides what a
+      // consuming org reads, that decides whether a publication would be read by anyone at all.
+      globals.sort(oldestGlobalFirst);
       return globals[0] ?? null;
     }
     // NO sentinel fallback here (A3 re-review MEDIUM-1/MEDIUM-2). `getForActor` is the EXECUTION
@@ -611,6 +637,38 @@ export class IntegrationDefinitionStore {
     // `listForActor` (discovery) and `isDefinitionVisibleTo` (which `setVisibility` consults to
     // restore it) — never through a resolution that feeds execution or a model.
     return null;
+  }
+
+  /**
+   * WHO HOLDS EACH KEY AT THE `global` TIER: the row a consuming org resolves for that key when it
+   * has no row of its own - which is every org a publication is FOR.
+   *
+   * THE REASON THIS EXISTS IS THAT PUBLISHING IS NOT A PER-ROW FACT (S6 review round five).
+   * `getForActor` above picks exactly ONE global row per key, `oldestGlobalFirst`, across all orgs.
+   * So when org B publishes a key org A already published, org B's snapshot is written, stamped and
+   * reported - and read by nobody: A's row is older, so it keeps answering for every consuming org,
+   * permanently. Nothing on B's row records that, because every signal the reviewer is shown
+   * (`republish`, `supersedes`) is derived from B's own `publishedSnapshot` and is correct about the
+   * row while saying nothing about the key. The publish door refuses that case and the review queue
+   * shows it coming, and both ask HERE rather than re-deriving the pick, so the refusal cannot drift
+   * from the resolver it is a statement about.
+   *
+   * ONE QUERY FOR THE WHOLE BATCH, because the caller is the review queue and the queue is unbounded
+   * (see `listPublishRequests`): a per-row lookup there would re-multiply the scan that method just
+   * finished narrowing. `keys` is the queue's own key set, so this read is bounded by exactly the
+   * thing the queue is bounded by, and by nothing new.
+   */
+  async globalHoldersForKeys(keys: string[]): Promise<Map<string, IntegrationDefinitionDoc>> {
+    if (keys.length === 0) return new Map();
+    const rows = await this.store.find({ key: { $in: [...new Set(keys)] }, visibility: 'global' });
+    const byKey = new Map<string, IntegrationDefinitionDoc>();
+    for (const row of [...rows].sort(oldestGlobalFirst)) if (!byKey.has(row.key)) byKey.set(row.key, row);
+    return byKey;
+  }
+
+  /** The one-key form, delegating so the rule lives in exactly one place. */
+  async globalHolderForKey(key: string): Promise<IntegrationDefinitionDoc | null> {
+    return (await this.globalHoldersForKeys([key])).get(key) ?? null;
   }
 
   /**
@@ -799,10 +857,16 @@ export class IntegrationDefinitionStore {
   }
 
   /**
-   * WITHDRAW the submission, closing the review window again. Refused while the row is `global`:
-   * a published row is already visible to every org, so "withdraw" there would only strip the
-   * reviewer's ability to UN-publish it — the un-publish is the way back, and it keeps the request
-   * standing so the transition remains exactly reversible (E1 review F1's rule).
+   * WITHDRAW the submission, closing the review window again. Refused while the row is `global`.
+   *
+   * THE REASON FOR THAT REFUSAL IS NOW A DIFFERENT ONE, and the old one was never quite true (S6
+   * review round five). It read: withdrawing on a published row "would only strip the reviewer's
+   * ability to UN-publish it ... it keeps the request standing so the transition remains exactly
+   * reversible". Un-publishing never consulted the request - it is `setVisibility`, which reads the
+   * TIER - and since `publishSnapshot` now consumes the stamp, a `global` row has no request to
+   * withdraw at all. What the refusal actually buys is that this door has ONE answer for a published
+   * row whether or not a stale stamp was left on it by an older write, instead of answering `ok` for
+   * some published rows and `forbidden` for others depending on their history.
    */
   async withdrawPublishRequest(id: string, actor: Actor): Promise<SetVisibilityResult> {
     const row = await this.store.get(id);
@@ -865,6 +929,18 @@ export class IntegrationDefinitionStore {
    *
    * `supersedes` is stamped HERE, from `cur` inside the mutator, so the recorded lineage is the
    * snapshot actually replaced by this write rather than the one the caller happened to read first.
+   *
+   * AND THE REQUEST IS CONSUMED (S6 review round five). The submission is what OPENS the E2 review
+   * window - `isDefinitionVisibleTo` shows an `org` row to a super-admin outside the authoring org
+   * for exactly as long as `publishRequest` is present - and publishing used to leave it standing.
+   * That was invisible while the row was `global` (everyone can see a global row), and it came back
+   * the moment a super-admin un-published: the row landed on `org` still carrying the old stamp, so
+   * it was in the queue again and exposed to every platform super-admin on a consent the tenant gave
+   * for a PUBLICATION THAT ALREADY HAPPENED. The row's own file says the window "is opened from
+   * inside the tenant"; a stale request is how that stopped being true. Consuming it here rather than
+   * on the demotion keeps the rule where the consent is spent: the request asked for a publication,
+   * this is the publication, and asking again is the tenant's act. It also means the queue empties
+   * for the reason it should - the request is gone - and not merely because the tier moved.
    */
   async publishSnapshot(
     id: string,
@@ -883,8 +959,12 @@ export class IntegrationDefinitionStore {
         return cur;
       }
       const prior = doc.publishedSnapshot;
+      // OMITTED, not set to `undefined`: `Store.update` writes through `replaceOne`, so a key absent
+      // from the returned object is really gone from the document, where an explicit `undefined`
+      // would be serialised as `null` and still satisfy the `$exists` the queue now filters on.
+      const { publishRequest: _consumed, ...rest } = cur;
       return {
-        ...cur,
+        ...rest,
         visibility: 'global',
         publishedSnapshot: {
           ...snapshot,

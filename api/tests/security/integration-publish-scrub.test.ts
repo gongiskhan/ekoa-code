@@ -341,18 +341,41 @@ describe('the review window is opened by the AUTHOR and by nothing else', () => 
     expect(await store.listPublishRequests(reviewer)).toEqual([]);
   });
 
-  it('a submitted row cannot be taken PRIVATE by the platform — publish and un-publish stay inverse', async () => {
+  it('a submitted row cannot be taken PRIVATE by the platform, and the publication SPENDS the window', async () => {
+    // THE SECOND HALF IS NEW AND IT REPLACES THE OPPOSITE CLAIM (S6 review round five). This case
+    // used to assert that the request SURVIVES a publication - "the org's own record that it asked" -
+    // and that the reviewer could therefore publish again straight after un-publishing. That was the
+    // defect stated as a property: `publishRequest` is not a record, it is the thing that OPENS the
+    // review window to a non-member super-admin (`isDefinitionVisibleTo`), and leaving it standing
+    // meant an un-publish silently handed the row back to every platform reviewer on a consent the
+    // tenant gave for a publication that had already happened.
     expect((await store.requestPublish(ID, author)).verdict).toBe('ok');
-    // The reviewer may publish and un-publish…
     expect((await publishDefinition(reviewer, ID, { modelPass: null }, store)).verdict).toBe('ok');
-    expect((await store.setVisibility(ID, reviewer, 'org')).verdict).toBe('ok');
-    // …but may never strip the authoring org of its own definition (the E1 review F1 trapdoor class).
+
+    // THE TRAPDOOR REFUSAL, ASSERTED WHILE THE ROW IS STILL `global` - which is where it means
+    // something. A super-admin can see every global row, so this `forbidden` is unambiguously the
+    // WRITE being refused rather than the row being invisible. (Below, once the window shuts, the
+    // same call answers the uniform `notfound`, and that would prove a different thing.)
     expect((await store.setVisibility(ID, reviewer, 'private')).verdict).toBe('forbidden');
+    expect((await store.getById(ID))?.visibility).toBe('global');
+
+    // The reviewer may un-publish, and it lands on `org`.
+    expect((await store.setVisibility(ID, reviewer, 'org')).verdict).toBe('ok');
     expect((await store.getById(ID))?.visibility).toBe('org');
-    // Nor remove the org's standing request, which is the org's own record that it asked.
-    expect((await store.withdrawPublishRequest(ID, reviewer)).verdict).toBe('forbidden');
-    expect((await store.getById(ID))?.publishRequest).toBeDefined();
-    // And the transition really is reversible: the row can be published again.
+
+    // AND THE WINDOW IS SHUT. The reviewer is not merely refused the withdraw now - they cannot SEE
+    // the row at all, which is strictly stronger and is the same uniform `notfound` a row that does
+    // not exist answers. Read off the document first, so the verdicts below are the window being
+    // closed rather than three separate refusals that happen to agree.
+    expect((await store.getById(ID))?.publishRequest, 'the publication spent it').toBeUndefined();
+    expect(await store.getForActor(reviewer, KEY)).toBeNull();
+    expect(await store.listPublishRequests(reviewer)).toEqual([]);
+    expect((await store.withdrawPublishRequest(ID, reviewer)).verdict).toBe('notfound');
+    expect(await publishDefinition(reviewer, ID, { modelPass: null }, store)).toEqual({ verdict: 'notfound' });
+
+    // AND THE TRANSITION IS STILL REVERSIBLE - it just costs the tenant's consent again, which is the
+    // whole point. Without this the assertions above would also pass if publishing had simply broken.
+    expect((await store.requestPublish(ID, author)).verdict).toBe('ok');
     expect((await publishDefinition(reviewer, ID, { modelPass: null }, store)).verdict).toBe('ok');
   });
 

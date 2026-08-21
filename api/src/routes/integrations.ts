@@ -55,6 +55,7 @@ import {
   publishDefinition,
   publishableContentOf,
   scrubPublishText,
+  type PublishRefusal,
 } from '../integrations/publish-scrub.js';
 import { resolveDefinition, listDefinitionsFor, activeCatalogFor } from '../integrations/definition-registry.js';
 import {
@@ -183,10 +184,44 @@ function sendVisibility(res: Response, result: SetVisibilityResult): void {
  * rather than claimed to be tested: no fixture reaches it through that route, and the only way to
  * make one is to change that route. It is still mapped rather than asserted away, because a default
  * that changes later must not fall through a `!`.
+ *
+ * THE PARAMETER IS DERIVED FROM `PublishResult`, not re-listed (S6 review round five). Two refusals
+ * were added this round, and a hand-written union here would have accepted both silently by widening
+ * to `string`. `PublishRefusal` makes the next one a compile error at this line, which is the
+ * "a default that changes later must not fall through" rule enforced rather than remembered.
+ *
+ * NEITHER NEW REFUSAL WIDENS THE `ErrorCode` ENUM, for the reason the publish route already gives:
+ * an older client reading the envelope must keep being able to. `key-taken` is `SLUG_TAKEN` (409),
+ * which `routes/artifacts.ts` already names as this contract's canonical "identifier already taken"
+ * and which `routes/users.ts` already uses for something that is not a slug either. `key-redacted` is
+ * `SECRET_GUARD_BLOCKED` (422) - a guard protecting secrets refused the write, the same sentence that
+ * code already carries on the config-save, artifact-download and model-pass paths.
+ *
+ * `key-taken`'s `details` carry the HOLDER's orgId, and that is deliberate but narrow: this refusal
+ * is only ever answered to a super-admin (both doors are `requireRole('super-admin')`), which is the
+ * same surface the review queue attributes by design. `key-redacted` carries no detail at all - the
+ * standing rule that the redaction report names WHERE and HOW MUCH but never WHAT applies with more
+ * force to a refusal whose whole subject is the credential.
  */
-function sendPublishRefusal(res: Response, out: { verdict: 'notfound' | 'forbidden' | 'model_pass_required' }): void {
+function sendPublishRefusal(res: Response, out: PublishRefusal): void {
   if (out.verdict === 'notfound') return notFound(res);
   if (out.verdict === 'forbidden') return sendError(res, 'FORBIDDEN', 'Sem permissão.');
+  if (out.verdict === 'key-taken') {
+    return sendError(
+      res,
+      'SLUG_TAKEN',
+      'Outra organização já publicou uma integração com esta chave, por isso esta publicação não seria lida por ninguém.',
+      { code: 'key_taken', heldBy: out.heldBy },
+    );
+  }
+  if (out.verdict === 'key-redacted') {
+    return sendError(
+      res,
+      'SECRET_GUARD_BLOCKED',
+      'A chave da integração parece conter uma credencial. Renomeie a integração antes de publicar.',
+      { code: 'key_redacted' },
+    );
+  }
   return sendError(
     res,
     'SECRET_GUARD_BLOCKED',
@@ -250,9 +285,20 @@ function sendPublishRequest(res: Response, result: SetVisibilityResult): void {
  * publication is anonymous and permanent, review is attributed and revocable.
  *
  * `actionCount` is the one thing derived from the content: a size signal, never the content, and
- * counted off the PUBLISHABLE action set so it answers "how many actions would ship".
+ * counted off the PUBLISHABLE action set. WHICH IS THE SAME NUMBER, and the earlier wording implied
+ * otherwise (S6 review round five). `publishableActions` is `actionsWithoutRecipes(...).map(...)` -
+ * both a `map`, neither a `filter` - so the projection has never dropped an action and `doc.actions`
+ * would count identically. No test can tell the two apart, and that is stated here rather than
+ * papered over with an assertion that would pass either way. It is still read off `floored`, because
+ * the rule this whole function follows is that a field is scrubbed by WHERE it is read from: a later
+ * projection that does drop an action gets counted correctly without anyone revisiting this line.
+ *
+ * `keyHeldBy` is the one field NOT derived from this document at all, and cannot be: it is a fact
+ * about the KEY across every tenant. It is passed in, resolved for the whole queue in one query
+ * (`globalHoldersForKeys`), because a per-row lookup on an unbounded queue is the scan this slice
+ * just finished narrowing.
  */
-function publishQueueEntry(doc: IntegrationDefinitionDoc) {
+function publishQueueEntry(doc: IntegrationDefinitionDoc, keyHolder: IntegrationDefinitionDoc | undefined) {
   const req = doc.publishRequest!;
   const floored = applyPublishFloor(publishableContentOf(doc)).content.config;
   return {
@@ -262,6 +308,9 @@ function publishQueueEntry(doc: IntegrationDefinitionDoc) {
     orgId: doc.orgId,
     actionCount: (floored.actions ?? []).length,
     republish: doc.publishedSnapshot !== undefined,
+    // Compared by `_id`: for one key that is exactly "the holder is some OTHER row", since
+    // `definitionIdFor(orgId, key)` makes row identity and org identity the same question here.
+    ...(keyHolder && keyHolder._id !== doc._id ? { keyHeldBy: keyHolder.orgId } : {}),
     requestedBy: req.requestedBy,
     requestedAt: req.requestedAt,
     // THE NOTE IS SCRUBBED HERE TOO, and this is not the submit route's scrub repeated. The two
@@ -515,7 +564,10 @@ export function integrationsRouter(deps: {
    */
   r.get('/definitions/publish-requests', requireAuth, requireRole('super-admin'), async (req: AuthedRequest, res: Response) => {
     const rows = await integrationDefinitionStore.listPublishRequests(actorOf(req));
-    res.json({ items: rows.map(publishQueueEntry) });
+    // ONE extra query for the whole page, not one per row - the queue is unbounded, so a per-row
+    // holder lookup would put back the N-query scan `listPublishRequests` was just narrowed to avoid.
+    const holders = await integrationDefinitionStore.globalHoldersForKeys(rows.map((row) => row.key));
+    res.json({ items: rows.map((row) => publishQueueEntry(row, holders.get(row.key))) });
   });
 
   /**
@@ -560,10 +612,11 @@ export function integrationsRouter(deps: {
    * DELETE /api/v1/integrations/definitions/:id/publish-request -> { ok, publishRequest: null }.
    *
    * WITHDRAW, closing the review window again (auth: user). The store refuses while the row is
-   * `global` - a published row is already visible to every org, so withdrawing there would only
-   * strip the reviewer's ability to UN-publish it. It also refuses a super-admin who is not a member
-   * of the authoring org: a platform reviewer must not be able to delete the org's own record that
-   * it ever asked.
+   * `global`, and since S6 review round five that refusal has nothing left to protect: publishing
+   * CONSUMES the request, so a published row carries no stamp to withdraw. It stays a refusal so the
+   * door gives one answer for a published row however it got there. It also refuses a super-admin
+   * who is not a member of the authoring org: a platform reviewer must not be able to delete the
+   * org's own record that it ever asked.
    */
   r.delete('/definitions/:id/publish-request', requireAuth, async (req: AuthedRequest, res: Response) => {
     const result = await integrationDefinitionStore.withdrawPublishRequest(req.params.id as string, actorOf(req));
@@ -596,6 +649,11 @@ export function integrationsRouter(deps: {
       redactions: out.redactions,
       modelPass: out.modelPass,
       ...(out.supersedes !== undefined ? { supersedes: out.supersedes } : {}),
+      // Without this the dry run keeps promising "exactly what a foreign org would read" for a row
+      // no foreign org will read at all, and the publish that follows answers 409 with nothing
+      // having warned the caller. A bare flag - the holder's identity is the reviewer's, on the
+      // queue; this response is read by authors.
+      ...(out.keyHeldByAnotherOrg ? { keyHeldByAnotherOrg: true } : {}),
     });
   });
 

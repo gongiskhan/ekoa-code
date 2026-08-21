@@ -852,6 +852,25 @@ enforced and tested over the MOUNTED HTTP routes only. Two in-process paths sit 
 What makes them safe rather than correct is the read-path fail-safe: a `global` row with no snapshot
 is served through the deterministic floor at read time, never raw.
 
+AND THE TIER IS A NAMESPACE, WHICH IS WHY THE DOOR NOW REFUSES TWO THINGS. `getForActor` resolves at
+most ONE `global` row per key for a consuming org - oldest `createdAt` first, `orgId` as the tiebreak
+(`oldestGlobalFirst`) - so two orgs cannot both be readable under one key. A publication whose key
+another org's row already holds would be written, stamped and answered 200 while being reachable by
+nobody, so `publishDefinition` refuses it (`key-taken` -> `SLUG_TAKEN` 409) and the review queue shows
+the holder (`keyHeldBy`) before the reviewer decides. It refuses rather than superseding because the
+alternative is a way for one tenant to seize another's key and change what every consuming org
+resolves; the way through is for a super-admin to demote the incumbent first. Second, the KEY is the
+one package field a snapshot cannot clean - `publishedViewOf` restores `key: doc.key` raw because the
+registry resolves BY key - so a key the publish floor redacts is refused too (`key-redacted` ->
+`SECRET_GUARD_BLOCKED` 422), judged by comparing the scrub's own output against the stored key rather
+than by a second predicate. Both refusals are one rule: what this tier does is decided per KEY, so the
+door has to judge per key.
+
+Publishing also CONSUMES `publishRequest`. The stamp is what opens the cross-org review window
+(`isDefinitionVisibleTo`), so leaving it on a published row meant an un-publish handed the row back to
+every platform super-admin on a consent the tenant gave for a publication that had already happened.
+Asking again is the tenant's act.
+
 ## Billing
 
 Four tiers (`config.ts`, env-overridable models/efforts/weights): FAST (`claude-haiku-4-5-20251001`,

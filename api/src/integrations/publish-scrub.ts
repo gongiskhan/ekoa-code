@@ -841,8 +841,22 @@ export interface PublishPreview {
   snapshot: PublishableContent;
   redactions: PublishRedaction[];
   modelPass: PublishModelPassRecord;
-  /** The snapshot this publish would supersede, when the row is already published. */
+  /** The snapshot this publish would supersede, when the row is already published. THIS ROW's
+   *  lineage, deliberately: it is what `publishSnapshot` will stamp, and it says nothing about the
+   *  KEY - which is what `keyHeldByAnotherOrg` below is for. */
   supersedes?: { scrubbedAt: string; scrubbedBy: string };
+  /**
+   * ANOTHER ORG HOLDS THIS KEY, so `snapshot` above is NOT what a foreign org would read - no
+   * foreign org would read anything of this row, and the publish will refuse (`key-taken`).
+   *
+   * A BARE FLAG, never the holder's identity, and that asymmetry with the review queue is the point.
+   * A published package is ANONYMOUS by construction - `publishableAuthoringOf` drops `authoredBy`,
+   * and a fork deliberately does not record `sourceOrgId` - so telling a tenant author which org
+   * holds a key would be a brand-new way to learn who published what. The reviewer, on the surface
+   * that is attributed by design, is told the orgId; the author is told only that the key is taken,
+   * which is all they need to rename it.
+   */
+  keyHeldByAnotherOrg?: true;
 }
 
 export type PublishPreviewResult = PublishPreview | { verdict: 'notfound' } | { verdict: 'forbidden' };
@@ -857,9 +871,50 @@ export type PublishResult =
    * never happened. It carries the row so a door reporting the TIER can answer from the document.
    */
   | { verdict: 'already-published'; doc: IntegrationDefinitionDoc }
+  /**
+   * ANOTHER ORG ALREADY HOLDS THIS KEY at the `global` tier, so this publication would be READ BY
+   * NOBODY (S6 review round five). `getForActor` resolves one global row per key -
+   * `oldestGlobalFirst`, across all orgs - so the incumbent keeps answering for every consuming org
+   * and the snapshot written here is unreachable. `heldBy` is the incumbent's `orgId`.
+   *
+   * REFUSED RATHER THAN SUPERSEDED, and that is the decision rather than the easy half of it. The
+   * alternative - let the newer publication take the key - hands any tenant a way to seize a key
+   * another tenant owns and silently change what every consuming org resolves, executed by a platform
+   * admin who was shown nothing to suggest the key was taken. A refusal costs the challenger nothing
+   * they had: their own members already read their own row at any tier, and cross-org reach is the
+   * only thing being refused - which is the thing they were never going to get. The escape hatch is
+   * explicit and already exists: a super-admin demotes the incumbent (`{global:false}`), and the
+   * challenger then publishes into a free key.
+   */
+  | { verdict: 'key-taken'; heldBy: string }
+  /**
+   * THE KEY ITSELF IS WHAT THE FLOOR REDACTED, so it must not cross (S6 review round five).
+   *
+   * `publishedViewOf` restores `key: doc.key` RAW on the cross-org read - deliberately, because a
+   * snapshot may not rename the row it describes - so the key is the one package field a snapshot
+   * CANNOT clean. A key the floor redacts is therefore a credential that reaches every consuming org
+   * verbatim however carefully the rest of the artifact was scrubbed. It is reachable through the
+   * ordinary authoring path: `definition-save.ts`'s `SAVE_KEY_RE` is a charset rule
+   * (`^[a-z0-9][a-z0-9-]{1,48}$`), and a real Slack bot token is lowercase, digits and dashes - it
+   * satisfies that rule and `VENDOR_SECRET_RE` alike.
+   *
+   * Judged by COMPARING the scrub's own output against the stored key rather than by asking a second
+   * predicate here: the rule is `applyPublishFloor`'s, this is only the observation that it fired on
+   * the one field the snapshot cannot carry. No refusal `reason` is exposed, for the same standing
+   * reason the redaction report carries `removedChars` and never the removed text.
+   */
+  | { verdict: 'key-redacted' }
   | { verdict: 'notfound' }
   | { verdict: 'forbidden' }
   | { verdict: 'model_pass_required'; reason: string };
+
+/**
+ * EVERY WAY A PUBLISH CAN BE REFUSED, derived rather than re-listed. The two doors map refusals
+ * through one function (`sendPublishRefusal`), and deriving its parameter from `PublishResult` means
+ * a verdict added later is a TYPE ERROR at that mapping instead of falling through it - the same
+ * discipline the mapping's own docblock argues for, made structural rather than remembered.
+ */
+export type PublishRefusal = Exclude<PublishResult, { verdict: 'ok' } | { verdict: 'already-published' }>;
 
 /**
  * DRY RUN. Shows the author exactly what will be published, derived from the SAME `scrubForPublish`
@@ -880,12 +935,18 @@ export async function previewPublish(
   if (pre.verdict !== 'ok') return pre;
   const res = await scrubForPublish(publishableContentOf(pre.doc), { billeeUserId: actor.userId, ...opts });
   const prior = pre.doc.publishedSnapshot;
+  // THE DRY RUN HAS TO RUN THE SAME CHECK THE WRITE DOES, or it goes on promising "exactly what a
+  // foreign org would read" for a publication that will be refused and that no foreign org would
+  // read. That is the same wrong-unit mistake one layer up, so the preview asks the same question of
+  // the same method the door asks.
+  const holder = await store.globalHolderForKey(pre.doc.key);
   return {
     verdict: 'ok',
     snapshot: res.content,
     redactions: res.redactions,
     modelPass: res.modelPass,
     ...(prior ? { supersedes: { scrubbedAt: prior.scrubbedAt, scrubbedBy: prior.scrubbedBy } } : {}),
+    ...(holder && holder._id !== pre.doc._id ? { keyHeldByAnotherOrg: true as const } : {}),
   };
 }
 
@@ -908,6 +969,15 @@ export async function publishDefinition(
   const pre = await store.publishPrecheck(id, actor);
   if (pre.verdict !== 'ok') return pre;
 
+  // THE KEY IS ALREADY HELD - see the `key-taken` verdict. Judged AFTER the pre-check for the same
+  // reason everything else here is (a caller who may not see the row must get the uniform 404, not a
+  // 409 telling them a key exists), and BEFORE the `promoteOnly` short-circuit deliberately: a row
+  // that is already `global` under a key another org owns is a broken state, and answering it with a
+  // cheerful tier echo is how it would stay broken. Compared by `_id`, which for one key is exactly
+  // "is the holder this row" - `definitionIdFor(orgId, key)` makes the two equivalent.
+  const holder = await store.globalHolderForKey(pre.doc.key);
+  if (holder && holder._id !== pre.doc._id) return { verdict: 'key-taken', heldBy: holder.orgId };
+
   // ALREADY PROMOTED, SO NOTHING TO DO - see `PublishScrubOptions.promoteOnly`. Judged AFTER the
   // pre-check, never before it: the admission answer must be identical whatever this option says, or
   // the door would gain an existence oracle (a caller who may not see the row must still get the
@@ -918,6 +988,19 @@ export async function publishDefinition(
   }
 
   const res = await scrubForPublish(publishableContentOf(pre.doc), { billeeUserId: actor.userId, ...opts });
+  // THE SCRUB REDACTED THE KEY - see the `key-redacted` verdict. Read off the scrub's OWN output, so
+  // the rule stays `applyPublishFloor`'s and this is only the observation that it fired on the one
+  // field `publishedViewOf` restores raw.
+  //
+  // AND IT IS DETERMINISTIC DESPITE BEING READ AFTER THE MODEL PASS. `FREE_TEXT_PATHS` is `skillMd`,
+  // `lessons`, `config.description` and `config.credentialGuide`; `writeFreeText` can reach nothing
+  // else, so the model cannot move `integrationKey` and this difference can only ever have been the
+  // floor's doing. That matters: a refusal driven by a model would make a publish fail differently on
+  // two identical calls, which is not something to build a door out of.
+  //
+  // Judged before `requireModelPass` because it is unconditional: a caller who did not ask for the
+  // strict posture still may not put a credential in every consuming org's catalog.
+  if (res.content.config.integrationKey !== pre.doc.key) return { verdict: 'key-redacted' };
   if (opts.requireModelPass && res.modelPass.status !== 'applied') {
     return { verdict: 'model_pass_required', reason: res.modelPass.reason ?? res.modelPass.status };
   }

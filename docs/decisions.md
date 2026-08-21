@@ -3871,3 +3871,83 @@ gap.
 **DIAGRAM CHECK (FIXED-12):** `12-org-tenancy` gains an append-only block for the promotion door's
 idempotence - the one behavioural edge this round changes on a diagrammed flow. No collection, module
 or wire shape changed, so 02 and 05 are unaffected.
+
+## 2026-08-21 - S6 review round five: the doors decide in the wrong unit, and the gate was blind by path
+
+**A PUBLISH DECIDES ABOUT A KEY; every signal it showed the reviewer was about a ROW.** `republish` is
+`publishedSnapshot !== undefined` and `supersedes` is stamped from the same field - both true of one
+`(org, key)` document. What approving does is decide what every OTHER organisation resolves for a
+KEY, and `getForActor` resolves one `global` row per key, oldest first across all orgs. So a second
+org publishing a key a first org already published was answered 200, with `republish: false` and no
+`supersedes`, for a write no consumer could ever read: the incumbent keeps answering, permanently.
+Decided: **the collision is REFUSED, not superseded.** Superseding would let any tenant seize a key
+another tenant owns and silently change what every consuming org resolves, on the say-so of an admin
+who was shown nothing to suggest it was taken; the refusal costs the challenger only the cross-org
+reach they were never going to get, and a super-admin can demote the incumbent to free the key.
+`republish` was deliberately NOT redefined per key - its row-lineage meaning is the true one and is
+what `supersedes` records - so the reviewer gets both facts under their own names, `republish` and
+`keyHeldBy`. **Review rule:** when a signal and the decision it informs are computed in different
+units, the signal is decoration however correct it is. Ask what the approval CHANGES, and compute the
+signal in that unit.
+
+**IDENTITY IS CARRIED ON THE ATTRIBUTED SURFACE AND NOWHERE ELSE.** The same fact takes two shapes:
+the review queue carries `keyHeldBy` (the holder's orgId) because that surface is attributed by
+design and the reviewer is the one person who can resolve a collision; the preview carries a bare
+`keyHeldByAnotherOrg` boolean because an AUTHOR reads it and a published package is anonymous by
+construction (`publishableAuthoringOf` drops the author, and a fork deliberately does not record its
+source org). Knowing a key is taken is what an author needs to rename it; knowing who took it is not.
+
+**THE KEY IS THE ONE PACKAGE FIELD A SNAPSHOT CANNOT CLEAN, so the door refuses instead.**
+`publishedViewOf` restores `key: doc.key` raw cross-org on purpose - the registry resolves by key, so
+a redacted key is an unresolvable package. Round two floored the QUEUE's copy of the key, correctly,
+and thereby showed the reviewer `[REDACTED]` while every consuming org's catalog showed the literal:
+the one human in the loop saw strictly less than the machines downstream. `publishDefinition` now
+compares the scrub's own output for `integrationKey` against the stored key and refuses when they
+differ. No new predicate - the rule stays `applyPublishFloor`'s - and nothing is tightened at the save
+path, so no stored row becomes unsavable and there is no migration. **Recorded because the ledger had
+it wrong twice:** the previous remedy ("a charset constraint on `key` at the save path") already
+exists as `SAVE_KEY_RE` and does not close it, because a charset rule is not a credential rule - a
+real Slack bot token is lowercase, digits and dashes and satisfies both `SAVE_KEY_RE` and
+`VENDOR_SECRET_RE`.
+
+**NEITHER REFUSAL WIDENS `ErrorCode`.** `key-taken` is `SLUG_TAKEN` (409), which `routes/artifacts.ts`
+already names as this contract's canonical "identifier already taken" and `routes/users.ts` already
+uses for something that is not a slug; `key-redacted` is `SECRET_GUARD_BLOCKED` (422), the code the
+publish route already argues for on exactly these grounds. And `sendPublishRefusal`'s parameter is now
+DERIVED from `PublishResult` rather than re-listed, so the next verdict added is a compile error at
+the mapping instead of falling through it - the discipline that function's docblock already argued
+for, made structural.
+
+**PUBLISHING CONSUMES THE REQUEST THAT ASKED FOR IT.** `publishRequest` is what opens the cross-org
+review window, and publishing left it standing - so an un-publish returned the row to the platform
+queue on a consent given for a publication that had already happened, while the store's own file said
+the window "is opened from inside the tenant". The contract suite could not see it because both
+un-publish cases re-submit immediately. Consumed in `publishSnapshot`'s mutator, where the consent is
+spent. **Review rule:** a test that arranges the next step of the happy path cannot observe a
+lingering state, because it overwrites it.
+
+**A GATE THAT ALLOWLISTS BY PATH IS BLIND, and this repo's own config says so.** Round four's replay
+removed the planted literal from the fixture and left it in `docs/findings.md`, in the write-up OF the
+leak - invisible because `scripts/gitleaks.toml` allowlists `docs/.*` by path, fifteen lines above its
+own argument that value-allowlists beat path-allowlists precisely because a path rule "would blind the
+scanner to a REAL token pasted into a test file". Measured: removing `docs/.*` and `spec/.*` takes the
+same config from 2 findings to 8, six of them never before seen. The literal is gone (the commit was
+replayed describing the token by SHAPE, in the ledger and the message), the path allowlists are
+recorded as their own OPEN finding rather than removed here - six findings in other streams' files
+need triage first - and the standing rule gains a clause: **the write-up of a credential leak is
+itself a place credentials leak, and it is the place nobody scans, because it is prose.**
+
+**"THE SAME AS X" IN A COMMENT IS NOT A MECHANISM, and the mutation run is what proved it.** The
+cross-org pick was implemented three times - `getForActor` (what a consuming org executes),
+`definition-registry.ts`'s `sortGlobals` (what the same org sees in its catalog), and this round's
+holder lookup. `sortGlobals` asserted in a comment that it was "the SAME order `getForActor` uses",
+kept true by having been typed out identically. Reversing the store's comparator left the WHOLE SUITE
+GREEN: list and resolve would have disagreed about which tenant's package a key names, silently, and
+the new publish refusal would have been computed against a row other than the one actually shadowing
+the applicant. One exported `oldestGlobalFirst`, imported up the dependency edge the documented cycle
+already fixed, and the property is pinned rather than the refactor. **Review rule:** a mutant that
+SHOULD redden and does not is the finding - chase it rather than logging the survivor and moving on.
+
+**DIAGRAM CHECK (FIXED-12):** `12-org-tenancy` gains an append-only block for the two publish
+refusals and the consumed request - the cross-org resolution edge is the one it already draws. No
+collection, module or wire shape changed, so 02 and 05 are unaffected.

@@ -6576,18 +6576,51 @@ re-implemented a live control had it trusted this heading over the code.
   layer it names - otherwise the redundant layer is documentation, and it will be removed one day by
   someone who runs the suite and sees green.
 
-- **`s6-a-secret-shaped-definition-key-crosses-orgs-raw-on-the-published-read-path`** (OPEN 2026-08-20,
-  LOW, residual - recorded, not fixed, because the obvious fix breaks resolution). `key` is a free
-  `z.string().min(1).max(120)` with no charset constraint, and while the published snapshot's
-  `config.integrationKey` IS floor-scrubbed, `publishedViewOf` deliberately restores `key: doc.key`
-  over it ("a snapshot never renames the row") - and the registry resolves BY key, so redacting it
-  there would make the published integration unresolvable for every consuming org. A definition whose
-  KEY contains a pasted credential therefore still exposes it cross-org through the ordinary global
-  read. Pre-existing (E1's `POST /global` and E2's publish both have it); not introduced by the
-  publish doors. The queue is now narrower than the publish for this field, which is the safe
-  direction. The real fix is a charset constraint on `key` at the save path - a Rule 7 breaking
-  change for any row already stored with an exotic key, so it needs its own slice and a migration
-  count, not a quiet tightening here.
+- **`s6-a-secret-shaped-definition-key-crosses-orgs-raw-on-the-published-read-path`** (CLOSED
+  2026-08-21 at the publish door; the original entry was WRONG in two places and is corrected here
+  rather than extended). `publishedViewOf` restores `key: doc.key` raw over the floor-scrubbed
+  `config.integrationKey`, deliberately - "a snapshot never renames the row", and the registry
+  resolves BY key, so redacting it there would make the published integration unresolvable for every
+  consuming org. The key is therefore the one package field a snapshot CANNOT clean, and a credential
+  in it reaches every consuming org verbatim through the ordinary global read.
+
+  **CORRECTION 1 - THIS SLICE MADE IT INVISIBLE TO THE ONLY HUMAN IN THE LOOP, and the entry did not
+  say so.** Round two began building the queue's content fields off the publish floor, which is right:
+  the queue crosses an org boundary. The consequence for THIS field went unnoticed. Measured
+  2026-08-21: the reviewer's queue showed the key as `[REDACTED]` while a third org's
+  `GET /api/v1/integrations` showed the literal. "The queue is now narrower than the publish for this
+  field, which is the safe direction" was exactly backwards - narrower on the REVIEW surface and wider
+  downstream is the unsafe direction, because the narrowing removes the only signal the approver had.
+
+  **CORRECTION 2 - THE PROPOSED REMEDY ALREADY EXISTED, AND WOULD NOT HAVE WORKED.** "The real fix is
+  a charset constraint on `key` at the save path": `definition-save.ts` has carried one from the
+  start - `SAVE_KEY_RE = /^[a-z0-9][a-z0-9-]{1,48}$/`, the only use of that regex in the repo, applied
+  to every builder save. It does not close this, because a charset rule and a credential rule are
+  different rules. A real Slack bot token is lowercase letters, digits and dashes, so
+  `xoxb-<digits>-<20 lowercase>` satisfies `SAVE_KEY_RE` AND `publish-scrub.ts`'s own
+  `VENDOR_SECRET_RE`. The exposure was always reachable through the ordinary production chain - save,
+  share to `org`, submit, publish - with no exotic key and no unusual writer, which is what the new
+  contract case exercises.
+
+  **AND THE OBVIOUS SUSPECT IS NOT THE WRITER, checked rather than assumed.** `IntegrationKeyParams`
+  is `z.string().min(1).max(120)` with no charset at all, and `persistAuthoredAction`'s fork
+  (`integration-achieve.ts`) writes `key: integrationKey` straight from that path param on a
+  `user-or-key` route - which reads like a way for a gateway key to mint an arbitrary key. It is not:
+  that branch is reached only when `resolveAuthoringTarget` has already resolved a FOREIGN row for the
+  key, which by the A1 gate is a `global` one, so the string must byte-equal a key that already exists
+  globally. The fork PROPAGATES a key into a new `private` row and cannot introduce one. Recorded
+  because it is where a reader looks first, and because a wrong writer in a ledger sends the next fix
+  to the wrong file.
+
+  **CLOSED AT THE BOUNDARY, WHICH IS WHERE THIS FIELD IS ACTUALLY DECIDED.** `publishDefinition` now
+  compares the scrub's OWN output for `integrationKey` against the stored key and refuses when they
+  differ (`key-redacted` -> `SECRET_GUARD_BLOCKED` 422), on both doors onto the tier. No new
+  predicate: the rule stays `applyPublishFloor`'s and this is only the observation that it fired on the
+  one field a snapshot cannot carry. Nothing is tightened at the save path, so no stored row becomes
+  unsavable and there is no migration - a row with such a key keeps working inside its own tenant,
+  which is the only place it should ever have worked. The queue's `[REDACTED]` key is now a refusal
+  coming rather than a blindfold, and `IntegrationPublishQueueEntry.key` says so. Verified by
+  mutation: dropping the refusal reddens 1.
 
 - **`s6-a-test-fixture-tripped-the-secrets-gate`** (CLOSED 2026-08-20, LOW, gate hygiene). The S6
   contract suite wrote its planted credential as a LITERAL,
@@ -6612,20 +6645,32 @@ re-implemented a live control had it trusted this heading over the code.
   safe because the branch has no upstream. MEASURED AFTER: `--log-opts="main..HEAD"` exits 0 with
   zero findings. Explicitly NOT closed with an entry in `scripts/gitleaks.toml` - that file already
   carries seven allowlisted values and its own warning that each is a deliberate act, and an eighth
-  added to quiet a fixture the author controls is how a gate turns into decoration. The pre-rewrite
-  tip is kept at `backup/s6-pre-secret-scrub` until the branch lands.
+  added to quiet a fixture the author controls is how a gate turns into decoration.
 
-  AND THAT BACKUP REF IS ITSELF THE TRAP THIS ENTRY IS ABOUT - recorded rather than left to be
-  rediscovered. `gitleaks detect` scans `--all` refs, so `backup/s6-pre-secret-scrub` keeps the
-  pre-rewrite commits, and therefore the literal, reachable: `npm run gate:secrets` still exits 1 on
-  any box that holds it. CI is unaffected (the ref is never pushed, and the job scans the PR ref), so
-  this is a LOCAL red only - which is exactly the shape of red that teaches people to stop reading
-  the gate. MEASURED, all three scopes, 2026-08-20: `--log-opts="main..HEAD"` exits 0; the default
-  all-refs run exits 1 with two findings; scoped to `main feat/s6-publish-doors` it exits 1 with ONE,
-  the pre-existing `PAGE_STATE_TOKEN` on main below. **DELETE THE BACKUP REF BEFORE LANDING** - the
-  replay is verified equivalent (`git diff <replayed-tip> backup/s6-pre-secret-scrub` is the fixture
-  block and nothing else) and the reflog still holds the old tip. It was left in place only because
-  it is another session's safety net and deleting it was not this round's call to make.
+  ROUND FIVE FOUND THE SAME LITERAL A SECOND TIME, IN THIS FILE. Round four's replay removed it from
+  the FIXTURE and left it in the LEDGER: the write-up of the displayName leak quoted the planted value
+  in full, at `docs/findings.md`, in the commit that wrote the entry. Nobody saw it because
+  `scripts/gitleaks.toml` allowlists `docs/.*` BY PATH - see the entry below, which is the real
+  defect. Closed the same way and no other way could work: the commit was replayed with the ledger
+  describing the token by SHAPE ("an `sk_live_` prefix over a 32-character body") and never by value,
+  in the ledger text AND in the commit message, which carried it too. **The rule this round adds to
+  the one above: the write-up of a credential leak is itself a place credentials leak, and it is the
+  place nobody scans, because it is prose.**
+
+  AND THE BACKUP REF WAS THE SAME TRAP AGAIN. `gitleaks detect` scans `--all` refs, so
+  `backup/s6-pre-secret-scrub` kept the pre-rewrite commits - and therefore the literal - reachable
+  after the replay had removed them from the branch. Verified 2026-08-21 that the ref is the SOLE
+  reachability: `git for-each-ref --contains 473fb4e` names only that branch, and no worktree HEAD
+  contains it. The only content it preserved was the secret-bearing fixture block and the
+  secret-bearing ledger paragraph, both already proved equivalent to their replacements
+  (`git diff <replayed> backup/s6-pre-secret-scrub` is those two hunks and nothing else), and the
+  reflog still holds the old tip. MEASURED with the CONFIGURED gate, 2026-08-21: with the ref present
+  `npm run gate:secrets` reports 2; scoped to `main feat/s6-publish-doors` - which is exactly what
+  remains once the ref is gone - it reports 1, the pre-existing `PAGE_STATE_TOKEN` on main below.
+  **THE REF MUST BE DELETED: `git -C <worktree> branch -D backup/s6-pre-secret-scrub`.** It was not
+  deleted from inside this round: the branch deletion was refused by the sandbox's permission
+  classifier, twice, and working around a refused permission is not something to do quietly. Recorded
+  here as the one remaining action rather than left as an unexplained red gate.
 
 - **`gitleaks-flags-a-deliberately-non-credential-viewstate-fixture`** (OPEN 2026-08-20, LOW, not
   this stream's file). `npm run gate:secrets` also reports `generic-api-key` at
@@ -6638,6 +6683,46 @@ re-implemented a live control had it trusted this heading over the code.
   that stream's next commit. Recorded so the red gate is a known red rather than ambient noise.
   (`gate:secrets` is not in `ci:lane`, so this is not blocking a PR today; `gate:ledger` is likewise
   red on main for unrelated web unit suites marked due/unrun at G9.)
+
+- **`the-secrets-gate-allowlists-docs-and-spec-BY-PATH-and-its-own-config-argues-against-that`**
+  (OPEN 2026-08-21, MEDIUM, repo-wide - recorded here because this branch is what proved it, and NOT
+  fixed here because the fix has its own blast radius). `scripts/gitleaks.toml` carries a path
+  allowlist:
+
+  ```
+  [allowlist]
+  description = "Spec text, docs, and synthetic test fixtures are not secrets"
+  paths = [ '''spec/.*''', '''docs/.*''', '''.*\.example\..*''', '''api/test/fake-daemon/fixtures/.*''' ]
+  ```
+
+  **THE FILE ARGUES AGAINST ITSELF FIFTEEN LINES LOWER DOWN.** Explaining why the synthetic security
+  fixtures are allowlisted by VALUE, it says: a path allowlist over `api/tests/security/**` "would be
+  one line instead of five - and would blind the scanner to a REAL token pasted into a test file,
+  which is a normal way credentials escape. Enumerating the values keeps the gate sharp." That
+  reasoning is correct and it is the reasoning this allowlist ignores, for two whole trees.
+
+  **AND IT IS NOT HYPOTHETICAL - IT IS WHY THE ENTRY ABOVE EXISTS.** Round four wrote the planted
+  `sk_live_` value into `docs/findings.md` while writing up a credential leak, and every gate stayed
+  green because of this rule. MEASURED 2026-08-21, same config with only `docs/.*` and `spec/.*`
+  removed from `paths`: 8 findings instead of 2. Six of them are under `docs/` and have never been
+  seen - the ledger literal (reachable from two commits), a `jwt` in
+  `docs/release/evidence/J1-auth/j1-auth.json`, and three `generic-api-key`s elsewhere under
+  `docs/release/evidence/`. Whether any of the six is a real credential is exactly the question this
+  gate exists to force, and it has never been asked for anything in those two trees.
+
+  **AND THE TRIAGE IS HARDER THAN IT LOOKS, which is why it is a slice and not a one-liner.** Checked
+  rather than assumed: all four `docs/release/evidence/` files are GONE FROM DISK - a working-tree
+  scan (`--no-git`) of this branch reports exactly one finding, the pre-existing `PAGE_STATE_TOKEN`
+  above. They are reachable only in history. So they cannot be fixed by editing a file: each is
+  either a VALUE allowlist entry (the `EKOA-SYNTHETIC-` convention the config already documents is
+  the tool where the value is genuinely a fixture), or a real credential that must be ROTATED, and
+  the path allowlist is the reason nobody has had to decide which.
+
+  **NOT REMOVED IN THIS BRANCH, deliberately.** Dropping the two path entries turns a currently-green
+  gate red for six findings in other streams' history - a repo-wide change with a blast radius
+  nothing to do with the publish doors. What it needs: a slice that triages the six, allowlists or
+  rotates each, and only then deletes the two path entries. Recorded with the measurement so that
+  slice starts from a number rather than a suspicion.
 
 - **`s6-a-non-member-super-admin-could-author-the-tenants-publish-request`** (CLOSED 2026-08-20,
   HIGH, cross-org write). `requestPublish` admitted on `canWriteDefinition` alone, which answers TRUE
@@ -6790,3 +6875,90 @@ re-implemented a live control had it trusted this heading over the code.
   predicate, so there is one place to delete from) and no test is claimed for it. Separately,
   `sendPublishRefusal`'s `model_pass_required` arm is DEAD from the `/global` door, which never asks
   for `requireModelPass`; the docblock now names that door rather than implying coverage.
+
+- **`s6-the-publish-decided-in-the-wrong-unit-a-row-where-consumers-read-a-key`** (CLOSED 2026-08-21,
+  MEDIUM, a cross-org write that no consumer could ever read, answered 200). Everything the reviewer
+  is shown before approving is derived from ONE `(org, key)` row's `publishedSnapshot`: `republish` is
+  literally `publishedSnapshot !== undefined`, and `supersedes` is stamped from the same field. What
+  approving DOES is decide what every OTHER organisation resolves for a KEY. MEASURED THROUGH THE REAL
+  APP, and the measurement is now a committed case rather than a note: org A publishes a key; org B
+  submits the same key; the reviewer's queue said `republish: false` with no `supersedes`, and the
+  publish answered a clean 200 - while a THIRD org's `GET /api/v1/integrations` resolved that key to
+  org A's package, because `getForActor` picks the OLDEST `global` row. Org A keeps answering for
+  every consuming org, permanently, and org B's package is reachable by NO consumer. The reviewer
+  approved a silent no-op with nothing in front of them that could have said so. `docs/decisions.md`'s "publishing a key that already has a live
+  snapshot REPLACES it wholesale" is true within a row and false across orgs - and across orgs is the
+  case the brief's "may replace the existing public one" is actually about.
+
+  **DECIDED: A CROSS-ORG KEY COLLISION IS REFUSED, NOT SUPERSEDED**, and the alternative is worth
+  recording because it is the tempting one. Letting the newer publication take the key would hand any
+  tenant a way to seize a key another tenant owns and silently change what every consuming org
+  resolves - executed by a platform admin who was shown nothing to suggest the key was taken. The
+  refusal costs the challenger nothing they had: their own members already read their own row at any
+  tier, and cross-org reach is the only thing refused, which is the thing they were never going to
+  get. The escape hatch already exists and is exercised in the test: a super-admin demotes the
+  incumbent (`{global:false}`) and the challenger then publishes into a free key.
+
+  **AND `republish` WAS NOT REDEFINED**, which was the obvious move and the wrong one. Its row-lineage
+  meaning is true and useful - it is what `supersedes` will record, and an un-published row awaiting
+  re-review really does have a reviewed artifact to replace - so a per-key redefinition would have
+  destroyed a real signal in order to carry a different one under its name. The reviewer now gets
+  BOTH, separately: `republish` (this row's lineage) and `keyHeldBy` (the key's owner, present only on
+  a collision, and its presence means approving will be refused). The dry run carries the same fact as
+  a BARE boolean, `keyHeldByAnotherOrg`, because an author reads that response and a published package
+  is anonymous by construction - the reviewer's surface is attributed, the author's is not.
+  Implemented as `globalHoldersForKeys` beside `getForActor` and sharing its `oldestGlobalFirst`
+  comparator, so the refusal cannot drift from the resolver it is a statement about. Verified by
+  mutation: dropping the refusal reddens 1; dropping `keyHeldBy` from the queue projection reddens 1.
+
+- **`s6-publishing-never-consumed-the-request-so-un-publishing-re-exposed-the-row`** (CLOSED
+  2026-08-21, LOW-MEDIUM, cross-tenant exposure on a stale consent). `publishRequest` is what OPENS
+  the E2 review window - `isDefinitionVisibleTo` shows an `org` row to a super-admin OUTSIDE the
+  authoring org for exactly as long as the stamp is present - and `publishSnapshot` left it standing.
+  Invisible while the row was `global` (a global row is visible to everyone anyway) and back the
+  moment a super-admin un-published: the row landed on `org` still carrying the old stamp, so it was
+  in the platform queue again and readable by every platform super-admin, on a consent the tenant gave
+  for a publication that had ALREADY HAPPENED - while `definition-store.ts` claimed the window "is
+  opened from inside the tenant". The contract suite could not see it because its two un-publish cases
+  both RE-SUBMIT immediately, so the row was back in the queue for a legitimate reason. Closed by
+  consuming the stamp inside `publishSnapshot`'s mutator (omitted, not set to `undefined`, which
+  `replaceOne` would store as `null` and still satisfy the queue's `$exists`). The withdraw's own
+  docblock is corrected on the way: it claimed the refusal on a `global` row protected the reviewer's
+  ability to un-publish, and un-publishing never consulted the request. Verified by mutation:
+  restoring the carried-forward stamp reddens 1.
+
+- **`s6-actioncount-off-the-floor-is-an-equivalent-mutant-and-the-docblock-claimed-otherwise`**
+  (CLOSED 2026-08-21, informational; a DOCBLOCK fixed, not code). `publishQueueEntry`'s comment said
+  `actionCount` is "counted off the PUBLISHABLE action set so it answers 'how many actions would
+  ship'", implying a distinction from counting `doc.actions`. There is none and there never has been:
+  `publishableActions` is `actionsWithoutRecipes(...).map(...)` - both a `map`, neither a `filter` -
+  so the projection has never dropped an action and the two counts are identical for every input. No
+  test can tell them apart, and writing one that appears to would be the equivalent-mutant trap this
+  slice has already logged twice. The code is unchanged, because reading off the floor is the right
+  structure (a later projection that DOES drop an action is then counted correctly by where the value
+  is read from), and the comment now says the number is the same today and why the line stays anyway.
+
+- **`the-cross-org-pick-was-written-down-three-times-and-a-mutation-proved-it`** (CLOSED 2026-08-21,
+  MEDIUM, list-versus-resolve divergence - found BY the mutation run, not by review). Which of several
+  `global` rows a key resolves to is "oldest `createdAt` first, `orgId` as the tiebreak". It was
+  implemented three times: inline in `IntegrationDefinitionStore.getForActor` (what a consuming org
+  EXECUTES), in `definition-registry.ts`'s `sortGlobals` (what the same org SEES in its catalog), and
+  - as of this round - in the new `globalHoldersForKeys` (what the publish door refuses against).
+  `sortGlobals` carried a comment asserting it was "the SAME order `getForActor` uses", and the
+  mechanism keeping that true was that someone had typed it out identically.
+
+  **MEASURED: reversing the store's comparator left the entire suite GREEN.** That is the whole
+  finding. A consuming org would have seen one tenant's package in `GET /api/v1/integrations` and
+  executed another tenant's through `GET /api/v1/integrations/:key`, for the same key, with no test
+  anywhere able to notice - and the publish door's new refusal would have been computed against a row
+  other than the one actually shadowing the applicant. Closed by exporting `oldestGlobalFirst` from
+  `definition-store.ts` and having the registry import it; the direction was already fixed by the
+  documented cycle (the registry imports the store, never the reverse). The property is now pinned
+  rather than the refactor: the third-org case asserts that the catalog and the by-key resolve name
+  the same package. Verified by mutation: reversing the comparator now reddens 1 (it reddened 0
+  before).
+
+  **The general rule, and the reason this is worth a row:** "the same as X" in a comment over a
+  duplicated implementation is a claim with no gate behind it, and mutation testing is what turns
+  that from an opinion into a measurement. This one was found only because a mutant that SHOULD have
+  reddened did not - which is the signal to chase rather than to shrug at.

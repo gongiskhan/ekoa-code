@@ -656,10 +656,47 @@ describe('the review queue is not a WIDER read of tenant content than the publis
     expect(items.map((d) => d._id), 'the submitted row is still returned').toEqual([ID]);
     // AND THE PROPERTY: one query, and it brought back ONE document - not the five that
     // `{visibility:'org'}` on its own matches.
-    expect(recording.reads.length, 'the queue is one query').toBe(1);
+    expect(recording.reads.length, 'the store read is one query').toBe(1);
     expect(
       recording.reads[0]!.returned,
       'the queue must not materialise rows it is about to discard',
     ).toBe(1);
+  });
+
+  it('the key-holder lookup the queue route adds is ONE query for the whole page, not one per row', async () => {
+    // THE SECOND READ, PINNED AT THE SAME PLACE AS THE FIRST (S6 review round five). The route now
+    // needs a KEY-level fact per entry - which org already holds that key at the `global` tier - and
+    // the obvious shape for that is a lookup inside the per-row projection. On a queue with no limit
+    // and no cursor that is an N+1 over exactly the scan the case above just narrowed, so the batch
+    // form is the property rather than an optimisation, and it is asserted where a per-row version
+    // would show up: in the number of reads, not in the answer.
+    const recording = new RecordingStore('integration_definitions');
+    const observed = new IntegrationDefinitionStore(recording, () => new Date(1_800_000_000_000 + clock++));
+
+    // FOUR published keys, each held by a DIFFERENT org, plus one key nobody holds - so the answer is
+    // non-trivial: a batch that returned nothing at all would pass a pure read-count assertion.
+    for (const [i, orgId] of ['orgB', 'orgC', 'orgD', 'orgE'].entries()) {
+      await observed.create(
+        {
+          orgId, userId: `pub${i}`, visibility: 'global', key: `shared-${i}`,
+          displayName: `Published ${i}`, description: 'already global elsewhere',
+          configSchema: [], actions: [], skillMd: '# published\n',
+        },
+        { actor: { userId: `pub${i}`, orgId, role: 'super-admin' }, onConflict: 'replace' },
+      );
+    }
+
+    recording.reads.length = 0;
+    const holders = await observed.globalHoldersForKeys(['shared-0', 'shared-1', 'shared-2', 'shared-3', 'no-such-key']);
+
+    expect(recording.reads.length, 'one query for five keys, not five').toBe(1);
+    expect([...holders.keys()].sort(), 'and it answers for the four that exist').toEqual(
+      ['shared-0', 'shared-1', 'shared-2', 'shared-3'],
+    );
+    expect(holders.get('shared-2')!.orgId, 'with the holding org, which is the fact the reviewer needs').toBe('orgD');
+    expect(holders.has('no-such-key'), 'an unheld key is absent rather than null').toBe(false);
+    // AND IT DOES NOT SCAN THE COLLECTION: only the four `global` rows come back, not the `org` rows
+    // the sibling case above planted, and not the definitions of every other tenant.
+    expect(recording.reads[0]!.returned, 'the batch reads only the rows it was asked about').toBe(4);
   });
 });

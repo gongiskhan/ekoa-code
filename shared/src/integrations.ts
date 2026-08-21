@@ -251,15 +251,51 @@ export type DefinitionPublishRequestResponse = z.infer<typeof DefinitionPublishR
 export const IntegrationPublishQueueEntry = z.object({
   /** The definition `_id` - what `previewPublish` and `publishDefinition` take in their path. */
   id: z.string(),
-  /** Floor-scrubbed, like `displayName`: both are package fields, and this crosses an org boundary. */
+  /**
+   * Floor-scrubbed, like `displayName`: both are package fields, and this crosses an org boundary.
+   *
+   * A `key` READING `[REDACTED]` IS A REFUSAL COMING, not cosmetics (S6 review round five). The
+   * stored key is restored RAW on the cross-org read (`publishedViewOf` - a snapshot may not rename
+   * the row it describes), so it is the one package field a snapshot cannot clean, and a key the
+   * floor redacts would reach every consuming org verbatim. `publishDefinition` refuses such a row
+   * outright, so what the reviewer sees here and what approving would do now agree: before this, the
+   * queue showed `[REDACTED]` while the catalog of every other org showed the literal.
+   */
   key: z.string(),
   displayName: z.string().optional(),
   /** The asking tenant. The point of the queue, and the reason it is super-admin only. */
   orgId: z.string(),
   /** How many actions the package declares. A size signal, never the actions themselves. */
   actionCount: z.number().int().nonnegative(),
-  /** True when this row already has a live snapshot: publishing it SUPERSEDES that one wholesale. */
+  /**
+   * True when THIS ROW already has a stored snapshot: publishing it supersedes that one wholesale
+   * and stamps its provenance into `supersedes`.
+   *
+   * IT IS A FACT ABOUT THE ROW, AND IT IS NOT A FACT ABOUT THE KEY - which is exactly the confusion
+   * `keyHeldBy` below exists to end (S6 review round five). It was tempting to re-derive this per
+   * KEY instead; that was rejected, because the row-lineage meaning is the true and useful one (it is
+   * what `supersedes` will record, and an un-published row awaiting re-review genuinely does have a
+   * reviewed artifact to replace), and a per-key redefinition would have destroyed that signal to
+   * carry a different one. The reviewer gets BOTH, separately, rather than one of them wearing the
+   * other's name.
+   */
   republish: z.boolean(),
+  /**
+   * The orgId of a DIFFERENT tenant that already holds this key at the `global` tier. Present only
+   * on a collision, and its presence means APPROVING WILL BE REFUSED (`key-taken`, 409).
+   *
+   * Without it the reviewer was shown a clean row for a write no consumer could ever read:
+   * `getForActor` resolves one global row per key, oldest first across all orgs, so a second org's
+   * publication is written, stamped, reported 200 - and shadowed permanently by the incumbent. Both
+   * signals above were correct about the row and silent about that.
+   *
+   * IDENTITY IS CARRIED HERE AND NOWHERE ELSE. This surface is attributed by design (see `orgId`
+   * above), and the reviewer is the one person who can resolve a collision - they can demote the
+   * incumbent. `previewPublish`, which an author reads, gets a bare boolean instead, because a
+   * published package is anonymous by construction and must not become a way to learn who published
+   * what.
+   */
+  keyHeldBy: z.string().optional(),
   requestedBy: z.string(),
   requestedAt: IsoTimestamp,
   /** Floor-scrubbed AGAIN on the way out - a different property from the submit route's scrub. That
@@ -322,8 +358,20 @@ export const PublishPreviewResponse = z.object({
   }),
   redactions: z.array(IntegrationPublishRedaction),
   modelPass: IntegrationPublishModelPass,
-  /** The stamp of the snapshot this publish would replace. Absent ⇒ this is a first publication. */
+  /** The stamp of the snapshot this publish would replace. Absent ⇒ this is a first publication.
+   *  THIS ROW's lineage; it says nothing about who holds the key - see the flag below. */
   supersedes: z.object({ scrubbedAt: IsoTimestamp, scrubbedBy: z.string() }).optional(),
+  /**
+   * Present (and always `true`) when ANOTHER org already holds this key at the `global` tier - in
+   * which case `snapshot` above is NOT "what a foreign org would read", because no foreign org would
+   * read anything of this row, and the publish will be refused with 409.
+   *
+   * A BARE FLAG, never the holder's orgId: an author may read this response, and a published package
+   * is anonymous by construction (`publishableAuthoringOf` drops the author, and a fork does not
+   * record its source org). Knowing the key is taken is what an author needs in order to rename it;
+   * knowing WHO took it is the reviewer's business, and it is carried on the review queue instead.
+   */
+  keyHeldByAnotherOrg: z.literal(true).optional(),
 });
 export type PublishPreviewResponse = z.infer<typeof PublishPreviewResponse>;
 

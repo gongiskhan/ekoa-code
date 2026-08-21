@@ -10,6 +10,7 @@ import { hashPassword } from '../../src/auth/password.js';
 import { buildApp } from '../../src/server.js';
 import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../../src/config.js';
 import { integrationDefinitionStore, definitionIdFor } from '../../src/integrations/definition-store.js';
+import { saveAuthoredDefinition } from '../../src/integrations/definition-save.js';
 import type { IntegrationAction } from '../../src/integrations/definitions.js';
 import {
   DefinitionPublishRequestResponse,
@@ -78,6 +79,10 @@ const preview = (t: string | null, id: string) =>
   api(`/api/v1/integrations/definitions/${id}/publish-preview`, t, { method: 'POST', body: '{}' });
 const publish = (t: string | null, id: string, body: Record<string, unknown> = {}) =>
   api(`/api/v1/integrations/definitions/${id}/publish`, t, { method: 'POST', body: JSON.stringify(body) });
+/** Module-level because three describes now need it: the tier toggle is also the un-publish, and the
+ *  un-publish is the only way back from `global` for every case that has to get there first. */
+const setGlobal = (t: string | null, id: string, global: boolean) =>
+  api(`/api/v1/integrations/definitions/${id}/global`, t, { method: 'POST', body: JSON.stringify({ global }) });
 
 async function expectEnvelope(res: Response, status: number, code: string): Promise<void> {
   expect(res.status).toBe(status);
@@ -220,15 +225,44 @@ describe('S6 - submit for review, and withdraw', () => {
     expect(await hidden.text()).toBe(await missing.text());
   });
 
-  it('a PUBLISHED row refuses the withdraw - un-publishing is the way back, and it stays reversible', async () => {
+  it('a PUBLISHED row refuses the withdraw, and the publication CONSUMED the request that asked for it', async () => {
+    // THE CONSENT IS SPENT (S6 review round five). This case used to assert the opposite - that the
+    // stamp SURVIVES a publication, "so the un-publish transition stays exactly reversible" - and
+    // that was the defect written down as a property. `publishRequest` is what OPENS the E2 review
+    // window: `isDefinitionVisibleTo` shows an `org` row to a super-admin outside the authoring org
+    // for exactly as long as the stamp is present. Leaving it on the row was invisible while the row
+    // was `global` (a global row is visible to everyone anyway) and came back the moment a
+    // super-admin un-published: the row landed on `org` still carrying the old stamp, so it was in
+    // the platform queue again, exposed to every platform super-admin, on a consent the tenant gave
+    // for a publication that had ALREADY HAPPENED. Reversibility never depended on the stamp - the
+    // un-publish is `setVisibility`, which reads the tier and not the request.
     await seedDefinition('org');
     await submit(await tokenFor('ownerA'), DEF_ID, 'ship it');
     await publish(await tokenFor('rootA'), DEF_ID);
     expect((await storedDoc(DEF_ID))?.visibility).toBe('global');
+    expect((await storedDoc(DEF_ID))?.publishRequest, 'the publication spent the request').toBeUndefined();
 
-    await expectEnvelope(await withdraw(await tokenFor('ownerA'), DEF_ID), 403, 'FORBIDDEN');
-    // The record that the org asked survives, so the un-publish transition stays exactly reversible.
-    expect((await storedDoc(DEF_ID))?.publishRequest?.requestedBy).toBe('ownerA');
+    const owner = await tokenFor('ownerA');
+    await expectEnvelope(await withdraw(owner, DEF_ID), 403, 'FORBIDDEN');
+
+    // AND THE CONSEQUENCE, which is the half that matters and the half no assertion on the row can
+    // make: un-publishing must not hand the row back to the platform reviewers on its own.
+    const root = await tokenFor('rootA');
+    expect((await setGlobal(root, DEF_ID, false)).status).toBe(200);
+    expect((await storedDoc(DEF_ID))?.visibility, 'and it really did land back on the queryable tier').toBe('org');
+    expect(
+      (await expectSchema<{ items: unknown[] }>(await queue(root), IntegrationPublishQueueResponse)).items,
+      'an un-published row is not back in the queue on the old consent',
+    ).toEqual([]);
+
+    // THE CONTROL, so this is consent being re-asked rather than the door being broken: the tenant
+    // asking again puts it straight back.
+    await submit(owner, DEF_ID, 'v2, please re-review');
+    expect(
+      (await expectSchema<{ items: Array<{ id: string }> }>(await queue(root), IntegrationPublishQueueResponse)).items
+        .map((i) => i.id),
+      'and the tenant can still ask again',
+    ).toEqual([DEF_ID]);
   });
 
   it('the PLATFORM REVIEWER cannot withdraw the org\'s own request (the record is the tenant\'s)', async () => {
@@ -602,9 +636,6 @@ describe('S6 - the publish, and what another org then reads', () => {
 // ---------------------------------------------------------------------------------------------
 
 describe('S6 - `POST /definitions/:id/global` is not a second, unscrubbed way across the boundary', () => {
-  const setGlobal = (t: string | null, id: string, global: boolean) =>
-    api(`/api/v1/integrations/definitions/${id}/global`, t, { method: 'POST', body: JSON.stringify({ global }) });
-
   it('THE REACHABILITY THIS SLICE CREATED: before a submission, the door cannot see the row at all', async () => {
     // The half of MAJOR-2 that makes it THIS slice's defect rather than a pre-existing one. Nothing
     // in `api/src/` wrote `publishRequest` before the submit door was mounted, so
@@ -877,5 +908,191 @@ describe('S6 - the five doors are mounted, closed by default, and declared', () 
     expect(integrationsEndpoints.previewPublish.auth).toBe('user');
     expect(integrationsEndpoints.listPublishRequests.auth).toBe('super-admin');
     expect(integrationsEndpoints.publishDefinition.auth).toBe('super-admin');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// 6. A publication that no consumer would read - S6 review round five
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * THE UNIT THE PUBLISH DOOR ACTUALLY DECIDES IN.
+ *
+ * Everything the reviewer is shown before approving - `republish`, `supersedes` - is derived from
+ * ONE `(org, key)` row's `publishedSnapshot`, and is correct about that row. What approving DOES is
+ * decide what every other organisation resolves for a KEY. Those are different units, and the two
+ * cases below are where they come apart:
+ *
+ *   - ANOTHER ORG ALREADY HOLDS THE KEY. `getForActor` resolves one `global` row per key, oldest
+ *     first across all orgs, so a second org's publication is written, stamped and answered 200 -
+ *     and shadowed permanently by the incumbent. Measured before the fix: the reviewer saw
+ *     `republish:false` and a clean 200 for a package no consuming org could ever reach.
+ *   - THE KEY IS THE CREDENTIAL. `publishedViewOf` restores `key: doc.key` RAW cross-org, so the key
+ *     is the one package field a snapshot cannot clean. Round two floored the queue's copy of it -
+ *     correctly, it crosses an org boundary - which meant the reviewer saw `[REDACTED]` while every
+ *     consuming org's catalog showed the literal. The one human in the loop was shown strictly less
+ *     than the machines downstream of them.
+ */
+describe('S6 - the publish refuses what no consumer would read, and says which', () => {
+  /** Org B's row for the SAME key org A publishes. Seeded through the store like `seedDefinition`,
+   *  which is this suite's convention for arranging a row; every assertion below is on the wire. */
+  const B_ID = definitionIdFor('orgB', KEY);
+  async function seedOrgBRow(): Promise<void> {
+    await integrationDefinitionStore.create(
+      {
+        orgId: 'orgB', userId: 'userB', visibility: 'org', key: KEY,
+        displayName: 'Org B rival probe', description: 'the same key, a different tenant',
+        configSchema: [], actions: [], skillMd: '# org b probe\n',
+      },
+      { actor: { userId: 'userB', orgId: 'orgB', role: 'user' }, onConflict: 'replace' },
+    );
+  }
+
+  it('a SECOND org publishing an already-published key is refused, and the reviewer was warned first', async () => {
+    const rootA = await tokenFor('rootA');
+    const rootB = await tokenFor('rootB');
+
+    // ORG A PUBLISHES FIRST, through the real doors.
+    await seedDefinition('org');
+    await submit(await tokenFor('ownerA'), DEF_ID, 'ours');
+    await expectSchema<PublishDefinitionResponse>(await publish(rootA, DEF_ID), PublishDefinitionResponse);
+
+    // ORG B ASKS FOR THE SAME KEY.
+    await seedOrgBRow();
+    await submit(await tokenFor('userB'), B_ID, 'ours too');
+
+    // THE REVIEWER IS TOLD, on the surface they decide from. `republish` stays FALSE and that is
+    // correct - org B's row has no snapshot of its own - which is exactly why it could never have
+    // carried this: the two facts are about different things and the queue now carries both.
+    const q = await expectSchema<{ items: Array<{ id: string; republish: boolean; keyHeldBy?: string }> }>(
+      await queue(rootB),
+      IntegrationPublishQueueResponse,
+    );
+    const entry = q.items.find((i) => i.id === B_ID)!;
+    expect(entry.republish, 'the row-level fact is unchanged and still true').toBe(false);
+    expect(entry.keyHeldBy, 'and the KEY-level fact is the one that was missing').toBe('orgA');
+    // THE WHITELIST GATE, EXTENDED TO THE NEW FIELD. The queue's key set is asserted as an EQUALITY
+    // elsewhere in this file so a field carried in by a spread fails rather than passing a "does not
+    // contain skillMd" check - but that case has no collision, so `keyHeldBy` is absent from it and
+    // would sit outside the gate. Asserted here in the one state that produces it.
+    expect(Object.keys(entry).sort()).toEqual(
+      ['actionCount', 'displayName', 'id', 'key', 'keyHeldBy', 'note', 'orgId', 'republish', 'requestedAt', 'requestedBy'].sort(),
+    );
+
+    // AND ON THE DRY RUN, whose contract is "exactly what a foreign org would read": no foreign org
+    // would read this at all, so a preview that said nothing here would be the same lie one layer up.
+    const dry = await expectSchema<PublishPreviewResponse>(await preview(rootB, B_ID), PublishPreviewResponse);
+    expect(dry.keyHeldByAnotherOrg).toBe(true);
+    // ANONYMITY: an author reads this response, and a published package does not say who published
+    // it. The reviewer gets the orgId; this must not.
+    expect(JSON.stringify(dry), 'the preview must not name the holder').not.toContain('orgA');
+
+    // THE REFUSAL. 409, and the org A row is untouched by the attempt.
+    await expectEnvelope(await publish(rootA, B_ID), 409, 'SLUG_TAKEN');
+    expect((await storedDoc(B_ID))!.visibility, 'nothing was written').toBe('org');
+    expect((await storedDoc(B_ID))!.publishedSnapshot).toBeUndefined();
+    expect((await storedDoc(DEF_ID))!.publishedSnapshot, 'and the incumbent is untouched').toBeDefined();
+
+    // THE NON-VACUITY HALF, and the escape hatch the refusal's docblock promises: demote the
+    // incumbent and the very same call succeeds. Without this the assertions above would also pass
+    // if the door had simply stopped publishing.
+    expect((await setGlobal(rootA, DEF_ID, false)).status).toBe(200);
+    await expectSchema<PublishDefinitionResponse>(await publish(rootA, B_ID), PublishDefinitionResponse);
+    expect((await storedDoc(B_ID))!.visibility).toBe('global');
+  });
+
+  it('the shadowed publication really was unreadable - the defect, measured from a THIRD org', async () => {
+    // WHY A REFUSAL AND NOT A WARNING. Without this case the rule above is a policy assertion; with
+    // it, it is a statement about what a consumer gets. Org C holds no row for this key, so it is
+    // every consuming org: `getForActor` picks the OLDEST global row, and org A's is older.
+    await mkUser('userC', 'orgC', 'user');
+    const rootA = await tokenFor('rootA');
+
+    await seedDefinition('org', { description: 'ORG A EDITION' });
+    await submit(await tokenFor('ownerA'), DEF_ID, 'ours');
+    await expectSchema<PublishDefinitionResponse>(await publish(rootA, DEF_ID), PublishDefinitionResponse);
+
+    // Org B reaches `global` for the same key WITHOUT the door - the state the refusal now prevents,
+    // reproduced directly so the consequence can be measured rather than argued.
+    await integrationDefinitionStore.create(
+      {
+        orgId: 'orgB', userId: 'userB', visibility: 'global', key: KEY,
+        displayName: 'Org B rival probe', description: 'ORG B EDITION',
+        configSchema: [], actions: [], skillMd: '# org b probe\n',
+      },
+      { actor: { userId: 'rootA', orgId: 'orgB', role: 'super-admin' }, onConflict: 'replace' },
+    );
+
+    const seen = (await (await api('/api/v1/integrations', await tokenFor('userC'))).json()) as {
+      items: Array<{ key: string; description?: string }>;
+    };
+    const resolved = seen.items.filter((d) => d.key === KEY);
+    expect(resolved, 'one key resolves to exactly one package').toHaveLength(1);
+    expect(resolved[0]!.description, 'and it is the INCUMBENT, permanently').toBe('ORG A EDITION');
+
+    // AND THE LIST AGREES WITH THE RESOLVE, which is a separate claim and the one the cross-org pick
+    // being written down TWICE used to threaten (S6 review round five). `listDefinitionsFor` and
+    // `getForActor` each ordered the candidate globals with their own copy of "oldest first, orgId
+    // tiebreak" - a sameness maintained by having been typed out identically. A mutation run proved
+    // that: reversing the store's comparator left the whole suite green, so a consuming org could
+    // have SEEN one tenant's package in its catalog and EXECUTED another's. They are one exported
+    // function now, and this asserts the property rather than the refactor.
+    const one = (await (await api(`/api/v1/integrations/${KEY}`, await tokenFor('userC'))).json()) as {
+      integration?: { description?: string };
+    };
+    expect(
+      one.integration?.description,
+      'the catalog and the by-key resolve name the SAME package',
+    ).toBe(resolved[0]!.description);
+  });
+
+  it('a key the publish FLOOR redacts is refused - it is the one field a snapshot cannot clean', async () => {
+    // REACHABLE THROUGH THE PRODUCTION WRITER, not planted. `saveAuthoredDefinition` is the function
+    // the builder save route calls, and its `SAVE_KEY_RE` is a CHARSET rule
+    // (`^[a-z0-9][a-z0-9-]{1,48}$`) - which a real Slack bot token satisfies, being lowercase,
+    // digits and dashes. So the same string is a legal integration key AND a `VENDOR_SECRET_RE`
+    // match, and the whole chain below is doors: save, share, submit, publish.
+    const badKey = ['xox', 'b-2317', '-4055', '-abcdefghijklmnopqrst'].join('');
+    const saved = await saveAuthoredDefinition(
+      { userId: 'ownerA', orgId: 'orgA', role: 'user' },
+      { integrationKey: badKey, displayName: 'Rogue', description: 'a package whose KEY is the credential', configSchema: [], actions: [] },
+      '# rogue\n',
+    );
+    expect(saved.ok, 'the production save really does accept this key - that IS the exposure').toBe(true);
+    const rogueId = definitionIdFor('orgA', badKey);
+
+    const owner = await tokenFor('ownerA');
+    const root = await tokenFor('rootA');
+    await api(`/api/v1/integrations/definitions/${rogueId}/visibility`, owner, {
+      method: 'PATCH',
+      body: JSON.stringify({ visibility: 'org' }),
+    });
+    await submit(owner, rogueId, 'please publish');
+
+    // WHAT THE REVIEWER SEES, and the reason this case exists: the queue floors the key, so the one
+    // human in the loop reads `[REDACTED]` where the consumer would read the token.
+    const q = await expectSchema<{ items: Array<{ id: string; key: string }> }>(
+      await queue(root),
+      IntegrationPublishQueueResponse,
+    );
+    const entry = q.items.find((i) => i.id === rogueId)!;
+    expect(entry.key, 'the queue does not echo it - correctly, it crosses an org boundary').toContain('[REDACTED]');
+    expect(entry.key).not.toContain(badKey);
+
+    // SO THE DOOR REFUSES, which is what makes the redaction above safe rather than blinding.
+    await expectEnvelope(await publish(root, rogueId), 422, 'SECRET_GUARD_BLOCKED');
+    expect((await storedDoc(rogueId))!.visibility, 'nothing crossed').toBe('org');
+    expect((await storedDoc(rogueId))!.publishedSnapshot).toBeUndefined();
+
+    // AND THE OTHER DOOR ONTO THE SAME TIER, since S6 folded them: a tier toggle must not be the way
+    // round a content refusal.
+    await expectEnvelope(await setGlobal(root, rogueId, true), 422, 'SECRET_GUARD_BLOCKED');
+    expect((await storedDoc(rogueId))!.visibility).toBe('org');
+
+    // THE CONTROL: the same chain on an ordinary key publishes. Without it this case would also pass
+    // against a door that refused everything.
+    await seedDefinition('org');
+    await submit(owner, DEF_ID, 'the innocent one');
+    await expectSchema<PublishDefinitionResponse>(await publish(root, DEF_ID), PublishDefinitionResponse);
   });
 });

@@ -52,6 +52,7 @@ import {
 import {
   integrationDefinitionStore,
   canWriteDefinition,
+  oldestGlobalFirst,
   LEGACY_RUNTIME_ORG,
   type IntegrationDefinitionDoc,
 } from './definition-store.js';
@@ -221,15 +222,15 @@ export async function resolveDefinition(
  * Deterministic pick among the cross-org `global` rows for one key — the SAME order
  * `IntegrationDefinitionStore.getForActor` uses (oldest first, `orgId` as tiebreak) so a key
  * resolves identically whether it is reached through `resolveDefinition` or through the list.
+ *
+ * IT IS NOW THE SAME FUNCTION AND NOT A SECOND COPY OF IT (S6 review round five). The sentence above
+ * was true and was kept true by having been typed out twice, which a mutation run showed is not a
+ * mechanism: reversing the store's comparator left this list resolving the old way and the entire
+ * suite green, so list and resolve would have disagreed about which tenant's package a key names -
+ * silently, and in the direction where a consuming org sees one package and executes another.
  */
 function sortGlobals(docs: IntegrationDefinitionDoc[]): IntegrationDefinitionDoc[] {
-  return [...docs].sort((a, b) =>
-    a.createdAt < b.createdAt ? -1
-      : a.createdAt > b.createdAt ? 1
-        : a.orgId < b.orgId ? -1
-          : a.orgId > b.orgId ? 1
-            : 0,
-  );
+  return [...docs].sort(oldestGlobalFirst);
 }
 
 /**
