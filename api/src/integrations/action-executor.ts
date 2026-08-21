@@ -90,6 +90,7 @@ import {
 } from './http-template.js';
 import {
   evidenceSecretsFromValues,
+  MAX_EVIDENCE_EXCERPT_CHARS,
   type ActionEvidenceKey,
   type RecordEvidenceInput,
   type RunStepEvidence,
@@ -265,7 +266,28 @@ export interface ExecutorDeps {
   // collects; a failed run records nothing and deletes nothing.
 }
 
-const MAX_BODY_DISPLAY_BYTES = 8_000;
+/**
+ * How much of a response body this module ever shows - on the failure dump AND on the success sample.
+ *
+ * IT IS `MAX_EVIDENCE_EXCERPT_CHARS`, NOT A SECOND LITERAL THAT HAPPENS TO MATCH IT (round nine).
+ * `action-evidence-store.ts` documents its own cap as "the SAME ceiling the executor's failure path
+ * applies… stated once here so the success sample and the failure dump cannot drift into showing a
+ * person two different amounts of the same body". It was NOT stated once: two independent `8_000`
+ * literals sat under that sentence with nothing tying them, and mutating either one by itself left
+ * the whole estate green - which is exactly the drift the sentence promised was impossible.
+ *
+ * The two are the same number because they answer the same question about the same bytes: an
+ * operator reading the failure details of a call and a person reading the stored sample of the
+ * success are looking at the same response body, and one of them silently seeing more than the other
+ * is a difference nobody chose. So there is one source and this is a binding to it. Both directions
+ * are pinned behaviourally by `the failure dump and the success sample cut the same body at the same
+ * point` in `api/tests/integrations/action-evidence-capture.test.ts`, which drives one oversized body
+ * through the real executor twice - once 2xx, once 5xx - and compares what each path shows.
+ *
+ * The VALUE (8_000) is pinned as a literal by `tests/integrations/action-evidence.test.ts`; this
+ * constant is about the TIE, not the number.
+ */
+const MAX_BODY_DISPLAY_BYTES = MAX_EVIDENCE_EXCERPT_CHARS;
 
 export async function executeUserIntegrationAction(
   input: ExecuteIntegrationActionInput,

@@ -938,8 +938,15 @@ export const integrationsEndpoints = {
    * somebody else's operation, or nobody's. It is superseded by the NEXT validated run of the same
    * action - which needs the action to still work and to be run again. It is erased when the
    * CREDENTIAL is disconnected - which costs the whole integration. And, failing both, it is
-   * collected by TIME: the boot retention sweep ends every row not re-validated inside
+   * collected by TIME: the retention sweep ends every row not re-validated inside
    * `EVIDENCE_RETENTION_DAYS` (90), and that sweep is the ONLY automatic collector there is.
+   *
+   * THAT SWEEP RUNS AT BOOT AND ON A TIMER, and this line said "the BOOT retention sweep" because
+   * until round nine boot was the only trigger it had - no interval, no Mongo TTL index, in a
+   * container deployed to stay up, so "at most 90 days" really meant "at most 90 days after the next
+   * deploy". `server.ts`'s `startRetentionSweepRail` re-runs it every `RETENTION_SWEEP_INTERVAL_MS`.
+   * The bound a caller can rely on is therefore 90 days plus at most one tick - still long, and still
+   * the reason this endpoint exists.
    *
    * NOTHING WATCHES FOR AN ACTION THAT STOPPED RESOLVING AND DELETES ITS SAMPLE ON THAT BASIS, and
    * this descriptor said it did until round six - a whole round after the mechanism was gone. The

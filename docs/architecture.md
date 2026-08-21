@@ -618,8 +618,16 @@ promoted and global integrations rather than a scrubber somebody has to maintain
 
 It is also NOT `integration_captured_calls`, and both exist. That one is the unbounded,
 machine-facing raw trace a recipe is compiled out of and then discarded; this one is the bounded,
-durable, human-facing sample a person is shown and a promotion rests on. Different questions,
-opposite lifecycles.
+durable sample SHAPED for a human reader, which a promotion rests on. Different questions, opposite
+lifecycles.
+
+**AND NOBODY READS IT ON THIS BRANCH** - said here because "human-facing" kept reading as a
+description of a shipped surface. `listForIntegration` has no production caller (the detail page is
+S2/S3); the one production read is `trustAuthoredAction` handing the row to `promoteToTrusted`, which
+looks at `outcome` and `shape` and renders nothing; and the person granting `trusted` echoes back a
+`shape` STRING, not a sample. The caps, the truncation flags and the step pointers are correctness
+for the reader who is coming, and the source docblocks that make the claim now say so at the point
+they make it rather than two files away.
 
 Capture reuses the executor's existing redaction rather than adding any: the api-call sample IS the
 `requestSummary` `action-executor.ts` already builds on every call and already persists on the
@@ -671,9 +679,11 @@ definition edit, a tier flip, a re-publish and a failed resolve record NOTHING a
 
 Three DURABLE signals end a row, and nothing else does:
 
-1. **TIME.** `sweepExpiredEvidence` at boot ends every row not re-validated within
-   `EVIDENCE_RETENTION_DAYS` (90), orphan or not. It was the backstop; it is now THE collector, and
-   its virtue is that **no vantage has to be right about anything**. Read "re-validated" literally:
+1. **TIME.** `sweepExpiredEvidence` ends every row not re-validated within
+   `EVIDENCE_RETENTION_DAYS` (90), orphan or not - at boot AND every `RETENTION_SWEEP_INTERVAL_MS`
+   (6h) on `server.ts`'s retention rail, so the honest bound is **90 days plus at most one tick**. It
+   was the backstop; it is now THE collector, and its virtue is that **no vantage has to be right
+   about anything**. Read "re-validated" literally:
    only a run that really HAPPENS refreshes `validatedAt`. A `browser-steps` READ action is
    `storable`, so after its first pass every later run REPLAYS and the collector answers null by
    construction - such an action can be in daily use and still be swept
@@ -694,8 +704,8 @@ Three DURABLE signals end a row, and nothing else does:
    validated run replaces the previous sample and releases its screenshot pin in one write.
 
 **THIS IS A DELIBERATE TRADE.** An orphaned row is a BOUNDED retention and privacy gap - at most 90
-days, closable at any moment by its owner, only ever the owner's own sample. A wrongly-deleted row is
-unrecoverable tenant data. Those costs are not comparable, and four rounds of evidence say the guess
+days plus one sweep interval, closable at any moment by its owner, only ever the owner's own sample.
+A wrongly-deleted row is unrecoverable tenant data. Those costs are not comparable, and four rounds of evidence say the guess
 is not reliable enough to spend the second one. The residual window is an OPEN entry in
 `findings.md` (`evidence-orphan-window-until-ttl`), widened by this change and written as the
 accepted cost rather than as a closed gap.
@@ -709,12 +719,43 @@ refusal is a thing a caller is TOLD, never a thing that deletes their data.
 survives its own expiry; required, so a caller that stops supplying it does not compile.
 `server.ts`'s `sweepScreenshotsSparingPinnedEvidence` is the one production composition of the
 evidence retention sweep, the pin read and the screenshot sweep - in that order, so a row that ages
-out releases its pin on the SAME boot rather than granting its screenshots one extra boot's grace.
+out releases its pin on the SAME pass rather than granting its screenshots one extra pass's grace.
 `bootState` awaits it AND READS ITS COUNTS - the read is what pins the await, since no test can
 distinguish an awaited call from a fire-and-forget one there (boot awaits slower things afterwards)
 while `void` has no `.removed`.
 
-**A PIN READ THAT FAILS SKIPS THE SWEEP FOR THAT BOOT** (round five). It used to
+**AND IT RUNS ON A TIMER, WHICH IT DID NOT** (round nine). This is the correction the two retention
+numbers above were resting on. Between them, `sweepExpiredEvidence` and `sweepExpiredScreenshots` had
+EXACTLY ONE caller chain - `sweepScreenshotsSparingPinnedEvidence` -> `bootState` -> `boot()` - with
+no `setInterval` and no Mongo TTL index anywhere in the repo, in a process that already runs three
+interval rails. The deployment (`deploy/staging/docker-compose.yml`, `restart: unless-stopped`;
+`deploy/api.service.json`, a long-lived container over a persistent volume) is built not to restart,
+so **an api container six months without a deploy kept every evidence row for six months** - a
+durable capped copy of one person's real third-party request and response - and every
+automation-backed row kept its `pinnedRunIds` exemption with it, so the per-step PNGs of authenticated
+client-portal sessions outlived the 7-day sweep for six months too. Round six had enforced the
+CONSTANT (90 -> 89 and 90 -> 91 both redden) and not the TRIGGER, and four documents plus the shared
+descriptor stated "at most 90 days" as enforced. Enforcing a number nothing fires is enforcing
+nothing.
+
+`startRetentionSweepRail` (`server.ts`) is that trigger: an unref'd `RETENTION_SWEEP_INTERVAL_MS`
+(6h) interval, armed by `bootState` right after the one-shot and disarmed on shutdown, re-entrancy
+guarded so a tick landing on an in-flight pass does nothing rather than racing it over the same tree.
+It is armed from `bootState` and NOT from `boot()`'s post-listen block, unlike the other three rails:
+it has no dependence on the HTTP listener, and `boot()` is entered by no test in this repo - the exact
+defect class this slice hit when the pin argument lived in an unentered `bootState`. **NOT a Mongo TTL
+index**: an index collects only the evidence row and leaves the SCREENSHOTS, which are a filesystem
+walk in this process and need a trigger regardless; it takes the evidence-before-pins ordering out of
+this process's hands; and `validatedAt` is an ISO-8601 STRING (deliberately - it orders
+lexicographically, which is what makes the cutoff one `deleteMany` with no materialisation) while a
+TTL index needs a BSON `Date`. Every bound is therefore written as "the window PLUS at most one sweep
+interval", including the backstop under `discardEvidenceOfDisconnectedConfig`, whose catch-all returns
+0 and warns with nothing retrying it. Pinned by a TICK and not a constant:
+`the retention rail` in `api/tests/automation/composition-root-screenshot-pins.test.ts` enters the
+real `bootState`, expires a row AFTER boot, and waits for a tick to collect it.
+
+**A PIN READ THAT FAILS SKIPS THE SWEEP FOR THAT PASS** (round five; "boot" until round nine gave
+the sweep a timer, which turned the cost of skipping from one deploy into one tick). It used to
 `.catch(() => new Set())` and sweep ANYWAY - which deleted every screenshot behind a live, unexpired
 evidence row, across every tenant at once (the tree is `<automationId>/<runId>` and carries no org),
 on a transient Mongo blip, with no restore path. The pin set is a PRECONDITION of the sweep, not an
@@ -738,8 +779,10 @@ the slice: `CollectedRunEvidence.truncated` is set in the same statement that cu
 `RunEvidenceCollector` seam declares it, and `action-executor.ts` forwards it onto the
 `AutomationEvidence` it builds. The store keeps its own length test as a ceiling against a future
 caller that forgets to cap, recorded as unreachable-from-production rather than as the mechanism. It
-matters because the row is durable for `EVIDENCE_RETENTION_DAYS` and is what a person reads before
-granting `trusted`, which makes an action auto-runnable by `achieve`.
+matters because the row is durable for `EVIDENCE_RETENTION_DAYS` and is what the graduation gate
+reads before an action becomes auto-runnable by `achieve`. (It is NOT "what a person reads" - see the
+no-reader note above; that phrasing stood in this document and in three source docblocks until round
+nine.)
 
 **AND AN EVIDENCE ROW SAYS WHETHER ITS RUN WORKED** (round eight). `ActionEvidenceDoc.outcome`
 (`'succeeded' | 'failed'`) is DERIVED by the store from the stored sample - the 2xx window for an
@@ -758,7 +801,16 @@ the way `EVIDENCE_RETENTION_DAYS` is: the security suite exercises the sweep WIT
 `retentionDays`, straddling the cutoff by half a day either side, because the one production caller
 rides the default while every suite used to override it. `sweepExpiredScreenshots` also carries the
 non-positive guard its sibling `sweepExpiredEvidence` always had - a `0`, a negative or a `NaN` put
-the cutoff at or after `now` and swept the entire unpinned tree on the next boot.
+the cutoff at or after `now` and swept the entire unpinned tree on the next pass. Its window, like the
+evidence one, is "7 days plus at most one `RETENTION_SWEEP_INTERVAL_MS`" and was not a window at all
+until the rail landed.
+
+The two response-body caps are ONE number: `action-executor.ts`'s `MAX_BODY_DISPLAY_BYTES` is
+`MAX_EVIDENCE_EXCERPT_CHARS`, not a second literal beside it. The store's docblock promised the
+failure dump and the success sample "cannot drift into showing a person two different amounts of the
+same body" over two independent `8_000` literals, and mutating either alone left the estate green.
+Pinned behaviourally - one oversized body driven through the real executor twice, 2xx and 5xx, and
+what each path shows compared.
 
 ## Billing
 

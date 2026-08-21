@@ -45,8 +45,14 @@
  * Both run directories carry the SAME long-ago mtime, so both are equally expired and any rule other
  * than the pin removes both (or neither). The unpinned one is asserted REMOVED in the same case, so
  * a sweeper that had simply stopped deleting cannot pass.
+ *
+ * ── AND SINCE ROUND NINE IT ALSO PINS THAT THE SWEEP EVER RUNS ───────────────────────────────
+ *
+ * Everything above is about what the sweep DOES. `the retention rail` at the bottom of this file is
+ * about whether it HAPPENS - the half that was missing, and the reason four documents plus the shared
+ * descriptor claimed a 90-day bound the code could not deliver. See that describe's own header.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, writeFileSync, existsSync, rmSync, utimesSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -56,7 +62,14 @@ import { integrationActionEvidence } from '../../src/data/stores.js';
 import { loadConfig, __resetConfigForTests } from '../../src/config.js';
 import { __resetAutomationConfigForTests } from '../../src/automation/config.js';
 import { actionEvidenceStore } from '../../src/integrations/action-evidence-store.js';
-import { bootState, sweepScreenshotsSparingPinnedEvidence } from '../../src/server.js';
+import {
+  bootState,
+  sweepScreenshotsSparingPinnedEvidence,
+  startRetentionSweepRail,
+  stopRetentionSweepRail,
+  retentionSweepTick,
+  __retentionSweepTimerForTests,
+} from '../../src/server.js';
 
 let mem: MongoMemoryServer;
 let dataDir: string;
@@ -120,6 +133,10 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
+  // `bootState` arms the retention rail now (round nine), so every case that boots leaves a live
+  // interval behind. Unref'd, so it could not hold the process open - disarmed anyway, because a
+  // rail still ticking during another suite's cases is a sweeper nobody asked for.
+  await stopRetentionSweepRail();
   await closeMongo();
   await mem.stop();
   rmSync(dataDir, { recursive: true, force: true });
@@ -128,10 +145,22 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  await stopRetentionSweepRail();
   await integrationActionEvidence.deleteMany({});
   rmSync(join(dataDir, 'automation-runs'), { recursive: true, force: true });
   seedTree();
 });
+
+/** Poll a condition to a deadline. Used only where the thing under test is a TIMER: a rail that
+ *  never fires has to fail as a timeout, because there is no event to await. */
+async function waitFor(pred: () => Promise<boolean>, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (await pred()) return;
+    if (Date.now() > deadline) throw new Error('the retention rail never ticked');
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
 
 describe('bootState sweeps expired screenshots WITH the evidence pins', () => {
   it('spares the run an evidence row points at, and removes the equally-expired one it does not', async () => {
@@ -161,7 +190,7 @@ describe('bootState sweeps expired screenshots WITH the evidence pins', () => {
  * `bootState` above proves the production LINE. These cases prove the function's own decisions
  * without paying for a full boot, and one of them is a decision only reachable here: what happens
  * when the PIN READ FAILS. Round four answered "sweep anyway with no pins" and shipped it; round
- * five answers "skip this boot" - see that case for why the two are not close.
+ * five answers "skip this pass" - see that case for why the two are not close.
  */
 describe('sweepScreenshotsSparingPinnedEvidence - the composition itself', () => {
   it('reports what it spared and what it removed', async () => {
@@ -173,7 +202,7 @@ describe('sweepScreenshotsSparingPinnedEvidence - the composition itself', () =>
     expect(existsSync(runDir(PINNED_RUN))).toBe(true);
   });
 
-  it('a SUPERSEDED evidence row releases its pin, and the old run is swept on the next boot', async () => {
+  it('a SUPERSEDED evidence row releases its pin, and the old run is swept on the next pass', async () => {
     // This is what bounds the retention extension. The pin follows the LIVE row, so a newly
     // validated run releases the previous one in the same write - it does not accumulate with run
     // volume, and a run stops being exempt the moment nothing points at it.
@@ -237,29 +266,32 @@ describe('sweepScreenshotsSparingPinnedEvidence - the composition itself', () =>
    * IT IS THE SAME INSTANT-VS-DURABLE ERROR the evidence collectors had: one failed read, at one
    * moment, deciding the fate of data whose lifetime is durable. The pin set is a PRECONDITION of
    * the sweep, not an embellishment on it - without it the sweep does not know less, it knows
-   * nothing - so the sweep is skipped for this boot. Bounded and recoverable (one extra boot of
-   * retained PNGs, collected by the next healthy read) beats unrecoverable.
+   * nothing - so the sweep is skipped for this pass. Bounded and recoverable (one extra PASS of
+   * retained PNGs - one `RETENTION_SWEEP_INTERVAL_MS` since round nine gave the sweep a timer, not
+   * one deploy - collected by the next healthy read) beats unrecoverable.
    */
-  it('a pin read that THROWS SKIPS the sweep for this boot, and never throws of its own', async () => {
+  it('a pin read that THROWS SKIPS the sweep for this pass, and never throws of its own', async () => {
     await seedPinningEvidence();
     const original = actionEvidenceStore.pinnedRunIdsForRetention.bind(actionEvidenceStore);
     actionEvidenceStore.pinnedRunIdsForRetention = async () => { throw new Error('mongo is unhappy'); };
     try {
-      // Reported as a sweep that did nothing, not as a sweep that pinned nothing.
+      // Reported as a sweep that did nothing, not as a sweep that pinned nothing. "Pass" and not
+      // "boot" since round nine: the rail re-enters this composition every
+      // `RETENTION_SWEEP_INTERVAL_MS`, so the cost of skipping is one tick, not one deploy.
       await expect(sweepScreenshotsSparingPinnedEvidence(() => Date.now()))
         .resolves.toEqual({ removed: 0, scanned: 0, pinned: 0, evidenceRemoved: 0 });
       // AND ASSERTED ON DISK, which is the claim that matters: the run behind the live evidence row
       // is still there. Under the old degrade it was deleted, irrecoverably.
       expect(existsSync(runDir(PINNED_RUN))).toBe(true);
-      // The unpinned one survives this boot too - that is the COST of skipping, stated rather than
-      // hidden, and it is one boot of retained PNGs against an unrecoverable deletion.
+      // The unpinned one survives this pass too - that is the COST of skipping, stated rather than
+      // hidden, and it is one tick of retained PNGs against an unrecoverable deletion.
       expect(existsSync(runDir(LOOSE_RUN))).toBe(true);
     } finally {
       actionEvidenceStore.pinnedRunIdsForRetention = original;
     }
   });
 
-  it('…and the NEXT boot, with a healthy read, collects what the skip left behind', async () => {
+  it('…and the NEXT pass, with a healthy read, collects what the skip left behind', async () => {
     // THE CONTROL, and what makes "skip" a deferral rather than a leak: nothing about the skipped
     // boot makes the loose run permanently exempt.
     await seedPinningEvidence();
@@ -276,5 +308,138 @@ describe('sweepScreenshotsSparingPinnedEvidence - the composition itself', () =>
     expect(result).toEqual({ removed: 1, scanned: 2, pinned: 1, evidenceRemoved: 0 });
     expect(existsSync(runDir(PINNED_RUN))).toBe(true);
     expect(existsSync(runDir(LOOSE_RUN))).toBe(false);
+  });
+});
+
+/**
+ * THE RETENTION RAIL - the trigger both windows never had (round nine).
+ *
+ * ── THE DEFECT ───────────────────────────────────────────────────────────────────────────────
+ *
+ * Everything above this line pins what the sweep DOES. Nothing pinned that it ever RUNS. Between
+ * them, `sweepExpiredEvidence` and `sweepExpiredScreenshots` had exactly one caller chain -
+ * `sweepScreenshotsSparingPinnedEvidence` -> `bootState` -> `boot()` - with no `setInterval` and no
+ * Mongo TTL index anywhere in the repo, while this same process already ran THREE interval rails.
+ * The deployment (`deploy/staging/docker-compose.yml`, `restart: unless-stopped`;
+ * `deploy/api.service.json`, a long-lived container over a persistent volume) is built not to
+ * restart. An api container six months without a deploy kept EVERY evidence row for six months - a
+ * durable capped copy of one person's real third-party request and response - and every
+ * automation-backed row kept its screenshot pin with it, so the per-step PNGs of authenticated
+ * client-portal sessions outlived the seven-day sweep for six months too.
+ *
+ * Round six then enforced the CONSTANT (`EVIDENCE_RETENTION_DAYS` 90 -> 89 and 90 -> 91 both redden)
+ * and NOT the trigger, and four documents plus the shared descriptor went on saying "at most 90 days"
+ * as though it were enforced. ENFORCING A NUMBER THAT NOTHING FIRES IS ENFORCING NOTHING, which is
+ * why every case below is about a TICK and none of them is about the constant except the one that
+ * has to be.
+ *
+ * ── WHAT THESE CASES PIN ─────────────────────────────────────────────────────────────────────
+ *
+ *   1. `bootState` ARMS the rail (the production line, entered for real), it is UNREF'D, and a TICK
+ *      collects a row that expired AFTER boot - proving collection without a restart, which is the
+ *      whole claim.
+ *   2. The rail rides `RETENTION_SWEEP_INTERVAL_MS`, restated as a literal and straddled by one
+ *      millisecond either side, so shortening or lengthening it reddens a different assertion.
+ *   3. A tick landing on top of one in flight does nothing rather than racing it over the same tree.
+ */
+describe('the retention rail', () => {
+  it('bootState arms it unref\'d, and a TICK collects a row that expired after boot - no restart', async () => {
+    await bootState();
+
+    // THE PRODUCTION ARMING, entered at the real `bootState` rather than re-composed here. The rail
+    // starts in `bootState` and not in `boot()`'s post-listen block precisely so this assertion can
+    // exist: nothing in this repo enters `boot()`, and an unentered composition root is how the
+    // `pinnedRunIds` argument went missing in the first place - see this file's own header.
+    const armed = __retentionSweepTimerForTests();
+    expect(armed).not.toBeNull();
+    // UNREF'D, ASSERTED RATHER THAN TRUSTED: a six-hour handle that kept the event loop alive would
+    // turn an idle process into one that will not shut down.
+    expect(armed!.hasRef()).toBe(false);
+
+    // A tree and a row that expire AFTER the boot sweep has already run. In the shipped code before
+    // this change, nothing in this process would ever look at either of them again.
+    seedTree();
+    await seedPinningEvidence();
+    const [row] = await integrationActionEvidence.find({});
+    await integrationActionEvidence.update(row!._id, (cur) => ({ ...cur, validatedAt: '2020-01-01T00:00:00.000Z' }));
+
+    // THE CONTROL, and it is the ROW that carries it: the boot sweep has already run, so nothing
+    // else in this process will ever collect this row - that is the six-month case, reproduced. The
+    // two directory assertions are preconditions (`seedTree` above re-made what boot removed), stated
+    // so the post-tick assertions below are known to be about the tick.
+    expect(await integrationActionEvidence.find({})).toHaveLength(1);
+    expect(existsSync(runDir(PINNED_RUN))).toBe(true);
+    expect(existsSync(runDir(LOOSE_RUN))).toBe(true);
+
+    // Re-armed at a tick length a test can wait out. The DEFAULT interval is the next case, so
+    // nothing here rests on six hours being six hours.
+    await stopRetentionSweepRail();
+    startRetentionSweepRail({ intervalMs: 25 });
+
+    await waitFor(async () => (await integrationActionEvidence.find({})).length === 0);
+
+    // AND THE PIN WENT WITH IT, on a tick: the run the expired row was holding out of the 7-day
+    // sweep is gone, and so is the equally-expired one nothing pinned.
+    await waitFor(async () => !existsSync(runDir(PINNED_RUN)));
+    expect(existsSync(runDir(LOOSE_RUN))).toBe(false);
+  }, 180_000);
+
+  it('rides RETENTION_SWEEP_INTERVAL_MS - nothing a millisecond before six hours, one tick at it', async () => {
+    // RESTATED AS A LITERAL rather than imported, the discipline the other two retention constants
+    // already carry: `expect(CONST).toBe(CONST)` is true of every value the constant could hold.
+    const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+
+    // The rail's WORK is stood in for at the store's own methods - the pattern the throwing-leg cases
+    // above use - so this case is about WHEN a tick fires and needs no live clock inside Mongo.
+    const sweep = actionEvidenceStore.sweepExpiredEvidence.bind(actionEvidenceStore);
+    const pins = actionEvidenceStore.pinnedRunIdsForRetention.bind(actionEvidenceStore);
+    let ticks = 0;
+    actionEvidenceStore.sweepExpiredEvidence = async () => { ticks++; return 0; };
+    actionEvidenceStore.pinnedRunIdsForRetention = async () => new Set<string>();
+    vi.useFakeTimers();
+    try {
+      startRetentionSweepRail(); // NO interval argument: production's exact call
+      await vi.advanceTimersByTimeAsync(SIX_HOURS_MS - 1);
+      expect(ticks).toBe(0); // SHORTENING the interval reddens here
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ticks).toBe(1); // LENGTHENING it reddens here
+    } finally {
+      vi.useRealTimers();
+      await stopRetentionSweepRail();
+      actionEvidenceStore.sweepExpiredEvidence = sweep;
+      actionEvidenceStore.pinnedRunIdsForRetention = pins;
+    }
+  });
+
+  it('a tick that arrives while one is in flight does NOTHING, rather than racing it', async () => {
+    // The screenshot half walks a tree that grows with run volume, so a tick CAN outlast the
+    // interval. Two overlapping passes would both read the pins, both `readdir` the same directories
+    // and both `rm` the same expired ones - the second `ENOENT`-ing on what the first is half-way
+    // through removing, and both reporting counts that are true of neither.
+    const sweep = actionEvidenceStore.sweepExpiredEvidence.bind(actionEvidenceStore);
+    let inFlight = 0;
+    let peak = 0;
+    actionEvidenceStore.sweepExpiredEvidence = async () => {
+      peak = Math.max(peak, ++inFlight);
+      await new Promise((r) => setTimeout(r, 80));
+      inFlight--;
+      return 0;
+    };
+    try {
+      const [first, second] = await Promise.all([
+        retentionSweepTick(() => Date.now()),
+        (async () => {
+          await new Promise((r) => setTimeout(r, 20)); // lands mid-pass
+          return retentionSweepTick(() => Date.now());
+        })(),
+      ]);
+
+      expect(peak).toBe(1);
+      expect(first).not.toBeNull();
+      // AND IT SAYS SO. `null` is "this tick did nothing", distinct from a pass that swept nothing.
+      expect(second).toBeNull();
+    } finally {
+      actionEvidenceStore.sweepExpiredEvidence = sweep;
+    }
   });
 });

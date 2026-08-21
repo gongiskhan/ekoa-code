@@ -652,7 +652,7 @@ export async function deleteConfig(actor: Actor, integrationKey: string): Promis
     // orders converge on the same end state, measured both ways. The `id is string` narrowing is
     // what `DisconnectedConfigScope`'s `readonly string[]` requires, so `tsc` - not a test - is what
     // stops this from becoming a `$nin` full of `null`s. The behaviour it protects IS pinned, one
-    // level down and end to end through this function: `a MIGRATED row carrying no owner` in
+    // level down and end to end through this function: `an OWNERLESS row` in
     // tests/integrations/action-evidence-removal.test.ts.
     const stillOwnTheirOwn = c.ownerUserId
       ? []

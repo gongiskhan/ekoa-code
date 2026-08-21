@@ -319,8 +319,11 @@ function recipesDroppedBy(
 // The common cause is not the scope. It is that "can somebody still reach this action" is answered
 // SYNCHRONOUSLY, at one instant, from one vantage, while the row it governs outlives that instant.
 // The question is not answerable that way, so it is no longer asked here at all: a definition write
-// records nothing and deletes nothing. TTL (`sweepExpiredEvidence`) collects, the owner's own
-// DELETE collects, and a newer validated run supersedes. See `action-evidence-store.ts`'s header for
+// records nothing and deletes nothing. TTL (`sweepExpiredEvidence` - at boot AND every
+// `RETENTION_SWEEP_INTERVAL_MS` on `server.ts`'s retention rail; it had no timer at all until round
+// nine, so read "TTL collects" as a claim about that rail rather than about the constant) collects,
+// the owner's own DELETE collects, and a newer validated run supersedes. See
+// `action-evidence-store.ts`'s header for
 // the trade and `docs/decisions.md` (2026-08-20, round five) for why it was taken deliberately.
 //
 // A CAPTURE PILE IS STILL COLLECTED HERE, and the difference is real rather than an inconsistency:

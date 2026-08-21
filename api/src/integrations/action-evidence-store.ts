@@ -13,16 +13,36 @@
  *                                    whole pile away the moment the recipe is compiled. Nobody
  *                                    reads it after that; nothing renders it.
  *
- *   `integration_action_evidence`  - THIS. Exactly ONE row per (org, integration, action), HUMAN
- *                                    facing, superseded wholesale by each validated run. It is the
- *                                    answer to "what did this action do the last time it worked",
- *                                    which is the question the detail page asks and the question a
- *                                    promotion to `trusted` now has to be able to answer.
+ *   `integration_action_evidence`  - THIS. Exactly ONE row per (org, integration, action), shaped
+ *                                    for a HUMAN reader, superseded wholesale by each validated run.
+ *                                    It is the answer to "what did this action do the last time it
+ *                                    worked", which is the question the detail page will ask and the
+ *                                    question a promotion to `trusted` now has to be able to answer.
  *
- * Both exist because "the trace a compiler consumes" and "the sample a person is shown" are not the
- * same artefact: the first is unbounded, transient and discarded on success, the second is bounded,
- * durable and only ever replaced. Collapsing them would mean either keeping hundreds of raw rows
- * alive forever to render one sample, or deleting the sample the moment a recipe compiled.
+ * ── AND ON THIS BRANCH NOBODY READS IT. SAID HERE, WHERE THE CLAIM IS MADE (round nine) ───────
+ *
+ * "Human facing" is a statement about the SHAPE of this row, not about a surface that exists. The
+ * caveat was recorded in two places - `listForIntegration`'s docblock and `EVIDENCE_RETENTION_DAYS`'s
+ * - and in NEITHER of the places the claim is actually made, which is how it kept reading as a
+ * description of the running product. The facts on this branch:
+ *
+ *   - `listForIntegration` has NO production caller. The detail page that would call it is S2/S3 and
+ *     lives on a different branch.
+ *   - `getEvidence` DOES have one, and it is a MACHINE read: `trustAuthoredAction` fetches the row
+ *     and hands it straight to `promoteToTrusted`, which compares `outcome` and `shape` and returns a
+ *     verdict. No byte of `evidence` reaches a response.
+ *   - the person granting `trusted` sends `POST …/actions/:name/trust` with a `shape` STRING they
+ *     echo back. They are shown the action, not the sample of it.
+ *
+ * So the excerpt caps, the truncation flags and the step pointers below are built for a reader who
+ * has not mounted yet. That is a deliberate order - a durable row is easier to shape right before it
+ * is rendered than after - but until the page lands, every "what a person sees" sentence in this file
+ * describes an intended surface. Delete these paragraphs when it mounts.
+ *
+ * Both collections exist because "the trace a compiler consumes" and "the sample a person is shown"
+ * are not the same artefact: the first is unbounded, transient and discarded on success, the second
+ * is bounded, durable and only ever replaced. Collapsing them would mean either keeping hundreds of
+ * raw rows alive forever to render one sample, or deleting the sample the moment a recipe compiled.
  *
  * ── WHY THIS IS A COLLECTION AND NOT A FIELD ON THE DEFINITION ────────────────────────────────
  *
@@ -78,8 +98,9 @@
  * `api/tests/security/action-evidence-isolation.test.ts`.
  *
  * The ONE cross-tenant reader left in this module is `pinnedRunIdsForRetention`, and it is not a
- * tenancy hole: see its own docblock. It is reachable from the boot sweeper alone and returns run
- * IDENTIFIERS ONLY. Round three had a SECOND one - `listOwnerRefsForKey`, which handed a write-time
+ * tenancy hole: see its own docblock. It is reachable from the retention sweeper alone (at boot and
+ * on the `RETENTION_SWEEP_INTERVAL_MS` rail) and returns run IDENTIFIERS ONLY. Round three had a
+ * SECOND one - `listOwnerRefsForKey`, which handed a write-time
  * reconciler every tenant's rows for a key - and it is deleted rather than narrowed: a listing that
  * crosses tenants is what made a cross-tenant DELETE expressible in the first place.
  *
@@ -111,8 +132,10 @@
  * question is no longer asked, and no cleverer reachability check replaces it. THREE DURABLE SIGNALS
  * END A ROW, and nothing else does:
  *
- *   1. TIME. `sweepExpiredEvidence` at boot ends every row not re-validated inside
- *      `EVIDENCE_RETENTION_DAYS`, orphan or not, and no vantage has to be right about anything.
+ *   1. TIME. `sweepExpiredEvidence` ends every row not re-validated inside `EVIDENCE_RETENTION_DAYS`,
+ *      orphan or not, and no vantage has to be right about anything. It runs at boot AND every
+ *      `RETENTION_SWEEP_INTERVAL_MS` on `server.ts`'s retention rail - the trigger it did NOT have
+ *      until round nine, when the only caller chain in the estate ended at `bootState`.
  *   2. THE OWNER. `discardEvidence`, reachable at
  *      `DELETE /api/v1/integrations/:key/actions/:actionName/evidence`. A person asking for their
  *      own data to go is a durable statement, not a guess. `discardEvidenceForDisconnectedConfig`
@@ -123,9 +146,11 @@
  *
  * A DEFINITION EDIT, A TIER FLIP, A RE-PUBLISH AND A FAILED RESOLVE RECORD NOTHING AND DELETE
  * NOTHING. That is a deliberate trade, journaled as one in docs/decisions.md: an orphaned row is a
- * BOUNDED retention and privacy gap - at most `EVIDENCE_RETENTION_DAYS`, and closable at any moment
- * by the owner - while a wrongly-deleted row is unrecoverable tenant data. The costs are not
- * comparable, and four rounds of evidence say the guess is not reliable enough to spend the second
+ * BOUNDED retention and privacy gap - at most `EVIDENCE_RETENTION_DAYS` plus one sweep interval, and
+ * closable at any moment by the owner - while a wrongly-deleted row is unrecoverable tenant data.
+ * (Read "bounded" as a claim about the TRIGGER as much as the number: until round nine there was no
+ * timer and no TTL index behind it, and the bound was really "until somebody deploys".) The costs
+ * are not comparable, and four rounds of evidence say the guess is not reliable enough to spend the second
  * one. THE RESIDUAL WINDOW IS REAL AND IS RECORDED AS OPEN in docs/findings.md; it is not closed
  * here, and this header does not imply that it is.
  *
@@ -138,9 +163,16 @@ import { integrationActionEvidence } from '../data/stores.js';
 import { secretRegistryFromValues, type SecretRegistry } from '../security/redaction.js';
 
 /**
- * Per-excerpt cap. The SAME ceiling the executor's failure path applies to a response body
- * (`MAX_BODY_DISPLAY_BYTES` in `action-executor.ts`), stated once here so the success sample and
- * the failure dump cannot drift into showing a person two different amounts of the same body.
+ * Per-excerpt cap, and the SINGLE SOURCE of the executor's `MAX_BODY_DISPLAY_BYTES` - the ceiling its
+ * failure path applies to a response body. `action-executor.ts` now binds its constant to this one
+ * (`const MAX_BODY_DISPLAY_BYTES = MAX_EVIDENCE_EXCERPT_CHARS`), so the success sample and the
+ * failure dump cannot drift into showing a person two different amounts of the same body.
+ *
+ * THIS DOCBLOCK USED TO CLAIM THAT AND THE CODE DID NOT DO IT (round nine): "stated once here" sat
+ * above two independent `8_000` literals in two files, and mutating either one alone left the whole
+ * estate green. The tie is real now, and the claim is pinned behaviourally rather than by this
+ * sentence - see `the failure dump and the success sample cut the same body at the same point` in
+ * `api/tests/integrations/action-evidence-capture.test.ts`.
  */
 export const MAX_EVIDENCE_EXCERPT_CHARS = 8_000;
 
@@ -203,7 +235,8 @@ export interface ActionEvidenceKey {
  * IT IS THE RETAINING DIRECTION AND IT IS BOUNDED, which is why it is recorded rather than fixed
  * here: the alternative (erase every owner in the org) is the round-four defect, which destroyed the
  * samples of credentials people still hold. The surviving row is closable by its owner at any moment
- * (`discardEvidence`, `DELETE …/evidence`) and goes on its own inside `EVIDENCE_RETENTION_DAYS`.
+ * (`discardEvidence`, `DELETE …/evidence`) and goes on its own inside `EVIDENCE_RETENTION_DAYS` plus
+ * one `RETENTION_SWEEP_INTERVAL_MS`.
  * OPEN in docs/findings.md as `evidence-of-a-shared-credential-survives-its-disconnection`.
  */
 export type DisconnectedConfigScope = {
@@ -215,8 +248,26 @@ export type DisconnectedConfigScope = {
 /**
  * How long a validated run stays evidence. The RETENTION BOUND that makes an orphaned row a bounded
  * gap rather than an unbounded one, and the reason "fail towards retaining" is an acceptable posture
- * at all: a row not re-validated within this window goes at the next boot whether or not anything
+ * at all: a row not re-validated within this window goes at the next sweep whether or not anything
  * ever noticed its action stopped resolving.
+ *
+ * ── AND "THE NEXT SWEEP" IS A REAL EVENT NOW, WHICH IT WAS NOT (round nine) ───────────────────
+ *
+ * The sentence above used to read "goes at the next BOOT", and every document that quoted this
+ * constant turned that into "at most 90 days". It was not: `sweepExpiredEvidence` had exactly one
+ * caller chain in the estate - `sweepScreenshotsSparingPinnedEvidence` -> `bootState` -> `boot()` -
+ * with no interval and no Mongo TTL index anywhere in the repo, while the deployment
+ * (`deploy/staging/docker-compose.yml`, `restart: unless-stopped`) is built to stay up. An api
+ * container running six months without a deploy held every row for six months, and every
+ * automation-backed row held its screenshot pin for six months with it. Round six then enforced this
+ * CONSTANT (90 -> 89 and 90 -> 91 both redden) and not the TRIGGER, so the estate was green over a
+ * bound that could not fire.
+ *
+ * `startRetentionSweepRail` in `server.ts` is the trigger: an unref'd `RETENTION_SWEEP_INTERVAL_MS`
+ * interval armed by `bootState`, pinned by a TICK rather than by a constant
+ * (`api/tests/automation/composition-root-screenshot-pins.test.ts`). THE HONEST BOUND IS THEREFORE
+ * "`EVIDENCE_RETENTION_DAYS` PLUS AT MOST ONE `RETENTION_SWEEP_INTERVAL_MS`", and it is written that
+ * way wherever it is claimed rather than rounded down to the number below.
  *
  * 90 DAYS, AND THE NUMBER IS A TRADE RATHER THAN A ROUND FIGURE. Shorter than the screenshot sweep's
  * 7 days is wrong (an automation row's pointers would outlive nothing, but the graduation
@@ -232,7 +283,7 @@ export type DisconnectedConfigScope = {
  * run REPLAYS - the answer carries a `replay-<uuid>` id, there is by construction no `automationRuns`
  * document behind it, `collectRunEvidence` therefore answers null, and the executor records nothing.
  * An action run successfully every single day for ninety days keeps the stamp of its FIRST run, is
- * deleted at the next boot after that, and releases its screenshot pin on the way out.
+ * deleted at the next sweep after that, and releases its screenshot pin on the way out.
  *
  * The paths that DO refresh are the ones where a run really happens: every `api-call` action; a
  * mutating automation-backed action (never `storable`, so it never replays); and an automation-backed
@@ -253,7 +304,7 @@ export type DisconnectedConfigScope = {
  * docs/decisions.md, docs/findings.md, docs/architecture.md and this file's own header rests on -
  * and until round six nothing enforced it: 90 -> 1 left the whole estate green while deleting every
  * tenant's evidence a day after their last run and releasing each automation-backed row's screenshot
- * pin in the same boot. `sweepExpiredEvidence - the retention bound` in
+ * pin in the same sweep. `sweepExpiredEvidence - the retention bound` in
  * `api/tests/integrations/action-evidence.test.ts` now restates 90 as a LITERAL and straddles the
  * cutoff by half a day either side, so any integer change here reddens it. If you are shortening the
  * window deliberately, change that literal in the same commit and say why in docs/decisions.md; if
@@ -314,9 +365,16 @@ export interface AutomationEvidence {
    * `collectRunEvidence`, through `action-executor.ts` - has already sliced to exactly that number.
    * So the length test never fired on the only path production takes, and a 50-step prefix of a
    * 200-step run was stored byte-for-byte as a complete 50-step run: no flag, no count, nothing a
-   * reader could notice. The row is durable for `EVIDENCE_RETENTION_DAYS` and is the human's basis
-   * for granting `trusted`, which makes an action auto-runnable by `achieve` - so "the trace you are
-   * reading is not the whole trace" is not decoration.
+   * reader could notice.
+   *
+   * WHY IT MATTERS, STATED FOR WHAT THIS BRANCH ACTUALLY HAS. The row is durable for
+   * `EVIDENCE_RETENTION_DAYS` plus one sweep interval, and it is the record the graduation gate
+   * reads before an action becomes auto-runnable by `achieve`. The previous revision called it "the
+   * human's basis for granting `trusted`", and NO HUMAN READS IT HERE: `trustAuthoredAction`'s fetch
+   * feeds `promoteToTrusted`, which looks at `outcome` and `shape` only, and the person promoting
+   * echoes back a shape string - the steps never reach a surface, because the page that would render
+   * them is S2/S3. The flag is therefore correctness FOR THE READER WHO IS COMING (see the module
+   * header), not a fix to something a person is currently being misled by.
    *
    * The end-to-end pin is `the EVIDENCE seams (slice S1)` in
    * `api/tests/automation/composition-root-action-seam.test.ts`, which drives a run longer than the
@@ -564,9 +622,22 @@ export class ActionEvidenceStore {
    * thing being measured. A row whose action stopped resolving for a reader who never runs it again
    * ages out here, releasing its screenshot pin with it.
    *
+   * IT IS ALSO THE ONLY BOUND UNDER `discardEvidenceOfDisconnectedConfig`, whose catch-all returns 0
+   * and warns: a credential-disconnect erasure that fails leaves rows behind that nothing retries,
+   * and this is what eventually takes them. That backstop was as un-triggered as the bound itself
+   * until round nine - see below.
+   *
+   * IT HAS A TRIGGER, AND THE TRIGGER IS NOT A DEPLOY (round nine). Its one caller chain used to end
+   * at `bootState`, with no interval and no Mongo TTL index behind it, so every "at most 90 days"
+   * claim in this repo was really "at most 90 days after the next restart" in a deployment built not
+   * to restart. `server.ts`'s `startRetentionSweepRail` re-enters
+   * `sweepScreenshotsSparingPinnedEvidence` every `RETENTION_SWEEP_INTERVAL_MS`, so the bound this
+   * method enforces is `EVIDENCE_RETENTION_DAYS` plus at most one tick.
+   *
    * CROSS-TENANT BY NECESSITY AND NOT A TENANCY HOLE, for the reason `pinnedRunIdsForRetention` is
-   * not one: retention belongs to no tenant, this runs on a boot job that has no actor and cannot be
-   * reached by a request, and it returns a COUNT - it never reads, projects or hands back a row.
+   * not one: retention belongs to no tenant, this runs on a boot/timer job that has no actor and
+   * cannot be reached by a request, and it returns a COUNT - it never reads, projects or hands back
+   * a row.
    *
    * ONE `deleteMany` AND NO MATERIALISATION: `validatedAt` is an ISO-8601 stamp, which orders
    * lexicographically, so the cutoff is a plain string comparison in the query rather than a scan of
@@ -583,14 +654,15 @@ export class ActionEvidenceStore {
    * THE RETENTION PINS - every run id any tenant's live evidence points at.
    *
    * CROSS-TENANT BY NECESSITY, AND NOT A TENANCY HOLE. `sweepExpiredScreenshots` walks a FILESYSTEM
-   * tree that has no org in it (`<root>/<automationId>/<runId>`), on a boot job that belongs to no
-   * tenant. Asking "which runs must this sweep spare" cannot be scoped to an org, because the sweep
-   * is not scoped to an org.
+   * tree that has no org in it (`<root>/<automationId>/<runId>`), on a boot/timer job that belongs to
+   * no tenant. Asking "which runs must this sweep spare" cannot be scoped to an org, because the
+   * sweep is not scoped to an org.
    *
    * What crosses the boundary is therefore held to identifiers ONLY: a set of run id strings, with
    * no org, no action, no integration key and no sample attached. A caller learns that some run is
-   * pinned, never whose it is or what it did. The one production caller is the boot sweeper
-   * (`server.ts`), which does not have an actor and cannot be reached by a request.
+   * pinned, never whose it is or what it did. The one production caller is the retention sweeper
+   * (`server.ts`, at boot and on its rail), which does not have an actor and cannot be reached by a
+   * request.
    *
    * ── THE READ IS BOUNDED, WHICH IS A DIFFERENT CLAIM FROM "THE PIN COUNT IS BOUNDED" ──────────
    *
@@ -754,6 +826,15 @@ export const actionEvidenceStore = new ActionEvidenceStore();
  *
  * BEST EFFORT AND LOUD: `deleteConfig` has already removed the credential by the time this runs, and
  * an undeletable config would be a worse failure than a reported leftover.
+ *
+ * AND "BEST EFFORT" NEEDS SOMETHING BEHIND IT, WHICH IT DID NOT HAVE (round nine). Nothing retries
+ * this: the catch below answers 0, logs, and the caller moves on. The only thing that ever reaches
+ * those leftover rows again is the retention sweep - which, until `startRetentionSweepRail` existed,
+ * ran solely at `bootState`. So a disconnect erasure that hit a Mongo blip left one person's real
+ * third-party request and response behind with no bounded backstop at all, in a container built to
+ * stay up. The backstop is now `EVIDENCE_RETENTION_DAYS` plus at most one `RETENTION_SWEEP_INTERVAL_MS`,
+ * which is long but is a bound. Shortening it means retrying here, and that is a durable-queue
+ * question rather than a `try`/`catch` one.
  */
 export async function discardEvidenceOfDisconnectedConfig(
   scope: DisconnectedConfigScope,

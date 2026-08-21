@@ -69,8 +69,16 @@ export interface CollectedRunEvidence {
    * `evidence.steps.length > MAX_EVIDENCE_STEPS`, but what it receives is ALREADY sliced to exactly
    * 50, so that disjunct is unreachable from the only path production takes. A 50-step prefix of a
    * 200-step run was byte-indistinguishable from a complete 50-step run, and the row is durable for
-   * 90 days and is the human's basis for granting `trusted` - which makes an action auto-runnable by
-   * `achieve`. The signal therefore has to travel with the slice, not be re-derived after it.
+   * 90 days plus one retention-sweep interval and is the record the graduation gate reads before an
+   * action becomes auto-runnable by `achieve`. The signal therefore has to travel with the slice, not
+   * be re-derived after it.
+   *
+   * "THE HUMAN'S BASIS FOR GRANTING `trusted`" IS WHAT THIS USED TO SAY, AND IT IS NOT TRUE ON THIS
+   * BRANCH (round nine). Nothing renders these steps to anybody: the promotion path reads the stored
+   * row's `outcome` and `shape` and nothing else, and the person promoting echoes back a shape
+   * string. The detail page that would show a trace is S2/S3. The flag is correct and worth carrying
+   * for the reader who is coming - see the module header of
+   * `integrations/action-evidence-store.ts` - but it is not currently un-misleading anyone.
    *
    * `AutomationEvidence.truncated` in `integrations/action-evidence-store.ts` is the field this ends
    * up in; `action-executor.ts` forwards it across the seam.

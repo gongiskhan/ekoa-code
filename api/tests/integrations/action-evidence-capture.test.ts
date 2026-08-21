@@ -323,6 +323,56 @@ describe('a 2xx api-call leaves evidence the executor used to discard', () => {
     expect(ev.response.body!.length).toBeLessThanOrEqual(MAX_EVIDENCE_EXCERPT_CHARS);
     expect(ev.response.truncated).toBe(true);
   });
+
+  /**
+   * ONE BODY, TWO PATHS, THE SAME CUT (round nine).
+   *
+   * `MAX_EVIDENCE_EXCERPT_CHARS`'s docblock promised the success sample and the failure dump "cannot
+   * drift into showing a person two different amounts of the same body", and under that sentence sat
+   * TWO INDEPENDENT `8_000` LITERALS in two files with nothing tying them. Mutating either one alone
+   * left the whole estate green - the caps case above only ever compares the stored body against the
+   * STORE's own constant, so it can never see the executor's. A docblock claiming a consequence the
+   * code cannot have is the thing this branch keeps finding, so the claim was made true
+   * (`const MAX_BODY_DISPLAY_BYTES = MAX_EVIDENCE_EXCERPT_CHARS`) and then pinned here.
+   *
+   * PINNED BEHAVIOURALLY, THROUGH THE REAL EXECUTOR, IN BOTH DIRECTIONS - not by comparing the two
+   * constants to each other, which would be a tautology over any pair of equal numbers. The same
+   * oversized body goes through twice, once 2xx and once 5xx, and what each path SHOWS is compared:
+   *
+   *   - if the executor's cap were the SMALLER, `truncateForDisplay`'s marker would fit inside the
+   *     evidence cap and ride into the stored sample, making it longer than the dump's body;
+   *   - if the evidence cap were the SMALLER, the store would slice the sample shorter than the dump.
+   *
+   * MEASURED, INCLUDING THE MUTANT THAT PROVES THE TIE IS NOT AN EQUIVALENT ONE.
+   * `MAX_EVIDENCE_EXCERPT_CHARS + 1_000` reddens and `111` reddens, so both directions of a drift
+   * die. Re-splitting `MAX_BODY_DISPLAY_BYTES` back to a bare `8_000` stays GREEN - correctly, since
+   * that is not a drift, it is the same number written twice. What shows the tie is load-bearing
+   * rather than cosmetic is the pair: re-split to `8_000` AND move the store's constant to `111`,
+   * which reddens. With the tie, the same single-literal change moves BOTH caps and this case stays
+   * green - the VALUE is pinned separately, as a literal, in `action-evidence.test.ts`.
+   */
+  it('the failure dump and the success sample cut the same body at the same point', async () => {
+    await seed([readAction]);
+    // Deliberately NOT valid JSON, so neither path canonicalises it: both store the raw text and the
+    // comparison is about the CUT rather than about `safeStringify`.
+    const RAW = 'y'.repeat(MAX_EVIDENCE_EXCERPT_CHARS + 5_000);
+
+    await run(fetchReturning(200, RAW));
+    const shownOnSuccess = ((await evidenceOf())!.evidence as ApiCallEvidence).response.body!;
+
+    const failed = await run(fetchReturning(500, RAW));
+    expect(failed.success).toBe(false);
+    const shownOnFailure = failed.details!.response!.body;
+
+    // The one difference the two presentations are ALLOWED to have: `truncateForDisplay` appends its
+    // own marker, and the evidence cap then slices that marker back off the stored sample.
+    const marker = shownOnFailure.match(/\n… \[truncated, (\d+) more bytes\]$/);
+    expect(marker).not.toBeNull();
+    const bodyBytesOnFailure = shownOnFailure.slice(0, -marker![0].length);
+
+    expect(bodyBytesOnFailure).toBe(shownOnSuccess);
+    expect(Number(marker![1])).toBe(RAW.length - bodyBytesOnFailure.length);
+  });
 });
 
 describe('evidence is the LAST VALIDATED run, so a failure is not one', () => {

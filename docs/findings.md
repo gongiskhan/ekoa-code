@@ -17,7 +17,8 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   **Its docblock claims otherwise**: *"Erase every screenshot for one run (the delete-on-run-delete
   / erasure-request path)"*. There is no delete-on-run-delete path and there is no erasure-request
   path; the only thing that ever removes these PNGs is the AGE-BASED sweep
-  (`sweepExpiredScreenshots`, armed at boot from `server.ts`). So the tree of authenticated
+  (`sweepExpiredScreenshots`, armed at boot from `server.ts` and, since round nine, re-run every
+  `RETENTION_SWEEP_INTERVAL_MS` on its retention rail). So the tree of authenticated
   client-portal screenshots - court filings, processo numbers, client NIFs, as pixels - has
   retention but no erasure, while a function named for erasure sits beside it looking like coverage.
   Its suite is green because it tests the function, never a caller.
@@ -71,9 +72,11 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   so it is gone. Pin release is now: the READER'S own run when it can no longer resolve the action,
   the writing org's own reconciliation, the owner's new erasure control
   (`DELETE /api/v1/integrations/:key/actions/:actionName/evidence`), the credential disconnection,
-  and - the one that needs nobody to notice anything - the boot retention sweep at 90 days
+  and - the one that needs nobody to notice anything - the retention sweep at 90 days
   (`sweepExpiredEvidence`). That last one is what finally makes the pin's retention BOUNDED in every
-  case rather than in the cases somebody enumerated. It is still not erasure over the PNGs:
+  case rather than in the cases somebody enumerated. (Written "boot retention sweep" here until round
+  nine, and at boot was all there was - see
+  `the-90-day-bound-was-contingent-on-somebody-deploying`.) It is still not erasure over the PNGs:
   `deleteRunScreenshots` still has no production caller and this entry still claims no erasure
   coverage over the screenshot tree.
 
@@ -83,11 +86,13 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   reconciliation"* are gone; that paragraph outlived them by a round, which is the same class of
   stale claim round six is otherwise cleaning up. **Pin release is now exactly three things**: the
   owner's erasure control (`DELETE /api/v1/integrations/:key/actions/:actionName/evidence`), the
-  credential disconnection, and the boot retention sweep at 90 days (`sweepExpiredEvidence`) - plus
+  credential disconnection, and the retention sweep at 90 days (`sweepExpiredEvidence`) - plus
   the structural supersede, which releases the previous pin whenever a newer validated run replaces
   the row. **The bound is therefore carried entirely by the sweep**, which is what round six pins
   (`the-retention-window-was-a-number-no-test-could-tell-from-any-other`, below): before it, nothing
   stopped that 90 from becoming a 1 and taking every pinned run's PNGs with it on the next boot.
+  Round nine then gave the sweep a TRIGGER - it ran only at boot, so the bound was carried by a
+  deploy rather than by the sweep (`the-90-day-bound-was-contingent-on-somebody-deploying`).
   Unchanged: `deleteRunScreenshots` still has no production caller, and this entry still claims no
   erasure coverage over the screenshot tree.
 
@@ -96,9 +101,10 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   and REWRITES `evidence-orphan-window-until-the-reader-returns`: the old slug named a bound that no
   longer holds, and what it claimed is quoted below rather than quietly dropped).
 
-  **THE WINDOW IS NOW UNIFORM AND IT IS UP TO `EVIDENCE_RETENTION_DAYS` (90 DAYS).** An evidence row
-  whose action nobody can reach again is ended by exactly three things, and only one of them is
-  automatic: the boot retention sweep at 90 days, the owner's own
+  **THE WINDOW IS NOW UNIFORM AND IT IS UP TO `EVIDENCE_RETENTION_DAYS` (90 DAYS) PLUS ONE SWEEP
+  INTERVAL.** An evidence row whose action nobody can reach again is ended by exactly three things,
+  and only one of them is automatic: the retention sweep at 90 days (at boot and every
+  `RETENTION_SWEEP_INTERVAL_MS`), the owner's own
   `DELETE /api/v1/integrations/:key/actions/:actionName/evidence`, and a newer validated run
   superseding it (which cannot happen for an action nobody can run). `deleteConfig` also erases what
   a disconnected credential produced. Nothing else collects. So an orphan persists - as a durable
@@ -140,6 +146,19 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   `the-retention-window-was-a-number-no-test-could-tell-from-any-other` below. The WINDOW itself is
   unchanged and this entry stays OPEN.
 
+  **AND THAT PARAGRAPH WAS WRONG, CORRECTED ROUND NINE** (2026-08-21). It said the bound was
+  ENFORCED. Round six enforced the CONSTANT and not the TRIGGER, and there was no trigger: between
+  them `sweepExpiredEvidence` and `sweepExpiredScreenshots` had exactly one caller chain -
+  `sweepScreenshotsSparingPinnedEvidence` -> `bootState` -> `boot()` - with no `setInterval` and no
+  Mongo TTL index anywhere in the repo, in a deployment (`restart: unless-stopped`, persistent volume)
+  built not to restart. **An api container six months without a deploy held every row for six months**,
+  with every automation-backed row's screenshot pin. Enforcing a number nothing fires is enforcing
+  nothing, and this entry said otherwise for three rounds. Closed by
+  `the-90-day-bound-was-contingent-on-somebody-deploying` below. **THE WINDOW THIS ENTRY IS ABOUT IS
+  NOW `EVIDENCE_RETENTION_DAYS` PLUS AT MOST ONE `RETENTION_SWEEP_INTERVAL_MS` (6h)**, which is what
+  every "at most 90 days" sentence in this file now says; the entry stays OPEN on the size of the
+  window, which is unchanged.
+
 - **`evidence-of-a-replaying-action-ages-out-while-the-action-is-in-daily-use`** (2026-08-21, OPEN,
   **LOW on this branch, MEDIUM the moment S2/S3 mounts**; S1 round eight. Found by reading the
   `EVIDENCE_RETENTION_DAYS` docblock against the discovery spine, not by a failing test - nothing
@@ -155,7 +174,7 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   answers with a `replay-<uuid>` id that by construction has no `automationRuns` document behind it,
   so `collectRunEvidence` returns null, the executor's capture closure returns null, and NOTHING IS
   RECORDED. An action run successfully every single day for ninety days keeps the stamp of its first
-  run, is deleted at the next boot after that, and releases its screenshot pin on the way out.
+  run, is deleted at the next sweep after that, and releases its screenshot pin on the way out.
 
   **WHAT IS AND IS NOT AFFECTED.** Refreshing paths: every `api-call` action; a mutating
   automation-backed action (never `storable`, so it never replays); an automation-backed read whose
@@ -192,8 +211,9 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   answer a question about a durable row" shape the store header spends forty lines on, and it errs the
   same way: towards retaining.
   CONSEQUENCE IF NOT CLOSED: one org-shared account's real request and response body survive that
-  account's disconnection - bounded by `EVIDENCE_RETENTION_DAYS`, and closable at any moment by the
-  row's owner (`DELETE /api/v1/integrations/:key/actions/:actionName/evidence`).
+  account's disconnection - bounded by `EVIDENCE_RETENTION_DAYS` plus one
+  `RETENTION_SWEEP_INTERVAL_MS`, and closable at any moment by the row's owner
+  (`DELETE /api/v1/integrations/:key/actions/:actionName/evidence`).
   CLOSE BY (only with a DURABLE signal): stamping the evidence row with the CONFIG it ran under at
   write time, so the disconnect erasure is keyed on a fact about the row rather than on a
   reconstruction of who resolves what today. **NOT by widening the erasure back to every owner in the
@@ -3337,6 +3357,131 @@ silently absorbed into a ledger note):
   `sales-crm.png` ("Página não encontrada" 404 instead of the dashboard) - `booking-system` is
   disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
   `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
+
+## Recently fixed - 2026-08-21 action evidence round NINE (one major + three minors)
+
+- **`the-90-day-bound-was-contingent-on-somebody-deploying`** (**FIXED 2026-08-21**, S1 round nine,
+  **MAJOR** - a retention bound with no trigger, and five documents asserting it as enforced. Created
+  BY round five's simplification and made invisible BY round six's fix, so it is logged as a
+  compounding error rather than as a discovery).
+
+  **WHAT WAS TRUE.** `sweepExpiredEvidence` had exactly one caller chain in the estate:
+  `sweepScreenshotsSparingPinnedEvidence` -> `bootState` -> `boot()`. No `setInterval`, no Mongo TTL
+  index anywhere in the repo - in a process that already runs THREE interval rails (the listener
+  supervisor, the knowledge scheduler, the schedule supervisor). Deployment reality:
+  `deploy/staging/docker-compose.yml` is `restart: unless-stopped` and `deploy/api.service.json` is a
+  long-lived container over a persistent volume. **An api container that runs six months without a
+  deploy retained EVERY evidence row for six months** - a durable capped copy of one person's real
+  third-party request and response, client names, processo numbers, invoice totals - and every
+  automation-backed row kept its `pinnedRunIds` exemption for six months with it, so the per-step PNGs
+  of authenticated client-portal sessions survived the 7-day screenshot sweep for six months too, with
+  no erasure path over that tree at all (`screenshot-erasure-path-has-no-production-caller`, OPEN).
+
+  **HOW IT GOT THERE, RECORDED AS COMPOUNDING RATHER THAN AS ONE MISTAKE.** Round five removed every
+  synchronous collector on the strength of *"TTL is the collector"* - without checking that the TTL
+  fires on a schedule. It fired at boot. Round six then enforced the CONSTANT (90 -> 89 and 90 -> 91
+  both redden) and not the TRIGGER, which made the gap harder to see rather than easier: the estate
+  was green over a bound that could not fire. Five places then stated it as enforced - the store
+  header, `EVIDENCE_RETENTION_DAYS`'s docblock, `data/stores.ts`, `docs/architecture.md`,
+  `docs/findings.md` (*"THE 'AT MOST 90 DAYS' BOUND IS NOW ENFORCED"*), plus
+  `shared/src/integrations.ts`, the shipped contract file. **Enforcing a number nothing fires is
+  enforcing nothing.**
+
+  **THE SAME ONE-SHOT SILENTLY BACKSTOPPED THE DISCONNECT ERASURE.**
+  `discardEvidenceOfDisconnectedConfig` catches everything, returns 0 and warns; nothing retries it.
+  The only thing that ever reached those leftover rows again was this sweep, so a
+  credential-disconnect erasure that hit a Mongo blip had no bounded backstop either. Now bounded at
+  the same window plus one tick, and said so in its docblock.
+
+  **THE FIX IS A TRIGGER.** `startRetentionSweepRail` (`api/src/server.ts`): an unref'd
+  `RETENTION_SWEEP_INTERVAL_MS` (6h) interval re-entering `sweepScreenshotsSparingPinnedEvidence`,
+  armed by `bootState` immediately after the one-shot (so the first tick cannot race it) and disarmed
+  on shutdown, re-entrancy-guarded so a tick landing on an in-flight pass answers `null` instead of
+  racing it over the same tree. Armed from `bootState` and NOT `boot()`'s post-listen block, unlike
+  the other three rails: it has no HTTP-listener dependency, and `boot()` is entered by no test in
+  this repo - the exact defect class this slice already hit once.
+
+  **NOT A MONGO TTL INDEX**, and the three reasons are in the function's docblock: an index collects
+  only the row and leaves the SCREENSHOTS, which are a filesystem walk in this process needing a
+  trigger regardless; it takes the evidence-before-pins ordering out of this process's hands; and
+  `validatedAt` is an ISO-8601 STRING by design (it orders lexicographically, which is what makes the
+  cutoff one `deleteMany` with no materialisation) while a TTL index needs a BSON `Date` - so an index
+  means changing the stored type or carrying a permanent parallel field, which CLAUDE.md rule 10
+  forbids.
+
+  **PINNED BY A TICK, NOT BY A CONSTANT** - `the retention rail` in
+  `api/tests/automation/composition-root-screenshot-pins.test.ts`, three cases. (1) Enters the REAL
+  `bootState`, asserts the rail is armed and `hasRef() === false`, then expires a row AFTER boot
+  (asserting the un-swept state first, as the control) and waits for a tick to collect it and release
+  its screenshot pin - collection with NO restart, which is the whole claim. (2) Arms with NO interval
+  argument (production's exact call) under fake timers and straddles `6 * 60 * 60 * 1000` by one
+  millisecond, restated as a literal. (3) Two overlapping ticks: peak concurrency 1 and the second
+  answers `null`.
+
+  **MUTATION-VERIFIED, all restored byte-identical:** arming nothing (the pre-round-nine behaviour)
+  reddens 2; dropping `timer.unref?.()` reddens 1; 6h -> 5h reddens 1 and 6h -> 7h reddens 1 (both
+  ways); removing `startRetentionSweepRail` from `bootState` reddens 1; removing the re-entrancy guard
+  reddens 1.
+
+  **AND EVERY CLAIM WAS CORRECTED TO WHAT IS ACTUALLY ENFORCED**: the bound is written as
+  *"`EVIDENCE_RETENTION_DAYS` plus at most one `RETENTION_SWEEP_INTERVAL_MS`"* in the store header,
+  the constant's docblock, `sweepExpiredEvidence`, `discardEvidenceOfDisconnectedConfig`,
+  `data/stores.ts`, `definition-store.ts`, `screenshot-plane.ts`, `shared/src/integrations.ts`,
+  `docs/architecture.md` and this file - including the paragraph above that claimed it was enforced.
+
+- **`the-migrated-row-sweep-was-logged-closed-without-being-grepped`** (**FIXED 2026-08-21**, S1
+  round nine, **MINOR** - a retired claim surviving in a TEST NAME, in the file that states it most
+  strongly, one round after the sweep for it was logged CLOSED).
+
+  Round eight corrected the provenance of the owner-less evidence row - this collection HAS NEVER
+  SHIPPED, the org-only key was an earlier round of this same unmerged branch, so no deployment holds
+  a pre-owner row and nothing migrated anything - in `action-evidence-store.ts` and in
+  `tests/integrations/action-evidence-removal.test.ts`, and recorded the sweep as complete. It had not
+  grepped. `api/tests/security/action-evidence-isolation.test.ts` still carried it in its header
+  (twice), in two inline comments, and **in a test NAME**: *"a PRE-OWNER migrated row … is served to
+  nobody"*, whose body said *"The exact document the first cut of this collection wrote"*. The removal
+  suite's own case name and fixture id (`migrated-org-only-key`) had survived the round-eight fix too,
+  and `service.ts` cited that name.
+
+  **THE COST IS SPECIFIC**: a maintainer greps "migrated", lands on a test name asserting that a
+  deployment holds pre-owner rows, and plans a data migration for a collection that has never
+  shipped - the exact mistake round eight logged as CLOSED. Renamed to *"an OWNERLESS row"* in both
+  suites, fixture id and cross-reference updated, and the header now states the provenance, the fact
+  that the defence is unchanged and still worth having, and why a wrong provenance in a test NAME is
+  the kind that gets acted on. **The rule: a claim-retirement sweep is not complete until it has been
+  grepped, including test names and fixture identifiers.** The same pass also retired a second stale
+  claim in that header - `listOwnerRefsForKey` listed as a live cross-tenant reader "since round
+  three", deleted in round four along with its round-five successor `listOwnerRefsInOrg`.
+
+- **`three-docblocks-said-a-human-reads-a-row-nobody-renders`** (**FIXED 2026-08-21**, S1 round nine,
+  **MINOR**, documentation-only). *"That row is what a person reads before granting trusted"*,
+  *"the human's basis for granting `trusted`"* (twice) and *"the question the detail page asks"* were
+  asserted at the three points the claim is MADE, while the caveat that no such reader exists lived in
+  two other places entirely (`listForIntegration`'s docblock and `EVIDENCE_RETENTION_DAYS`'s). On this
+  branch: `listForIntegration` has no production caller; the one production read is
+  `trustAuthoredAction` handing the row to `promoteToTrusted`, which reads `outcome` and `shape` and
+  renders nothing; and the person granting `trusted` echoes back a `shape` STRING. The caveat is now
+  at each site that makes the claim - the store's module header, `AutomationEvidence.truncated`,
+  `CollectedRunEvidence.truncated`, `data/stores.ts` and `docs/architecture.md` - saying that the
+  caps, flags and pointers are correctness for the reader who is COMING, with an instruction to delete
+  the paragraphs when the page mounts.
+
+- **`two-literals-under-a-docblock-promising-they-could-not-drift`** (**FIXED 2026-08-21**, S1 round
+  nine, **MINOR**). `MAX_EVIDENCE_EXCERPT_CHARS`'s docblock said the executor's response cap was
+  *"stated once here so the success sample and the failure dump cannot drift into showing a person two
+  different amounts of the same body"*. It was stated twice: two independent `8_000` literals, in two
+  files, with nothing tying them - and mutating either alone left the whole estate green, because the
+  only case that touched the cap compared the stored body against the STORE's constant and could never
+  see the executor's. Closed by making the claim true - `const MAX_BODY_DISPLAY_BYTES =
+  MAX_EVIDENCE_EXCERPT_CHARS` in `action-executor.ts` - and pinning it BEHAVIOURALLY rather than by
+  comparing the two constants (which is a tautology over any pair of equal numbers): `the failure dump
+  and the success sample cut the same body at the same point` drives one oversized body through the
+  real executor twice, 2xx and 5xx, strips `truncateForDisplay`'s marker from the dump and asserts the
+  remaining body bytes are exactly what the stored sample shows. **Measured both ways**: executor cap
+  larger (`+ 1_000`) reddens, executor cap smaller (`111`) reddens, and re-splitting to a bare `8_000`
+  stays green - correctly, because that is not a drift; re-splitting AND moving the store's constant to
+  111 reddens, which is what proves the tie is load-bearing rather than an equivalent mutant. The VALUE
+  8_000 stays pinned separately as a literal in `action-evidence.test.ts`.
 
 ## Recently fixed - 2026-08-21 action evidence round EIGHT (one major + three minors)
 

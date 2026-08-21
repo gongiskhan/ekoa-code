@@ -181,10 +181,16 @@ export const integrationCapturedCalls = new Store<Doc>('integration_captured_cal
  * action to `trusted` on the strength of another member's run against another member's account.
  *
  * RETENTION IS BOUNDED, which is what lets every collector on this collection fail towards KEEPING:
- * `sweepExpiredEvidence` at boot ends every row not re-validated within `EVIDENCE_RETENTION_DAYS`,
- * whether or not anything ever noticed its action had stopped resolving for its owner. Read
- * "re-validated" literally - a REPLAYING browser-steps action refreshes nothing, and that gap is OPEN
- * in docs/findings.md rather than implied away here.
+ * `sweepExpiredEvidence` ends every row not re-validated within `EVIDENCE_RETENTION_DAYS`, whether or
+ * not anything ever noticed its action had stopped resolving for its owner. Read "re-validated"
+ * literally - a REPLAYING browser-steps action refreshes nothing, and that gap is OPEN in
+ * docs/findings.md rather than implied away here.
+ *
+ * AND READ "BOUNDED" AS A CLAIM ABOUT A TRIGGER, not about a number. This docblock said "at boot",
+ * and at boot was ALL there was: no interval, no Mongo TTL index, in a container deployed to stay up,
+ * so the real bound was "until somebody deploys". `server.ts`'s `startRetentionSweepRail` (round
+ * nine) re-runs the sweep every `RETENTION_SWEEP_INTERVAL_MS`, which makes the bound
+ * `EVIDENCE_RETENTION_DAYS` plus at most one tick.
  *
  * THE ROW SAYS WHETHER ITS RUN WORKED, and the store DERIVES that rather than believing a caller:
  * `outcome` is `'succeeded' | 'failed'`, computed in `recordEvidence` off the stored sample.
@@ -193,9 +199,12 @@ export const integrationCapturedCalls = new Store<Doc>('integration_captured_cal
  *
  * NOT THE SAME THING AS `integration_captured_calls` ABOVE, and the difference is the reason both
  * exist: that one is the unbounded MACHINE-facing trace a recipe is compiled out of and then
- * discarded; this one is the bounded, durable, HUMAN-facing sample the integration detail page
- * renders and the graduation-to-trusted prerequisite reads. The evidence-store header sets out the
- * full argument.
+ * discarded; this one is the bounded, durable sample SHAPED for a human reader, which the
+ * graduation-to-trusted prerequisite reads. "The integration detail page renders it" is what this
+ * line used to say and it is not true on this branch - the page is S2/S3, `listForIntegration` has no
+ * production caller, and the one production read (`trustAuthoredAction` -> `promoteToTrusted`) looks
+ * at `outcome` and `shape` and renders nothing. The evidence-store header sets out the full argument
+ * and carries the same caveat.
  *
  * NOT A FIELD ON THE DEFINITION, deliberately: it would ride `publishedSnapshot` into every other
  * org (one tenant's real request and real response body) and it would race the 16MB document limit

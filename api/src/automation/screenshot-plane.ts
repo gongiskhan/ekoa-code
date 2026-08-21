@@ -37,13 +37,19 @@ import { automationStore } from './persistence.js';
  *
  * CHANGING THIS NUMBER IS A TRIPWIRE, for the same reason `EVIDENCE_RETENTION_DAYS` is one and with
  * the same measured history. These are screenshots of an AUTHENTICATED session on a client portal
- * and there is exactly one copy of each; the boot sweep is the only thing that reads this, and its
- * production caller (`sweepScreenshotsSparingPinnedEvidence` in `server.ts`) passes no
+ * and there is exactly one copy of each; the retention sweep is the only thing that reads this, and
+ * its production caller (`sweepScreenshotsSparingPinnedEvidence` in `server.ts`) passes no
  * `retentionDays` at all and rides the default. Every suite that touched the sweeper passed
  * `retentionDays: 7` EXPLICITLY, so the default was unenforced in both directions: 7 -> 36500
  * reddened nothing and 7 -> 1 reddened nothing - and the second silently destroys six days of every
- * tenant's screenshots at the next boot, including runs an evidence row points at whenever the pin
+ * tenant's screenshots at the next sweep, including runs an evidence row points at whenever the pin
  * read degrades to the empty set.
+ *
+ * THE WINDOW IS "SEVEN DAYS PLUS AT MOST ONE `RETENTION_SWEEP_INTERVAL_MS`", and it is written that
+ * way here because until round nine it was not a window at all. There was no timer and no TTL index:
+ * `sweepScreenshotsSparingPinnedEvidence` ran ONLY from `bootState`, so this number bounded nothing
+ * in a container that is deployed to stay up. `startRetentionSweepRail` in `server.ts` is the trigger,
+ * and its docblock carries the full account.
  *
  * `screenshot retention (R-3)` in `api/tests/security/screenshot-plane.test.ts` now restates 7 as a
  * LITERAL and straddles the cutoff by half a day either side WITHOUT passing `retentionDays`, so any
@@ -137,7 +143,8 @@ export function screenshotPlaneRouter(deps: ScreenshotPlaneDeps): Router {
 
 /**
  * Delete run-screenshot directories older than `retentionDays`. Best-effort and never throws: a
- * sweep failure must not take down boot or a scheduled tick.
+ * sweep failure must not take down boot, and must not take down the retention rail's tick either -
+ * a rail that died on one bad `stat` would put this window back where round nine found it.
  *
  * Granularity is the RUN directory (its mtime advances as steps are written), so a run is retained
  * or erased as a unit rather than losing individual steps out of the middle of a trace.

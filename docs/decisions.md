@@ -3369,3 +3369,101 @@ Rule 5: the isolation suite is untouched; the new cases add no tenancy leg. FIXE
 of an evidence row changes ADDITIVELY (a derived `outcome` term), so `05-data-model` carries an
 append-only AS-BUILT (g) note; no module, seam or flow moves, so `02-module-map` needs none and saying
 so is part of the rule rather than an exemption from it.
+
+- 2026-08-21 - **Slice S1 round NINE: retention gets a TRIGGER, and five documents stop claiming a
+bound the code could not deliver.** Branch `feat/s1-s3-integration-surface`. One major and three
+minors; a rebuttal of round five's own reasoning, logged as a compounding error rather than as a
+discovery.
+
+**THE MAJOR: THE 90-DAY BOUND WAS CONTINGENT ON A PROCESS RESTART.** `sweepExpiredEvidence` had
+exactly one caller chain in the estate - `sweepScreenshotsSparingPinnedEvidence` -> `bootState` ->
+`boot()`. No `setInterval`, no Mongo TTL index anywhere in the repo, in a process that already ran
+THREE interval rails (the listener supervisor, the knowledge scheduler, the schedule supervisor).
+Deployment reality: `deploy/staging/docker-compose.yml` is `restart: unless-stopped` and
+`deploy/api.service.json` is a long-lived container over a persistent volume. An api container that
+runs six months without a deploy retained EVERY evidence row for six months - a durable capped copy of
+one person's real third-party request and response (client names, processo numbers, invoice totals) -
+and every automation-backed row kept its `pinnedRunIds` exemption, so the per-step PNGs of
+authenticated client-portal sessions survived the 7-day screenshot sweep for six months too, over a
+tree that has no erasure path at all.
+
+**IT IS ROUND FIVE'S ERROR COMPOUNDED BY ROUND SIX'S FIX, AND IT IS RECORDED AS THAT.** Round five
+removed every synchronous collector on the strength of "TTL is the collector", without checking that
+the TTL fires on a schedule; it fired at boot. Round six then enforced the CONSTANT (90 -> 89 and
+90 -> 91 both redden) and not the TRIGGER, which made the gap *harder* to see: the estate went green
+over a bound that could not fire. Five places then asserted it - the store header,
+`EVIDENCE_RETENTION_DAYS`'s docblock, `data/stores.ts`, `docs/architecture.md`, and `docs/findings.md`
+in as many words ("THE 'AT MOST 90 DAYS' BOUND IS NOW ENFORCED") - plus `shared/src/integrations.ts`,
+the shipped contract file. **Enforcing a number that nothing fires is enforcing nothing.** The lesson
+this repo takes forward: a numeric bound needs its TRIGGER pinned as well as its VALUE, and a test
+that reddens on a constant change proves only that the constant is read somewhere.
+
+**THE FIX IS AN INTERVAL RAIL, NOT A MONGO TTL INDEX.** `startRetentionSweepRail` (`api/src/server.ts`)
+arms an unref'd `RETENTION_SWEEP_INTERVAL_MS` (6h) interval that re-enters
+`sweepScreenshotsSparingPinnedEvidence`. Armed by `bootState` immediately after the one-shot, so the
+first tick cannot race it; disarmed in the SIGINT/SIGTERM handler, awaiting the pass in flight so no
+half-finished `rm -r` of a run directory is left behind; re-entrancy-guarded, because the screenshot
+half walks a tree that grows with run volume and two overlapping passes would `rm` the same
+directories. **Armed from `bootState` and NOT from `boot()`'s post-listen block**, unlike the other
+three rails - it has no HTTP-listener dependency (the reason delivery and the listener supervisor
+must wait is re-entrant calls needing a live socket), and `boot()` is entered by no test in this repo,
+which is the exact defect class this slice already hit when the pin argument lived in an unentered
+`bootState`. An index was rejected for three reasons, all in the function's docblock: it collects only
+the row and leaves the SCREENSHOTS (a filesystem walk in this process, needing a trigger regardless);
+it takes the evidence-before-pins ordering out of this process's hands; and `validatedAt` is an
+ISO-8601 STRING by design - it orders lexicographically, which is what makes the cutoff one
+`deleteMany` with no materialisation - while a TTL index needs a BSON `Date`, so an index means either
+changing the stored type or carrying a permanent parallel field, which rule 10 forbids.
+
+**THE SAME ONE-SHOT SILENTLY BACKSTOPPED `discardEvidenceOfDisconnectedConfig`**, whose catch-all
+returns 0 and warns with nothing retrying it. A credential-disconnect erasure that hit a Mongo blip
+therefore had no bounded backstop either. Now bounded at the window plus one tick, said so in its
+docblock, and the shortening of it named as a durable-queue question rather than a `try`/`catch` one.
+
+**6 HOURS IS A TRADE, AND EVERY BOUND IS NOW WRITTEN AS "THE WINDOW PLUS AT MOST ONE TICK."** Small
+against both windows (0.25% of seven days), large against the work (a tick `stat`s every run directory
+in the tree). The claim is not rounded down to 90 anywhere: the store header, the constant's docblock,
+`sweepExpiredEvidence`, `discardEvidenceOfDisconnectedConfig`, `data/stores.ts`, `definition-store.ts`,
+`screenshot-plane.ts`, `shared/src/integrations.ts`, `docs/architecture.md` and `docs/findings.md` all
+say it the long way, including the findings paragraph that had claimed enforcement.
+
+**PINNED BY A TICK, NOT BY A CONSTANT** (`the retention rail`,
+`api/tests/automation/composition-root-screenshot-pins.test.ts`): the REAL `bootState` is entered, the
+rail is asserted armed and `hasRef() === false`, a row is expired AFTER boot (with the un-swept state
+asserted first as the control), and a tick is waited for. Mutation-verified, all restored
+byte-identical: arming nothing reddens 2; dropping `unref` reddens 1; 6h -> 5h and 6h -> 7h each
+redden 1 (both ways); removing the `bootState` arming reddens 1; removing the re-entrancy guard
+reddens 1.
+
+**THE THREE MINORS.** (1) Round eight's MIGRATED-row provenance correction was logged CLOSED without
+being grepped: the retired claim survived in `tests/security/action-evidence-isolation.test.ts`'s
+header, two comments and a TEST NAME ("a PRE-OWNER migrated row … is served to nobody"), and in the
+removal suite's own case name and fixture id, cited from `service.ts`. A maintainer greps "migrated",
+lands on a test name asserting a deployment holds pre-owner rows, and plans a migration for a
+collection that has never shipped. Renamed to "an OWNERLESS row" everywhere; the same pass retired a
+second stale claim in that header (`listOwnerRefsForKey` listed as a live cross-tenant reader, deleted
+in round four). **Standing rule taken from it: a claim-retirement sweep is not complete until it has
+been grepped, test names and fixture identifiers included.** (2) Three source docblocks asserted that
+a human reads the evidence row before granting `trusted`, while the caveat that no such reader exists
+lived in two entirely different places. On this branch `listForIntegration` has no production caller,
+the one production read is `trustAuthoredAction` -> `promoteToTrusted` (which reads `outcome` and
+`shape` and renders nothing), and the promoting human echoes back a shape STRING. The caveat now sits
+at each site that makes the claim. (3) `MAX_EVIDENCE_EXCERPT_CHARS` and `MAX_BODY_DISPLAY_BYTES` were
+two independent `8_000` literals under a docblock promising they "cannot drift into showing a person
+two different amounts of the same body"; mutating either alone left the estate green. Tied
+(`MAX_BODY_DISPLAY_BYTES = MAX_EVIDENCE_EXCERPT_CHARS`) and pinned BEHAVIOURALLY - one oversized body
+through the real executor twice, 2xx and 5xx, comparing what each path shows - because comparing the
+two constants is a tautology over any pair of equal numbers. Both directions redden; a bare re-split
+stays green and is disclosed as not-a-drift, while re-split-plus-move reddens, which is what shows the
+tie is load-bearing rather than an equivalent mutant.
+
+Rule 7: nothing on the wire moves - the rail is a process-internal timer, no descriptor, route, auth
+class or zod shape changes, the `shared/` edit is a docblock, OpenAPI and the generated cortex-cli are
+byte-identical, and `EXPECTED_PENDING_COUNT` is unmoved. Rule 5: no tenancy leg changes; the retention
+sweep is the cross-tenant boot/timer job it already was, with no actor and no request path, and the
+isolation suite's edits are comment and name corrections only. Rule 10: no parallel implementation is
+introduced - the rail re-enters the ONE existing composition rather than adding a second collector,
+which is what a Mongo TTL index would have been. FIXED-12: retention gains a TIMER RAIL as a new
+lifecycle trigger on an existing seam, so `02-module-map` carries an append-only AS-BUILT (f) note;
+the stored shape of an evidence row does not change, and `05-data-model` carries an append-only (h)
+note correcting what its own retention line means, because the diagram stated the boot-only trigger.

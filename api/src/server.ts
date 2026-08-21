@@ -536,8 +536,9 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     // `bindDefinitionEvidenceReconciler()` on the next line for the write-time one. Both are gone
     // with the collectors they fed: a run's refusal and a definition write are each one instant's
     // answer, and an evidence row is durable. Retention is decided by time
-    // (`sweepScreenshotsSparingPinnedEvidence` at boot), by the owner's own DELETE, and by a newer
-    // validated run superseding the old sample. See `integrations/action-evidence-store.ts`.
+    // (`sweepScreenshotsSparingPinnedEvidence`, at boot AND on the `startRetentionSweepRail` timer),
+    // by the owner's own DELETE, and by a newer validated run superseding the old sample. See
+    // `integrations/action-evidence-store.ts`.
   };
   setIntegrationActionExecutor(async (call) => {
     const owner = (await users.get(call.ownerUserId)) as { orgId?: string } | null;
@@ -1600,6 +1601,19 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
 }
 
 /**
+ * What one pass of the retention sweep did. Named rather than inlined so `logRetentionSweep` and the
+ * rail below can both take it, which is what keeps `bootState`'s `await` pinned by the compiler: the
+ * counts are READ by a typed call, and neither `void sweep(...)` (type `undefined`) nor a dropped
+ * `await` (type `Promise<…>`) is assignable to this.
+ */
+export interface RetentionSweepCounts {
+  removed: number;
+  scanned: number;
+  pinned: number;
+  evidenceRemoved: number;
+}
+
+/**
  * THE SCREENSHOT RETENTION SWEEP, JOINED TO THE EVIDENCE PINS (slice S1).
  *
  * WHY THIS IS A NAMED, EXPORTED FUNCTION AND NOT THREE LINES INSIDE `bootState`. The two halves are
@@ -1612,6 +1626,8 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
  * a real tree. `bootState` is entered there too, so the call below is proved and not assumed.
  *
  * BEST EFFORT, AND "BEST EFFORT" MEANS SKIPPING - NOT PROCEEDING WITHOUT THE FACTS (round five).
+ * (Round nine note: every "boot" in the paragraphs below now reads PASS. This function runs at boot
+ * AND on the retention rail, so "the next boot collects them" would be a claim about a deploy.)
  * The previous revision of this note said the pin read "degrades to pin nothing", and the code did
  * exactly that: `.catch(() => new Set())` and then swept ANYWAY. That is the one failure mode this
  * note itself names as destroying data, written down as the design. Reproduced: a healthy pin read
@@ -1619,11 +1635,13 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
  * LIVE, unexpired evidence row deleted, across every tenant at once (the screenshot tree has
  * `<automationId>/<runId>` in it and no org), with no restore path, on a transient Mongo blip.
  *
- * SO A PIN READ THAT FAILS SKIPS THE SWEEP FOR THIS BOOT. The screenshots stay one more boot -
- * bounded, recoverable, and the next boot with a healthy read collects them. It is the same
+ * SO A PIN READ THAT FAILS SKIPS THE SWEEP FOR THIS PASS. The screenshots stay one more pass -
+ * bounded, recoverable, and the next pass with a healthy read collects them, at most one
+ * `RETENTION_SWEEP_INTERVAL_MS` later rather than at the next deploy. It is the same
  * instant-vs-durable error as the evidence collectors round five removed: one failed read at one
  * moment must not decide the fate of data whose lifetime is durable. A sweep failure still never
- * fails boot; the whole thing still degrades to "swept nothing" and never to a throw.
+ * fails boot, and never kills the rail either; the whole thing still degrades to "swept nothing" and
+ * never to a throw.
  *
  * AWAITED BY `bootState`, where the first cut was fire-and-forget. `sweepOrphans` above sets the
  * precedent, and the reason is the same: an obligation that resolves after boot "finishes" is one no
@@ -1638,20 +1656,27 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
  * the same way - by making the mutant not compile: `bootState` READS the counts this returns, and
  * `void` has no `.removed`. That is why the log line below moved to the call site and did not stay
  * here; a result nobody reads is a result an `await` cannot be proved to have waited for.
+ *
+ * ── IT IS NOT A BOOT-ONLY OBLIGATION ANY MORE (round nine) ────────────────────────────────────
+ *
+ * `bootState` is still the first caller, but it is no longer the ONLY one: `startRetentionSweepRail`
+ * below re-enters this same composition on a timer, so the retention windows this function enforces
+ * stop being contingent on somebody deploying. See that function for the defect that was.
  */
 export async function sweepScreenshotsSparingPinnedEvidence(
   now: () => number,
-): Promise<{ removed: number; scanned: number; pinned: number; evidenceRemoved: number }> {
+): Promise<RetentionSweepCounts> {
   // THE EVIDENCE RETENTION SWEEP RUNS FIRST, AND THE ORDER IS THE POINT (round four). An evidence
   // row that ages out here releases its screenshot pin, and releasing it BEFORE the pin set is read
-  // means the run it was pinning is swept on THIS boot rather than the next one. Reversed, every
-  // expiring row would grant its screenshots one extra boot's grace - a retention rule that is a
+  // means the run it was pinning is swept on THIS pass rather than the next one. Reversed, every
+  // expiring row would grant its screenshots one extra pass's grace - a retention rule that is a
   // little bit longer than it says it is.
   //
   // AND THIS IS THE ONLY THING THAT ENDS AN ORPHANED ROW BY ITSELF (round five). Every synchronous
-  // collector is gone, so TTL is the collector: a row nobody re-validates goes at 90 days whether or
-  // not anything ever noticed its action stopped resolving, and no vantage has to be right about
-  // anything for that to be correct.
+  // collector is gone, so TTL is the collector: a row nobody re-validates goes at
+  // `EVIDENCE_RETENTION_DAYS` - plus at most one `RETENTION_SWEEP_INTERVAL_MS`, the rail's tick
+  // spacing - whether or not anything ever noticed its action stopped resolving, and no vantage has
+  // to be right about anything for that to be correct.
   const evidenceRemoved = await actionEvidenceStore
     .sweepExpiredEvidence({ now: now() })
     .catch((err: unknown) => {
@@ -1661,13 +1686,13 @@ export async function sweepScreenshotsSparingPinnedEvidence(
   // THE PIN READ IS A PRECONDITION OF THE SWEEP, NOT AN EMBELLISHMENT ON IT. `null` here is "we do
   // not know what is pinned", and the only safe thing to do without that knowledge is nothing: an
   // unpinned sweep deletes the screenshots behind live evidence rows, irrecoverably, for every
-  // tenant. Skipping costs one boot of retained PNGs. See the docblock.
+  // tenant. Skipping costs one PASS of retained PNGs - one tick, not one deploy. See the docblock.
   const pinnedRunIds = await actionEvidenceStore
     .pinnedRunIdsForRetention()
     .catch((err: unknown) => {
       console.warn(
         '[automation] screenshot retention: the evidence pin read failed, so the sweep is SKIPPED this '
-          + `boot rather than run unpinned (it would delete screenshots behind live evidence): ${err instanceof Error ? err.message : String(err)}`,
+          + `pass rather than run unpinned (it would delete screenshots behind live evidence): ${err instanceof Error ? err.message : String(err)}`,
       );
       return null;
     });
@@ -1677,6 +1702,168 @@ export async function sweepScreenshotsSparingPinnedEvidence(
   } catch {
     return { removed: 0, scanned: 0, pinned: 0, evidenceRemoved };
   }
+}
+
+/** The one place a completed sweep is reported. Both callers - `bootState` and the rail - use it, so
+ *  an operator reading logs cannot tell a boot sweep from a scheduled one by its shape, only by when
+ *  it appeared. */
+function logRetentionSweep(counts: RetentionSweepCounts): void {
+  if (counts.removed > 0 || counts.pinned > 0) {
+    console.log(
+      `[automation] screenshot retention: removed ${counts.removed}/${counts.scanned} run dirs, `
+        + `spared ${counts.pinned} pinned by evidence`,
+    );
+  }
+  if (counts.evidenceRemoved > 0) {
+    console.log(
+      `[integrations] action-evidence retention: removed ${counts.evidenceRemoved} row(s) not `
+        + `re-validated in ${EVIDENCE_RETENTION_DAYS} days`,
+    );
+  }
+}
+
+/**
+ * HOW OFTEN THE RETENTION SWEEP RE-RUNS WITHOUT A RESTART.
+ *
+ * SIX HOURS, AND THE NUMBER IS A TRADE. It is the term that turns "at most `EVIDENCE_RETENTION_DAYS`"
+ * and "at most `DEFAULT_SCREENSHOT_RETENTION_DAYS`" into "at most that, PLUS one of these", so it has
+ * to be small against both windows (it is 0.25% of seven days) and large against the work: a tick
+ * walks the whole `<automationId>/<runId>` tree with a `stat` per run directory, and there is nothing
+ * to gain from doing that hourly to shave minutes off a 90-day bound.
+ *
+ * IT IS A LITERAL IN THE TEST, both ways: `the retention rail` in
+ * `api/tests/automation/composition-root-screenshot-pins.test.ts` arms the rail with NO interval
+ * argument - production's exact call - and asserts that nothing fires one millisecond before
+ * `6 * 60 * 60 * 1000` and exactly one tick fires at it. Shortening this reddens the first assertion,
+ * lengthening it reddens the second.
+ */
+export const RETENTION_SWEEP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+const retentionRail: {
+  timer: ReturnType<typeof setInterval> | null;
+  sweeping: Promise<RetentionSweepCounts | null> | null;
+} = { timer: null, sweeping: null };
+
+/**
+ * ONE TICK OF THE RETENTION RAIL.
+ *
+ * RE-ENTRANCY-GUARDED, and not for tidiness: the screenshot half walks a filesystem tree whose size
+ * grows with run volume, so a tick can outlast the interval on a big tree. Two overlapping passes
+ * would both read the pin set, both `readdir` the same directories and both `rm` the same expired
+ * ones - the second one racing `ENOENT`s the first one is mid-way through. A tick that arrives while
+ * one is in flight therefore does NOTHING and answers `null`, the way `ScheduleSupervisor.tick` does;
+ * the next interval picks it up.
+ *
+ * WHAT THE `catch` IS ACTUALLY FOR, stated precisely rather than left looking like the mechanism.
+ * `sweepScreenshotsSparingPinnedEvidence` catches all three of its own legs, so a Mongo blip or a
+ * bad `stat` cannot reach here. ONE thing can: `now()`. It is evaluated eagerly (`{ now: now() }`)
+ * before any promise exists, so an injected clock that throws rejects the whole composition - and
+ * this is the callback of a `setInterval`, where an unhandled rejection would repeat forever. The
+ * `catch` also covers the future leg that forgets its own.
+ */
+export async function retentionSweepTick(now: () => number = Date.now): Promise<RetentionSweepCounts | null> {
+  if (retentionRail.sweeping !== null) return null;
+  const pass = (async (): Promise<RetentionSweepCounts | null> => {
+    try {
+      const counts = await sweepScreenshotsSparingPinnedEvidence(now);
+      logRetentionSweep(counts);
+      return counts;
+    } catch (err) {
+      console.warn(
+        `[retention] the sweep tick failed; the rail stays armed and the next tick retries: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  })();
+  retentionRail.sweeping = pass;
+  try {
+    return await pass;
+  } finally {
+    if (retentionRail.sweeping === pass) retentionRail.sweeping = null;
+  }
+}
+
+/**
+ * ARM THE RETENTION RAIL - the trigger the two retention windows were missing (round nine).
+ *
+ * ── THE DEFECT THIS CLOSES, STATED AS THE DEFECT IT WAS ───────────────────────────────────────
+ *
+ * `sweepExpiredEvidence` and `sweepExpiredScreenshots` had EXACTLY ONE caller chain between them:
+ * `sweepScreenshotsSparingPinnedEvidence` -> `bootState` -> `boot()`. There was no interval, and no
+ * Mongo TTL index anywhere in this repo. So both windows were contingent on a PROCESS RESTART, in a
+ * deployment (`deploy/staging/docker-compose.yml`, `restart: unless-stopped`; `deploy/api.service.json`,
+ * a long-lived container over a persistent volume) that is built not to restart. An api container that
+ * runs six months without a deploy kept EVERY evidence row for six months - a durable capped copy of
+ * one person's real third-party request and response, client names, processo numbers, invoice totals -
+ * and every automation-backed row kept its `pinnedRunIds` exemption for six months with it, so the
+ * per-step PNGs of authenticated client-portal sessions outlived the seven-day screenshot sweep too.
+ *
+ * FOUR DOCUMENTS PLUS THE SHARED DESCRIPTOR SAID "AT MOST 90 DAYS" AND MEANT "AT MOST 90 DAYS AFTER
+ * SOMEBODY DEPLOYS". Round five removed every synchronous collector on the strength of "TTL is the
+ * collector", and round six then enforced the CONSTANT - 90 -> 89 and 90 -> 91 both redden - without
+ * enforcing the TRIGGER. Enforcing a number that nothing fires is enforcing nothing; that is the
+ * lesson this function exists to carry, and it is why the pin below is a TICK and not a constant.
+ *
+ * ── WHY AN INTERVAL AND NOT A MONGO TTL INDEX ─────────────────────────────────────────────────
+ *
+ * Both were on the table and the index does not do the job:
+ *
+ *   1. IT WOULD ONLY COLLECT HALF. Mongo would drop the evidence row; nothing would then sweep the
+ *      SCREENSHOTS the row was pinning, because that half is a filesystem walk in this process and
+ *      needs a trigger of its own regardless. The window that is worst to leave un-triggered is
+ *      precisely the one an index cannot reach.
+ *   2. IT WOULD BE INVISIBLE TO THE PIN ORDER. `sweepScreenshotsSparingPinnedEvidence` sweeps
+ *      evidence BEFORE reading the pins so an expiring row releases its screenshots in the same pass.
+ *      An index deleting rows on Mongo's own schedule takes that ordering out of this process's hands.
+ *   3. `validatedAt` IS A STRING. It is an ISO-8601 stamp, deliberately - it orders
+ *      lexicographically, which is what lets `sweepExpiredEvidence` express its cutoff as one
+ *      `deleteMany` with no materialisation. A TTL index needs a BSON `Date`, so an index means
+ *      either changing the stored type or carrying a second parallel field, and CLAUDE.md rule 10 is
+ *      explicit that a permanent parallel field is not a thing this repo ships.
+ *
+ * ── SHAPE ─────────────────────────────────────────────────────────────────────────────────────
+ *
+ * UNREF'D, like every other timer rail here (`listener-supervisor`, `schedules/supervisor`,
+ * `events/delivery`, `knowledge/crawl/scheduler`): a six-hour handle that kept the event loop alive
+ * would turn an idle process into one that will not shut down. Asserted rather than trusted -
+ * `__retentionSweepTimerForTests` hands the suite the handle and it checks `hasRef()`, the same way
+ * `bridge/secret-delivery.ts` exposes its own sweep handle.
+ *
+ * NO IMMEDIATE FIRST TICK, unlike `ScheduleSupervisor.start`. `bootState` has just awaited the very
+ * same composition one line above; an immediate tick would sweep an already-swept tree.
+ *
+ * ARMED FROM `bootState` AND NOT FROM `boot()`'s POST-LISTEN BLOCK, which is a deliberate departure
+ * from where the other three rails start, for two reasons. It has no dependence on the HTTP listener
+ * (the reason delivery and the listener supervisor must wait is re-entrant calls needing a live
+ * socket); and `boot()` is entered by no test in this repo, which is the exact defect class this
+ * slice has already hit once - the `pinnedRunIds` argument lived in a `bootState` that no test
+ * entered, and `composition-root-screenshot-pins.test.ts` exists because of it. Arming here means the
+ * production line is proved by the same suite that proves the boot sweep, rather than by nothing.
+ */
+export function startRetentionSweepRail(opts: { now?: () => number; intervalMs?: number } = {}): void {
+  if (retentionRail.timer !== null) return; // idempotent: a second boot in one process re-uses the rail
+  const now = opts.now ?? Date.now;
+  const intervalMs = opts.intervalMs ?? RETENTION_SWEEP_INTERVAL_MS;
+  const timer = setInterval(() => { void retentionSweepTick(now); }, intervalMs);
+  timer.unref?.();
+  retentionRail.timer = timer;
+}
+
+/** Disarm the rail and wait out the pass in flight, so a shutdown cannot leave a half-finished
+ *  `rm -r` of a run directory behind it. Idempotent. */
+export async function stopRetentionSweepRail(): Promise<void> {
+  if (retentionRail.timer !== null) {
+    clearInterval(retentionRail.timer);
+    retentionRail.timer = null;
+  }
+  const pass = retentionRail.sweeping;
+  if (pass) await pass;
+}
+
+/** Test helper: the armed handle, so a suite can assert it exists and is unref'd rather than trust
+ *  either. The shape `bridge/secret-delivery.ts` uses for the same purpose. */
+export function __retentionSweepTimerForTests(): ReturnType<typeof setInterval> | null {
+  return retentionRail.timer;
 }
 
 /** Boot the persistence + admission state (ch09 §9.7): connect fail-fast, load the
@@ -1729,18 +1916,13 @@ export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> 
   // sweep wins the race either way), so the distinction is made structural instead: `void` has no
   // `.removed`, so the mutant stops compiling. See the function's own note.
   const screenshotSweep = await sweepScreenshotsSparingPinnedEvidence(deps.now);
-  if (screenshotSweep.removed > 0 || screenshotSweep.pinned > 0) {
-    console.log(
-      `[automation] screenshot retention: removed ${screenshotSweep.removed}/${screenshotSweep.scanned} run dirs, `
-        + `spared ${screenshotSweep.pinned} pinned by evidence`,
-    );
-  }
-  if (screenshotSweep.evidenceRemoved > 0) {
-    console.log(
-      `[integrations] action-evidence retention: removed ${screenshotSweep.evidenceRemoved} row(s) not `
-        + `re-validated in ${EVIDENCE_RETENTION_DAYS} days`,
-    );
-  }
+  logRetentionSweep(screenshotSweep);
+  // AND THE SAME SWEEP IS NOW ARMED ON A TIMER, which is the whole point of round nine: until this
+  // line, BOTH retention windows fired only on a process restart, in a deployment built not to
+  // restart. Armed AFTER the one-shot above so the first tick cannot race it, and unref'd so it
+  // cannot hold the process open. See `startRetentionSweepRail` for why it is here and not in
+  // `boot()`'s post-listen block with the other three rails.
+  startRetentionSweepRail({ now: deps.now });
 
   // A3 — the FROZEN legacy disk runtime tier scan (Rule-10 review 2026-08-15). REPORT-ONLY by
   // default: it persists nothing unless the operator set EKOA_IMPORT_LEGACY_RUNTIME=1 (A3 review
@@ -1851,11 +2033,13 @@ export function boot(): void {
 
   // Shutdown obligations (ch07 §7.16): dispose esbuild watch contexts + registry watchers;
   // the delivery pipeline drains in-flight dispatches (the rest recovers next boot, §12.3);
-  // the artifact-backend runtime terminates its worker threads (S1).
+  // the retention rail disarms and waits out the pass in flight, so no half-finished `rm -r` of a
+  // run directory is left behind; the artifact-backend runtime terminates its worker threads (S1).
   const shutdown = () => {
     void Promise.allSettled([
       stopListenerSupervisor(),
       stopScheduleSupervisor(),
+      stopRetentionSweepRail(),
       stopDelivery(),
       appBuilder.dispose(),
       appRegistry.stop(),

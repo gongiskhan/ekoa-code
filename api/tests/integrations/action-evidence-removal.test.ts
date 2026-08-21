@@ -26,8 +26,10 @@
  *
  * THREE DURABLE SIGNALS END A ROW, and nothing else does:
  *
- *   1. TIME - `sweepExpiredEvidence`, the boot retention sweep. Nobody has to be right about
- *      anything: a row not re-validated inside the window goes, orphan or not.
+ *   1. TIME - `sweepExpiredEvidence`, the retention sweep: at boot AND every
+ *      `RETENTION_SWEEP_INTERVAL_MS` on `server.ts`'s rail (round nine gave it that trigger; until
+ *      then a restart was the only thing that fired it). Nobody has to be right about anything: a
+ *      row not re-validated inside the window goes, orphan or not.
  *   2. THE OWNER - `discardEvidence`, behind `DELETE /api/v1/integrations/:key/actions/:actionName
  *      /evidence`. A person asking for their own data to go is a durable statement, not a guess.
  *      `deleteConfig`'s credential erasure is the same signal one step out: the credential whose
@@ -520,11 +522,13 @@ describe('the OWNER\'s durable signals: an explicit erasure, and a disconnected 
   });
 
   /**
-   * A MIGRATED ROW CARRYING NO OWNER GOES WITH THE SHARED CREDENTIAL - the one claim
+   * AN OWNERLESS ROW GOES WITH THE SHARED CREDENTIAL - the one claim
    * `discardEvidenceForDisconnectedConfig`'s `$nin` note makes, and nothing pinned it.
    *
    * THE SHAPE IS REAL AND THE CURRENT WRITER CANNOT MAKE IT, which is the point rather than a
-   * loophole - AND ITS PROVENANCE IS NOT A MIGRATION (corrected, round eight). The previous revision
+   * loophole - AND ITS PROVENANCE IS NOT A MIGRATION (corrected, round eight; the NAME of this case
+   * and its fixture id still said "migrated" until round nine, which is the copy a maintainer
+   * greps for). The previous revision
    * of this paragraph said "every such row in a real deployment is a survivor of that key change",
    * describing a migration that cannot have happened: this collection HAS NEVER SHIPPED, and the
    * org-only key (orgId, integrationKey, actionName) was an earlier round of this same unmerged
@@ -549,12 +553,12 @@ describe('the OWNER\'s durable signals: an explicit erasure, and a disconnected 
    * itself deleted by its own iteration, and both orders converge - measured); `tsc` is what enforces
    * it, and the erasure below is the behaviour it is there to keep true.
    */
-  it('a MIGRATED row carrying no owner goes when the shared credential that produced it is disconnected', async () => {
+  it('an OWNERLESS row goes when the shared credential that produced it is disconnected', async () => {
     const admin: Actor = { userId: 'u-admin', orgId: ORG, role: 'org-admin' };
     await integrationDefinitionStore.create(definitionRow([DOOMED]), { actor: author });
     await createConfig(admin, { integrationKey: KEY, configValues: { api_key: 'shared' }, secretKeys: ['api_key'] }, cfgDeps);
     await integrationActionEvidence.insert({
-      _id: 'migrated-org-only-key',
+      _id: 'ownerless-org-only-key',
       orgId: ORG,
       integrationKey: KEY,
       actionName: DOOMED,

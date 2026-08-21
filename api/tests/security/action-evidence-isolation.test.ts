@@ -28,17 +28,38 @@ import {
  *     owner's sample with the peer's own private data - and `trustAuthoredAction`, which reads this
  *     collection, would then let one user promote an action to `trusted` on another user's run;
  *   - a row whose stored `orgId` / `ownerUserId` disagrees with the id it lives under fails CLOSED
- *     (the migrated / hand-written document case the deterministic id alone does not cover) -
- *     including the SHAPE A MIGRATED PRE-OWNER ROW HAS, which carries no `ownerUserId` at all;
+ *     (the UNWRITABLE-BY-PRODUCTION document case the deterministic id alone does not cover) -
+ *     including the OWNERLESS SHAPE, which carries no `ownerUserId` at all;
  *   - an empty-string org or owner - the "actor with no tenant" and system-actor shapes - reads
  *     nothing and writes nothing, and every leg of that case is proved against a planted row so
  *     none of them is unfailable;
  *   - the LAST GATE refuses a row that still carries a live credential value after redaction, and
  *     refuses it by NOT WRITING it;
- *   - the TWO deliberately cross-tenant readers hand back IDENTIFIERS and nothing else:
- *     `pinnedRunIdsForRetention` (run ids, for the boot sweeper) and, since verification round
- *     three, `listOwnerRefsForKey` (org + owner + action name, for the reconciler that must judge a
- *     row in the org that RAN the action from a write made in the org that AUTHORED it).
+ *   - the ONE deliberately cross-tenant reader hands back IDENTIFIERS and nothing else:
+ *     `pinnedRunIdsForRetention` (run ids, for the retention sweeper).
+ *
+ * ── "MIGRATED" IS THE WORD THIS FILE USED, AND IT NAMES SOMETHING THAT CANNOT HAVE HAPPENED ───
+ *
+ * Round eight corrected that provenance in `action-evidence-store.ts` and in
+ * `tests/integrations/action-evidence-removal.test.ts`, logged the sweep CLOSED, and MISSED THIS
+ * FILE - where the claim was stated most strongly, including in a TEST NAME. It is corrected here
+ * (round nine), and the correction is worth the words because of what the old wording would cost a
+ * maintainer: greps for "migrated", lands on a test asserting that a deployment holds pre-owner rows,
+ * and plans a data migration for a collection that has never shipped.
+ *
+ * THE FACTS. `integration_action_evidence` has never been released. The org-only key
+ * (orgId, integrationKey, actionName) was an earlier round of this same unmerged branch, so no
+ * deployment holds a row of that shape and nothing migrated anything. `recordEvidence` refuses to
+ * write an owner-less or mismatched row (`assertKey`, plus the deterministic `_id`), so the documents
+ * planted below can only arrive BY HAND, BY A PARTIAL RESTORE, OR FROM A FUTURE WRITER.
+ *
+ * THE DEFENCE IS UNCHANGED AND STILL WORTH HAVING - that list is exactly when a fail-closed re-check
+ * matters and exactly when nobody is watching. Only the provenance was wrong, and a wrong provenance
+ * in a test NAME is the kind that gets acted on.
+ *
+ * The second stale claim here was `listOwnerRefsForKey`, listed above as a live cross-tenant reader
+ * "since verification round three". It was DELETED in round four and its successor
+ * `listOwnerRefsInOrg` in round five; nothing in this codebase enumerates who holds a row any more.
  *
  * THE TENANCY FILTERS ARE PROVED REMOVABLE, and where they are NOT individually provable this
  * suite says so instead of implying otherwise. Every count below is MEASURED by reverting the named
@@ -190,8 +211,9 @@ describe('tenancy: two users of ONE org, the same integration and the same actio
 
 describe('tenancy: rows the deterministic id alone does not protect', () => {
   it('a row whose stored orgId disagrees with its id fails CLOSED on the point read', async () => {
-    // The migrated / hand-written document. The id says orgA; the row says orgB. Reading it as orgA
-    // - which the id lookup alone would do - hands one tenant a document belonging to another.
+    // The hand-written / restored document - a shape `recordEvidence` cannot produce, and NOT a
+    // migration (see the header). The id says orgA; the row says orgB. Reading it as orgA - which
+    // the id lookup alone would do - hands one tenant a document belonging to another.
     await integrationActionEvidence.put({
       _id: actionEvidenceIdFor({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION }),
       orgId: 'orgB',
@@ -223,10 +245,16 @@ describe('tenancy: rows the deterministic id alone does not protect', () => {
     expect(await store.getEvidence({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION })).toBeNull();
   });
 
-  it('a PRE-OWNER migrated row - stored with no ownerUserId at all - is served to nobody', async () => {
-    // The exact document the first cut of this collection wrote. It has an `orgId` and no owner, so
-    // the only thing standing between it and whichever member of the org asks first is the stored
-    // re-check. `undefined !== ''` and `undefined !== OWNER`, so it fails closed on both.
+  it('an OWNERLESS row - stored with no ownerUserId at all - is served to nobody', async () => {
+    // THE SHAPE, NOT A SURVIVOR OF ONE. The org-only key an earlier round of this branch used would
+    // have written exactly this document - and that round never shipped, so no deployment holds one
+    // and nothing migrated anything (header). `recordEvidence` refuses to write it, so it can only
+    // arrive by hand, by a partial restore, or from a future writer; the insert is direct because no
+    // production writer can produce it.
+    //
+    // It has an `orgId` and no owner, so the only thing standing between it and whichever member of
+    // the org asks first is the stored re-check. `undefined !== ''` and `undefined !== OWNER`, so it
+    // fails closed on both.
     await integrationActionEvidence.put({
       _id: actionEvidenceIdFor({ orgId: 'orgA', ownerUserId: OWNER, integrationKey: KEY, actionName: ACTION }),
       orgId: 'orgA',
@@ -561,8 +589,9 @@ describe('the credential erasure reaches ONE tenant\'s rows, on either arm', () 
    * Asserting that `orgId: ''` erases nothing is UNFAILABLE against ordinary rows: no row carries an
    * empty org, so the query matches nothing whether or not the guard exists, and deleting the guard
    * leaves this green (measured). Each leg is therefore aimed at a row PLANTED under exactly the
-   * term it names - the migrated / hand-written shapes `recordEvidence` refuses to create - so the
-   * guard is the only thing standing between the call and a deletion.
+   * term it names - the hand-written / restored shapes `recordEvidence` refuses to create, which are
+   * not migration survivors (header) - so the guard is the only thing standing between the call and
+   * a deletion.
    */
   it('an empty org, key or owner erases NOTHING - asserted against rows planted under those keys', async () => {
     const planted = [
