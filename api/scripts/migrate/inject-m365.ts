@@ -25,7 +25,13 @@ if (!oldKeyRaw) { console.error('set EKOA_OLD_ENCRYPTION_KEY'); process.exit(2);
 
 function key32(raw: string): Buffer { const b = Buffer.from(raw, 'utf8'); if (b.length >= 32) return b.subarray(0, 32); const p = Buffer.alloc(32); b.copy(p); return p; }
 function oldDecrypt(ciphertext: string): string {
+  // `noUncheckedIndexedAccess` types each part as possibly-undefined, and it genuinely is: a
+  // truncated or wrongly-delimited bundle would otherwise reach createDecipheriv as undefined and
+  // fail somewhere less obvious than the line that read it.
   const [ivB, tagB, enc] = ciphertext.split(':');
+  if (ivB === undefined || tagB === undefined || enc === undefined) {
+    throw new Error('old ciphertext is not iv:tag:payload');
+  }
   const d = createDecipheriv('aes-256-gcm', key32(oldKeyRaw), Buffer.from(ivB, 'base64'));
   d.setAuthTag(Buffer.from(tagB, 'base64'));
   return d.update(enc, 'base64', 'utf8') + d.final('utf8');
@@ -50,7 +56,9 @@ const credentialsCiphertext = await envelopeEncrypt(JSON.stringify(tokens), ORG_
 
 const client = new MongoClient(MONGO);
 await client.connect();
-const col = client.db('ekoa').collection('integration_configs');
+// Typed with a string `_id`: this collection keys on the deterministic `platform-<org>-<provider>`
+// id, not an ObjectId, and an untyped handle makes the driver infer ObjectId and reject the filter.
+const col = client.db('ekoa').collection<{ _id: string }>('integration_configs');
 const _id = `platform-${ORG_ID}-microsoft`;
 await col.replaceOne({ _id }, { _id, orgId: ORG_ID, ownerUserId: null, integrationKey: 'platform-microsoft', name: 'Microsoft 365', enabled: true, platformProvider: 'microsoft', credentialsCiphertext, _rev: 0 } as never, { upsert: true });
 console.log('inserted platform-microsoft row _id=', _id);
