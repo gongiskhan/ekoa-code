@@ -157,7 +157,8 @@ cortex integrations show slack          # connected? and every action, with its 
 cortex integrations execute slack list_channels --json
 cortex integrations execute slack send_message --arg channel=#geral --arg text="olá" --json
 
-# or state a goal and let Cortex pick (or write) the action
+# or state a goal and let Cortex pick the action, fill its arguments, narrow its answer, or write
+# a new one - see the four outcomes below, two of which are exit 0
 cortex integrations achieve slack --goal "diz olá no #geral" --json
 ```
 
@@ -199,16 +200,55 @@ reachable with a key**: `POST /api/v1/integrations/:key/actions/:actionName/appr
 cannot approve the shape it was just handed. **A person must approve the action in the Ekoa UI**;
 retrying, re-wording the goal, or calling `achieve` instead will meet the same gate.
 
-`achieve` has three outcomes and only one of them is exit 0:
+`achieve` has FOUR outcomes and two of them are exit 0:
 
 | outcome | what happened | exit |
 |---|---|---|
 | `executed` | an existing trusted action ran; `result` is the ordinary execute body, so trap 1 applies to it | 0, or 1 if `result.success` is false |
+| `composed` | an existing trusted **read** ran and its rows were narrowed against one of your own app collections. Nothing was minted and nothing was written; `result` is the action's own answer and `items` is the subset that survived | 0, or 1 if `result.success` is false |
 | `authored` | nothing fitted, so an action was **written** as provisional. It has NOT run and cannot until a person promotes it | 1 |
 | `refused` | addressed, admitted, then declined, with a machine-readable `code` (`ambiguous_goal`, `verification_failed`, ...) | 1 |
 
 A run that reaches a gate is an answer, not a crash - but it is not the goal happening, so it does
 not exit 0.
+
+**TRAP 3: `composed` is an answer, and `items` is NOT the whole of it.** Cortex may run a trusted
+read and then filter its rows against a collection one of your own Ekoa apps holds - "todos os
+processos de clientes com menos de 40 anos" is one action plus one join, not a new action. Reading
+`items` alone is how a partial answer gets mistaken for a complete one:
+
+```json
+{ "outcome": "composed", "actionName": "processos",
+  "result": { "success": true, "status": 206,
+              "data": { "processos": ["… every row the action returned …"], "nextPage": "cursor-2" } },
+  "items": ["… only the rows that survived the join …"],
+  "composition": { "collection": "clients", "where": { "field": "idade", "op": "lt", "value": 40 },
+                   "join": { "resultField": "clienteId", "collectionField": "id" },
+                   "scanned": 4, "matched": 2, "truncated": false,
+                   "collectionScanned": 5, "collectionTruncated": false } }
+```
+
+- **`result` is the action's OWN answer, whole** - the upstream status, and every field standing
+  beside the list inside `data`. That is where a next-page cursor lives, and neither `items` nor
+  `composition` can carry it: `composition.scanned` counts the rows THIS PAGE returned, never the
+  rows the remote holds. **A paginated read is one page whatever the join then did with it.** Human
+  mode prints this envelope above the rows for exactly that reason.
+- **`composition.truncated` / `composition.collectionTruncated`** mean the list you were handed is
+  the head of a longer one (the emit cap) or was matched against only a prefix of your collection
+  (the scan cap). Human mode says `- PART of the answer, not all of it`; under `--json` both flags
+  are on `composition`. Neither is a failure, and neither is safe to ignore.
+
+`ladder` rides every outcome that carries an answer - `executed`, `composed` and `authored`, never a
+`refused` - and says which rung produced it (`reuse`, `parametrize`, `compose`, `mint`) and what the
+ones above it decided (`taken` / `skipped` / `refused` / `unavailable`). A rung's own `refused` means
+it judged its work and threw it away; `unavailable` means it could not run at all. **Neither is a
+refused call**: the action still ran, with your own arguments, unnarrowed.
+
+`filledArgs` names the arguments a model filled because you left them out - NAMES only. The values
+it chose are shown in exactly one answer: the `awaiting_consent` 403, under
+`details.filledArgValues`, because nobody can approve "a model chose a `titulo`" without being shown
+the `titulo`. They are recorded durably server-side BEFORE the call goes out, so a value a model
+picked can never reach a third party unrecorded.
 
 ## Patterns worth copying
 

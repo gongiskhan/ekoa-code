@@ -386,12 +386,22 @@ const PROCESS_ROWS = [
  * same set over this fixture and the canonical assertion could not tell the two apart - an
  * off-by-one in the one predicate every recipe in the product also runs on would have gone
  * unnoticed here (it did, until the shared predicate was mutated to prove otherwise).
+ *
+ * `c5` SATISFIES THE PREDICATE AND KEYS NOTHING, and it is here so the FOUR COUNTS a composed
+ * answer reports are four DIFFERENT numbers over the canonical fixture. Every fixture in the estate
+ * used to hold four action rows and four collection rows, so `scanned` (4) was indistinguishable
+ * from `collectionScanned` (4) and `matched` from `matchedCollectionRows` (2 and 2): no assertion
+ * anywhere could say WHICH side of the join a count was counting, and a summary reporting the
+ * collection's size as the action's page size would have been green across the whole estate. With
+ * `c5` the canonical answer is scanned 4, collectionScanned 5, matchedCollectionRows 3, matched 2 -
+ * and a count that reads the wrong side has nowhere left to hide.
  */
 const CLIENT_ROWS = [
   { id: 'c1', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', nome: 'Ana', idade: 31 },
   { id: 'c2', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', nome: 'Bruno', idade: 52 },
   { id: 'c3', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', nome: 'Carla', idade: 39 },
   { id: 'c4', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', nome: 'Duarte', idade: 40 },
+  { id: 'c5', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', nome: 'Eva', idade: 25 },
 ];
 
 const CANONICAL_PLAN = {
@@ -735,8 +745,10 @@ describe('the parametrize rung fills arguments and then meets the same gate', ()
    * where an audit trail is supposed to be.
    *
    * The row is written whatever the call then did, INCLUDING the gate refusing it, because "a model
-   * chose these values and the gate held" is as much an audit fact as "and they were filed". The
-   * executor's own verdict and code are on the row so the two are never read for each other.
+   * chose these values and the gate held" is as much an audit fact as "and they were filed" - and
+   * it is written BEFORE the call, which is the round-nine half. The outcome of the call is
+   * `capability_execute`'s own row, one insert later; copying it here was two rows carrying one
+   * fact, and it was the only reason this row had to wait for a write to finish.
    */
   it('records what a model chose in a durable row - the VALUES, not the names', async () => {
     await seed([consultarProcesso]);
@@ -755,7 +767,19 @@ describe('the parametrize rung fills arguments and then meets the same gate', ()
     expect(meta.mayWrite).toBe(false);
   });
 
-  it('records it for a WRITE the gate refused too, with the gate\'s own verdict on the row', async () => {
+  /**
+   * THE SAME ROW FOR A WRITE THE GATE REFUSED, AND THE OUTCOME ON THE ROW NEXT TO IT.
+   *
+   * "A model chose these values and the gate held" is as much an audit fact as "and they were
+   * filed", so the row is written either way. What is no longer on it is the executor's `verdict`
+   * and `code`: `capability_execute` records exactly that, for exactly this call, one insert later -
+   * two rows carrying one fact is two rows that can disagree, and it was the ONLY thing forcing
+   * this row to be written after an irreversible write had already happened.
+   *
+   * The pair is asserted together, because "we dropped a field" and "we lost a fact" are different
+   * claims and only the first one is true.
+   */
+  it('records it for a WRITE the gate refused too, and the gate\'s verdict is on the execute row', async () => {
     await seed([submeterPeca]);
     const { planner } = plannerEmitting([argsBlock({ titulo: 'Contestação' })]);
     const { ctx } = ctxWith('ownerA', 'orgA', { planner });
@@ -768,12 +792,60 @@ describe('the parametrize rung fills arguments and then meets the same gate', ()
     expect(meta.filledArgs).toEqual({ titulo: 'Contestação' });
     // `mayWrite` is the same fail-closed reading of `mutates` the compose rung's entry uses.
     expect(meta.mayWrite).toBe(true);
-    // Nothing ran, and the row says so rather than reading like a completed write.
-    expect(meta.verdict).toBe('failed');
-    expect(meta.code).toBe('awaiting_consent');
+    // The outcome is NOT on this row - it cannot be, the call had not happened yet.
+    expect(meta.verdict).toBeUndefined();
+    expect(meta.code).toBeUndefined();
     // The CALLER's own argument is not on the row: it is theirs to know, and it is not the fact
     // this row exists to preserve.
     expect(JSON.stringify(meta)).not.toContain('111/24.0T8LSB');
+
+    // …and nothing was lost with it. The executor's own row says the gate held, for this action.
+    const executed = await activityLogs.find({ type: 'capability_execute' });
+    expect(executed).toHaveLength(1);
+    const executedMeta = (executed[0] as { metadata?: Record<string, unknown> }).metadata ?? {};
+    expect(executedMeta.actionName).toBe('submeter_peca');
+    expect(executedMeta.verdict).toBe('failed');
+    expect(executedMeta.code).toBe('awaiting_consent');
+  });
+
+  /**
+   * THE ORDER, AS AN ASSERTION - the round-nine major-minor, and the one this file could not have
+   * caught by reading a field.
+   *
+   * The row went in AFTER the one gated execute and swallowed its own failure, so the only durable
+   * copy of "a model, not the person holding the key, decided what this call would act on" could be
+   * silently absent EXACTLY when the third-party write it describes had succeeded. There is no
+   * worse moment for an audit row to go missing, and no field on any row says it happened.
+   *
+   * So the sequence itself is pinned. `runAutomationBackedAction` is the executor's own seam, and
+   * the activity store is where every row lands; interleaving the two gives the one fact that
+   * matters - the record of the choice precedes the spending of it. Moving the call back below the
+   * execute reds this and nothing else in the estate.
+   */
+  it('writes the record BEFORE the call it describes, not after it', async () => {
+    await seed([{ ...processos, argsSchema: { type: 'object', properties: { tribunal: {} } } }]);
+    const { planner } = plannerEmitting([argsBlock({ tribunal: 'Coimbra' })]);
+    const order: string[] = [];
+    const { ctx } = ctxWith('ownerA', 'orgA', { planner, data: { processos: PROCESS_ROWS } });
+    const realRun = ctx.runAutomationBackedAction!;
+    ctx.runAutomationBackedAction = async (input) => {
+      order.push('execute');
+      return realRun(input);
+    };
+
+    const realInsert = activityLogs.insert.bind(activityLogs);
+    const spy = vi.spyOn(activityLogs, 'insert').mockImplementation(async (doc) => {
+      order.push(String((doc as { type?: string }).type));
+      return realInsert(doc);
+    });
+    try {
+      await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'processos do tribunal indicado');
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The choice is recorded, THEN the third party is called, THEN what happened is recorded.
+    expect(order).toEqual(['capability_achieve_parametrize', 'execute', 'capability_execute']);
   });
 
   /**
@@ -805,20 +877,28 @@ describe('the parametrize rung fills arguments and then meets the same gate', ()
   });
 
   /**
-   * AND THIS ROW'S OWN `catch` IS A GUARD TOO, pinned the way the compose row's was after it was
-   * found unexercised. `auditParametrized` is awaited in `runMatchedAction` AFTER the one gated
-   * execute and OUTSIDE any try of its own, so without the catch a rejecting activity write
-   * propagates out of `achieveIntegrationGoal` and into the route's error handler as a 500 - the
-   * caller's request already sent to a third party, already answered, and thrown away by a write
-   * that is nobody's answer. It is the same defect this branch spent three rounds closing, on a
-   * fifth exit, and it now sits on the WRITE PATH rather than the read path: on a `mutates` action
-   * the side effect is spent.
+   * WHAT A FAILING RECORD DOES NOW: THE RUNG STANDS DOWN. It does not swallow, and it does not
+   * refuse.
+   *
+   * The old shape swallowed - logged a warning and carried on - which is what made the audit trail
+   * deniable: the record of a model's choice could be missing precisely on the calls where the
+   * choice had already been spent on a third party. Refusing instead would be the other defect this
+   * branch spent three rounds closing: a rung taking away a call that a trusted action, the caller's
+   * own arguments and a human's standing approval had earned, because an activity insert blipped.
+   *
+   * The third answer is the rung's OWN degradation path, and it makes the missing row impossible
+   * rather than tolerable: if the choice cannot be recorded, the choice is not made. The model's
+   * value is dropped, the request goes out as the CALLER shaped it, the ladder says `unavailable`,
+   * and the answer still reaches the caller whole.
+   *
+   * ALL FOUR HALVES ARE ASSERTED TOGETHER, because three of them are true of the swallowing version
+   * too. The one that is not is the first: `tribunal` never left the process.
    *
    * The failure is injected at the store the single audit path really uses, and ONLY for this row -
    * `mockRejectedValueOnce` would catch the EXECUTOR's own audit write instead and prove a
    * different function's guard.
    */
-  it('a FAILING audit write does not destroy the answer it was recording', async () => {
+  it('a FAILING record stands the rung down: the model\'s value never reaches the third party', async () => {
     await seed([{ ...processos, argsSchema: { type: 'object', properties: { tribunal: {} } } }]);
     const { planner } = plannerEmitting([argsBlock({ tribunal: 'Coimbra' })]);
     const { ctx, calls } = ctxWith('ownerA', 'orgA', { planner, data: { processos: PROCESS_ROWS } });
@@ -839,9 +919,19 @@ describe('the parametrize rung fills arguments and then meets the same gate', ()
 
     const res = valueOf(out);
     if (res.outcome !== 'executed') throw new Error(`expected executed, got ${JSON.stringify(res)}`);
-    // The call went out carrying the model's value, and its answer reached the caller whole.
-    expect(calls[0]?.args).toMatchObject({ tribunal: 'Coimbra' });
+    // THE LOAD-BEARING HALF. An unrecordable choice is not made: the request the third party
+    // received is byte-for-byte the one the caller asked for, and the response says so too.
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.args).toEqual({});
+    expect(res.filledArgs).toBeUndefined();
+    // The rung did not take the call away either - the answer is here, whole.
     expect(res.result.data).toEqual({ processos: PROCESS_ROWS });
+    // "We could not right now", never "we would not": nothing about the goal was judged.
+    const step = (res.ladder as AchieveLadderStep[]).find((s) => s.rung === 'parametrize');
+    expect(step?.verdict).toBe('unavailable');
+    expect(step?.detail).toContain('could not be recorded');
+    expect(step?.violations).toBeUndefined();
+    // The store's own message is an operator's, never the caller's.
     expect(JSON.stringify(res)).not.toContain('MongoNetworkError');
     // …and the row really did not land, so this is not passing by the write having succeeded.
     expect(await activityLogs.find({ type: 'capability_achieve_parametrize' })).toHaveLength(0);
@@ -1059,12 +1149,22 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
       actionRows: PROCESS_ROWS,
       collectionRows: CLIENT_ROWS,
     });
-    // `c4` is exactly 40 and is NOT under 40.
+    // `c4` is exactly 40 and is NOT under 40; `c5` is under 40 and keys no process at all.
     expect(out.items.map((r) => r.numeroProcesso)).toEqual(['111/24.0T8LSB', '333/24.0T8CBR']);
+    // FOUR COUNTS, FOUR DIFFERENT NUMBERS - which is the whole reason `c5` is in the fixture. Each
+    // one names a different side of the join, and until they differed no assertion in the estate
+    // could tell them apart: `scanned` counts the rows THE ACTION returned, and reading it off the
+    // collection instead was green everywhere.
     expect(out.summary.scanned).toBe(4);
-    expect(out.summary.matchedCollectionRows).toBe(2);
+    expect(out.summary.collectionScanned).toBe(5);
+    expect(out.summary.matchedCollectionRows).toBe(3);
     expect(out.summary.matched).toBe(2);
     expect(out.summary.truncated).toBe(false);
+    expect(out.summary.collectionTruncated).toBe(false);
+    // …and `scanned` follows the ACTION side when only that side moves.
+    const fewer = composedBy({ plan: CANONICAL_PLAN as never, actionRows: PROCESS_ROWS.slice(0, 3), collectionRows: CLIENT_ROWS });
+    expect(fewer.summary.scanned).toBe(3);
+    expect(fewer.summary.collectionScanned).toBe(5);
   });
 
   it('uses the SAME predicate `store.query` uses - not a second copy of it', () => {
@@ -1146,8 +1246,10 @@ describe('the compose stage is TypeScript, and its vocabulary is the recipe DSL\
     expect(out.items).toHaveLength(COMPOSE_MAX_ITEMS);
     expect(out.summary.matched).toBe(COMPOSE_MAX_ITEMS + 5);
     expect(out.summary.truncated).toBe(true);
-    // The OTHER cap did not fire: four collection rows is four collection rows.
-    expect(out.summary.collectionScanned).toBe(4);
+    // `scanned` is the ACTION's page, and here it is nothing like either of the other two numbers.
+    expect(out.summary.scanned).toBe(COMPOSE_MAX_ITEMS + 5);
+    // The OTHER cap did not fire: five collection rows is five collection rows.
+    expect(out.summary.collectionScanned).toBe(5);
     expect(out.summary.collectionTruncated).toBe(false);
   });
 
@@ -1624,10 +1726,14 @@ describe('CANONICAL: "todos os processos de clientes com menos de 40 anos"', () 
     expect(res.composition.collection).toBe('clients');
     expect(res.composition.where).toEqual({ field: 'idade', op: 'lt', value: 40 });
     expect(res.composition.join).toEqual({ resultField: 'clienteId', collectionField: 'id' });
+    // FOUR COUNTS, FOUR DIFFERENT NUMBERS, on the value the route projects. `scanned` is the rows
+    // THE ACTION returned - the page - and it is the number a caller most easily mistakes for the
+    // size of their own collection, which is why the fixture makes the two disagree.
     expect(res.composition.scanned).toBe(4);
     expect(res.composition.matched).toBe(2);
     // The join saw the WHOLE collection, and says so - the caller is owed that either way.
-    expect(res.composition.collectionScanned).toBe(4);
+    expect(res.composition.collectionScanned).toBe(5);
+    expect(res.composition.matchedCollectionRows).toBe(3);
     expect(res.composition.collectionTruncated).toBe(false);
     expect(reads).toEqual(['clients']);
 
@@ -2867,6 +2973,37 @@ describe('the field names put in a prompt are bounded and sanitised', () => {
     expect(kept).not.toContain(names[100]);
     // …and a set exactly AT the bound loses nothing.
     expect(promptSafeFields(names.slice(0, 100))).toHaveLength(100);
+  });
+
+  /**
+   * FILTER FIRST, THEN CAP - and the honest statement of what that buys, because the obvious one is
+   * WRONG. Reversing the two steps does NOT let an unsafe name into the prompt: `.slice().filter()`
+   * sanitises everything it emits just as `.filter().slice()` does, and no name the predicate
+   * rejects reaches a system prompt under either order. The order was nevertheless unpinned, so it
+   * could be reversed with the whole estate green, and it has a real consequence.
+   *
+   * WHOSE NAMES THE CAP IS SPENT ON. Capping first spends the 100 slots on the RAW list, refused
+   * names included, and then discards some of them - so the caller is offered FEWER than 100 usable
+   * names whenever a rejected one sorts early. Both sets arrive SORTED (`fieldsOf`,
+   * `listCollectionFields`) and the ACTION side is a third party's own JSON keys, so "sorts early"
+   * is neither hypothetical nor the caller's choice: the fixture below is exactly what a remote
+   * emitting control-charactered keys does to a tenant's ability to narrow their own answer. Under
+   * the reversed order it is total - one hundred refused names first, and the offered set is EMPTY.
+   */
+  it('the cap is spent on names that will really be offered, not on ones about to be dropped', () => {
+    // A hundred names the filter REFUSES (each carries a C0 character), then a hundred good ones -
+    // and this really is the order `fieldsOf` produces, because a C0 character sorts below every
+    // letter. It is what a remote whose JSON keys carry control characters hands this rung.
+    const refused = Array.from({ length: 100 }, (_, i) => `\u0000bad${String(i).padStart(4, '0')}`);
+    const good = Array.from({ length: 100 }, (_, i) => `ok${String(i).padStart(4, '0')}`);
+    expect([...good, ...refused].sort()).toEqual([...refused, ...good]);
+
+    const kept = promptSafeFields([...refused, ...good]);
+
+    // FILTER FIRST: the cap is spent entirely on usable names, and the caller keeps all 100.
+    // CAP FIRST: the 100 slots go to the refused names, the filter then empties them, and a caller
+    // whose remote emits a hundred bad keys can narrow their own answer by NOTHING - `[]`.
+    expect(kept).toEqual(good);
   });
 
   /**

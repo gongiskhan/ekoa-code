@@ -892,6 +892,15 @@ PARAMETRIZE it, COMPOSE over it, or MINT a new one - and the ladder is reported 
 (`ladder: AchieveLadderStep[]`) so a caller can see which rung answered and what the ones above it
 decided.
 
+ALL FOUR RUNGS ARE OBSERVABLE, and until D-S4-5/D-S5-8 the fourth was not: `AchieveRung` published
+`mint` and no code pushed it, so an `authored` answer carried no ladder at all and the word named a
+rung no reader could reach. The author arm IS the mint rung and now records itself - `reuse`
+`skipped` (nothing fitted, which is why anything was minted) then `mint` `taken`. `ladder` is
+present on exactly the three outcomes that CARRY AN ANSWER (`executed`, `composed`, `authored`) and
+absent on every `refused`, which is a property of the api-side union rather than a convention: the
+refused variant has no field to put one in. A refusal is the answer that no rung produced anything,
+so what went wrong is `code`/`message`/`violations` - one vocabulary, not two.
+
 THE PICK IS NOT ON THE LADDER. `matchActionForGoal` chooses the action deterministically and
 lexically, exactly as it did before the rungs existed, and neither new rung is handed
 `definition.actions`. Every model turn here is downstream of a pick a human already trusted, and
@@ -1038,6 +1047,28 @@ Both rungs arrive as seams bound once in `server.ts` (`planStep`, a third `autho
 specialisation; `appCollections`, owner-scoped as above), and an absent seam, a refused allowance, a
 model outage, a write, or a goal with no residual intent SKIPS the rung rather than failing the call
 - so `achieve` degrades to exactly its pre-ladder behaviour (Rule 7).
+
+**THE RECORD OF A MODEL'S CHOICE IS WRITTEN BEFORE THE CALL, AND ITS FAILURE STANDS THE RUNG DOWN**
+(D-S4-5/D-S5-8). `capability_achieve_parametrize` is the only durable record that a MODEL, rather
+than the person or script holding the key, decided what a third-party call would act on - and it was
+written AFTER the one gated execute inside a `catch` that logged and moved on, so it could be
+silently absent exactly when the irreversible write it describes had succeeded. It now runs before
+the execute and does not catch. Its rejection is neither swallowed nor a refusal: the rung STANDS
+DOWN on its own degradation path - the model's arguments are dropped, the request goes out carrying
+exactly what the caller sent, one ladder step says `unavailable` - so the ladder invariant holds and
+a model-chosen value can no longer reach a third party unrecorded. The row carries no `verdict` or
+`code`: `capability_execute` records exactly that for the same call one insert later, and copying it
+here was the ONLY reason this row had to wait for a write to finish. The order is pinned as a
+sequence (`capability_achieve_parametrize` -> the third-party call -> `capability_execute`).
+
+**THE PRODUCT'S EDGE IS THE CLIENT, AND THAT INCLUDES THE DOCUMENT SHIPPED WITH IT.** A rung whose
+answer is correct at the route and wrong at `clients/cortex-cli` is wrong (D-S4-4/D-S5-7), and the
+same is true of `clients/cortex-cli/SKILL.md`: it is the file an AGENT reads to decide how to use
+the command, so a stale contract in it is a wrong instruction shipped to every consumer. Its
+`achieve` outcome table is now tested against `docs/openapi/cortex.v1.json` and its exit column
+against the exit code the built binary really produces. In human mode a `composed` answer prints the
+action's OWN answer whole, above the narrowed rows: `items` alone cannot carry a `nextPage` cursor,
+so a paginated 200 read as a complete answer to the one reader who cannot go and look it up.
 
 ## Billing
 

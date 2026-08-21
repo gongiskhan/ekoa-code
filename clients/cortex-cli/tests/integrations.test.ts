@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { main } from '../src/cli.js';
 import type { Io } from '../src/output.js';
 
@@ -278,6 +280,84 @@ describe('a failed action at HTTP 200', () => {
 });
 
 /**
+ * THE COMPOSED ANSWER'S TWO PARTIALITY SIGNALS, as a table.
+ *
+ * A composed answer can be short for two unrelated reasons, and the human line says so with ONE
+ * clause because they are one fact for the reader - what is printed is PART of the answer:
+ *
+ *   `truncated`           - more action rows matched the join than the stage will EMIT;
+ *   `collectionTruncated` - the key set was built from a PREFIX of the caller's collection.
+ *
+ * Neither arm had a test. The clause could be deleted, inverted, or reduced to one of the two flags
+ * with the whole estate green - and it is the ONLY thing on screen that says a narrowed list is not
+ * the whole of somebody's answer. The e2e suite drives the `truncated` arm through the real join
+ * stage over 201 real rows; `collectionTruncated` needs 5001 collection rows to produce honestly,
+ * so it is exercised here against the shape the route really emits (`AchieveComposition`, both
+ * flags booleans on every composed answer), which is what makes the four rows below a table of the
+ * RENDERING rather than a claim about the stage.
+ *
+ * All four combinations, because an OR is four cases and three of them are the ones a mutant lives
+ * in: `&&` survives the first row alone, and dropping either flag survives two of the four.
+ */
+describe('a composed answer says when it is only part of one', () => {
+  const composedBody = (truncated: boolean, collectionTruncated: boolean) => ({
+    outcome: 'composed',
+    actionName: 'processos',
+    result: { success: true, status: 200, data: { processos: [{ id: 'p1' }, { id: 'p2' }], nextPage: 'cursor-2' } },
+    items: [{ id: 'p1' }],
+    composition: {
+      collection: 'clients',
+      where: { field: 'idade', op: 'lt', value: 40 },
+      join: { resultField: 'clienteId', collectionField: 'id' },
+      scanned: 2,
+      collectionScanned: 5,
+      collectionTruncated,
+      matchedCollectionRows: 3,
+      matched: 1,
+      truncated,
+    },
+  });
+
+  const humanOut = async (truncated: boolean, collectionTruncated: boolean): Promise<string> => {
+    const cap = capture();
+    const code = await main(['integrations', 'achieve', 'crm', '--goal', 'processos de clientes com menos de 40 anos'], {
+      io: cap.io,
+      env: ENV,
+      fetchImpl: stub(composedBody(truncated, collectionTruncated)).fetchImpl,
+    });
+    expect(code, cap.err.join('\n')).toBe(0);
+    return cap.out.join('\n');
+  };
+
+  it.each([
+    ['the emit cap fired', true, false],
+    ['the collection scan cap fired', false, true],
+    ['both fired', true, true],
+  ])('%s: the caller is told the list is PART of the answer', async (_name, truncated, collectionTruncated) => {
+    expect(await humanOut(truncated, collectionTruncated)).toContain('- PART of the answer, not all of it');
+  });
+
+  it('and says nothing of the sort when the answer really is whole', async () => {
+    const out = await humanOut(false, false);
+    expect(out).toContain('1 of 2 rows kept, joined against "clients"');
+    expect(out).not.toContain('PART of the answer');
+  });
+
+  /**
+   * AND THE ACTION'S OWN ENVELOPE IS PRINTED. `--json` has always carried it; the human path
+   * printed `items` alone, so a `nextPage` cursor - the one thing that says a 200 was ONE PAGE -
+   * reached the one reader who cannot go and look it up. The e2e suite drives this through the real
+   * route; here it is the rendering, beside the flags it belongs with.
+   */
+  it('prints the action\'s own answer whole, above the rows it was narrowed from', async () => {
+    const out = await humanOut(false, false);
+    expect(out).toContain('the action\'s own answer, whole - the rows below are a subset of it:');
+    expect(out).toContain('cursor-2');
+    expect(out.indexOf('cursor-2')).toBeLessThan(out.indexOf('rows kept:'));
+  });
+});
+
+/**
  * T2 - THE WRITE GATE.
  *
  * A `mutates` action with no live approval is refused with HTTP 403, `details.code =
@@ -340,6 +420,84 @@ describe('a mutating action awaiting consent', () => {
     });
     expect(code).toBe(1);
     expect(cap.err.join('\n')).not.toContain('awaiting_consent');
+  });
+});
+
+/**
+ * SKILL.md IS PART OF THE PRODUCT, AND IT SHIPPED DESCRIBING A CONTRACT THAT NO LONGER EXISTED.
+ *
+ * The doc said "`achieve` has three outcomes and only one of them is exit 0" and listed three rows.
+ * `composed` had already landed - in the schema, in the route, in the generated client and in this
+ * command's own exit-code branch - and the document an AGENT reads to decide how to use the command
+ * still said a composed answer was not one of them. That is not cosmetic: a stale contract in the
+ * skill doc is a wrong instruction shipped to every consumer, and an agent that believes it will
+ * treat a successful narrowed read as a failed goal, which is exactly the bug the client itself had.
+ *
+ * So the doc is tested against the two authorities it describes, rather than proof-read:
+ *
+ *   1. WHAT OUTCOMES EXIST comes from `docs/openapi/cortex.v1.json` - the published contract this
+ *      package generates its client from. Every outcome it declares must have a row.
+ *   2. WHAT EACH ONE DOES comes from RUNNING THE COMMAND. The exit code in the doc's table is
+ *      compared against the exit code the binary really produces for that outcome, so the doc
+ *      cannot drift from the behaviour in either direction - a client change without the doc, or a
+ *      doc change without the client, reds here.
+ */
+describe('the shipped skill doc describes the contract this command implements', () => {
+  const SKILL = readFileSync(fileURLToPath(new URL('../SKILL.md', import.meta.url)), 'utf8');
+  const SPEC = JSON.parse(
+    readFileSync(fileURLToPath(new URL('../../../docs/openapi/cortex.v1.json', import.meta.url)), 'utf8'),
+  ) as { components: { schemas: { AchieveIntegrationGoalResponse: { properties: { outcome: { enum: string[] } } } } } };
+  const OUTCOMES = SPEC.components.schemas.AchieveIntegrationGoalResponse.properties.outcome.enum;
+
+  /** The row of the doc's achieve table for one outcome, split into cells. */
+  function tableRow(outcome: string): string[] {
+    const line = SKILL.split('\n').find((l) => l.startsWith(`| \`${outcome}\` |`));
+    expect(line, `SKILL.md has no achieve table row for the outcome "${outcome}"`).toBeDefined();
+    return (line as string).split('|').map((c) => c.trim());
+  }
+
+  /** A minimally well-formed achieve response for each outcome, as the route emits it. */
+  const bodyFor: Record<string, Record<string, unknown>> = {
+    executed: { outcome: 'executed', actionName: 'processos', result: { success: true, status: 200, data: { processos: [] } } },
+    composed: {
+      outcome: 'composed',
+      actionName: 'processos',
+      result: { success: true, status: 200, data: { processos: [{ id: 'p1' }] } },
+      items: [{ id: 'p1' }],
+      composition: {
+        collection: 'clients',
+        where: { field: 'idade', op: 'lt', value: 40 },
+        join: { resultField: 'clienteId', collectionField: 'id' },
+        scanned: 1, collectionScanned: 5, collectionTruncated: false,
+        matchedCollectionRows: 3, matched: 1, truncated: false,
+      },
+    },
+    authored: { outcome: 'authored', actionName: 'novo', state: 'provisional', requiresApproval: true },
+    refused: { outcome: 'refused', code: 'ambiguous_goal', message: 'Mais do que uma ação serve.' },
+  };
+
+  it('lists EVERY outcome the published contract declares - four of them, not three', () => {
+    expect(OUTCOMES).toContain('composed');
+    for (const outcome of OUTCOMES) expect(tableRow(outcome)[1]).toBe(`\`${outcome}\``);
+    // …and it does not still claim there are three. The count is written out in the prose above the
+    // table, which is the sentence an agent actually reads before the rows.
+    expect(SKILL).toContain(`\`achieve\` has FOUR outcomes`);
+    expect(SKILL).not.toContain('has three outcomes');
+  });
+
+  it('states the exit code each outcome REALLY produces, taken from running the command', async () => {
+    for (const outcome of OUTCOMES) {
+      const cap = capture();
+      const code = await main(['integrations', 'achieve', 'crm', '--goal', 'um objectivo', '--json'], {
+        io: cap.io,
+        env: ENV,
+        fetchImpl: stub(bodyFor[outcome] as Record<string, unknown>).fetchImpl,
+      });
+      // The doc's exit cell reads "0, or 1 if …" or "1"; the code the binary produced has to be the
+      // one it opens with.
+      const stated = tableRow(outcome)[3] as string;
+      expect(stated.startsWith(String(code)), `SKILL.md says "${stated}" for ${outcome}, the binary exits ${code}`).toBe(true);
+    }
   });
 });
 

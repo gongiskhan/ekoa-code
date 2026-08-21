@@ -284,9 +284,16 @@ describe('achieve AUTHORS, and the key that authored cannot bless its own work',
     const body = (await authored.json()) as {
       outcome: string; actionName: string; state: string; forked: boolean;
       requiresApproval: boolean; verification: { passed: boolean; checks: Array<{ name: string; ok: boolean }> };
+      ladder?: Array<{ rung: string; verdict: string }>;
     };
     expect(AchieveIntegrationGoalResponse.safeParse(body).success, JSON.stringify(body)).toBe(true);
     expect(body.outcome).toBe('authored');
+    // THE MINT RUNG, ON THE WIRE. `AchieveRung` published `mint` for two rounds while nothing
+    // pushed it, so this outcome carried a declared-and-always-absent `ladder` and the fourth rung
+    // of a four-rung ladder was a word no consumer could observe. Asserted HERE as well as at the
+    // module, because the route projects `authored` through a bare `res.json(result)` and this
+    // branch has already shipped one rung that was right at the module and wrong one layer out.
+    expect(body.ladder?.map((s) => `${s.rung}:${s.verdict}`)).toEqual(['reuse:skipped', 'mint:taken']);
     expect(body.actionName).toBe('exportar_faturas');
     expect(body.state).toBe('provisional');
     expect(body.forked).toBe(false);

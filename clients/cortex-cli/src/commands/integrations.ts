@@ -43,7 +43,8 @@ const USAGE = `cortex integrations <command>
   execute  run ONE named action        cortex integrations execute <key> <actionName>
              --arg k=v                 repeatable; values are strings
              --args-json <json>        whole args object as JSON (mutually exclusive with --arg)
-  achieve  state a goal and let Cortex pick or write the action
+  achieve  state a goal and let Cortex pick the action, fill its arguments, narrow its answer,
+           or write a new one
              cortex integrations achieve <key> --goal "<text>" [--arg k=v]
 
 Every command accepts --json.
@@ -56,7 +57,13 @@ success. The HTTP status alone never tells you whether the action ran.
 A MUTATING ACTION NEEDS A HUMAN. It answers 403 with details.code = "awaiting_consent" and the
 descriptor of what would have run, which is printed. THIS CLI CANNOT GRANT THAT APPROVAL: the
 approval endpoint is a platform-session endpoint, deliberately off the key-reachable surface, so a
-person must approve the action in the Ekoa UI before it can run.`;
+person must approve the action in the Ekoa UI before it can run.
+
+achieve HAS FOUR OUTCOMES AND TWO OF THEM EXIT 0. "executed" ran an action; "composed" ran a trusted
+READ and narrowed its rows against one of your own app collections. "authored" wrote a provisional
+action that has NOT run, and "refused" declined - both exit 1. On "composed", items is a SUBSET and
+result is the action's own answer whole: a next-page cursor lives there, so items alone can read as
+a complete answer when it is one page of several.`;
 
 async function list(ctx: Ctx, args: ParsedArgs): Promise<void> {
   noExtraPositionals(args, 0);
@@ -209,14 +216,29 @@ function printActionResult(ctx: Ctx, what: string, body: ExecuteResponse | undef
 }
 
 /**
- * A COMPOSED answer, for a person: the same verdict line, then how the rows were narrowed, then the
- * rows that survived. The narrowing is printed rather than left implicit because a shorter list is
- * indistinguishable from a complete one - which is the failure this whole rung is built around -
- * and a person who is not told their answer was joined against `clients` cannot tell either.
+ * A COMPOSED answer, for a person: the verdict line, how the rows were narrowed, THE ACTION'S OWN
+ * ANSWER WHOLE, and then the rows that survived. The narrowing is printed rather than left implicit
+ * because a shorter list is indistinguishable from a complete one - which is the failure this whole
+ * rung is built around - and a person who is not told their answer was joined against `clients`
+ * cannot tell either.
  *
- * `--json` carries the arm's WHOLE envelope (`result`, with the upstream status and everything
- * standing beside the list in `data`); this rendering is a projection for a human, and the upstream
- * status is on it because a 206 means the answer was one page of several.
+ * THE ENVELOPE IS PRINTED, AND ITS ABSENCE WAS THE THIRD VARIANT OF THIS RUNG'S SHARPEST DEFECT -
+ * the dangerous one, because the caller could not see it. The composition is a POST-STAGE: the
+ * module carries the arm's whole answer on `result`, the route projects it, `--json` prints it. The
+ * HUMAN path threw it away and printed `items` alone, so every field standing BESIDE the list
+ * inside `data` - a `nextPage` cursor above all, a `total`, a `hasMore` - never reached the one
+ * reader who cannot go and look it up. The composed line tells them the rows were NARROWED; nothing
+ * told them what they were narrowed FROM was itself one page. So a join over the first page of a
+ * paginated read printed identically to the same join over the whole of it, and for "todos os
+ * processos de clientes com menos de 40 anos" that is a lawyer reading a partial case list as the
+ * complete one.
+ *
+ * `execute` has always printed the action's `data` whole (`printActionResult`), so this is the same
+ * rendering plus the narrowing rather than a new dialect: a composed answer now shows a person
+ * everything an executed one would have, and the subset on top.
+ *
+ * THE ENVELOPE GOES ABOVE THE ROWS, deliberately. `items` is capped at 200 rows, and a partiality
+ * signal underneath 200 rows of JSON is a signal nobody reads.
  */
 function printComposedResult(ctx: Ctx, what: string, body: AchieveResponse): void {
   const upstream = body.result?.status === undefined ? '' : `  (upstream HTTP ${body.result.status})`;
@@ -228,6 +250,14 @@ function printComposedResult(ctx: Ctx, what: string, body: AchieveResponse): voi
     const partial = c.truncated || c.collectionTruncated ? ' - PART of the answer, not all of it' : '';
     ctx.io.out(`composed  ${c.matched} of ${c.scanned} rows kept, joined against "${c.collection}"${partial}`);
   }
+  // Printed whenever the action returned a body at all, and NOT reduced to "the interesting bits":
+  // deciding which siblings of the list matter would mean this client guessing which key a given
+  // third party paginates with, and the one it guessed wrong about is the one that would go missing.
+  if (body.result?.data !== undefined) {
+    ctx.io.out('the action\'s own answer, whole - the rows below are a subset of it:');
+    ctx.io.out(JSON.stringify(body.result.data, null, 2));
+  }
+  ctx.io.out('rows kept:');
   ctx.io.out(JSON.stringify(body.items ?? [], null, 2));
 }
 

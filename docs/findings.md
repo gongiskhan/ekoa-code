@@ -7574,3 +7574,91 @@ re-implemented a live control had it trusted this heading over the code.
   PROVEN BY MUTATION: the contract suite asserts the value in the REQUEST BODY the third party
   received and the value in the durable row are the same one, and each field of each is separately
   killable.
+
+- **`s4s5-the-shipped-skill-doc-described-the-pre-compose-contract`** (**FIXED 2026-08-21**, S4/S5
+  round nine, was MAJOR; journal D-S4-5/D-S5-8). `clients/cortex-cli/SKILL.md` said "`achieve` has
+  three outcomes and only one of them is exit 0" with a three-row table, while `composed` was already
+  in the schema, the OpenAPI spec, the generated client, the route and - since round eight - this
+  command's own exit-0 branch. SKILL.md is the document an AGENT reads to decide how to use the
+  command, so a stale contract there is a wrong INSTRUCTION shipped to every consumer: an agent
+  believing it treats a successful narrowed read as a failed goal, which is exactly the defect the
+  client itself had one round earlier. Same class as the route docblock and the descriptor on the
+  sibling branch - the code moved and the thing people read did not.
+  FIXED by testing the doc instead of proof-reading it: what outcomes exist is read from
+  `docs/openapi/cortex.v1.json`, and the exit code each row claims is compared against the exit code
+  the BINARY really produces for that outcome, so neither side can drift alone.
+  PROVEN BY MUTATION in both directions - deleting the `composed` row reds, and changing its stated
+  exit to 1 reds against the running command.
+
+- **`s4s5-human-mode-composed-dropped-the-envelope-so-a-paginated-200-read-as-the-whole-answer`**
+  (**FIXED 2026-08-21**, S4/S5 round nine, was MAJOR; same journal entry). The third variant of this
+  rung's sharpest defect and the most dangerous, because the caller cannot see it. Round eight put
+  the arm's whole answer on `result` at the module, projected it at the route and printed it under
+  `--json`; `printComposedResult` printed `items` alone, so every field standing BESIDE the list
+  inside `data` - a `nextPage` cursor above all - never reached the one reader who cannot go and look
+  it up. The composed line tells them the rows were NARROWED; nothing told them what they were
+  narrowed FROM was itself one page, so a join over the first page of a paginated read printed
+  identically to the same join over the whole of it - and for "todos os processos de clientes com
+  menos de 40 anos" that is a lawyer reading a partial case list as the full one. FIXED by printing the action's own answer whole,
+  labelled, ABOVE the rows (`items` is capped at 200, and a partiality signal under 200 rows of JSON
+  is a signal nobody reads), and nothing on it summarised - choosing which siblings of the list
+  matter would mean guessing which key a given third party paginates with.
+  PROVEN BY MUTATION against a fixture answering HTTP **200** with a cursor, which is the dangerous
+  case: a 206 announces itself in the status line, a paginated 200 announces itself nowhere else.
+
+- **`s4s5-the-record-of-a-model-chosen-value-was-written-after-the-write-and-swallowed`**
+  (**FIXED 2026-08-21**, S4/S5 round nine, was MINOR but the sharpest one; same journal entry).
+  `capability_achieve_parametrize` is the only durable record that a MODEL, rather than the person or
+  script holding the key, decided what a third-party call would act on - and it was awaited AFTER the
+  one gated execute inside its own `catch`. So the audit trail for "what did the model pick for this
+  write" could be silently absent EXACTLY when the write had succeeded: missing precisely on the runs
+  that mattered, which is not a trail. FIXED by writing it BEFORE the execute and not catching:
+  nothing has been spent at that point, so the failure has somewhere to go that is neither silence
+  nor a destroyed answer. Refusing the call would have been the other defect this branch spent three
+  rounds closing, so the rung STANDS DOWN instead - the model's arguments are dropped, the request
+  goes out as the CALLER shaped it, the ladder says `unavailable`, and the answer arrives whole. The
+  record of the choice is a precondition of the choice. `verdict`/`code` leave the row (they are
+  `capability_execute`'s own fact for the same call, one insert later, and were the only reason this
+  row had to wait for a write to finish).
+  PROVEN BY MUTATION: the ORDER is asserted as a sequence (`capability_achieve_parametrize` ->
+  the third-party call -> `capability_execute`), and moving the write back below the execute reds
+  that and nothing else in the estate; swallowing instead of standing down reds the case that
+  asserts the model's value never left the process.
+
+- **`s4s5-composition-scanned-was-unpinned-across-the-whole-estate`** (**FIXED 2026-08-21**, S4/S5
+  round nine, was MINOR; same journal entry). Every fixture held four action rows and four collection
+  rows, so `scanned` could not be told from `collectionScanned`, nor `matched` from
+  `matchedCollectionRows`: no assertion anywhere could say which SIDE of the join a count was
+  counting, and a summary reporting the caller's collection size as the action's page size was green
+  everywhere. FIXED with a fifth client that satisfies the predicate and keys no process, in all
+  three fixtures, so the canonical answer is scanned 4 / collectionScanned 5 / matchedCollectionRows
+  3 / matched 2 - four counts, four different numbers, at the pure stage, on the wire and through
+  the client.
+
+- **`s4s5-the-humans-only-truncation-warning-had-no-test`** (**FIXED 2026-08-21**, S4/S5 round nine,
+  was MINOR; same journal entry). `- PART of the answer, not all of it` is the one thing on screen
+  that says a narrowed list is not the whole of somebody's answer, and it could be deleted, inverted
+  or reduced to one of its two flags with the estate green - same family as the envelope defect
+  above. FIXED with a four-row table of the rendering (each flag alone, both, neither) plus an
+  end-to-end case driving 201 real rows through the real join stage, so `truncated` is set by
+  `composeRows` counting past its own emit cap rather than by a fixture asserting itself.
+
+- **`s4s5-mint-and-ladder-on-a-refusal-were-published-and-populated-by-nothing`**
+  (**FIXED 2026-08-21**, S4/S5 round nine, was MINOR; same journal entry). `AchieveRung` published
+  the word `mint` and nothing pushed it; `AchieveResult` declared `ladder` on `authored` and on
+  `refused` and no call site passed it. A vocabulary a server publishes and never emits is a contract
+  the code does not have. FIXED per field: the author arm IS the mint rung and now says so
+  (`authored` carries `reuse` `skipped` then `mint` `taken`, and `ladder` is REQUIRED there), while
+  `ladder` is REMOVED from the refused variant rather than left declared-and-empty - a refusal is the
+  answer that no rung produced anything, and the type now has nowhere to put one.
+
+- **`s4s5-promptsafefields-ordering-was-unpinned`** (**FIXED 2026-08-21**, S4/S5 round nine, was
+  MINOR - and the review's stated reason for it is CORRECTED rather than repeated; same journal
+  entry). The order of `filter` and `slice` was unpinned and could be reversed with the estate green.
+  It is NOT what stops an unsafe field name reaching the prompt: `.slice().filter()` sanitises
+  everything it emits exactly as `.filter().slice()` does, and no name the predicate rejects reaches
+  a system prompt under either order. What it stops is a THIRD PARTY DECIDING WHAT A TENANT MAY
+  NARROW BY: capping first spends the 100 slots on the raw list, so a remote emitting a hundred
+  control-charactered keys - which sort first, both sets arriving sorted - leaves the caller an EMPTY
+  offered set. The docblock now states that consequence and disclaims the injection one; the test is
+  a 100-refused + 100-good fixture that reads `[]` under the reversed order.

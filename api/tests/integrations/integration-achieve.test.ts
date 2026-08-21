@@ -292,6 +292,73 @@ describe('achieve EXECUTES an existing action through the gated executor', () =>
 // ---------------------------------------------------------------------------------------------
 
 describe('achieve AUTHORS when nothing satisfies the goal', () => {
+  /**
+   * THE MINT RUNG SAYS SO, and for two rounds it did not.
+   *
+   * `AchieveRung` published the word `mint` and `AchieveResult` declared `ladder` on `authored` and
+   * on `refused`, and NOTHING anywhere pushed a step onto either. A client that read `ladder` to
+   * learn which rung answered found the field absent on every authored answer, and the fourth rung
+   * of a four-rung ladder was a word no reader could ever observe. Publishing a vocabulary the
+   * server never emits is the same defect as a doc describing a contract the code does not have -
+   * so this asserts the whole ladder, by equality, rather than that a `mint` step exists somewhere
+   * in it.
+   *
+   * The step ABOVE it is the reason this arm ran at all: `matchActionForGoal` found nothing to
+   * reuse. `parametrize` and `compose` are deliberately absent - both act on a MATCHED action's
+   * arguments and rows, and there is no matched action here, so a step for either would report a
+   * decision nothing took.
+   */
+  it('reports the MINT rung on the ladder, under the reuse rung that found nothing', async () => {
+    await seed(PROBE_INTEGRATION, [existingRead]);
+    const { drafter } = drafterEmitting([block(GOOD_DRAFT)]);
+    const { ctx } = ctxWith('ownerA', 'orgA', drafter);
+
+    const res = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'arquivar um processo antigo'));
+    if (res.outcome !== 'authored') throw new Error(`expected authored, got ${JSON.stringify(res)}`);
+    expect(res.ladder).toEqual([
+      { rung: 'reuse', verdict: 'skipped', detail: 'no existing action fits this goal, so one was written' },
+      { rung: 'mint', verdict: 'taken', detail: 'wrote "arquivar_processo" as provisional' },
+    ]);
+  });
+
+  /**
+   * AND A REFUSAL CARRIES NONE - the other half of "populate it or stop publishing it".
+   *
+   * `ladder` was declared optional on the refused variant and passed by no call site in the module,
+   * so it was a published field nothing could ever fill. It is gone from the type rather than left
+   * declared-and-empty: a refusal is the answer that NO rung produced anything, so "which rung
+   * answered" has nothing to report, and what went wrong is the refusal's own `code`, `message` and
+   * `violations` - one vocabulary instead of two.
+   *
+   * `verification_failed` is the sharpest case for it: the mint rung really did run, really did
+   * judge a draft and really did throw it away, which is the one refusal where a ladder step would
+   * look most plausible - and every word of it is already on `code` + `violations`.
+   */
+  it('a refused goal carries NO ladder at all, whichever arm refused it', async () => {
+    await seed(PROBE_INTEGRATION, [existingRead]);
+    const bad = { ...GOOD_DRAFT, httpConfig: { ...GOOD_DRAFT.httpConfig, baseUrl: 'https://exfil.example' } };
+    const { drafter } = drafterEmitting([block(bad)]);
+    const { ctx } = ctxWith('ownerA', 'orgA', drafter);
+
+    // (a) the MINT rung's own refusal, after it ran and judged a draft.
+    const minted = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'arquivar um processo antigo'));
+    if (minted.outcome !== 'refused') throw new Error(`expected refused, got ${minted.outcome}`);
+    expect(minted.code).toBe('verification_failed');
+    expect(Object.keys(minted)).not.toContain('ladder');
+    // What went wrong is here, in the one vocabulary a client already reads.
+    expect(minted.violations?.join(' ')).toContain('exfil.example');
+
+    // (b) a refusal decided BEFORE any rung was entered, for the same absence.
+    await seed(PROBE_INTEGRATION, [
+      { ...existingWrite, actionName: 'enviar_email', description: 'Enviar ao cliente' },
+      { ...existingWrite, actionName: 'enviar_sms', description: 'Enviar ao cliente' },
+    ]);
+    const early = valueOf(await achieveIntegrationGoal(ctx, PROBE_INTEGRATION, 'enviar por email ou sms'));
+    if (early.outcome !== 'refused') throw new Error(`expected refused, got ${early.outcome}`);
+    expect(early.code).toBe('ambiguous_goal');
+    expect(Object.keys(early)).not.toContain('ladder');
+  });
+
   it('persists a PROVISIONAL action with mutates FORCED true, even though the draft claimed false', async () => {
     await seed(PROBE_INTEGRATION, [existingRead]);
     const { drafter } = drafterEmitting([block(GOOD_DRAFT)]);

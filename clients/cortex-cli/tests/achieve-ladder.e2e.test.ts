@@ -154,6 +154,22 @@ const PROCESS_ROWS = [
  *  narrowed rows - which is exactly why a composition that drops the envelope is a defect. */
 const UPSTREAM_PAGE = JSON.stringify({ processos: PROCESS_ROWS, nextPage: 'cursor-2' });
 
+/** THE SAME PAGE AT HTTP 200, which is the dangerous one and the reason the envelope has to be
+ *  printed rather than summarised. A 206 announces itself in the status line; a paginated 200 says
+ *  nothing at all except through the cursor sitting BESIDE the list inside `data`. Most real list
+ *  endpoints paginate at 200. */
+const UPSTREAM_PAGE_200 = JSON.stringify({ processos: PROCESS_ROWS, nextPage: 'cursor-2', total: 500 });
+
+/** More matching rows than the compose stage will EMIT (`COMPOSE_MAX_ITEMS` is 200), every one of
+ *  them keyed to `c1`, who is 31. The join therefore matches all 201 and `items` is the head of
+ *  them - which is the only condition under which the client's truncation clause can fire, and the
+ *  only honest way to produce it: the count comes from the real stage over real rows. */
+const OVER_CAP_ROWS = Array.from({ length: 201 }, (_, i) => ({
+  numeroProcesso: `9${String(i).padStart(3, '0')}/24.0T8LSB`,
+  clienteId: 'c1',
+}));
+const UPSTREAM_OVER_CAP = JSON.stringify({ processos: OVER_CAP_ROWS });
+
 const COMPOSE_PLAN = {
   compose: true,
   collection: 'clients',
@@ -193,6 +209,21 @@ function jsonOf(res: CliResult): Record<string, unknown> {
   return JSON.parse(res.stdout) as Record<string, unknown>;
 }
 
+/**
+ * The `numeroProcesso` of every row printed under `rows kept:` in HUMAN mode.
+ *
+ * Parsed rather than substring-matched, because human output now carries TWO json blocks - the
+ * action's own answer whole, then the narrowing - and `toContain('111/24.0T8LSB')` would be
+ * satisfied by the first one. Asserting on the narrowing means reading the narrowing.
+ */
+function rowsKeptOf(stdout: string): string[] {
+  const marker = 'rows kept:\n';
+  const at = stdout.indexOf(marker);
+  expect(at, `no "rows kept:" block in:\n${stdout}`).toBeGreaterThanOrEqual(0);
+  const rows = JSON.parse(stdout.slice(at + marker.length)) as Array<{ numeroProcesso: string }>;
+  return rows.map((r) => r.numeroProcesso);
+}
+
 const authed = (path: string, init: RequestInit = {}) =>
   fetch(`${baseUrl}${path}`, {
     ...init,
@@ -224,6 +255,11 @@ async function seedClients(): Promise<void> {
   await engine.create(scope, 'clients', { id: 'c2', nome: 'Bruno', idade: 52 });
   await engine.create(scope, 'clients', { id: 'c3', nome: 'Carla', idade: 39 });
   await engine.create(scope, 'clients', { id: 'c4', nome: 'Duarte', idade: 40 });
+  // `c5` satisfies the predicate and keys no process, so the four counts a composed answer reports
+  // are four DIFFERENT numbers by the time they reach the client: scanned 4 (the ACTION's page),
+  // collectionScanned 5, matchedCollectionRows 3, matched 2. Every fixture in the estate used to
+  // hold four rows on each side, so nothing anywhere could tell `scanned` from the collection size.
+  await engine.create(scope, 'clients', { id: 'c5', nome: 'Eva', idade: 25 });
 }
 
 beforeAll(async () => {
@@ -344,11 +380,93 @@ describe('the compose rung through the built binary', () => {
     expect(res.stderr).toBe('');
     expect(res.stdout).toContain(`ok  ${PROBE}/processos`);
     expect(res.stdout).toContain('upstream HTTP 206');
+    // `2 of 4` - the ACTION's page, not the caller's five-row collection. The two counts differ in
+    // this fixture precisely so this line cannot be read off the wrong side of the join.
     expect(res.stdout).toContain('2 of 4 rows kept, joined against "clients"');
     expect(res.stdout).toContain('111/24.0T8LSB');
-    expect(res.stdout).toContain('333/24.0T8CBR');
-    // The rows the join dropped are not printed as if they had been kept.
-    expect(res.stdout).not.toContain('222/24.0T8PRT');
+    // The rows the join dropped are not printed under `rows kept:`.
+    expect(rowsKeptOf(res.stdout)).toEqual(['111/24.0T8LSB', '333/24.0T8CBR']);
+  });
+
+  /**
+   * THE MAJOR, IN HUMAN MODE - the third variant of this rung's defect and the most dangerous of
+   * the three, because the caller cannot see it.
+   *
+   * The module carries the arm's whole answer on `result`, the route projects it and `--json`
+   * prints it; the HUMAN path threw it away and printed `items` alone. Every field standing BESIDE
+   * the list inside `data` - the `nextPage` cursor above all, the `total` - never reached the ONE
+   * reader who cannot go and look it up. The composed line tells them the rows were NARROWED;
+   * nothing told them what they were narrowed FROM was itself one page, so a join over the first
+   * page of a paginated read printed identically to the same join over the whole of it.
+   *
+   * THE FIXTURE ANSWERS 200, deliberately, and that is the whole case. A 206 announces itself in
+   * the status line the client already printed; a paginated 200 - which is what most list endpoints
+   * actually answer - announces itself NOWHERE except in the envelope. For "todos os processos de
+   * clientes com menos de 40 anos" the failure is a lawyer reading a partial case list as the full
+   * one, and nothing on screen contradicting them.
+   */
+  it('a PAGINATED 200 is visibly partial in human mode: the envelope is printed, not dropped', async () => {
+    upstream.calls.length = 0;
+    upstream.status = 200;
+    upstream.body = UPSTREAM_PAGE_200;
+    plans.args = argsBlock({ tribunal: 'Lisboa' });
+    plans.compose = composeBlock(COMPOSE_PLAN);
+
+    const res = await cortex(['integrations', 'achieve', PROBE, '--goal', CANONICAL_GOAL]);
+
+    expect(res.code, res.stderr).toBe(0);
+    expect(res.stderr).toBe('');
+    // THE TWO FACTS THAT WERE INVISIBLE. Neither is recoverable from `items` or `composition`, and
+    // at HTTP 200 neither is implied by anything else on screen.
+    expect(res.stdout).toContain('nextPage');
+    expect(res.stdout).toContain('cursor-2');
+    expect(res.stdout).toContain('500');
+    // …and they are labelled as the action's own answer, so a reader knows the rows are a subset of
+    // it rather than a second list.
+    expect(res.stdout).toContain('the action\'s own answer, whole - the rows below are a subset of it:');
+    // The envelope sits ABOVE the rows: `items` is capped at 200, and a partiality signal printed
+    // underneath 200 rows of JSON is a signal nobody reads.
+    expect(res.stdout.indexOf('cursor-2')).toBeLessThan(res.stdout.indexOf('rows kept:'));
+    // The narrowing still happened and is still the caller's answer.
+    expect(rowsKeptOf(res.stdout)).toEqual(['111/24.0T8LSB', '333/24.0T8CBR']);
+  });
+
+  /**
+   * THE ONE SIGNAL THAT SAYS "THIS IS NOT EVERYTHING", AND IT HAD NO TEST.
+   *
+   * `printComposedResult` appends `- PART of the answer, not all of it` when either truncation flag
+   * is set, and nothing anywhere exercised it: the clause could be deleted, or the condition
+   * inverted, with the whole estate green. It is the same family as the envelope above - the
+   * difference between a partial answer a caller knows about and a partial answer they do not.
+   *
+   * Produced HONESTLY rather than stubbed: 201 real rows through the real join stage, so
+   * `truncated` is set by `composeRows` counting past its own emit cap.
+   */
+  it('says the composed answer is PART of the answer when the emit cap really fired', async () => {
+    upstream.calls.length = 0;
+    upstream.status = 200;
+    upstream.body = UPSTREAM_OVER_CAP;
+    plans.args = argsBlock({ tribunal: 'Lisboa' });
+    plans.compose = composeBlock(COMPOSE_PLAN);
+
+    const res = await cortex(['integrations', 'achieve', PROBE, '--goal', CANONICAL_GOAL]);
+
+    expect(res.code, res.stderr).toBe(0);
+    expect(res.stdout).toContain('201 of 201 rows kept, joined against "clients" - PART of the answer, not all of it');
+    // The cap really fired, and the caller received its head: 200 rows, not 201.
+    expect(rowsKeptOf(res.stdout)).toHaveLength(200);
+
+    // …and the SAME run under --json carries the flag machine-readably, so the human line is a
+    // projection of a fact rather than a sentence this client invented.
+    upstream.calls.length = 0;
+    upstream.body = UPSTREAM_OVER_CAP;
+    plans.args = argsBlock({ tribunal: 'Lisboa' });
+    plans.compose = composeBlock(COMPOSE_PLAN);
+    const doc = jsonOf(await cortex(['integrations', 'achieve', PROBE, '--goal', CANONICAL_GOAL, '--json']));
+    const composition = (doc.data as { composition: { truncated: boolean; matched: number; scanned: number } }).composition;
+    expect(composition.truncated).toBe(true);
+    expect(composition.matched).toBe(201);
+    expect(composition.scanned).toBe(201);
   });
 
   /**

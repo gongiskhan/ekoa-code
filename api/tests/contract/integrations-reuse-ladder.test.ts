@@ -244,6 +244,11 @@ async function seedClients(orgId = 'orgA', userId = 'ownerA', artifactId = ART):
   await engine.create(scope, 'clients', { id: 'c2', nome: 'Bruno', idade: 52 });
   await engine.create(scope, 'clients', { id: 'c3', nome: 'Carla', idade: 39 });
   await engine.create(scope, 'clients', { id: 'c4', nome: 'Duarte', idade: 40 });
+  // `c5` SATISFIES THE PREDICATE AND KEYS NO PROCESS, so the four counts a composed answer reports
+  // are four different numbers on the wire: scanned 4 (the ACTION's page), collectionScanned 5,
+  // matchedCollectionRows 3, matched 2. Every fixture in the estate used to hold four rows on each
+  // side, which made `scanned` indistinguishable from the size of the caller's own collection.
+  await engine.create(scope, 'clients', { id: 'c5', nome: 'Eva', idade: 25 });
 }
 
 beforeAll(async () => {
@@ -432,7 +437,13 @@ describe('the parametrize rung is wired, and its value reaches the request', () 
     expect(meta.filledArgs).toEqual({ titulo: 'Contestacao' });
     expect(meta.actionName).toBe('submeter_peca');
     expect(meta.mayWrite).toBe(true);
-    expect(meta.verdict).toBe('ok');
+    // The OUTCOME of the call is the executor's own row for the same call, not a second copy on
+    // this one - which is what let this row move to BEFORE the write it describes. Both are read
+    // here, because "we dropped a field" and "we lost a fact" are different claims.
+    expect(meta.verdict).toBeUndefined();
+    const executed = await activityLogs.find({ type: 'capability_execute' });
+    expect(executed).toHaveLength(1);
+    expect((executed[0] as unknown as { metadata?: Record<string, unknown> }).metadata?.verdict).toBe('ok');
 
     // THE 200 ITSELF STAYS NAMES-ONLY, which is the contract and is deliberate: the values live in
     // the answer a human reads before authorising, and in the row an auditor reads afterwards.
@@ -484,13 +495,15 @@ describe('CANONICAL, through the real app: "todos os processos de clientes com m
       .toEqual(['111/24.0T8LSB', '333/24.0T8CBR']);
     const composition = body.composition as Record<string, unknown>;
     expect(composition.collection).toBe('clients');
+    // FOUR COUNTS, FOUR DIFFERENT NUMBERS, on the wire. `scanned` is the rows the ACTION returned -
+    // this page - and it is the one a caller most easily reads as the size of their own collection.
     expect(composition.scanned).toBe(4);
-    expect(composition.matchedCollectionRows).toBe(2);
+    expect(composition.matchedCollectionRows).toBe(3);
     expect(composition.matched).toBe(2);
     expect(composition.truncated).toBe(false);
     // Both caps reported, on the wire, on every composed answer: the caller is told how much of
     // their own collection the join actually considered.
-    expect(composition.collectionScanned).toBe(4);
+    expect(composition.collectionScanned).toBe(5);
     expect(composition.collectionTruncated).toBe(false);
     // The rungs considered, on the wire.
     const ladder = body.ladder as Array<{ rung: string; verdict: string }>;

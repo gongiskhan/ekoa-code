@@ -5092,3 +5092,146 @@ into the existing files so the diff is exactly the appended element.
 the one projection for both arms, the new audit writer, and the e2e file that stands on it.
 `docs/diagrams/05-data-model.excalidraw` note (h) - `result` on `composed`, the three new fields on
 the consent 403 with their new shared schema, and the one new activity type with every field of it.
+
+## 2026-08-21 - D-S4-5/D-S5-8: the document an agent reads, the page a person reads, and the record of what a model chose
+
+**MAJOR 1: THE SHIPPED SKILL DOC STILL DESCRIBED THE PRE-COMPOSE CONTRACT.**
+
+`clients/cortex-cli/SKILL.md` said, verbatim:
+
+    `achieve` has three outcomes and only one of them is exit 0:
+
+with a three-row table holding `executed`, `authored` and `refused`. `composed` had already landed
+in `shared/src/integrations.ts`, in `docs/openapi/cortex.v1.json`, in the generated client, in the
+route and - last round - in this command's own exit-code branch. The document did not move.
+
+That is not cosmetic and it is not a typo. SKILL.md is the file an AGENT reads to decide how to use
+the command, so a stale contract there is a wrong INSTRUCTION shipped to every consumer: an agent
+believing it treats a successful narrowed read as a failed goal, which is precisely the defect the
+client itself had last round. It is the same class as the route docblock and the descriptor on the
+sibling branch - the code moved and the thing people read did not.
+
+The doc is now TESTED rather than proof-read, against the two authorities it describes
+(`clients/cortex-cli/tests/integrations.test.ts`, "the shipped skill doc describes the contract this
+command implements"):
+
+  1. WHAT OUTCOMES EXIST is read from `docs/openapi/cortex.v1.json` - the published contract this
+     package generates its client from. Every outcome the spec declares must have a table row.
+  2. WHAT EACH ONE DOES is taken from RUNNING THE COMMAND. For every outcome the spec declares, the
+     binary is driven over a stubbed response and its real exit code is compared against the exit
+     column of that outcome's row. The doc cannot drift from the behaviour in either direction: a
+     client change without the doc, and a doc change without the client, both red.
+
+The doc also gained TRAP 3 (`composed` is an answer and `items` is not the whole of it), the
+`ladder` vocabulary, and where a model's chosen VALUES are and are not readable.
+
+**MAJOR 2: HUMAN-MODE `composed` DROPPED THE ACTION'S ENVELOPE, SO A PAGINATED 200 READ AS THE
+WHOLE ANSWER.**
+
+The third variant of this rung's sharpest defect, and the most dangerous of the three, because the
+caller cannot see it. D-S5-7 put the arm's whole answer on `result` at the module, projected it at
+the route and printed it under `--json`. `printComposedResult` - the HUMAN path - printed `items`
+alone:
+
+    ok  crm/processos
+    composed  2 of 4 rows kept, joined against "clients"
+    [ ...2 rows... ]
+
+Every field standing BESIDE the list inside `data` - a `nextPage` cursor above all, a `total` -
+never reached the ONE reader who cannot go and look it up. The composed line tells the reader the rows were NARROWED; nothing told them what
+they were narrowed FROM was itself one page, so a join over the first page of a paginated read
+printed identically to the same join over the whole of it. For "todos os processos
+de clientes com menos de 40 anos" that is a lawyer reading a partial case list as the full one.
+
+`execute` has always printed the action's `data` whole, so the fix is that rendering plus the
+narrowing rather than a new dialect: the envelope is printed, labelled as the action's own answer,
+ABOVE the rows - `items` is capped at 200, and a partiality signal underneath 200 rows of JSON is a
+signal nobody reads. Nothing is summarised or filtered on the way: deciding WHICH siblings of the
+list matter would mean this client guessing which key a given third party paginates with, and the
+one it guessed wrong about is the one that would go missing.
+
+THE FIXTURE FOR IT ANSWERS HTTP 200, deliberately. A 206 announces itself in the status line the
+client already printed; a paginated 200 - which is what most real list endpoints answer - announces
+itself NOWHERE except in the envelope.
+
+**MINOR 1: `composition.scanned` WAS UNPINNED ACROSS THE WHOLE ESTATE.** Every fixture held four
+action rows and four collection rows, so `scanned` (4) was indistinguishable from `collectionScanned`
+(4), and `matched` from `matchedCollectionRows` (2 and 2). No assertion anywhere could say which
+SIDE of the join a count was counting, and a summary reporting the caller's collection size as the
+action's page size would have been green everywhere. A fifth client (`c5`, 25, keying no process)
+is added to all three fixtures - the module suite, the contract suite and the cortex-cli e2e - so
+the canonical answer now reads scanned 4, collectionScanned 5, matchedCollectionRows 3, matched 2:
+four counts, four different numbers, asserted at the pure stage, on the wire and through the client.
+
+**MINOR 2: THE HUMAN'S ONLY TRUNCATION WARNING HAD NO TEST.** `- PART of the answer, not all of it`
+is the one thing on screen that says a narrowed list is not the whole of somebody's answer, and it
+could be deleted, inverted, or reduced to one of its two flags with the estate green. It is now a
+four-row table of the rendering (both flags, each alone, both, neither) plus an end-to-end case
+driving 201 real rows through the real join stage so `truncated` is set by `composeRows` counting
+past its own emit cap.
+
+**MINOR 3: `mint` AND `ladder`-ON-A-REFUSAL WERE PUBLISHED AND POPULATED BY NOTHING.** `AchieveRung`
+has carried the word `mint` since the ladder shipped and no code pushed it; `AchieveResult` declared
+`ladder` on `authored` and on `refused` and no call site passed it. A vocabulary a server publishes
+and never emits is a contract the code does not have. Answered per field, which is what
+"populate it or stop publishing it" means here:
+
+  - `mint` IS PRODUCED. The author arm - the only code in the platform that writes a new action - is
+    the mint rung, and now says so. An `authored` answer carries exactly two steps: `reuse`
+    `skipped` (nothing fitted, which is WHY anything was minted) and `mint` `taken`. `parametrize`
+    and `compose` are deliberately absent: both act on a MATCHED action's arguments and rows, and
+    there is no matched action on that arm, so a step for either would report a decision nothing
+    took. `ladder` is REQUIRED on `authored` rather than optional.
+  - `ladder` ON A REFUSAL IS GONE FROM THE TYPE. Not left declared-and-empty: the refused variant
+    has no field to put one in, so "present on exactly the outcomes that carry an answer" is a
+    property of the shape instead of a sentence somebody has to keep true. A refusal is the answer
+    that NO rung produced anything; what went wrong is `code`/`message`/`violations`, which every
+    client already reads.
+
+RULE 7: `ladder` is unchanged on the wire schema (optional on one flat object, as it has always
+been) and no enum member moved. `mint` is a value a consumer could already receive under the
+published schema and never did; `authored` gains a field it never carried. `gate:openapi` and
+`gate:client-drift` both run and produce no diff.
+
+**MINOR 4 - THE ONE THAT MATTERS MOST: THE RECORD OF A MODEL'S CHOICE WAS WRITTEN AFTER THE
+IRREVERSIBLE WRITE AND SWALLOWED ON FAILURE.**
+
+`capability_achieve_parametrize` is the only durable record that a MODEL, rather than the person or
+script holding the key, decided what a third-party call would act on. It was awaited in
+`runMatchedAction` AFTER the one gated execute, inside its own `catch`, which logged and moved on.
+So the audit trail for "what did the model pick for this write" could be silently absent EXACTLY
+when the write had succeeded - missing precisely on the runs that mattered, which is not a trail.
+
+Both halves are fixed by one move: the write goes BEFORE the execute (`recordParametrization`,
+awaited by `parametrizeArgs`) and no longer catches. Nothing has been spent at that point, so the
+failure has somewhere to go that is neither silence nor a destroyed answer.
+
+REFUSING THE CALL WOULD HAVE BEEN THE OTHER DEFECT - the parametrize rung taking away a call that a
+trusted action, the caller's own arguments and a human's standing approval had already earned,
+because an activity insert blipped (D-S4-3/D-S5-6). So the rung STANDS DOWN, on its own existing
+degradation path: the model's arguments are dropped, the request goes out carrying exactly what the
+caller sent, one ladder step says `unavailable` ("we could not right now" - nothing about the goal
+was judged), and the answer reaches the caller whole. THE RECORD OF THE CHOICE IS A PRECONDITION OF
+THE CHOICE: if it cannot be recorded, the choice is not made, and a model-chosen value can no longer
+reach a third party unrecorded.
+
+THE OUTCOME LEAVES THE ROW, and that is what made the move affordable. `verdict`/`code` were copied
+off the executor's result onto this row, which is the same fact `capability_execute` already records
+for the same call one insert later - two rows carrying one fact is two rows that can disagree, and
+it was the ONLY reason this row had to wait for a write to finish. An auditor reads the pair: this
+row says what a model chose, that row says what happened when it was spent. Both are still written
+when the write gate refuses. The suites assert the PAIR rather than the deletion, because "we
+dropped a field" and "we lost a fact" are different claims and only the first one is true.
+
+**MINOR 5: `promptSafeFields`'s FILTER-BEFORE-SLICE ORDERING WAS UNPINNED - AND THE OBVIOUS REASON
+FOR IT IS FALSE.** The review put it as "the ordering is what stops an unsafe field name reaching
+the prompt". THE CODE DISAGREES AND THE CODE WINS: `.slice().filter()` sanitises everything it emits
+exactly as `.filter().slice()` does, and no name the predicate rejects reaches a system prompt under
+either order. What reversing them changes is WHOSE names the cap is spent on. Capping first spends
+the 100 slots on the RAW list, refused names included, and then discards some of them - so the
+caller is offered FEWER than 100 usable names whenever a rejected one sorts early. Both sets arrive
+sorted and a C0 character sorts below every letter, so a remote emitting a hundred control-charactered
+keys leaves the caller an EMPTY offered set and a rung that can narrow nothing at all: a third party
+deciding what this tenant may narrow their own answer by. The docblock now states that consequence
+and explicitly disclaims the injection one; the test is a 100-refused + 100-good fixture that reads
+`[]` under the reversed order.

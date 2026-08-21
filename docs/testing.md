@@ -55,8 +55,23 @@ where they touch the dashboard.
   than a tenancy one, so it is pinned in the module suite
   (`integrations/achieve-reuse-ladder.test.ts`, "the field names put in a prompt are bounded and
   sanitised") rather than here: both bounds as literal pairs, the sanitiser over the whole banned
-  range, and the filter asserted on each side SEPARATELY so filtering one and not the other reds.
+  range, the filter asserted on each side SEPARATELY so filtering one and not the other reds, and
+  the ORDER of the two steps - which is an availability property rather than an injection one, so
+  the case asserts what reversing it really costs (a remote emitting a hundred refused names first
+  spends the whole cap and leaves the tenant an EMPTY offered set) instead of a claim about
+  injection that neither order can break.
   `migration/` holds the protocol-parity replay suites.
+- **A capability is not verified at the route, and the SHIPPED DOC is part of the edge.** Capabilities
+  are exposed as versioned public APIs consumed by ordinary API clients (Rule 1, Rule 3) and this
+  repo ships one, so `clients/cortex-cli/tests/achieve-ladder.e2e.test.ts` drives the BUILT binary
+  against `buildApp` for every ladder answer - the round-eight blocker was correct at the route and
+  destroyed one layer out, and nothing that stopped at `buildApp` could have caught it. The same
+  rule reaches `clients/cortex-cli/SKILL.md`, which is the document an AGENT reads to decide how to
+  use the command: it is TESTED, not proof-read (`clients/cortex-cli/tests/integrations.test.ts`,
+  "the shipped skill doc describes the contract this command implements") - which outcomes exist is
+  read from `docs/openapi/cortex.v1.json`, and the exit code each table row claims is compared
+  against the exit code the command really produces for a response of that outcome, so a client
+  change without the doc and a doc change without the client both red.
 - **The P4 locality suites, and what each is for** (they overlap on purpose, and the overlap is the
   point - a decision this slice makes wrong is an account lock, so each layer proves a different
   thing about it). `automation/locality.test.ts` drives the PURE decision table with real arguments,

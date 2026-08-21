@@ -371,6 +371,17 @@ of what exists, the three field refusals state OFFEREDNESS ("is not among the fi
 …") rather than existence - a platform that tells a caller `idade` is not a field of their own
 `clients` collection is stating a falsehood about their data.
 
+AND IT FILTERS BEFORE IT CAPS, WHICH IS AN AVAILABILITY PROPERTY RATHER THAN AN INJECTION ONE - said
+plainly because the plausible reading is wrong (D-S4-5/D-S5-8). Reversing the two steps would NOT
+admit an unsafe name: `.slice().filter()` sanitises everything it emits exactly as
+`.filter().slice()` does. What it would change is WHOSE names the cap is spent on. Capping first
+spends the 100 slots on the raw list, refused names included, and then discards some of them; both
+sets arrive sorted and a C0 character sorts below every letter, so a remote emitting a hundred
+control-charactered keys would leave the tenant an EMPTY offered set and a rung that can narrow
+nothing at all - a third party deciding what this tenant may narrow their own answer by. Filtering
+first spends the cap only on names that will really be offered. Pinned by a 100-refused +
+100-good fixture that reads `[]` under the reversed order.
+
 ## Incident response
 
 Solo-operator posture: the founder is incident commander. Detection sources, in order: **Registo**

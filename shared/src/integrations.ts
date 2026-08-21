@@ -815,6 +815,13 @@ export type AuthoredActionVerification = z.infer<typeof AuthoredActionVerificati
  * `AchieveLadderStep` at all, and `clients/cortex-cli` regenerates from this schema in the same
  * commit. Every value that could previously appear still appears, on exactly the steps it appeared
  * on, except the ones that were being MISREPORTED - which is the point of the change.
+ *
+ * `mint` IS PRODUCED, and until this round it was not. The word was published with the other three
+ * and pushed by nothing: the author arm - the only code in the platform that WRITES a new action -
+ * recorded no step, so `authored` answers carried no `ladder` and no client could ever observe the
+ * fourth rung it was being told about. A vocabulary a server publishes and never emits is a
+ * contract the code does not have. An `authored` answer now carries exactly two steps: `reuse`
+ * `skipped` (nothing fitted, which is why anything was minted) and `mint` `taken`.
  */
 export const AchieveRung = z.enum(['reuse', 'parametrize', 'compose', 'mint']);
 export type AchieveRung = z.infer<typeof AchieveRung>;
@@ -886,7 +893,8 @@ export type AchieveComposition = z.infer<typeof AchieveComposition>;
  *                PROVISIONAL. It has NOT run and cannot run yet: `requiresApproval` is always true
  *                for it, and a person must promote it (`POST …/trust`) before `achieve` will pick
  *                it. `forked` says the action landed in a fresh COPY of a globally-published
- *                integration, in the caller's own tenant.
+ *                integration, in the caller's own tenant. This is the MINT rung's own answer and
+ *                carries `ladder` saying so - `reuse` `skipped`, then `mint` `taken`.
  *   `refused`   — the call was addressed and admitted and then declined, with a machine-readable
  *                `code`. Distinct from a 404 (not addressable) and from a 403 write-gate refusal
  *                (which is the same `awaiting_consent` envelope the execute endpoint returns, so a
@@ -929,8 +937,18 @@ export const AchieveIntegrationGoalResponse = z.object({
   items: z.array(z.record(z.unknown())).optional(),
   /** `composed` only - how they were narrowed. */
   composition: AchieveComposition.optional(),
-  /** Which rung answered, and what the ones above it decided. Present on every outcome the ladder
-   *  reached; absent on the refusals that happen before a rung is entered at all. */
+  /** Which rung answered, and what the ones above it decided.
+   *
+   *  PRESENT ON EXACTLY THE THREE OUTCOMES THAT CARRY AN ANSWER - `executed`, `composed` and
+   *  `authored` - and ABSENT ON EVERY `refused`. That split is not a convention the server tries to
+   *  keep: `AchieveResult`'s refused variant has no field to put one in. A refusal is the answer
+   *  that NO rung produced anything, so "which rung answered" has nothing to report, and what went
+   *  wrong is `code`/`message`/`violations` - one vocabulary rather than two.
+   *
+   *  Optional on the WIRE schema only because `refused` shares this one flat object with the other
+   *  three. The api-side union (`AchieveResult`) makes it REQUIRED on all three answering outcomes
+   *  and absent from `refused`, so the rule above is enforced by the types rather than kept by
+   *  hand, and a client that knows the outcome may rely on it. */
   ladder: z.array(AchieveLadderStep).optional(),
   /** `executed` / `composed` - the argument NAMES a model supplied because the caller left them
    *  out. NAMES ONLY, and the two places the VALUES do live are named here rather than left to be

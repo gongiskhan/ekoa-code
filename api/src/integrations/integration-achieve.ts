@@ -256,10 +256,23 @@ export type AchieveRefusalCode =
   | 'persist_failed';
 
 /**
- * THE LADDER, as a value. `achieve` is now four rungs (reuse -> parametrize -> compose -> mint) and
- * a caller reading only `outcome` cannot tell which of them answered, nor what the ones above it
- * decided. Recorded on every answer and on every refusal, because "why did it not parametrize" is
- * the first question anyone asks of a rung that silently did not fire.
+ * THE LADDER, as a value. `achieve` is four rungs (reuse -> parametrize -> compose -> mint) and a
+ * caller reading only `outcome` cannot tell which of them answered, nor what the ones above it
+ * decided. "Why did it not parametrize" is the first question anyone asks of a rung that silently
+ * did not fire.
+ *
+ * `mint` IS ON THIS LIST BECAUSE IT IS NOW PRODUCED. It was published for two rounds and pushed by
+ * nothing: the author arm - the rung that writes a new action when no existing one fits - recorded
+ * no step at all, so an `authored` answer carried a `ladder` field that was declared and always
+ * absent, and the word `mint` named a rung no reader could ever observe. Publishing a vocabulary
+ * nothing emits is the same defect as a doc describing a contract the code does not have. It is
+ * emitted by `achieveIntegrationGoal`'s author arm, which is the only place that mints.
+ *
+ * WHERE THE LADDER APPEARS, exactly: on the three outcomes that CARRY AN ANSWER - `executed`,
+ * `composed` and `authored`. NOT on `refused`, and that is a property of the shape below rather
+ * than a convention: the refused variant has nowhere to put one. A refusal is the answer that no
+ * rung produced anything, so "which rung answered" has no answer to report; what went wrong is the
+ * refusal's own `code`, `message` and `violations`, which is one vocabulary rather than two.
  */
 export type AchieveRung = 'reuse' | 'parametrize' | 'compose' | 'mint';
 
@@ -312,7 +325,10 @@ export type AchieveResult =
       outcome: 'executed';
       actionName: string;
       result: ExecuteIntegrationActionResult;
-      ladder?: AchieveLadderStep[];
+      /** REQUIRED, like `authored`'s: `runMatchedAction` records a step for every rung it ran, on
+       *  every path, so "present on exactly the outcomes that carry an answer" is a fact about
+       *  these types rather than a convention four return statements have to keep. */
+      ladder: AchieveLadderStep[];
       filledArgs?: string[];
       filledValues?: Record<string, PlannedArgValue>;
     }
@@ -337,10 +353,17 @@ export type AchieveResult =
       result: ExecuteIntegrationActionResult;
       items: Record<string, unknown>[];
       composition: ComposeSummary;
-      ladder?: AchieveLadderStep[];
+      ladder: AchieveLadderStep[];
       filledArgs?: string[];
     }
-  /** No action satisfied it; one was authored, verified and persisted as PROVISIONAL. */
+  /**
+   * No action satisfied it; one was authored, verified and persisted as PROVISIONAL.
+   *
+   * `ladder` IS REQUIRED HERE, and that is the fix for a field that was declared optional and then
+   * populated by nothing. This is the MINT rung's own answer - the arm reached only when
+   * `matchActionForGoal` finds nothing to reuse - so it always has exactly the two steps to report
+   * that a reader needs: reuse could not (there was no action), and mint did.
+   */
   | {
       outcome: 'authored';
       actionName: string;
@@ -350,14 +373,21 @@ export type AchieveResult =
       verification: AuthoredActionVerification;
       /** Always true: a provisional action is stored `mutates: true`, so it is gated. */
       requiresApproval: true;
-      ladder?: AchieveLadderStep[];
+      ladder: AchieveLadderStep[];
     }
-  | { outcome: 'refused'; code: AchieveRefusalCode; message: string; violations?: string[]; candidates?: string[]; ladder?: AchieveLadderStep[] };
+  /**
+   * Addressed, admitted, declined. NO `ladder`, BY CONSTRUCTION rather than by convention: this
+   * variant has nowhere to put one, so the "present on exactly the outcomes that carry an answer"
+   * rule is a fact about the type instead of a sentence somebody has to keep true. It was declared
+   * optional for two rounds and passed by no call site - a published field nothing could populate.
+   * What went wrong belongs to `code`/`message`/`violations`, which every client already reads.
+   */
+  | { outcome: 'refused'; code: AchieveRefusalCode; message: string; violations?: string[]; candidates?: string[] };
 
 function refused(
   code: AchieveRefusalCode,
   message: string,
-  extra: { violations?: string[]; candidates?: string[]; ladder?: AchieveLadderStep[] } = {},
+  extra: { violations?: string[]; candidates?: string[] } = {},
 ): CapabilityOutcome<AchieveResult> {
   return { ok: true, value: { outcome: 'refused', code, message, ...extra } };
 }
@@ -632,7 +662,24 @@ export async function achieveIntegrationGoal(
     return runMatchedAction(ctx, integrationKey, goal, match.action, args, definition, config);
   }
 
-  // --- AUTHOR ------------------------------------------------------------------------------
+  // --- AUTHOR - THE MINT RUNG ---------------------------------------------------------------
+  //
+  // THE ONE PLACE THAT MINTS, and now the one place that says so. `AchieveRung` has published the
+  // word `mint` since the ladder shipped and nothing ever pushed it, so a client reading `ladder`
+  // on an `authored` answer found the field absent and the vocabulary unreachable.
+  //
+  // The rung ABOVE it is recorded too, with the reason this arm was reached at all: `match.kind`
+  // is `none` here, which is the deterministic matcher saying there is nothing to reuse. Neither
+  // parametrize nor compose appears, and their absence is honest rather than an omission - both act
+  // on a MATCHED action's arguments and rows, and there is no matched action on this arm. A step
+  // for them would be reporting a decision nothing took.
+  //
+  // Nothing below this line records a step: every exit between here and the answer is a REFUSAL,
+  // and a refusal carries no ladder by construction (see `AchieveResult`).
+  const ladder: AchieveLadderStep[] = [
+    { rung: 'reuse', verdict: 'skipped', detail: 'no existing action fits this goal, so one was written' },
+  ];
+
   // LOCK 6. The definition governing this credential resolves as its CUSTODIAN; if that is not the
   // acting user, an authored action would be both the exfiltration shape the custodian rule closed
   // (a peer choosing the hosts an admin's credential is spent against) and unreachable, since the
@@ -745,6 +792,11 @@ export async function achieveIntegrationGoal(
   }
 
   await auditAuthored(ctx, integrationKey, action, target.kind === 'fork');
+  // THE RUNG THAT ANSWERED. `taken` has one meaning across all four rungs - "this rung produced the
+  // answer" - and on this arm the answer is a PROVISIONAL action that has not run, which the
+  // outcome's own `state` and `requiresApproval` already say. The step reports which rung produced
+  // it, not that anything was executed.
+  ladder.push({ rung: 'mint', verdict: 'taken', detail: `wrote "${action.actionName}" as provisional` });
   return {
     ok: true,
     value: {
@@ -754,6 +806,7 @@ export async function achieveIntegrationGoal(
       forked: target.kind === 'fork',
       verification,
       requiresApproval: true,
+      ladder,
     },
   };
 }
@@ -855,11 +908,13 @@ async function runMatchedAction(
   const filledArgs = Object.keys(filled).sort();
 
   // --- RUNG 1: REUSE - the ONE gated execute, whatever the rung above decided ----------------
+  //
+  // NOTHING IS RECORDED HERE ANY MORE, and that is the point. The durable copy of what a model chose
+  // is written by `parametrizeArgs` BEFORE this line, because a record written afterwards is a
+  // record that can be absent exactly when the write it describes succeeded - see
+  // `recordParametrization`.
   const out = await executeIntegrationCapabilityAction(ctx, integrationKey, action.actionName, args);
   if (!out.ok) return out;
-  // THE DURABLE COPY OF WHAT A MODEL CHOSE, written before either exit below and BEFORE the ladder
-  // can decide anything else about the answer. See `auditParametrized`.
-  await auditParametrized(ctx, integrationKey, action, filled, out.value);
 
   // --- RUNG 3: COMPOSE (planned and applied over the rows the execute returned) --------------
   //
@@ -986,6 +1041,15 @@ type ParametrizeAttempt =
  * function converts every one of its outcomes - a rejection included - into ONE ladder step plus
  * the caller's own arguments. There is no expression in this body that can escape.
  *
+ * THERE ARE NOW TWO GUARDED AWAITS, NOT ONE, AND THE SECOND IS THE RUNG'S PRICE OF ADMISSION.
+ * `recordParametrization` writes the durable copy of what the model chose, and it is awaited HERE -
+ * before the one gated execute - rather than after it, deliberately not catching its own failure.
+ * A record written after the call and swallowing its own rejection is a record that can be absent
+ * exactly when the irreversible write it describes succeeded. Its rejection lands on the same
+ * degradation path everything else in this function lands on: the plan is dropped, the request goes
+ * out as the CALLER shaped it, one ladder step says `unavailable`. The rung still cannot subtract
+ * an answer, and a model-chosen value can no longer reach a third party unrecorded.
+ *
  * WHAT A THROW PUTS ON THE WIRE IS FIXED TEXT, `applyComposition`'s rule for `applyComposition`'s
  * reason: a store rejection's message names a namespace, a host and a query shape, and the ladder
  * is a caller-facing field. The error's own message goes to the process log for an operator.
@@ -1027,6 +1091,43 @@ async function parametrizeArgs(
     // request the caller asked for, on every one of these paths.
     return { args: callerArgs, filled: {} };
   }
+
+  // THE RECORD OF THE CHOICE IS A PRECONDITION OF THE CHOICE.
+  //
+  // This write used to sit AFTER the one gated execute, wrapped in a `catch` that logged and moved
+  // on, and that ordering is what made the audit trail deniable: the only durable copy of "a model,
+  // not the person holding the key, decided what this call would act on" could be silently absent
+  // exactly when the third-party write it describes had SUCCEEDED. A trail that is missing precisely
+  // on the runs that mattered is not a trail.
+  //
+  // Written here, nothing has been spent yet - so the failure has somewhere to go that is not
+  // silence and is not a destroyed answer. The rung STANDS DOWN: the model's arguments are dropped,
+  // the request goes out carrying exactly what the caller sent, and the ladder says so. That is the
+  // rung's own degradation path, reached for the one new reason. It keeps the invariant this branch
+  // was built around - a rung may only ADD an answer, never subtract one - while making the missing
+  // row impossible rather than tolerable: if the choice is not recorded, the choice is not made.
+  //
+  // REFUSING THE CALL INSTEAD WOULD BE THE DEFECT. `achieve` refusing because an activity insert
+  // blipped is the parametrize rung taking away a call that a trusted action, the caller's own
+  // arguments and a human's standing approval had already earned (D-S4-3/D-S5-6).
+  try {
+    await recordParametrization(ctx, integrationKey, action, attempt.args);
+  } catch (err) {
+    console.warn(
+      `[integration-achieve] parametrize record failed for ${integrationKey}.${action.actionName}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    ladder.push({
+      rung: 'parametrize',
+      // `unavailable`: nothing was judged here either. The plan passed every guardrail; what could
+      // not be done was keeping the record of it.
+      verdict: 'unavailable',
+      // No `err` in this string - a store rejection's message names a namespace, a host and a query
+      // shape, and this is a caller-facing field.
+      detail: 'what a model chose for this call could not be recorded, so the call runs with the arguments you supplied',
+    });
+    return { args: callerArgs, filled: {} };
+  }
+
   ladder.push({ rung: 'parametrize', verdict: 'taken', detail: `filled: ${attempt.filled.join(', ')}` });
   // THE CALLER'S OWN ARGUMENTS WIN, spread last.
   //
@@ -1718,14 +1819,29 @@ async function auditComposed(
 }
 
 /**
- * ONE activity row per PARAMETRIZED CALL, AND IT CARRIES THE VALUES.
+ * ONE activity row per PARAMETRIZED CALL, AND IT CARRIES THE VALUES - WRITTEN BEFORE THE CALL.
  *
  * This is the only durable record that a MODEL, rather than the person or the script holding the
  * key, decided what a call would act on. Nothing else in the estate holds it: `capability_execute`
- * records the integration, the action, a verdict and a duration and no arguments at all; the 200
- * carries `filledArgs` as NAMES; the request itself is a socket write to a third party that this
- * platform keeps no copy of. So "the model chose the `titulo` this peça was filed under" was
+ * records the integration, the action, a verdict, a status and a duration and no arguments at all;
+ * the 200 carries `filledArgs` as NAMES; the request itself is a socket write to a third party that
+ * this platform keeps no copy of. So "the model chose the `titulo` this peça was filed under" was
  * reconstructable from nothing, which is the difference between an audit trail and a shrug.
+ *
+ * IT DOES NOT CATCH, AND IT RUNS BEFORE THE EXECUTE. Both halves are one decision, and the second
+ * is what makes the first affordable. Written after the call and swallowing its own failure - which
+ * is how this row shipped - the record of a model's choice could be silently absent EXACTLY when the
+ * irreversible write it describes had succeeded, and there is no worse moment for an audit row to go
+ * missing. `parametrizeArgs` owns the rejection now, before anything has been spent: it drops the
+ * model's arguments, the call goes out as the CALLER shaped it, and the ladder says `unavailable`.
+ * If the choice cannot be recorded, the choice is not made.
+ *
+ * THE OUTCOME IS NOT ON THIS ROW, and its absence is deliberate rather than lost. `verdict`/`code`
+ * used to be copied here off the executor's result, which is the same fact `capability_execute`
+ * already records for the same call one row later - two rows carrying one fact, and the ONLY reason
+ * this row had to wait for the call. An auditor reads the pair: this row says what a model chose,
+ * that row says what happened when it was spent. Both are written for a gate refusal too, so
+ * "a model chose these values and the gate held" is still answerable.
  *
  * VALUES, DELIBERATELY, and the reason they are safe to hold is a property of where they come from:
  * every one was produced by the planning turn, which is shown the caller's goal, the action's
@@ -1734,47 +1850,33 @@ async function auditComposed(
  * supply. The caller's OWN arguments are NOT recorded: they are the caller's to know, they can be
  * anything at all, and they are not the fact this row exists to preserve.
  *
- * WRITTEN WHATEVER THE CALL THEN DID, including the write gate refusing it, because "a model chose
- * these values and the gate held" is exactly as much an audit fact as "a model chose these values
- * and they were filed". `verdict` and `code` are the executor's own, so the two are never confused
- * for each other, and `mayWrite` is the same fail-closed reading of `mutates` the compose rung's
- * entry uses (`!== false`), so an action whose definition omits the key counts as a write here too.
+ * `mayWrite` is the same fail-closed reading of `mutates` the compose rung's entry uses (`!== false`),
+ * so an action whose definition omits the key counts as a write here too.
  *
- * NO ROW AT ALL WHEN NO ARGUMENT WAS MODEL-FILLED - not an empty one. The rung skipping is the
- * ordinary case (the caller supplied everything, or the seam is unwired), and a row per call for it
- * would bury the ones that matter under the ones that do not.
+ * NO ROW AT ALL WHEN NO ARGUMENT WAS MODEL-FILLED - not an empty one. This function is only reached
+ * with a non-empty plan (the rung's other exits return before it), and the rung skipping is the
+ * ordinary case: a row per call for it would bury the ones that matter under the ones that do not.
  */
-async function auditParametrized(
+async function recordParametrization(
   ctx: AchieveContext,
   integrationKey: string,
   action: IntegrationAction,
   filled: Record<string, PlannedArgValue>,
-  result: ExecuteIntegrationActionResult,
 ): Promise<void> {
-  if (Object.keys(filled).length === 0) return;
-  try {
-    await logActivity(
-      { userId: ctx.actor.userId, username: ctx.username ?? ctx.actor.userId, orgId: ctx.actor.orgId },
-      'integrations',
-      'capability_achieve_parametrize',
-      ctx.deps,
-      {
-        integrationKey,
-        actionName: action.actionName,
-        mayWrite: action.mutates !== false,
-        filledArgs: filled,
-        verdict: result.success ? 'ok' : 'failed',
-        ...(result.code ? { code: result.code } : {}),
-        ...(ctx.principal ? { keyId: ctx.principal.keyId } : {}),
-        ...(ctx.principal?.xClient ? { xClient: ctx.principal.xClient } : {}),
-      },
-    );
-  } catch (err) {
-    // Swallowed exactly as the compose row's is, and for the stronger reason: this row is written
-    // AFTER the call has been made, so a rejecting audit store that escaped here would destroy an
-    // answer already in hand - the defect round five closed one function down.
-    console.warn(`[integration-achieve] parametrize audit write failed for ${integrationKey}.${action.actionName}: ${err instanceof Error ? err.message : String(err)}`);
-  }
+  await logActivity(
+    { userId: ctx.actor.userId, username: ctx.username ?? ctx.actor.userId, orgId: ctx.actor.orgId },
+    'integrations',
+    'capability_achieve_parametrize',
+    ctx.deps,
+    {
+      integrationKey,
+      actionName: action.actionName,
+      mayWrite: action.mutates !== false,
+      filledArgs: filled,
+      ...(ctx.principal ? { keyId: ctx.principal.keyId } : {}),
+      ...(ctx.principal?.xClient ? { xClient: ctx.principal.xClient } : {}),
+    },
+  );
 }
 
 const AUTHORING_TARGET_MESSAGES: Record<'published_row' | 'baseline_package' | 'not_writable', string> = {

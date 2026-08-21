@@ -198,6 +198,23 @@ export const COMPOSE_MAX_FIELDS = 100;
  * suite and a name the model was shown is refused when it uses it - an arbitrary refusal. Filtered
  * once, upstream of both, a dropped name is simply not offered and not accepted, and the caller is
  * told which names were available in the same `violations` every other field refusal uses.
+ *
+ * ================================ FILTER FIRST, THEN CAP - AND WHY ==========================
+ * The order of the two steps is a real decision with an observable consequence, so it is stated
+ * here rather than left to read as incidental - and it is stated ACCURATELY, because the obvious
+ * claim for it is false. It is NOT what keeps an unsafe name out of the prompt: `.slice().filter()`
+ * sanitises everything it emits exactly as `.filter().slice()` does, and no name this predicate
+ * rejects can reach a system prompt under either order.
+ *
+ * What reversing them changes is WHOSE names the cap is spent on. Capping first spends the 100
+ * slots on the RAW list - names that will be refused included - and then discards some of them, so
+ * the caller is offered FEWER than 100 usable names whenever a rejected one sorts early. Both sets
+ * arrive SORTED (`fieldsOf`, `listCollectionFields`), so "sorts early" is neither hypothetical nor
+ * the caller's choice: the ACTION side is a third-party API's own JSON keys, and a remote emitting
+ * a hundred over-long or control-charactered keys would leave the caller an EMPTY offered set and a
+ * rung that can narrow nothing at all. That is a third party deciding what this tenant may narrow
+ * their own answer by. Filtering first spends the cap only on names that will really be offered,
+ * which is the entire point of having one.
  */
 export function promptSafeFields(names: readonly string[]): string[] {
   return names
