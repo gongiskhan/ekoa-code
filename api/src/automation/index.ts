@@ -257,3 +257,15 @@ export {
   type CollectedRunEvidence,
   type CollectedStepEvidence,
 } from './action-evidence.js';
+
+// Slice S7: the automations -> integrations migration CLASSIFIER. Report-only by construction - the
+// module has no write path at all. `routes/integrations.ts` reads it per caller under that caller's
+// own tenancy; the composition root logs the estate-wide COUNTS once at boot.
+export {
+  buildMigrationReport,
+  classifyAutomation,
+  migrationBootSummary,
+  MIGRATION_SCAN_CAP,
+  type MigrationScanDeps,
+  type MigrationScanScope,
+} from './migration-report.js';

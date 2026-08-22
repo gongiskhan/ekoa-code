@@ -1,6 +1,6 @@
 /** Integrations domain contract (ch03 §3.8.13): definitions, active catalog, configs, session capture. */
 import { z } from 'zod';
-import { IsoTimestamp, itemsResponse, OkResponse } from './common.js';
+import { Id, IsoTimestamp, itemsResponse, OkResponse, Visibility } from './common.js';
 import type { DomainDescriptorMap } from './descriptor.js';
 
 export const IntegrationDefinition = z
@@ -1270,6 +1270,171 @@ export const DiscardActionEvidenceResponse = z.object({
 });
 export type DiscardActionEvidenceResponse = z.infer<typeof DiscardActionEvidenceResponse>;
 
+/* --- AUTOMATIONS -> INTEGRATIONS MIGRATION, REPORT-ONLY (slice S7) --------------------------- */
+
+/**
+ * THE ANSWER THIS REPORT GIVES: for each automation a reader owns or shares, what would become of it
+ * if the automation surface were replaced by integration actions - and what would be LOST.
+ *
+ * IT IS A REPORT AND ONLY A REPORT (decision D3). Nothing on this contract writes: no action is
+ * minted, no automation is renumbered, nothing is deleted. Automation ids are live references from
+ * triggers, schedules and run history, so the migration that eventually acts on this classification
+ * mints WRAPPER actions pointing at the existing rows rather than moving them.
+ *
+ * The vocabulary below is the classification, not a promise about a future run: `tier` is what the
+ * automation would BECOME, `flattenRefusals` is why it could not become the simpler thing,
+ * `engineInternal` is what the wrapper would hide rather than carry, and `degradations` is what a
+ * person would lose. All four travel together because a report that showed only the first would read
+ * as "everything migrates cleanly".
+ */
+export const AutomationMigrationTier = z.enum([
+  /** Exactly one `api_call` step, fully expressible as a self-contained api-call action. */
+  'flatten',
+  /** Everything else: an action whose backing is a binding onto the automation that already exists. */
+  'wrap',
+]);
+export type AutomationMigrationTier = z.infer<typeof AutomationMigrationTier>;
+
+/**
+ * Why an automation could not FLATTEN. Every member names a property of the self-contained api-call
+ * action shape (`IntegrationActionHttpConfig`) that the step does not fit into - never a property of
+ * the automation engine, which keeps running all of these unchanged behind a wrapper.
+ */
+export const AutomationMigrationFlattenRefusal = z.enum([
+  /** More than one step, or none. A self-contained action is one request. */
+  'not-single-step',
+  /** The single step is not an `api_call` (or carries no request spec). */
+  'step-not-api-call',
+  /** HEAD / OPTIONS: the action's http config does not model them. */
+  'method-unrepresentable',
+  /** Scheme/host/port carry a template hole, or the URL is not absolute http(s). */
+  'origin-not-literal',
+  /** A text/form body, or a JSON body that is not a template-substitutable object. */
+  'body-not-json-object',
+  /** `{{capture.x}}` holes: a value produced by an earlier step, which a one-request action has not run. */
+  'capture-holes',
+  /** Credential holes naming more than one integration, so no single destination key resolves. */
+  'multiple-credential-sources',
+  /** An auth-shaped header set to a literal value: never copied forward into a definition. */
+  'literal-auth-header',
+  /**
+   * The step declares a timeout the action shape cannot carry. `ApiCallSpec.timeoutMs` is honoured
+   * by the step executor up to five minutes; `IntegrationActionHttpConfig` has NO timeout field and
+   * the action executor's default is 30s, so a step that declares anything else would silently run
+   * under a different budget after flattening (review round F16).
+   */
+  'timeout-unrepresentable',
+  /**
+   * The step carries a `declaration` the action shape has no vocabulary for: cofre credential
+   * references, an attended step, or an off-cloud target. Those are engine-internal by definition,
+   * and an action with no wrapper has no engine to keep them in (review round F16).
+   */
+  'step-declaration-unrepresentable',
+]);
+export type AutomationMigrationFlattenRefusal = z.infer<typeof AutomationMigrationFlattenRefusal>;
+
+/**
+ * What stays ENGINE-INTERNAL behind a wrapper. Not a defect list: these are the automation
+ * capabilities an integration action has no vocabulary for, which is exactly why the wrapper exists
+ * instead of a rewrite. Named so the report cannot be read as "wrapping is lossless".
+ */
+export const AutomationMigrationEngineInternal = z.enum([
+  /** A `sub_automation` step: a graph of automations the action surface does not model. */
+  'sub-automation',
+  /** `declaration.credentialRefs`: cofre references resolved by the engine at step time. */
+  'credential-refs',
+  /** A `local_command` step's `envRefs`: cofre references injected into a process environment. */
+  'command-env-refs',
+  /** `declaration.target` is not `cloud`: the step runs on a paired machine through the bridge. */
+  'off-cloud-target',
+  /** `declaration.attended`: the step expects a human present for it. */
+  'attended-step',
+  /** `browser` / `verify` steps: the vision resolve loop, the assertion cache and the rehearsal fixer. */
+  'rehearsal-vision',
+  /** A non-manual trigger: the automation fires itself, which no action does. */
+  'self-firing-trigger',
+]);
+export type AutomationMigrationEngineInternal = z.infer<typeof AutomationMigrationEngineInternal>;
+
+/**
+ * WHAT A PERSON WOULD LOSE. Recorded rather than hidden, per the S7 brief: a migration report whose
+ * only output is a tier is a migration plan with its costs deleted.
+ */
+export const AutomationMigrationDegradation = z.enum([
+  /**
+   * The automation is readable by the whole org today; a minted action is not. An action lands on
+   * the integration definition row for its key, and a row a builder save creates is `private` - so
+   * an org-visible automation narrows to its author unless someone shares the destination row.
+   */
+  'org-visible-narrows-to-owner',
+  /**
+   * The automation can PAUSE mid-run for a human (a CAPTCHA, an MFA prompt, the rehearsal fixer's
+   * pause patch) and action execution is synchronous: a paused run answers the caller
+   * `automation_failed` with the run id. The lifecycle is not lost - it stays on the run, which the
+   * integration detail page shows - but the ACTION's answer is a failure code.
+   */
+  'mid-run-pause-collapses',
+  /** The automation fires on a trigger the action does not carry: the trigger keeps firing the automation. */
+  'trigger-not-carried',
+  /**
+   * Two or more DIFFERENT owners' automations in this scan resolve to the same destination
+   * integration key. A definition row is one per (org, key) with a single author, so the second
+   * arrival does not narrow "to its owner": it forks a key or lands on a row that is private to the
+   * OTHER author. Recorded as the fact the scan can actually see - a contested destination - rather
+   * than as a prediction about a write half that does not exist yet (review round F10).
+   */
+  'destination-key-contested',
+]);
+export type AutomationMigrationDegradation = z.infer<typeof AutomationMigrationDegradation>;
+
+export const AutomationMigrationEntry = z.object({
+  automationId: Id,
+  name: z.string(),
+  ownerUserId: Id,
+  /** Absent on the row means org-visible; the report always states one of the two. */
+  visibility: Visibility,
+  stepCount: z.number().int().nonnegative(),
+  tier: AutomationMigrationTier,
+  /**
+   * sha256 over exactly what was classified. Two reports taken at different times are diffable on
+   * it: an automation whose hash moved has been edited since the earlier classification, and its
+   * tier may no longer be the one an operator read.
+   */
+  shapeHash: z.string(),
+  /** Empty on `flatten`. */
+  flattenRefusals: z.array(AutomationMigrationFlattenRefusal),
+  engineInternal: z.array(AutomationMigrationEngineInternal),
+  degradations: z.array(AutomationMigrationDegradation),
+  /**
+   * The integration key the migrated action would land under, where one resolves: the automation's
+   * own provisioning provenance, or the single integration its credential holes name. Absent means
+   * the destination is a decision nobody has made yet, not that migration is impossible.
+   */
+  destinationIntegrationKey: z.string().optional(),
+  /** Present when the automation was itself provisioned from an integration's template. */
+  source: z.object({ integrationKey: z.string(), templateKey: z.string() }).optional(),
+});
+export type AutomationMigrationEntry = z.infer<typeof AutomationMigrationEntry>;
+
+export const AutomationMigrationReportResponse = z.object({
+  /** The only mode this contract has. A persisting mode would be a different endpoint under Rule 7. */
+  mode: z.literal('report-only'),
+  generatedAt: IsoTimestamp,
+  scanned: z.number().int().nonnegative(),
+  /** True when the scan cap was reached: the counts describe a prefix, not the estate. */
+  truncated: z.boolean(),
+  tiers: z.object({
+    flatten: z.number().int().nonnegative(),
+    wrap: z.number().int().nonnegative(),
+    /** Wrapped automations that hide at least one engine-internal capability. */
+    engineInternalBehindWrappers: z.number().int().nonnegative(),
+  }),
+  entries: z.array(AutomationMigrationEntry),
+  /** A row the classifier could not read. Contained here rather than failing the whole report. */
+  errors: z.array(z.object({ automationId: Id, error: z.string() })),
+});
+export type AutomationMigrationReportResponse = z.infer<typeof AutomationMigrationReportResponse>;
+
 export const integrationsEndpoints = {
   /**
    * The definition list — the CAPABILITY DISCOVERY endpoint since D1.
@@ -1847,5 +2012,37 @@ export const integrationsEndpoints = {
     auth: 'user',
     params: IntegrationActionParams,
     response: DiscardActionEvidenceResponse,
+  },
+
+  /* --- The automations -> integrations MIGRATION REPORT (slice S7) ---------------------------- */
+
+  /**
+   * WHAT WOULD BECOME OF THE CALLER'S AUTOMATIONS, and what it would cost them. Report-only: this
+   * endpoint reads, classifies and answers. It writes nothing, mints nothing and deletes nothing.
+   *
+   * A LITERAL PATH THAT MUST OUTRANK `:key`, like `/active`, `/configs` and `/recipes` before it -
+   * see the ordering note at the top of `api/src/routes/integrations.ts`.
+   *
+   * `auth: 'user'` AND NOT `user-or-key`. Two reasons, and the first is enough on its own: the
+   * report carries automation NAMES, which are free text a person wrote about their own work, and a
+   * gateway key is an agent. The second is that this is a migration instrument for the person whose
+   * automations are being migrated, not a capability an outside client composes with - Rule 4 is
+   * satisfied because every call still identifies a user, and Rule 7 keeps the widening available
+   * later if a consumer ever has a use for it.
+   *
+   * TENANCY IS THE AUTOMATION SERVICE'S OWN RULE, NOT A SECOND ONE. The scan is filtered by the
+   * verified actor's `orgId` and then by the SAME `private` predicate `listAutomations` applies, so
+   * this endpoint can never report a row the caller could not already open. Pinned by
+   * `api/tests/security/automation-migration-isolation.test.ts`.
+   *
+   * NOT super-admin, deliberately. A platform-wide read would mean one role holding every tenant's
+   * automation names in one response, which is the thing the A1 tenancy model refuses; the estate
+   * view an operator needs is the boot log, and the boot log carries COUNTS and no names.
+   */
+  automationMigrationReport: {
+    method: 'GET',
+    path: '/api/v1/integrations/automation-migration-report',
+    auth: 'user',
+    response: AutomationMigrationReportResponse,
   },
 } as const satisfies DomainDescriptorMap;

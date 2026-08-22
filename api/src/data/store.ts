@@ -91,7 +91,9 @@ export class Store<T extends Doc> {
    * twenty notes of a person who may hold thousands. Applied by the DRIVER (`.limit()`), so the cap
    * governs what is FETCHED rather than what survives a `.slice()` afterwards - which is the whole
    * difference between a bounded read and a bounded answer. Pair it with `sort`: a limit over an
-   * unordered cursor answers an arbitrary subset.
+   * unordered cursor answers an arbitrary subset. `automation/migration-report.ts` is the second
+   * caller (its review round F12/F19, independently of the first): the scan asks for cap + 1 so the
+   * database decides which rows come back and `truncated` is a fact rather than an inference.
    */
   async find(
     filter: Record<string, unknown> = {},

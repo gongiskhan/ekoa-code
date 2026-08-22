@@ -170,6 +170,8 @@ import {
   screenshotPlaneRouter,
   sweepExpiredScreenshots,
   collectRunEvidence,
+  buildMigrationReport,
+  migrationBootSummary,
   type RunEventEmitter,
 } from './automation/index.js';
 import { type ActionDrafter, type PlanDrafter } from './integrations/integration-achieve.js';
@@ -2031,6 +2033,24 @@ export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> 
       `[legacy-runtime-import] scan failed (boot continues; set ${LEGACY_IMPORT_OPT_IN_ENV} aside and inspect the directory):`,
       err instanceof Error ? err.message : err,
     );
+  }
+
+  // THE AUTOMATIONS -> INTEGRATIONS MIGRATION REPORT (slice S7, decision D3). One estate-wide pass
+  // that WRITES NOTHING: it classifies what each automation would become and logs the COUNTS. Names
+  // never reach the log - the per-automation detail is reachable only through
+  // `GET /api/v1/integrations/automation-migration-report`, under the calling user's own tenancy.
+  //
+  // Guarded like the legacy import above and for the same reason: a classification pass must not be
+  // able to stop boot. The module already contains its own per-row failures, so this catch is the
+  // second wall, not the first.
+  try {
+    const migration = await buildMigrationReport();
+    if (migration.scanned > 0 || migration.errors.length > 0) {
+      console.log(migrationBootSummary(migration));
+      for (const e of migration.errors) console.warn(`[automation-migration] '${e.automationId}': ${e.error}`);
+    }
+  } catch (err) {
+    console.warn('[automation-migration] scan failed (boot continues; nothing was written):', err instanceof Error ? err.message : err);
   }
 
   const seedUser = process.env.EKOA_ADMIN_USERNAME;

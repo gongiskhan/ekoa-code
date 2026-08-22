@@ -5512,3 +5512,192 @@ loading-vs-empty copy and the empty-draft save refusal all gained the tests that
 note fixture is parsed through the shared schema per the house rule; and the composition-root
 suite's "must start UNBOUND" guard, which could not fire against emptied collections, is replaced by
 one that plants a real fixture first and therefore can.
+
+## 2026-08-22 - S7: the automations -> integrations migration is a REPORT, and the report says what it costs
+
+**THE DECISION (D3, taken as its default and then narrowed).** Migration lands as a classification
+pass and nothing else. `api/src/automation/migration-report.ts` walks stored automations and answers,
+per automation, which of three tiers it falls into and what a person would lose. It has NO WRITE PATH
+AT ALL - not a disabled one, not one behind a flag. Nothing is minted, nothing is renumbered, nothing
+is deleted, and that is not a runtime mode but a property of the module: there is no code in it that
+could write. Automation ids are LIVE REFERENCES (a trigger names one, a schedule names one, every run
+record is keyed by one), so the slice that eventually acts on this classification mints WRAPPER
+actions pointing at the rows that already exist rather than moving them, through the builder save
+path, never through `achieve` - the authored-action api-call-only guardrail is NOT widened by this
+slice or by the one that follows. MCP stays out: the backing union stubs it and no automation
+classifies onto it here.
+
+**THE THREE TIERS.** (1) FLATTEN - exactly one `api_call` step that fits, whole, inside
+`IntegrationActionHttpConfig`. (2) WRAP - everything else, backed by an `automationBinding` onto the
+automation as it stands; the mechanism, its tenancy, the write gate and the consent story are already
+end-to-end and the citius package is the live proof of all four. (3) ENGINE-INTERNAL is not a third
+disposition but the CONTENTS of the wrappers: sub-automation graphs, cofre/declaration references, a
+`local_command`'s env refs, off-cloud targets, attended steps and the rehearsal/vision loop keep
+running inside the engine, hidden behind tier 2's action. It is reported per automation precisely so
+"it wraps" cannot be read as "nothing is hidden".
+
+**FLATTENING IS A CLAIM ABOUT A SHAPE, SO EVERY REFUSAL NAMES A PROPERTY OF THAT SHAPE.** The eight
+refusal codes are not a taste list: `method-unrepresentable` (the action config's method union is
+narrower than the step's - HEAD and OPTIONS have no spelling), `origin-not-literal` (a `baseUrl` is
+not a place to discover a host, so a hole in scheme/host/port refuses while a hole in the path or
+query does not - that one becomes an arg), `body-not-json-object` (a body survives only as
+`bodyTemplate`, an object; text/form bodies and JSON with a hole in value position do not parse into
+one), `capture-holes`, `multiple-credential-sources` (the action config has no credential vocabulary
+of its own, so a step drawing on two integrations has no single key to land under),
+`literal-auth-header` (never copied forward, and the report carries the header NAME and never the
+value - COFRE H-6), plus the two structural ones. All refusals are COLLECTED rather than
+short-circuited: an operator planning the work needs the whole reason.
+
+**THE DEGRADATIONS ARE FIELDS, NOT PROSE.** A migration report whose only output is a tier is a
+migration plan with its costs deleted, so the two known losses are typed and asserted in both
+directions:
+- `org-visible-narrows-to-owner`. An action is reached through the integration definition row for its
+  key, and a row a builder save creates is `visibility: 'private'` (`integrations/definition-save.ts`)
+  - visible to its author alone. An automation that is org-visible today therefore narrows to one
+  person unless somebody shares the destination row. ASKED OF THE DESTINATION, not of the automation:
+  a destination naming a RESERVED key (every shipped baseline package) cannot be a fresh private row
+  at all, because `definition-save.ts` refuses reserved keys and those wrapper actions already exist
+  org-wide on the shipped definition. See the review round below for why the first cut was wrong.
+- `mid-run-pause-collapses`. Action execution is synchronous. An automation that pauses for a human
+  answers the action caller `automation_failed` carrying the run id (`action-executor.ts`). The
+  lifecycle is not lost - it survives on the RUN, which S2's detail page renders - but the ACTION's
+  own answer is a failure code. WHICH AUTOMATIONS CAN PAUSE IS THE ENGINE'S QUESTION: both
+  `pauseRunForUser` callers are gated on `shouldAttemptFix` and nothing narrower, so every step type
+  the fixer acts on makes a pause reachable, and a `sub_automation` step counts because the engine
+  recurses into a child this pass cannot see. The degradation is gated on the `wrap` tier by
+  construction rather than by a claim about pausing: the collapse being described is what a WRAPPER
+  does to a pause, and a flattened action does not run the engine at all.
+- `destination-key-contested`. Two DIFFERENT owners' automations resolving to one destination key
+  cannot both land on it: a definition row is one per (org, key) with a single author, so the second
+  arrival forks a key or meets a row private to the other author. Recorded as the fact the scan can
+  see rather than as a prediction about which of those two a write half would choose.
+A third, `trigger-not-carried`, records that a self-firing automation keeps firing itself: an action
+has no trigger, so the trigger stays where it is rather than being migrated or lost.
+
+**THE REPORT IS REACHABLE, AND ITS TENANCY IS THE AUTOMATION SERVICE'S OWN.** Two surfaces, and the
+split is deliberate:
+- `GET /api/v1/integrations/automation-migration-report`, `auth: 'user'`. Filtered by the verified
+  actor's `orgId` and then by the same `private` predicate `listAutomations` applies - in memory,
+  through the same shape, so the two read paths cannot drift. It can never name a row the caller
+  could not already open. NOT `user-or-key`: the body carries automation NAMES, free text a person
+  wrote about their own work, and a gateway key is an agent (the `getLessons`/`listActionEvidence`
+  reasoning). NOT super-admin either: a platform-wide read would put every tenant's automation names
+  in one response for one role, which is the thing the A1 tenancy model refuses.
+- The BOOT pass, estate-wide, logging COUNTS AND NO NAMES. That is the operator's view and it is the
+  only cross-org read in the slice. Guarded like the legacy import beside it: a classification pass
+  must not be able to stop boot.
+
+**A DELIBERATE DEVIATION FROM D3'S WORDING, RECORDED RATHER THAN SLID PAST.** D3 describes the
+legacy-runtime-import shape as "idempotent, content-hashed, env-flag opt-in". The first two are here
+and are load-bearing: the pass is idempotent because it writes nothing at all, and every entry carries
+a `shapeHash` over exactly what was classified, so two reports taken weeks apart are diffable and an
+automation edited since an earlier classification is visible as a moved hash. THE ENV FLAG IS NOT.
+In the precedent the flag gates PERSISTENCE; this pass has no persisting mode, so a flag here would
+gate a log line and would be furniture by the time the write arrives - which is exactly what Rule 10
+tells us not to build. The flag lands with the write it protects.
+
+**RULE 10 - THE STATE MIGRATION THIS OPENS, AND WHEN IT ENDS.** SHADOW: the report classifies while
+the automation surface and the action surface both run, unchanged, side by side. COMPARE: the report
+is the comparison instrument - `shapeHash` diffs between boots, the tier counts, and the per-automation
+degradations are what an operator reads to decide whether wrapping is acceptable for this estate.
+**CUTOVER-OR-REMOVE: REVIEW DATE 2026-11-14.** By that date one of two things happens and no third:
+either the write half lands (wrapper minting through the builder save path, with its own env-flag
+opt-in and its own decision entry), or this module and its endpoint are DELETED. What must not happen
+is a report that becomes permanent furniture - a diagnostic nobody acts on, kept because deleting it
+feels like losing something. If the review finds the estate is small enough that no migration is
+worth writing, that is a REMOVE and it is a good outcome.
+
+**SCAN COST, BOUNDED AT THE READ.** The pass projects away everything it does not classify AND
+carries a `limit` of `cap + 1` into the query, newest first, so the database decides which rows come
+back and the process never holds more than the cap plus one; `truncated` is read off that row count.
+An unprojected, unlimited `find({})` over a collection whose rows carry full step arrays is the
+failure mode `data/store.ts` documents, and a JS slice after the fact does not avert it - see the
+review round below. `Store.find` gained an additive `limit` option for this, beside the `projection`
+option that already existed for the same argument at the other axis.
+
+**FAILURE IS CONTAINED TWICE.** A row the classifier cannot read (a malformed `declaration` that
+`resolveStepDeclaration` refuses is the realistic case) lands in `errors` with its id and drops out of
+the counts, rather than being classified on a half-read declaration - a silently wrong tier is worse
+than a named gap. The composition root wraps the whole call besides.
+
+**GATES.** `api/tests/automation/migration-report.test.ts` (32 cases: every refusal, every
+engine-internal feature, both directions of each degradation, the hash's move-and-hold, and the boot
+line proven to carry no names); `api/tests/contract/integrations-migration-report.test.ts` (the 2xx
+against `AutomationMigrationReportResponse`, the 401 envelope, the tier counts, the literal path
+proven not to be swallowed by `:key`, and a before/after comparison of the collection pinning that the
+endpoint writes nothing); `api/tests/security/automation-migration-isolation.test.ts` (Rule 5 class, MODULE layer:
+the cross-org refusal, the same-org PRIVATE peer row, absent-visibility-is-not-private); and the
+ROUTE layer of the same gate in the contract suite's "tenancy AT THE ROUTE" describe, which is what
+the first cut was missing entirely - see the review round below.
+`api/tests/automation/migration-report-scan.test.ts` (the scan bound and the contested destination,
+driven over a real store rather than described). `gate:openapi` and `gate:client-drift` are
+both clean with no regenerated bytes, because the spec is definitionally the `user-or-key` surface and
+this endpoint is `user` by construction.
+
+DIAGRAM CHECK (FIXED-12): DONE, append-only. `docs/diagrams/02-module-map.excalidraw` gains the S7
+classifier module, its two scopes (per-caller and estate), the route that reads it and the boot
+obligation that logs its counts. Appended as single text elements carrying `text`, `rawText` and
+`originalText`; no existing element was edited.
+
+**REVIEW ROUND (2026-08-22), AND WHAT IT CORRECTED ABOVE.** The adversarial round returned one
+blocker and four majors against this slice. Everything above is now what the code does; this section
+records what was wrong, because the wrong version is what a future editor would otherwise follow.
+
+*THE BLOCKER: the tenancy gate could not fail.* The route's entire tenancy is two arguments
+(`buildMigrationReport({ orgId, readerUserId })`), and NO test exercised them. The isolation suite
+called the module directly with hand-passed scopes, so it proved the filter arithmetic and said
+nothing about the route; the contract suite seeded one user in one org, so the caller scope, the org
+scope and the ESTATE scope returned byte-identical bytes. Changing the route to
+`buildMigrationReport({})` - handing every tenant's automation names to any authenticated caller -
+left all 46 tests green. Worse, the suite header NAMED that exact hazard and then pinned the function
+anyway, and the schema-coverage comment claimed the distinction "is asserted". This is the repo's own
+tests-that-cannot-fail plus wrong-unit-of-scope class, on the slice's own Rule 5 gate. FIXED at the
+route, in the S6 two-layer form: each case first shows through the module at estate scope that the
+foreign row is really there, then asserts the authenticated HTTP response omits it - because an
+absence assertion alone also passes on an empty database. Three separate drops (both arguments,
+`orgId` alone, `readerUserId` alone) each redden, and each reddens the case that names it.
+
+*THE PAUSE DEGRADATION WAS FALSE ACCOUNTING.* The predicate keyed on `browser` steps, on a reading
+that `pauseRunForUser`'s two callers were "both on the browser rail". They are not: both are gated on
+`shouldAttemptFix`, which returns true for `verify`, `navigate`, `local_command`, `api_call` and
+`ekoa_action` as well. A `[navigate, verify]` automation pauses today while the report said it could
+not - a false negative in the exact direction this report exists to prevent. The defending test made
+it invisible: it built its fixture from `wait` steps, the one fixable-adjacent type the engine
+refuses, so it passed against the bug AND the fix. Recomputed from the engine's own set, with
+`sub_automation` included (the engine recurses into a child this pass cannot see), and the test now
+uses the real counterexample plus a direct assertion over the SET itself.
+
+*THE NARROWING WAS COMPUTED AT THE WRONG UNIT,* and the module's own comment conceded it while the
+code read `doc.visibility` alone. The class that made it wrong is the one provisioning mass-mints:
+integration-provisioned automations are org-visible with a SHIPPED destination key, which a builder
+save can never claim - so no fresh private row exists for them to narrow onto, yet every one was
+flagged, inflating the census an operator acts on to essentially all org-visible rows. Now asked of
+the destination, with the reserved-key set resolved once per pass and passed into a classifier that
+stays pure. The collision case is recorded as its own degradation rather than predicted.
+
+*"BOUNDED" WAS TRUE OF THE LOOP AND FALSE OF THE READ.* `Store.find` had no limit, so the pass
+materialised every row of the collection - full `steps` arrays, on the boot path, estate-wide - and
+then sliced to 1000 in JS. That is precisely the uncatchable-OOM hazard `data/store.ts` documents,
+with the slice as decoration, and the boot line would even print "capped" after reading everything.
+The limit is now in the query. `MIGRATION_SCAN_CAP` also had no test that could fail (the only
+"capped" case hand-built a report object and asserted the log FORMAT), so the cap is now an injected
+seam driven over a real store.
+
+*THREE SMALLER CORRECTIONS.* FLATTEN ignored `timeoutMs` (representable only as the action executor's
+hardcoded 30s) and `step.declaration` (so a flatten verdict could carry engine-internal features,
+which is self-contradictory - a flattened action has no wrapper to keep them in); both are refusals
+now. The `literal-auth-header` check read holes with a plain substring while this module's own
+`INTEGRATION_HOLE` and the engine's interpolator both tolerate whitespace, so `{{ integration.a.b }}`
+was counted as a credential source AND reported as a literal credential in the same entry - both
+readers now go through one regex. And the OPTIONS half of the documented method refusal was pinned by
+nothing: adding OPTIONS to the allowed set reddened no test.
+
+*REFUTED, AND DELIBERATELY NOT CHANGED.* Four findings were checked and rejected by the verifier, and
+are recorded here so they are not re-raised: the engine's `RUN_FAILED` shadow copy (pre-existing on
+main, and deriving it would mismatch its own `AUTOMATION_FAILED` code); flatten disposability being
+judged per row rather than across the inbound-reference graph (the flatten claim is per-action and
+explicitly not a retirement claim, and nothing is ever deleted); "no write path at all" as a
+structural overclaim (the contrast the sentence draws is with a flag-gated write, and the module's
+sole store operation is one projected find); and spec-rewrite dispositions being absent from
+`SUITE_LEDGER.json` (the ledger's one write obligation is registering NEW specs, which S8 did; the
+dispositions belong to the decision journal).

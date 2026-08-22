@@ -106,7 +106,12 @@ import { forgetRecipe } from '../integrations/recipe-lifecycle.js';
 // `/:key/actions/:actionName/evidence` handler.
 import { actionEvidenceStore } from '../integrations/action-evidence-store.js';
 import type { IntegrationActionRecipe } from '../integrations/definitions.js';
-import { provisionIntegrationAutomations, sessionActionRows, type ProvisionBinding } from '../automation/index.js';
+import {
+  buildMigrationReport,
+  provisionIntegrationAutomations,
+  sessionActionRows,
+  type ProvisionBinding,
+} from '../automation/index.js';
 import { requestAttendedCeremony } from '../bridge/attended.js';
 import { advertisesCapability, getConnectionByOwner } from '../bridge/registry.js';
 import { findSessionItemsForOrigin, sessionIsExpired } from '../cofre/sessions.js';
@@ -826,6 +831,27 @@ export function integrationsRouter(deps: {
   r.get('/recipes', requireAuth, async (req: AuthedRequest, res: Response) => {
     const rows = await integrationRecipeStore.listRecipesForActor(actorOf(req));
     res.json({ items: rows.map(({ key, actionName, recipe }) => recipeSummary(key, actionName, recipe)) });
+  });
+
+  /**
+   * GET /api/v1/integrations/automation-migration-report -> AutomationMigrationReportResponse
+   * (auth: user). Slice S7, decision D3.
+   *
+   * WHAT WOULD BECOME OF THIS CALLER'S AUTOMATIONS if the automation surface were replaced by
+   * integration actions, and what it would cost them. REPORT-ONLY, and not as a mode: the module
+   * behind it has no write path, so there is no flag that could turn this into a migration.
+   *
+   * ANOTHER LITERAL PATH THAT MUST OUTRANK `:key` - registered here with `/active`, `/configs`,
+   * `/definitions/...` and `/recipes`, above the `:key` block that starts on the next screen.
+   *
+   * TENANCY IS THE AUTOMATION SERVICE'S OWN, PASSED IN AND NOT RE-DERIVED: the scan is filtered by
+   * the verified actor's `orgId` and then by the same `private` predicate `listAutomations` applies,
+   * so this endpoint cannot report a row the caller could not already open. Both arguments come off
+   * `actorOf(req)` and never off the request body.
+   */
+  r.get('/automation-migration-report', requireAuth, async (req: AuthedRequest, res: Response) => {
+    const actor = actorOf(req);
+    res.json(await buildMigrationReport({ orgId: actor.orgId, readerUserId: actor.userId }));
   });
 
   // ===========================================================================================

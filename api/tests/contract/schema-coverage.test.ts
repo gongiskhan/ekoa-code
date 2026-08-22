@@ -340,6 +340,21 @@ const COVERED = new Set<string>([
   // `auth === 'user-or-key'`, so a `user`-class descriptor is definitionally outside the spec and
   // outside the generated cortex-cli client the drift gate compares.
   'integrations.listActionFeedback', 'integrations.setActionFeedback', 'integrations.discardActionFeedback',
+
+  // 2026-08-22 (slice S7) - WHAT WOULD BECOME OF THIS CALLER'S AUTOMATIONS
+  // (integrations-migration-report.test.ts, through the real app: the 2xx body against
+  // AutomationMigrationReportResponse; the unauthenticated 401 as the shared envelope; the tier
+  // counts over seeded rows; the literal path proven NOT to be swallowed by `:key`; and a
+  // before/after comparison of the automations collection pinning that the endpoint writes nothing.
+  // Tenancy is pinned AT THE ROUTE in the same contract suite (review round: the first cut claimed
+  // this line and was wrong - the isolation suite drove the module, and this suite seeded one org
+  // and one user, so the estate scope was indistinguishable from the caller scope and dropping the
+  // route's scope arguments stayed green). It now seeds a second org and a same-org peer's private
+  // row, shows through the module at estate scope that both are really there, and asserts the
+  // authenticated response omits them; security/automation-migration-isolation.test.ts keeps the
+  // module-level filter arithmetic beside it.)
+  // ONE NEW descriptor, one COVERED entry: the pinned EXPECTED_PENDING_COUNT below is UNCHANGED.
+  'integrations.automationMigrationReport',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as
