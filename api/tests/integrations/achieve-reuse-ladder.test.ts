@@ -295,18 +295,25 @@ function ctxWith(userId: string, orgId: string, opts: CtxOpts = {}): { ctx: Achi
 /**
  * THE CANONICAL FIXTURE, and an honest note about its name.
  *
- * The plan this slice implements names the canonical action `get-ongoing-processes`. That action
- * DOES NOT EXIST in this repo (`grep -ri 'ongoing.process\|processos em curso' api/ shared/ web/`
- * returns nothing), which VERIFICATION.md already recorded as net-new work needing a real Citius
- * session - so the canonical case is built here against a deterministic local fixture of the same
- * shape, and the Citius path is NOT claimed as proven.
+ * WHAT CHANGED IN S9, AND WHAT DID NOT. When this file was written the canonical action existed
+ * nowhere in the repo, so this fixture stood in for it and said so. It now exists: the shipped
+ * `citius` package declares a REAL `processos` action, backed by a `tenant-read` over the rows the
+ * Citius sync rail lands (`api/assets/integrations/citius/config.json`,
+ * `api/src/legal/citius-processos.ts`). The end-to-end case against THAT action - resolved from the
+ * shipped package, run through the real executor, narrowed by the real compose rung - is
+ * `api/tests/integrations/citius-processos-ladder.test.ts`.
  *
- * There is a SECOND reason the name could not be used, and it is a property of the code rather
- * than of the missing session: `matchActionForGoal` requires the goal to name EVERY token of the
- * action's name, and the canonical Portuguese goal names neither `ongoing` nor `curso`. An action
- * called `get-ongoing-processes` is therefore UNREACHABLE from "todos os processos de clientes com
- * menos de 40 anos", with or without a Citius session. Section 1 pins exactly that, so the finding
- * survives in the suite rather than only in a report.
+ * THIS FIXTURE STAYS A FIXTURE, deliberately. Every rung's REFUSAL behaviour below is exercised by
+ * deforming the action (into a write, a broken httpConfig, an unshaped result, a goal with no
+ * residue), and deforming the SHIPPED package to test the ladder would be testing the ladder
+ * against a package that does not ship. The two files answer different questions.
+ *
+ * THE NAMING FACT IS UNCHANGED AND STILL PINNED, and it is why the shipped action is called
+ * `processos` rather than the name the plan used: `matchActionForGoal` requires the goal to name
+ * EVERY token of the action's name, and the canonical Portuguese goal names neither `ongoing` nor
+ * `curso`. An action called `get-ongoing-processes` is UNREACHABLE from "todos os processos de
+ * clientes com menos de 40 anos", with or without a Citius session. Section 0 pins both halves: the
+ * reachable name reaches, the plan's name does not.
  */
 const processos: IntegrationAction = {
   actionName: 'processos',
@@ -2460,17 +2467,56 @@ describe('the compose rung stands down; it never takes an answer away', () => {
     const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'integrations', 'integration-achieve.ts'), 'utf-8');
     const union = src.slice(src.indexOf('export type AchieveRefusalCode ='));
     const members = (union.slice(0, union.indexOf(';')).match(/'[a-z_]+'/g) ?? []).map((m) => m.replace(/'/g, ''));
-    // Exactly the thirteen AUTHOR-arm codes that pre-date the ladder, and nothing else.
+    // The thirteen codes that pre-date the ladder, plus S9's `read_only_match` - and nothing else.
+    // The addition is argued in docs/decisions.md D-S9-6 and its arm is asserted below; see the
+    // block comment above this section for why a MATCH-arm code is not a rung subtracting an answer.
     expect(members).toEqual([
-      'ambiguous_goal', 'provisional_match', 'not_custodian', 'published_row', 'baseline_package',
-      'not_writable', 'origin_refused', 'origin_unbound', 'authoring_unavailable', 'billing_blocked',
-      'authoring_failed', 'verification_failed', 'persist_failed',
+      'ambiguous_goal', 'read_only_match', 'provisional_match', 'not_custodian', 'published_row',
+      'baseline_package', 'not_writable', 'origin_refused', 'origin_unbound', 'authoring_unavailable',
+      'billing_blocked', 'authoring_failed', 'verification_failed', 'persist_failed',
     ]);
     // …and nothing in the module can construct one of the removed codes either.
     const code = src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
     for (const gone of ['compose_refused', 'compose_unknown_collection', 'compose_unshaped_result', 'parametrize_refused', 'composed_write_refused']) {
       expect(code, `${gone} is still reachable`).not.toContain(gone);
     }
+  });
+
+  /**
+   * THE INVARIANT THE COUNT WAS PROTECTING, ASSERTED DIRECTLY (slice S9).
+   *
+   * D-S5-3's rule is not "the union never grows" - it is that A RUNG may only ADD an answer and may
+   * never SUBTRACT one. Reading it as a bare count would have made it unmaintainable in the honest
+   * direction and satisfiable in the dishonest one (a rung could refuse by REUSING an existing code
+   * and the count would not move). So the arm is now asserted where it lives: neither rung function
+   * may construct a refusal at all, whatever it is called.
+   *
+   * `read_only_match` is decided on the MATCH arm, beside `ambiguous_goal`, before any request
+   * leaves the building - which is what makes it not a subtraction. See D-S9-6.
+   */
+  it('NEITHER RUNG can construct a refusal - the invariant the count stands for', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'integrations', 'integration-achieve.ts'), 'utf-8');
+    // COMMENTS STRIPPED FIRST, the sibling case's technique and for its reason: this module's
+    // docblocks legitimately QUOTE the removed `refused('parametrize_refused', …)` call as the
+    // defect they describe, and a scan that counted prose would fail on the explanation of the fix.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
+    // A function body is its declaration up to the first closing brace in COLUMN ZERO, which is
+    // where this file's formatting puts the end of every top-level function.
+    const bodyOf = (name: string): string => {
+      const start = code.indexOf(`async function ${name}(`);
+      expect(start, `${name} exists`).toBeGreaterThan(-1);
+      const end = code.indexOf('\n}\n', start);
+      expect(end, `${name} terminates`).toBeGreaterThan(start);
+      return code.slice(start, end);
+    };
+    // The two rungs S4/S5 added. Neither may call `refused(...)`, so neither can end a call.
+    for (const rung of ['draftParametrizedArgs', 'draftCompositionPlan']) {
+      expect(bodyOf(rung), `${rung} must not be able to refuse`).not.toMatch(/\brefused\s*\(/);
+    }
+    // And the new code is produced on the match arm ONLY - once, in `achieveIntegrationGoal`.
+    const occurrences = (code.match(/'read_only_match'/g) ?? []).length;
+    expect(occurrences, 'read_only_match appears in the union and at one call site').toBe(2);
+    expect(bodyOf('achieveIntegrationGoal')).toContain("'read_only_match'");
   });
 });
 

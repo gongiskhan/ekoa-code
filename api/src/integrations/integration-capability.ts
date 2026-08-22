@@ -176,6 +176,14 @@ export interface CapabilityContext {
    */
   resolveManagedAutomationIds?: (orgId: string, integrationKey: string) => Promise<Record<string, string>>;
   /**
+   * The TENANT-READ seam (slice S9), bound once beside the automation one and for its exact wiring
+   * reason. Omitting it here would leave the shipped `citius processos` action answering
+   * `unsupported_backing_type` on the capability and `achieve` rails while working on the schedule
+   * and automation ones - one rail quietly behaving differently from the rest, which is the failure
+   * the D1 note beside `runAutomationBackedAction` in `server.ts` was written about.
+   */
+  readTenantDataset?: ExecutorDeps['readTenantDataset'];
+  /**
    * THE EVIDENCE SEAMS (slice S1), bound once by the composition root alongside the automation one
    * and merged into the executor deps at the dispatch below.
    *
@@ -351,7 +359,16 @@ export async function getIntegrationCapability(
       actionName: descriptor.actionName,
       description: descriptor.description,
       backingType: backingOf(action),
-      transport: action.transport ?? 'http',
+      // SLICE S9 (review round). `transport` is documented on the wire as "the wire protocol the
+      // action needs", and a `tenant-read` action needs none - D-S9-3 argues at length that naming
+      // one "would be a lie of the same class as the http://127.0.0.1:0 placeholder". Reporting the
+      // ?? 'http' default for it published exactly that lie on the versioned capability surface.
+      //
+      // PROJECTION ONLY, and the distinction is load-bearing: the action must keep DECLARING no
+      // transport, because the executor's transport gate refuses anything but 'http' and sits ABOVE
+      // the backing dispatch - so writing 'none' into the package would make the action unrunnable.
+      // What is corrected is what a client is TOLD, not what the executor reads.
+      transport: backingOf(action) === 'tenant-read' ? 'none' : (action.transport ?? 'http'),
       target: descriptor.target,
       shape: descriptor.shape,
       requiresApproval,
@@ -417,6 +434,9 @@ export async function executeIntegrationCapabilityAction(
           },
           {
             ...(ctx.runAutomationBackedAction ? { runAutomationBackedAction: ctx.runAutomationBackedAction } : {}),
+            // Slice S9: the tenant-read seam rides the same deps object, so a tenant-read action
+            // answers identically on this rail and on the three others.
+            ...(ctx.readTenantDataset ? { readTenantDataset: ctx.readTenantDataset } : {}),
             // Slice S1: the evidence seams ride the same deps object the automation seam does, so a
             // capability-rail execute records the same evidence every other rail records. Spread
             // whole - see `executorEvidence`.

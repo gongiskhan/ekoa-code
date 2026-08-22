@@ -245,6 +245,7 @@ export interface AchieveContext extends CapabilityContext {
  */
 export type AchieveRefusalCode =
   | 'ambiguous_goal'
+  | 'read_only_match'
   | 'provisional_match'
   | 'not_custodian'
   | 'published_row'
@@ -424,6 +425,85 @@ export type GoalMatch =
   | { kind: 'none' }
   | { kind: 'one'; action: IntegrationAction }
   | { kind: 'ambiguous'; candidates: string[] };
+
+/**
+ * Verbs that ask for a CHANGE. Portuguese and English, stemless and deliberately small.
+ *
+ * ── WHY THIS EXISTS: THE COVERAGE RULE IS VACUOUS FOR A NAME WITH NO VERB ─────────────────────
+ *
+ * `matchActionForGoal`'s safety property is "a goal that omits the verb omits the action". It is a
+ * real property and it is not being weakened here. But it is a property of NAMES THAT CARRY A VERB:
+ * an action whose name tokenises to a bare noun has no verb to omit, so EVERY goal mentioning that
+ * noun covers it - including goals asking to destroy the thing.
+ *
+ * THIS IS NOT A CITIUS PROBLEM AND IT DID NOT ARRIVE WITH `processos`. `get` is a stopword
+ * (GOAL_STOPWORDS), so `get_file`, `get_profile`, `get_agreement`, `get_invoice` and `get_request`
+ * all tokenise to ONE token today, on google-workspace, microsoft-365, invoicexpress,
+ * adobe-acrobat-sign and zoho-sign. Verified against this very function: "delete the file from the
+ * drive" matches `get_file` as `one`, "cancel the agreement" matches `get_agreement`. The platform
+ * has been answering `outcome: 'executed'` - a claim that the goal was ACHIEVED - to destructive
+ * intents that produced a listing, on five shipped packages against real third-party accounts.
+ * `processos` is the sixth instance, which is how the class was found; it is not the origin.
+ *
+ * ── WHAT IS SUBTRACTED, AND WHY IT IS NOT AN ANSWER ───────────────────────────────────────────
+ *
+ * D-S5-3's invariant is that a RUNG may only ADD an answer, never SUBTRACT one, and it is intact:
+ * this is not a rung. It sits on the MATCH arm beside `ambiguous_goal`, decides BEFORE any request
+ * leaves the building, spends no side effect, and names the action it declined to run so a caller
+ * who did mean the read can ask for it by name. What it removes is not an answer the product had -
+ * the product could never delete anything here - but a FALSE CLAIM that it had done so.
+ *
+ * ── THE LIST IS SMALL ON PURPOSE ──────────────────────────────────────────────────────────────
+ *
+ * Every word here costs a refusal when it appears in a goal whose only match reads, so the list
+ * holds verbs that are unambiguously about changing state and leaves out anything that reads as
+ * either ("ver", "rever", "fechar" as in closing a view). A false positive is a refusal that NAMES
+ * the read and invites the caller to ask for it directly; a false negative is the false success
+ * above. The asymmetry is why the list errs small rather than empty.
+ */
+const MUTATING_GOAL_VERBS: ReadonlySet<string> = new Set([
+  // Portuguese
+  'apagar', 'apague', 'eliminar', 'elimine', 'remover', 'remova', 'arquivar', 'arquive',
+  'cancelar', 'cancele', 'anular', 'anule', 'revogar', 'revogue', 'extinguir',
+  'submeter', 'submeta', 'enviar', 'envie', 'criar', 'crie', 'alterar', 'altere',
+  'atualizar', 'atualize', 'apagando', 'eliminando',
+  // English
+  'delete', 'remove', 'archive', 'cancel', 'revoke', 'destroy', 'purge', 'erase',
+  'submit', 'send', 'create', 'update', 'modify', 'overwrite',
+]);
+
+/**
+ * Does this goal ask for a CHANGE that the matched action cannot make?
+ *
+ * TRUE only when BOTH halves hold: the goal names a mutating verb, and the action the deterministic
+ * matcher picked declares `mutates: false`. A goal naming a destructive verb that matches a WRITE is
+ * congruent and passes straight through to the write gate, which is where that decision belongs.
+ *
+ * `mutates === false` is the LITERAL reading `action-consent.ts` uses everywhere: an absent or
+ * non-boolean `mutates` is a write, so an unvalidated `config.json` cannot earn a pass here by
+ * omitting the field.
+ */
+export function mutatingGoalAgainstRead(
+  goal: string,
+  action: Pick<IntegrationAction, 'mutates' | 'actionName'>,
+): string | null {
+  if (action.mutates !== false) return null;
+  // AN EXACT NAMING IS NOT A GOAL, IT IS AN INSTRUCTION - and this clause is what makes the refusal
+  // honest rather than a dead end. The message the caller gets says "name the action directly if you
+  // meant to read"; if naming it directly were ALSO refused, that sentence would be a lie and there
+  // would be no way through at all. It is the same escape the original finding anticipated ("or
+  // callers must name it exactly"), and the same equality `matchActionForGoal` already treats as
+  // winning outright, so the two cannot disagree about what "exact" means.
+  //
+  // FOUND BY THE ESTATE, not by inspection: `integration-achieve.test.ts` calls `achieve` with the
+  // literal action name `arquivar_processo` - a read whose own name carries a mutating verb - and
+  // the first cut of this check refused it.
+  if (goalTokens(goal).join('_') === goalTokens(action.actionName).join('_')) return null;
+  for (const token of goalTokens(goal)) {
+    if (MUTATING_GOAL_VERBS.has(token)) return token;
+  }
+  return null;
+}
 
 /**
  * Does an existing action satisfy the goal? DETERMINISTIC, and deliberately so.
@@ -655,6 +735,24 @@ export async function achieveIntegrationGoal(
     );
   }
   if (match.kind === 'one') {
+    // THE GOAL ASKS TO CHANGE SOMETHING AND THE ONLY ACTION THAT FITS ONLY READS.
+    //
+    // Placed HERE, above every other decision on this arm, because the cheapest honest answer is
+    // the one that costs nothing: no trust lookup, no credential, no request, no model turn. See
+    // `mutatingGoalAgainstRead` for why the coverage rule alone cannot catch this, and for the five
+    // shipped packages that have had the same exposure since long before this action existed.
+    //
+    // The candidate is NAMED rather than hidden: a caller who did mean the read asks for it by
+    // name, exactly as `ambiguous_goal` expects them to.
+    const mutatingVerb = mutatingGoalAgainstRead(goal, match.action);
+    if (mutatingVerb) {
+      return refused(
+        'read_only_match',
+        `this goal asks to ${mutatingVerb}, and the only action that fits it - "${match.action.actionName}" - can only read. `
+          + 'Nothing here can carry out that change; name the action directly if you meant to read.',
+        { candidates: [match.action.actionName] },
+      );
+    }
     if (!isTrustedAction(integrationKey, match.action)) {
       return refused(
         'provisional_match',

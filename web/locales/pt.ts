@@ -306,6 +306,7 @@ export const pt: Translations = {
           apiCall: 'Pedido à API',
           browserSteps: 'Passos no navegador',
           bashCli: 'Linha de comandos',
+          tenantRead: 'Dados sincronizados',
           invalid: 'Mal configurada',
         },
         readOnly: 'Apenas leitura',

@@ -859,11 +859,18 @@ export type IntegrationActionParams = z.infer<typeof IntegrationActionParams>;
 export const IntegrationCapabilityAction = z.object({
   actionName: z.string(),
   description: z.string(),
-  /** `api-call | bash-cli | browser-steps`, or `invalid` for a package that contradicts itself. */
+  /** `api-call | bash-cli | browser-steps | tenant-read`, or `invalid` for a package that
+   *  contradicts itself. `tenant-read` (slice S9) answers from data this platform already holds for
+   *  the caller's own tenant and contacts nothing. Published as a string rather than an enum, so a
+   *  new backing is additive on the wire - but this line is the contract a client author reads, and
+   *  it stays enumerated deliberately: it went stale for exactly one slice, and the consequence was
+   *  a dashboard rendering the fourth value as "Misconfigured". */
   backingType: z.string(),
-  /** Wire protocol the action needs; `http` unless the package declares otherwise. */
+  /** Wire protocol the action needs; `http` unless the package declares otherwise, and `none` for a
+   *  `tenant-read` action, which makes no request at all. */
   transport: z.string(),
-  /** Human-readable destination, e.g. `POST https://slack.com/api/chat.postMessage`. */
+  /** Human-readable destination, e.g. `POST https://slack.com/api/chat.postMessage`; for a
+   *  `tenant-read` action, the dataset it answers from. */
   target: z.string(),
   /** Fingerprint of the action's executable content — the token an approval is keyed on. */
   shape: z.string(),

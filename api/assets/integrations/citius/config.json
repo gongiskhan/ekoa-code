@@ -66,6 +66,34 @@
       }
     },
     {
+      "actionName": "processos",
+      "description": "Lista os processos em curso do mandatário no CITIUS/eTribunal, apurados a partir das notificações já sincronizadas do Portal dos Mandatários. Devolve uma linha por processo com o número único, o tribunal, o último ato, a data da notificação mais recente e quantas notificações lhe deram origem. COBERTURA: inclui apenas os processos com uma ou mais notificações recolhidas pela sincronização; um processo sem movimento na janela já sincronizada não aparece nesta lista. Não contacta o portal, não precisa de sessão e não abre documentos.",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "returnSchema": {
+        "type": "object",
+        "description": "{ processos: [{ processo, tribunal, ultimoAto, ultimaNotificacao, primeiraNotificacao, notificacoes, comDocumento }], origem }. Ordenado da atividade mais recente para a mais antiga.",
+        "properties": {
+          "processos": {
+            "type": "array",
+            "description": "Uma linha por processo distinto."
+          },
+          "origem": {
+            "type": "string",
+            "description": "Proveniência dos dados: citius-notificacoes-sincronizadas."
+          }
+        }
+      },
+      "backingType": "tenant-read",
+      "tenantRead": {
+        "dataset": "citius.processos"
+      }
+    },
+    {
       "actionName": "consultar_processo",
       "description": "Consulta o estado e os movimentos de um processo no Portal dos Mandatários (eTribunal). Requer sessão capturada.",
       "mutates": false,

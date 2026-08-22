@@ -121,6 +121,12 @@ export type IntegrationErrorCode =
   // (`unsupported_backing_type`). Distinct because the fixes are distinct.
   | 'invalid_backing_type'
   | 'unsupported_backing_type'
+  // S9, the `tenant-read` backing: the package names a dataset this deployment binds no reader for
+  // (`unknown_dataset`), or the reader itself failed (`tenant_read_failed`). Distinct from every
+  // code above them because NOTHING WAS CONTACTED - a caller must not read either as a third-party
+  // outage, and neither is a reason to retry against the portal.
+  | 'unknown_dataset'
+  | 'tenant_read_failed'
   // C2, the write gate: the action mutates and no live human approval covers this exact shape.
   // The SAME token the automation engine uses for its local_command pause, on purpose — one
   // vocabulary for "a human has to answer before this proceeds", whichever rail asks.
@@ -231,6 +237,35 @@ export type RunEvidenceCollector = (runId: string) => Promise<{
   truncated?: boolean;
 } | null>;
 
+/**
+ * Handler for `tenant-read` actions (slice S9) - the answer read out of data this platform ALREADY
+ * HOLDS for the asking tenant. Injected by the composition root for the same reason the automation
+ * seam is: the readers live in `legal/` (tier 5) and this module is tier 3, so the edge runs one
+ * way and the wiring happens once, above both.
+ *
+ * ── THE TENANCY TERMS ARE HANDED DOWN, NEVER LOOKED UP ────────────────────────────────────────
+ *
+ * `orgId` and `ownerUserId` are the pair this executor already resolved and already ran every gate
+ * against, and they are the ONLY scope a reader gets. A reader does not resolve a tenant, does not
+ * read one off `args`, and has no way to widen the one it was given - which is what makes Rule 5
+ * a property of this seam rather than a rule each reader has to remember. `args` is the caller's
+ * own request shape (a date bound, a filter), and it is never a scope.
+ *
+ * ── THE DATASET IS A KEY INTO A CLOSED SET ────────────────────────────────────────────────────
+ *
+ * `dataset` is the package's declared `tenantRead.dataset`. A handler that does not recognise it
+ * answers `unknown_dataset`; it must never fall back to "read something close enough", because a
+ * package string that could select a collection would be a query, and this is not a query surface.
+ */
+export type TenantReadHandler = (input: {
+  dataset: string;
+  args: Record<string, unknown>;
+  orgId: string;
+  ownerUserId: string;
+  integrationKey: string;
+  actionName: string;
+}) => Promise<{ success: boolean; data?: unknown; error?: string; code?: 'unknown_dataset' | 'tenant_read_failed' }>;
+
 export interface ExecutorDeps {
   /** Transport seam; default plain fetch (SSRF-exempt by design). Tests inject a fake. */
   fetchImpl?: FetchLike;
@@ -238,6 +273,13 @@ export interface ExecutorDeps {
   timeoutMs?: number;
   /** Optional automation-backed action handler (the automation/ seam). */
   runAutomationBackedAction?: AutomationBackedHandler;
+  /**
+   * Optional tenant-read handler (slice S9, the `legal/` seam). ABSENT ⇒ a `tenant-read` action is
+   * refused with `unsupported_backing_type`, exactly as an unbound `bash-cli` action is: a
+   * deployment that has not wired the readers cannot run one, and saying so is better than
+   * answering an empty list that reads like "you have no processes".
+   */
+  readTenantDataset?: TenantReadHandler;
   /**
    * Persist the evidence of a VALIDATED run (slice S1). Injected so the unit lane can drive the
    * capture without a store; `server.ts` binds it to the real `integration_action_evidence`
@@ -395,7 +437,18 @@ export async function executeUserIntegrationAction(
       error: `action "${input.actionName}" on ${input.integrationKey} is bash-cli-backed and is not bound to an automation — bash runs on the user's paired machine through the automation engine, never on the Cortex host`,
     };
   }
-  if (!action.httpConfig && !action.automationBinding) {
+  // A TENANT READ NEEDS NO SEAM TO BE SHAPED, BUT IT DOES NEED ONE TO BE BOUND (S9). Refused here,
+  // among the other shape gates and before any credential is touched, for the `bash-cli` reason one
+  // clause up: a deployment that binds no readers cannot answer, and an unbound rail must say so
+  // rather than fall through to a branch that would answer something else.
+  if (backingType === 'tenant-read' && !deps.readTenantDataset) {
+    return {
+      success: false,
+      code: 'unsupported_backing_type',
+      error: `action "${input.actionName}" on ${input.integrationKey} is tenant-read-backed and this deployment binds no dataset readers`,
+    };
+  }
+  if (backingType !== 'tenant-read' && !action.httpConfig && !action.automationBinding) {
     return { success: false, code: 'unsupported_auth_type', error: `action "${input.actionName}" has no httpConfig — only HTTP-backed actions are executable` };
   }
 
@@ -435,6 +488,43 @@ export async function executeUserIntegrationAction(
   }
   if (config && !config.enabled) {
     return { success: false, code: 'disabled', error: `integration ${input.integrationKey} is disabled` };
+  }
+
+  // TENANT-READ DISPATCH (S9), AND THE LINE IT SITS ON IS THE POINT.
+  //
+  // Everything ABOVE it still applies: the write gate has answered, a disconnected or disabled
+  // integration has already been refused. Everything BELOW it - the credential decrypt, the WS-C
+  // shadow comparator, the provider credential resolver, the egress binding - is not skipped, it is
+  // UNREACHED, and that is the property this backing exists to have. The answer costs no
+  // third-party access, so it must cost no secret either: a tenant read that decrypted a credential
+  // on its way to reading rows the platform already holds would be spending custody for nothing,
+  // and "it does not use the value" is not the same guarantee as "the value is never produced".
+  //
+  // The reader is handed the (orgId, ownerUserId) THIS CALL RESOLVED, so it cannot be pointed at
+  // another tenant by anything in the package or in `args` (Rule 5). See `TenantReadHandler`.
+  //
+  // NO EVIDENCE ROW IS RECORDED HERE, deliberately and not by omission. `integration_action_evidence`
+  // is a sample of what an action did against a third party - a redacted request, a response
+  // excerpt, a step trace - and a tenant read produced none of those. Storing the rows it returned
+  // would copy one tenant's own data into a second collection to prove it had been read out of the
+  // first, which is a duplicate, not evidence. What a person should read to judge this action is
+  // the sync run that landed the rows, and `readCitiusSyncState` already surfaces it.
+  if (backingType === 'tenant-read') {
+    const dataset = action.tenantRead?.dataset ?? '';
+    const read = await deps.readTenantDataset!({
+      dataset,
+      args: input.args,
+      orgId: input.orgId,
+      ownerUserId: input.ownerUserId,
+      integrationKey: input.integrationKey,
+      actionName: input.actionName,
+    });
+    if (read.success) return { success: true, status: 200, data: read.data };
+    return {
+      success: false,
+      code: read.code ?? 'tenant_read_failed',
+      error: read.error ?? `action "${input.actionName}" could not read the "${dataset}" dataset`,
+    };
   }
 
   const decrypted = await decryptCredentialFields(config);

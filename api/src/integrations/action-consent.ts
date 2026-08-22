@@ -165,6 +165,17 @@ function safeBacking(action: IntegrationAction): string {
  *
  * EXCLUDED: `description`, `argsSchema`, `returnSchema`. They are documentation and validation of
  * the CALLER's input; changing them cannot change what the action does to the remote account.
+ *
+ * SLICE S9 ADDED A TERM WITHOUT MOVING ONE EXISTING FINGERPRINT, and the conditional spread below
+ * is the whole of that promise. A `tenant-read` action's `dataset` decides what happens when it
+ * runs on exactly the terms `httpConfig` and `automationBinding` do, so it belongs in here; but a
+ * fingerprint is DURABLE STATE - it is stored on every standing approval and on every authored
+ * action's `authoring.shape`. Appending an unconditional `null` would have re-hashed every action
+ * in existence: every standing approval silently unmatched (re-prompting people who had already
+ * answered) and every `trusted` action demoted to `provisional`, because `authoringStateOf`
+ * compares the stored shape against a freshly computed one. Appending the term ONLY when the field
+ * is present leaves the tuple byte-identical for every action shipped before S9, which is what
+ * `actionShape` stability is pinned on in `api/tests/integrations/action-backing-type.test.ts`.
  */
 export function actionShape(integrationKey: string, action: IntegrationAction): string {
   const tuple = [
@@ -174,6 +185,7 @@ export function actionShape(integrationKey: string, action: IntegrationAction): 
     action.transport ?? 'http',
     action.httpConfig ?? null,
     action.automationBinding ?? null,
+    ...(action.tenantRead === undefined ? [] : [action.tenantRead]),
   ];
   return createHash('sha256').update(JSON.stringify(canonical(tuple))).digest('hex').slice(0, 32);
 }
@@ -259,6 +271,17 @@ export function actionTarget(action: IntegrationAction, resolution?: TargetResol
     return backing === 'bash-cli'
       ? `comando na máquina emparelhada (sequência de passos ${named})`
       : `sequência de passos ${named}`;
+  }
+  // SLICE S9 (review round). A `tenant-read` action RESOLVES cleanly, so it must not receive the
+  // fallback this function reserves for a backing that could not be resolved at all - a required
+  // public field (`IntegrationCapabilityAction.target`) was reporting a valid action as broken, the
+  // same misreport the dashboard's backing chip was fixed for in the first round and this one was
+  // not. The destination is the DATASET, because that is the whole of where this action goes: no
+  // host, no request, no machine. It matters beyond cosmetics for a future MUTATING tenant-read
+  // action, whose consent dialog would otherwise show a human no destination at all and key their
+  // approval (`idFor`) on the cannot-resolve string.
+  if (backing === 'tenant-read' && action.tenantRead?.dataset) {
+    return `dados já sincronizados neste Ekoa (${action.tenantRead.dataset})`;
   }
   return 'destino indeterminado';
 }

@@ -238,8 +238,17 @@ export const CITIUS_SYNC_ACTION_KEY = 'sync_notificacoes';
  * Landed notification METADATA, one row per `(orgId, integrationKey, actionKey, ref)`.
  *
  * A module-local `Store`, the `cofre/store.ts` / `integrations/app-sso-sessions.ts` pattern: the
- * collection has exactly one writer and one reader, both in this file, so registering it in the
- * global `data/stores.ts` inventory would advertise a handle nothing else may touch.
+ * collection has exactly ONE WRITER and every read in this file, so registering it in the global
+ * `data/stores.ts` inventory would advertise a handle nothing else may touch.
+ *
+ * SLICE S9 ADDED THE SECOND READER (`listCitiusNotificationRows`) AND KEPT IT HERE, which is the
+ * whole reason the sentence above still says "in this file". The `processos` action needs these
+ * rows, and the obvious way to give them to it - export the `Store` handle, or register the
+ * collection globally - would have moved the scoping decision to whoever holds the handle. Hazard 4
+ * is the reason that matters more here than in an ordinary collection: the key is per MANDATÁRIO,
+ * not per org, so a reader that filtered on `orgId` alone would hand one lawyer another lawyer's
+ * inbox with nothing failing anywhere. Every read is therefore a function in this module, keyed by
+ * `syncStateKeyFor` - the SAME derivation the writer uses - and there is no handle to get wrong.
  */
 const citiusNotifications = new Store<Doc>('citius_notifications');
 
@@ -850,4 +859,57 @@ export async function readCitiusSyncState(input: CitiusSyncScope): Promise<SyncS
     landed,
     ...(parsed === undefined ? {} : { latest: parsed }),
   };
+}
+
+/** One landed row, as a reader of this collection sees it. The metadata is the typed record the
+ *  writer spread in; `itemDate` and `landedAt` are the run's own stamps, not the portal's. */
+export interface CitiusLandedNotification {
+  ref: string;
+  /** The portal's `data` cell normalised by `citiusItemDate` - a READING, not an exact instant
+   *  (SPIKE A). Verbatim when the cell's shape was not one of the two recognised ones. */
+  itemDate: string;
+  landedAt: string;
+  notificacao: CitiusNotificacaoMeta;
+}
+
+/**
+ * Every notification row landed for ONE actor's Citius sync (slice S9).
+ *
+ * SCOPED BY `syncStateKeyFor`, WHICH IS THE ONLY REASON THIS IS SAFE TO EXPORT. The key is
+ * `(orgId, integrationKey, JSON.stringify([actionKey, userId]))` - the writer's own derivation,
+ * called here rather than restated, so the actor term (hazard 4: one org is not one inbox) cannot
+ * be dropped by a reader that only remembered the org. An empty component still throws
+ * `CitiusSyncError` rather than widening, because `syncStateKeyFor` fails closed for everybody.
+ *
+ * IT RETURNS METADATA AND NOTHING ELSE, which is the sync's operator-locked invariant one step
+ * further out: what was landed is what is read, and the landed row has never contained a document.
+ * `documentoRef` is carried on the typed record as the INERT captured token it has always been -
+ * this function dereferences nothing and neither may its callers.
+ */
+export async function listCitiusNotificationRows(
+  input: CitiusSyncScope,
+): Promise<CitiusLandedNotification[]> {
+  const key = syncStateKeyFor(input);
+  const docs = await citiusNotifications.find({
+    orgId: key.orgId,
+    integrationKey: key.integrationKey,
+    actionKey: key.actionKey,
+  });
+  const rows: CitiusLandedNotification[] = [];
+  for (const doc of docs) {
+    const d = doc as Doc & { ref?: unknown; itemDate?: unknown; landedAt?: unknown; notificacao?: unknown };
+    const meta = metaOf(d.notificacao);
+    // A row this module cannot read as a notification is SKIPPED, not thrown on and not passed
+    // through half-built. The writer's own seam throws for the same shape, because there it means
+    // the mapping is broken mid-run and nothing should move; here the write already happened, and
+    // one unreadable row from an older schema must not take a lawyer's whole list away.
+    if (!meta || typeof d.ref !== 'string') continue;
+    rows.push({
+      ref: d.ref,
+      itemDate: typeof d.itemDate === 'string' ? d.itemDate : '',
+      landedAt: typeof d.landedAt === 'string' ? d.landedAt : '',
+      notificacao: meta,
+    });
+  }
+  return rows;
 }

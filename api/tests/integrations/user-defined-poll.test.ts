@@ -477,13 +477,29 @@ describe('pollUserDefinedSource — automation-backed poll actions (the citius s
       ).toBe(true);
     }
 
-    // THE BUNDLE ITSELF, seam by seam. Dropping any one of the three from the binding is the exact
-    // failure this guard exists for, and it is invisible to a call-site scan once the call sites
-    // spread an object.
+    // THE BUNDLE ITSELF, seam by seam. Dropping any one from the binding is the exact failure this
+    // guard exists for, and it is invisible to a call-site scan once the call sites spread an object.
+    //
+    // THE WINDOW IS THE LITERAL, NOT A CHARACTER COUNT (slice S9). This used to read the first 600
+    // characters of the declaration, which made the guard's reach depend on how much PROSE the
+    // binding carried: adding the tenant-read seam with its comment pushed `collectRunEvidence` past
+    // 600 and reddened the case for a reason that had nothing to do with the wiring. Worse in the
+    // other direction - a future comment could have pushed a seam out of the window and the guard
+    // would have gone on passing while the seam it was watching had been deleted. The window now
+    // ends where the object literal ends, so it covers every member however the file is commented.
     const bundle = src.split('const executorDeps: ExecutorDeps = {')[1];
     expect(bundle, 'server.ts must bind ONE executorDeps bundle').toBeTruthy();
-    const decl = (bundle ?? '').slice(0, 600);
-    for (const seam of ['runAutomationBackedAction', 'recordActionEvidence', 'collectRunEvidence']) {
+    const end = (bundle ?? '').indexOf('\n  };');
+    expect(end, 'the executorDeps literal must close at its own indentation').toBeGreaterThan(0);
+    const decl = (bundle ?? '').slice(0, end);
+    for (const seam of [
+      'runAutomationBackedAction',
+      // SLICE S9. Unbound, the shipped `citius processos` action answers `unsupported_backing_type`
+      // on every rail - the same silent-omission class as the evidence seams below.
+      'readTenantDataset',
+      'recordActionEvidence',
+      'collectRunEvidence',
+    ]) {
       expect.soft(decl, `executorDeps must bind ${seam}`).toContain(seam);
     }
   });

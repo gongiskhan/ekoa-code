@@ -92,6 +92,7 @@ import { recordZohoAgreement, findZohoAgreement, findAdobeAgreement } from './in
 import type { ResolveAppScope } from './integrations/app-scope.js';
 import { legalRouter } from './legal/router.js';
 import { CITIUS_WATCH_COLLECTION } from './legal/insolvencia-watch.js';
+import { legalTenantReadHandler } from './legal/citius-processos.js';
 import { designTokensHandler } from './services/design-tokens.js';
 import { getArtifactScreenshotDir } from './services/artifact-screenshot.js';
 import { appPdfRouter, getArtifactPdfDir, renderHtmlToPdf } from './apps/pdf.js';
@@ -548,6 +549,12 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
    */
   const executorDeps: ExecutorDeps = {
     runAutomationBackedAction,
+    // SLICE S9, the tenant-read seam - the same shape and the same reason as the automation seam
+    // above it: the readers live in `legal/` (tier 5), `integrations/` is tier 3, so the edge is
+    // wired here and nowhere else. The DISPATCH is not a lambda: `legalTenantReadHandler` decides
+    // which dataset it recognises and refuses the rest inside a module a suite can drive, because a
+    // lambda in this file is the A2 review's dead-code class.
+    readTenantDataset: legalTenantReadHandler,
     recordActionEvidence: (key, evidence) => actionEvidenceStore.recordEvidence(key, evidence),
     collectRunEvidence: (runId) => collectRunEvidence(runId),
     // THE BUNDLE CARRIES CAPTURE SEAMS ONLY, AND NO COLLECTION SEAM (round five). Round four bound a
@@ -1366,6 +1373,11 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     integrationsRouter({
       ...deps,
       runAutomationBackedAction,
+      // Slice S9: the tenant-read seam, from the SAME handler `executorDeps` above carries. This is
+      // the fourth executor call site and the argument is the D1 one, unchanged: a seam omitted here
+      // would leave the shipped `citius processos` action refused on the capability and `achieve`
+      // rails alone, which is one rail behaving differently rather than a feature being off.
+      readTenantDataset: legalTenantReadHandler,
       // Slice S1: the evidence seams, from the ONE bundle bound above rather than re-listed here -
       // this router is the fourth executor call site, and the seam-omitted-at-one-call-site failure
       // is the one the bundle exists to make impossible.

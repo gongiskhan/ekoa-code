@@ -317,9 +317,10 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   `if (!verdict.passed || !verdict.args)` -> `if (!verdict.args)`, redundant by construction because
   `verifyPlannedArgs`'s `done()` nulls `args` whenever `passed` is false.
 
-- **`the-canonical-ongoing-processes-action-is-unreachable-from-the-canonical-goal`** (OPEN
-  2026-08-20, S5, MEDIUM, a plan/code mismatch found while building the compose rung; blocks the S9
-  Citius reference case as written). TWO separate facts, and the second survives fixing the first.
+- **`the-canonical-ongoing-processes-action-is-unreachable-from-the-canonical-goal`**
+  (**CLOSED 2026-08-22 by S9**; opened 2026-08-20, S5, MEDIUM). Both facts below were addressed, and
+  the mechanism for each is named at the end of this entry rather than asserted.
+  TWO separate facts, and the second survives fixing the first.
   (a) `get-ongoing-processes` DOES NOT EXIST: `grep -ri 'ongoing.process|processos em curso'` over
   `api/`, `shared/` and `web/` returns nothing, and the nearest identifiers are the two DECLARATIVE
   Citius actions (`consultar_processo`, `fetch_documentos_processo`, both singular-by-number, both
@@ -339,6 +340,80 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   `api/tests/integrations/achieve-reuse-ladder.test.ts`, so it cannot be forgotten between here and
   S9. WHAT IS NOT: the Citius path itself is NOT claimed as proven by this slice, and a real session
   is still the only thing that can prove it.
+  **HOW S9 CLOSED IT** (decisions.md 2026-08-22, D-S9-1 through D-S9-5).
+  (a) THE ACTION NOW EXISTS, and it is not the automation the plan imagined. The shipped `citius`
+  package declares `processos`, a `tenant-read`-backed action over the rows `legal/citius-sync.ts`
+  already lands (`api/src/legal/citius-processos.ts`, dataset `citius.processos`). The alternative -
+  a second browser-steps walk of the portal - was rejected because it would be a SECOND Citius
+  enumerator re-deriving the sync rail's five hazards, four of which are silent when got wrong, and
+  because nothing in CI could ever prove it (D-S9-1).
+  (b) THE NAME IS ONE THE GOAL COVERS. It is called `processos` precisely because the coverage rule
+  says `get-ongoing-processes` is unreachable. Both halves are now pinned against the REAL package
+  in `api/tests/integrations/citius-processos-ladder.test.ts`: the canonical goal resolves the
+  shipped action and reaches NO OTHER action in the package (including, load-bearingly, the mutating
+  `submeter_peca`), and renaming the shipped action to the plan's name makes the goal stop reaching
+  it. The negative assertion in `achieve-reuse-ladder.test.ts` stays where S5 put it.
+  THE CANONICAL GOAL NOW RESOLVES END TO END through the real registered action: rows landed by the
+  REAL `syncCitiusNotifications`, read by the REAL executor through the REAL capability core,
+  narrowed by the REAL compose rung against the tenant's `clientes` collection - joining the action's
+  `processo` against the collection's `numeroProcesso`, which is the direction the data actually
+  runs, since Citius knows nothing about a firm's clients.
+  **CORRECTED 2026-08-23 (review round).** Two claims in the paragraph above were wider than the
+  mechanism and are fixed rather than left standing. (a) "narrowed by the REAL compose rung against
+  the tenant's `clientes` collection" - the RUNG is real (its output contract, parser and
+  deterministic guardrail suite all run), but the COLLECTION side is an in-memory `AppCollections`
+  seam, not `CollectionsEngine` through the composition root; the real binding is covered by
+  `security/achieve-compose-isolation.test.ts`. (b) "faked at exactly ONE seam" held only for the
+  row-landing helper: the ladder suite also doubles the planning turn and the collections seam, and
+  the schedule suite doubles the automation seam, the evidence collector and the notifier. Both
+  suites now carry inventories instead of the one-seam claim.
+  **WHAT IS STILL NOT PROVEN, AND IS NOT CLAIMED.** The portal transport is faked at exactly one seam
+  (CS4's `enumerate`) in both new suites, because a real Citius session cannot exist in CI. So: that
+  the authenticated inbox HTML PARSES is unobserved (every fixture in this workstream is
+  speculative); that `citius-notificacoes-template` drives the live site is unobserved; and the SIZE
+  OF THE COVERAGE GAP - `processos` answers "processes with notifications", not "processes", so a
+  case dormant in the swept window does not appear - is unmeasured. That last one is the residual
+  this entry hands to the acceptance run: **measure the gap against a real caseload and record it
+  here**. If it is material the action gains a second source (D-S9-1's review date); if not, D-S9-1
+  is confirmed and the automation template leaves the backlog.
+
+- **`a-bare-noun-action-name-makes-the-verb-omission-rule-vacuous`** (**FIXED 2026-08-23**, S9 review
+  round, MAJOR; see `docs/decisions.md` D-S9-6). `matchActionForGoal`'s safety property is "a goal
+  that omits the verb omits the action", and it is a property of names that CARRY a verb. A name
+  tokenising to a bare noun has no verb to omit, so every goal naming that noun covers it - including
+  goals asking to destroy the thing. `achieve` then ran the trusted read and answered
+  `outcome: 'executed'`, a claim that a delete/archive/cancel goal had been ACHIEVED when all it did
+  was list. Nothing was destroyed and nothing leaked (the actions are reads, tenant-scoped); the harm
+  is a false-success decision surface feeding agent chains, schedules and API consumers.
+  **THIS WAS NOT NEW IN S9, AND THE REVIEW'S VERDICT SAID IT WAS.** The verdict states that every
+  name shipped on main is multi-token verb_noun. That is true of the literal names and false after
+  tokenisation, because `get` is a STOPWORD: `get_file`, `get_profile`, `get_agreement`,
+  `get_invoice` and `get_request` all tokenise to one token. Verified against the real matcher rather
+  than a copy of it - "delete the file from the drive" matches `get_file` as `one`, "cancel the
+  agreement" matches `get_agreement` - so google-workspace, microsoft-365, invoicexpress,
+  adobe-acrobat-sign and zoho-sign have carried this against real third-party accounts since long
+  before this slice. `citius processos` is the sixth instance; finding it is what found the class.
+  FIXED on the reuse rung, where it covers every package: `mutatingGoalAgainstRead` refuses
+  `read_only_match` when a goal names a state-changing verb and the matched action declares a literal
+  `mutates: false`, naming the read so a caller who meant it can ask by name. A rename was rejected
+  on evidence: a verb-bearing name is UNCOVERED by the canonical goal (probed for
+  `consultar_processos` and `listar_processos`), so it would have un-closed the finding above, and it
+  would have left the other five actions exposed.
+  RESIDUAL, recorded rather than hidden: the verb list is a closed PT+EN list of unambiguously
+  state-changing words, so a read goal that happens to name one ("listar os processos que vou
+  apagar") is refused. The refusal names the action, making it a redirect rather than a dead end.
+
+- **`two-composition-root-bindings-were-re-declared-instead-of-driven`** (**FIXED 2026-08-23**, S9
+  review round, MAJOR; see `docs/decisions.md` D-S9-7). Two S9 suites carried comments claiming they
+  bound seams "BYTE FOR BYTE" as `server.ts` does, and rested their proves-the-wiring claims on
+  copies. A copy of a binding proves nothing about the binding: mutating `.then(mapIntegrationOutcome)`
+  on the supervisor seam (so a consent-blocked schedule records `failed` and `notifyBlocked` never
+  fires) and deleting `readTenantDataset` from the `integrationsRouter` mount (so the shipped action
+  dies on the HTTP execute and `achieve` rails while schedules keep working) each left the whole lane
+  green. Both are now DRIVEN through the real `buildApp` in
+  `api/tests/contract/citius-tenant-read-wiring.test.ts`, and both mutants verified dead. This is the
+  "pins the MAPPING, not the BINDING" class `composition-root-action-seam.test.ts` was created for,
+  reappearing two call sites over in the same slice that cited it.
 
 - **`the-reuse-ladder-made-a-working-call-worse`** (**FIXED 2026-08-20**, over FOUR rounds and not
   one; was MAJOR x5. See `docs/decisions.md` D-S5-1, D-S4-2 / D-S5-2a, and D-S5-3). One rule broken

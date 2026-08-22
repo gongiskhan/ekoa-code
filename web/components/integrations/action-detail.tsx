@@ -81,6 +81,10 @@ function backingLabel(t: DetailCopy, backingType: string): string {
   if (backingType === 'api-call') return t.backing.apiCall;
   if (backingType === 'browser-steps') return t.backing.browserSteps;
   if (backingType === 'bash-cli') return t.backing.bashCli;
+  // Slice S9. Without this branch a tenant-read action renders as "Misconfigured" - the chip's
+  // fallback is for a package that CONTRADICTS ITSELF, and telling a lawyer their working action is
+  // broken is worse than showing no chip at all.
+  if (backingType === 'tenant-read') return t.backing.tenantRead;
   return t.backing.invalid;
 }
 

@@ -86,6 +86,16 @@ describe('citius-sync · METADATA ONLY, structurally', () => {
         'CITIUS_SYNC_ACTION_KEY',
         'CitiusSyncError',
         'citiusItemDate',
+        // SLICE S9, and this list is exactly where that addition was meant to be argued rather than
+        // absorbed. `listCitiusNotificationRows` is the SECOND READER of `citius_notifications` and
+        // it lives in this module on purpose: the collection is keyed per MANDATÁRIO (hazard 4), so
+        // a reader outside this file would have had to re-derive `syncStateKeyFor` and could have
+        // re-derived it wrongly - silently, since one lawyer receiving another's caseload breaks
+        // nothing. What it hands out is the LANDED ROW, which is metadata by construction: the
+        // structural cases above still hold (this module names no document identifier at all), and
+        // `tests/legal/citius-processos.test.ts` re-proves the absence one tier out, on the rows the
+        // `processos` action actually returns.
+        'listCitiusNotificationRows',
         'notificationRowId',
         'readCitiusSyncState',
         'syncCitiusNotifications',

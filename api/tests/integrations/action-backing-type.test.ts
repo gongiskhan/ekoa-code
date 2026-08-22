@@ -17,7 +17,9 @@ import {
   executeUserIntegrationAction,
   type AutomationBackedHandler,
   type FetchLike,
+  type TenantReadHandler,
 } from '../../src/integrations/action-executor.js';
+import { actionShape } from '../../src/integrations/action-consent.js';
 
 /**
  * Slice C1 — the unified Action model's BACKING discriminator, both halves:
@@ -47,6 +49,7 @@ const API_KEY = ['tk', 'backing', Math.random().toString(36).slice(2, 10)].join(
 
 const HTTP = { method: 'GET', baseUrl: 'https://api.backing.example', path: '/things' } as const;
 const BINDING = { automationId: 'auto-1', argMap: {} } as const;
+const DATASET = 'backing.rows';
 
 /** The fixture package: one action per cell of the backing table, including the malformed ones. */
 const ACTIONS: Array<Record<string, unknown>> = [
@@ -62,6 +65,15 @@ const ACTIONS: Array<Record<string, unknown>> = [
   { actionName: 'bad_browser', description: 'browser-steps without a binding', mutates: false, backingType: 'browser-steps', httpConfig: HTTP },
   { actionName: 'bad_bash', description: 'bash-cli carrying an httpConfig', mutates: false, backingType: 'bash-cli', httpConfig: HTTP },
   { actionName: 'bad_unknown', description: 'a backing this version does not implement', mutates: false, backingType: 'mcp-call', httpConfig: HTTP },
+  // ── SLICE S9: the `tenant-read` backing ────────────────────────────────────────────────────
+  { actionName: 'derived_tenant', description: 'tenantRead, no backingType', mutates: false, tenantRead: { dataset: DATASET } },
+  { actionName: 'explicit_tenant', description: 'explicit tenant-read', mutates: false, backingType: 'tenant-read', tenantRead: { dataset: DATASET } },
+  { actionName: 'tenant_bound', description: 'tenantRead AND a binding, no backingType', mutates: false, tenantRead: { dataset: DATASET }, automationBinding: BINDING },
+  { actionName: 'tenant_unknown_dataset', description: 'a dataset nothing binds', mutates: false, tenantRead: { dataset: 'nobody.binds.this' } },
+  { actionName: 'tenant_write', description: 'a MUTATING tenant read', mutates: true, tenantRead: { dataset: DATASET } },
+  { actionName: 'bad_tenant_no_dataset', description: 'tenant-read naming no dataset', mutates: false, backingType: 'tenant-read' },
+  { actionName: 'bad_tenant_http', description: 'tenant-read carrying an httpConfig', mutates: false, backingType: 'tenant-read', tenantRead: { dataset: DATASET }, httpConfig: HTTP },
+  { actionName: 'bad_tenant_binding', description: 'tenant-read carrying a binding', mutates: false, backingType: 'tenant-read', tenantRead: { dataset: DATASET }, automationBinding: BINDING },
 ];
 
 interface FakeResponse {
@@ -89,6 +101,21 @@ function recordingSeam(): { fn: AutomationBackedHandler; calls: Array<{ binding:
   const fn: AutomationBackedHandler = async ({ binding, args }) => {
     calls.push({ binding, args });
     return { success: true, data: { viaSeam: true } };
+  };
+  return { fn, calls };
+}
+
+/** The tenant-read seam, recording - so "reached the reader" and "with which scope" are both
+ *  assertable. It answers for `DATASET` only, exactly as the real handler answers for its own. */
+function recordingReader(): {
+  fn: TenantReadHandler;
+  calls: Array<{ dataset: string; orgId: string; ownerUserId: string; args: Record<string, unknown> }>;
+} {
+  const calls: Array<{ dataset: string; orgId: string; ownerUserId: string; args: Record<string, unknown> }> = [];
+  const fn: TenantReadHandler = async ({ dataset, orgId, ownerUserId, args }) => {
+    calls.push({ dataset, orgId, ownerUserId, args });
+    if (dataset !== DATASET) return { success: false, code: 'unknown_dataset', error: `no reader for "${dataset}"` };
+    return { success: true, data: { rows: [{ id: 1 }] } };
   };
   return { fn, calls };
 }
@@ -299,5 +326,173 @@ describe('C1 review — a browser-steps action may not carry dead httpConfig', (
     // still wins, exactly as before C1. Only an EXPLICIT declaration is held to the stricter rule.
     const both = { actionName: 'both', description: 'x', mutates: false, automationBinding: { automationId: 'a1' }, httpConfig: { method: 'GET' as const, baseUrl: 'https://example.test', path: '/' } };
     expect(resolveBackingType(both)).toBe('browser-steps');
+  });
+});
+
+/**
+ * SLICE S9 - THE `tenant-read` BACKING.
+ *
+ * The fourth backing, and the only one that contacts nothing: the answer is read out of data this
+ * platform already holds for the asking tenant. Three properties are load-bearing and each has its
+ * own case below.
+ *
+ *  1. IT IS ADDITIVE. Every action shipped before S9 derives the backing it derived before, and -
+ *     the half that is easy to miss - keeps the same `actionShape` fingerprint, because that string
+ *     is durable state: it is stored on every standing approval and on every authored action's
+ *     `authoring.shape`. Re-hashing it would silently unmatch approvals people had already given
+ *     and demote every `trusted` action to `provisional`.
+ *  2. IT NEVER CAUSES A CREDENTIAL TO BE DECRYPTED. Proved BEHAVIOURALLY rather than by reading the
+ *     source: the owner's stored ciphertext is corrupted, so any path that decrypts answers
+ *     `credential_decrypt_failed`. The tenant read succeeds anyway; the api-call action on the same
+ *     corrupted config does not. Move the dispatch below the decrypt and this reddens.
+ *  3. IT IS NOT ABOVE THE WRITE GATE. A read costs no secret; that is not a reason to skip a gate.
+ *     A MUTATING tenant-read action still answers `awaiting_consent`, and the reader is never
+ *     called.
+ */
+describe('S9 - resolveBackingType and the tenant-read backing', () => {
+  it('a tenantRead alone DERIVES tenant-read; a binding still wins over it', () => {
+    expect(resolveBackingType(act({ tenantRead: { dataset: DATASET } }))).toBe('tenant-read');
+    // The historical precedence is untouched: the binding is the more specific shape and still wins,
+    // so no action that already carried one changes meaning by a tenantRead appearing beside it.
+    expect(resolveBackingType(act({ tenantRead: { dataset: DATASET }, automationBinding: BINDING }))).toBe('browser-steps');
+    // And an action with none of the three shapes still derives api-call, byte for byte as before.
+    expect(resolveBackingType(act({}))).toBe('api-call');
+  });
+
+  it('an EXPLICIT tenant-read is honoured, and refuses every shape it cannot use', () => {
+    expect(resolveBackingType(act({ backingType: 'tenant-read', tenantRead: { dataset: DATASET } }))).toBe('tenant-read');
+    const cases: Array<[string, Partial<IntegrationAction>]> = [
+      ['no dataset', { backingType: 'tenant-read' }],
+      ['empty dataset', { backingType: 'tenant-read', tenantRead: { dataset: '' } }],
+      ['dead httpConfig', { backingType: 'tenant-read', tenantRead: { dataset: DATASET }, httpConfig: HTTP }],
+      ['dead binding', { backingType: 'tenant-read', tenantRead: { dataset: DATASET }, automationBinding: BINDING }],
+    ];
+    for (const [label, shape] of cases) {
+      expect(() => resolveBackingType(act({ actionName: 'x', ...shape })), label).toThrow(IntegrationActionBackingTypeError);
+    }
+  });
+
+  it('actionShape is UNCHANGED for every action that declares no tenantRead', () => {
+    // The additive promise, as a LITERAL rather than a sentence. This hex was computed against the
+    // pre-S9 six-element tuple; it is what a standing approval row and an `authoring.shape` written
+    // before this slice actually contain. An unconditional seventh term in the tuple moves it - and
+    // would silently unmatch every approval a person had already given and demote every `trusted`
+    // action to `provisional`, because `authoringStateOf` compares stored against recomputed.
+    const httpOnly = act({ actionName: 'n', httpConfig: HTTP });
+    expect(actionShape('k', httpOnly)).toBe('0870edaba87bb0152447b773d83cc7bf');
+    const withUndefined = act({ actionName: 'n', httpConfig: HTTP, tenantRead: undefined });
+    expect(actionShape('k', withUndefined)).toBe(actionShape('k', httpOnly));
+    // …and a tenant-read action's fingerprint DOES move with its dataset: repointing an action at
+    // different data is a different action, and a standing approval must not carry over.
+    const a = act({ actionName: 'n', tenantRead: { dataset: 'one' } });
+    const b = act({ actionName: 'n', tenantRead: { dataset: 'two' } });
+    expect(actionShape('k', a)).not.toBe(actionShape('k', b));
+    expect(actionShape('k', a)).not.toBe(actionShape('k', httpOnly));
+  });
+});
+
+describe('S9 - executeUserIntegrationAction dispatches a tenant read', () => {
+  it('reaches the reader with the EXECUTOR\'s own tenancy terms, and nothing else', async () => {
+    for (const name of ['derived_tenant', 'explicit_tenant']) {
+      const http = recordingFetch();
+      const seam = recordingSeam();
+      const reader = recordingReader();
+      const res = await executeUserIntegrationAction(
+        { orgId: 'orgA', ownerUserId: 'u1', integrationKey: KEY, actionName: name, args: { desde: '2026-01-01' } },
+        { fetchImpl: http.fn, runAutomationBackedAction: seam.fn, readTenantDataset: reader.fn },
+      );
+      expect(res.success, name).toBe(true);
+      expect(res.data, name).toEqual({ rows: [{ id: 1 }] });
+      expect(reader.calls, name).toHaveLength(1);
+      // Rule 5: the scope is the pair the executor resolved and gated, handed down verbatim.
+      expect(reader.calls[0], name).toMatchObject({ dataset: DATASET, orgId: 'orgA', ownerUserId: 'u1' });
+      // `args` is the caller's request shape and reaches the reader; it is never a scope.
+      expect(reader.calls[0]?.args, name).toEqual({ desde: '2026-01-01' });
+      // Nothing was contacted, by either of the two rails that can contact something.
+      expect(http.calls, name).toHaveLength(0);
+      expect(seam.calls, name).toHaveLength(0);
+    }
+  });
+
+  it('a tenantRead beside a BINDING still runs the automation, not the reader', async () => {
+    const reader = recordingReader();
+    const seam = recordingSeam();
+    const res = await run('tenant_bound', { runAutomationBackedAction: seam.fn, readTenantDataset: reader.fn });
+    expect(res.success).toBe(true);
+    expect(seam.calls).toHaveLength(1);
+    expect(reader.calls).toHaveLength(0);
+  });
+
+  it('NEVER decrypts a credential - proved against a corrupted one', async () => {
+    // Corrupt the owner's stored bundle. Everything above the decrypt is unaffected; everything at
+    // or below it now fails with a distinctive code.
+    const rows = await integrationConfigs.find({ ownerUserId: 'u1' });
+    for (const row of rows) {
+      await integrationConfigs.update(row._id as string, (cur) => ({ ...cur, credentialsCiphertext: 'not-a-ciphertext' }));
+    }
+
+    // The CONTROL: an ordinary api-call action on the very same config row cannot run.
+    const control = await run('derived_api', { fetchImpl: recordingFetch().fn });
+    expect(control.success).toBe(false);
+    expect(control.code).toBe('credential_decrypt_failed');
+
+    // The tenant read answers anyway, because the decrypt is not merely unused - it is unreached.
+    const reader = recordingReader();
+    const res = await run('derived_tenant', { readTenantDataset: reader.fn });
+    expect(res.success).toBe(true);
+    expect(reader.calls).toHaveLength(1);
+  });
+
+  it('is REFUSED when the deployment binds no readers at all', async () => {
+    const http = recordingFetch();
+    const seam = recordingSeam();
+    const res = await run('derived_tenant', { fetchImpl: http.fn, runAutomationBackedAction: seam.fn });
+    expect(res.success).toBe(false);
+    expect(res.code).toBe('unsupported_backing_type');
+    expect(res.error).toMatch(/binds no dataset readers/);
+    // It does NOT fall through to the api-call branch's message, which would tell a reader to add
+    // an httpConfig to an action that must never have one.
+    expect(res.error).not.toMatch(/httpConfig/);
+    expect(http.calls).toHaveLength(0);
+    expect(seam.calls).toHaveLength(0);
+  });
+
+  it('…and that refusal lands BEFORE any credential is involved', async () => {
+    // No config row for this owner: without the gate's position this would be `not_connected`.
+    const res = await executeUserIntegrationAction(
+      { orgId: 'orgA', ownerUserId: 'u-sem-ligacao', integrationKey: KEY, actionName: 'derived_tenant', args: {} },
+      {},
+    );
+    expect(res.code).toBe('unsupported_backing_type');
+  });
+
+  it('surfaces the reader\'s own unknown_dataset rather than inventing an answer', async () => {
+    const reader = recordingReader();
+    const res = await run('tenant_unknown_dataset', { readTenantDataset: reader.fn });
+    expect(res.success).toBe(false);
+    expect(res.code).toBe('unknown_dataset');
+    // The refusal is the READER's: it was asked, and it said no. An executor that silently answered
+    // an empty list here would read, to a lawyer, as "you have no processes".
+    expect(reader.calls).toHaveLength(1);
+    expect(res.data).toBeUndefined();
+  });
+
+  it('a MUTATING tenant-read action still meets the write gate, and the reader is never called', async () => {
+    const reader = recordingReader();
+    const res = await run('tenant_write', { readTenantDataset: reader.fn });
+    expect(res.success).toBe(false);
+    expect(res.code).toBe('awaiting_consent');
+    expect(res.consentRequest).toBeTruthy();
+    expect(reader.calls).toHaveLength(0);
+  });
+
+  it('a malformed tenant-read package is refused with invalid_backing_type, reader untouched', async () => {
+    for (const name of ['bad_tenant_no_dataset', 'bad_tenant_http', 'bad_tenant_binding']) {
+      const reader = recordingReader();
+      const res = await run(name, { readTenantDataset: reader.fn });
+      expect(res.success, name).toBe(false);
+      expect(res.code, name).toBe('invalid_backing_type');
+      expect(reader.calls, name).toHaveLength(0);
+    }
   });
 });

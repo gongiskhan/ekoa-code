@@ -354,6 +354,7 @@ function capabilityCtxOf(
     now: () => number;
     genId: () => string;
     runAutomationBackedAction?: AutomationBackedHandler;
+    readTenantDataset?: CapabilityContext['readTenantDataset'];
     executorEvidence?: CapabilityContext['executorEvidence'];
     draftAction?: ActionDrafter;
     planStep?: PlanDrafter;
@@ -370,6 +371,9 @@ function capabilityCtxOf(
     ...(p ? { principal: { keyId: p.keyId, ...(p.xClient ? { xClient: p.xClient } : {}) } } : {}),
     ...(req.user?.username ? { username: req.user.username } : {}),
     ...(deps.runAutomationBackedAction ? { runAutomationBackedAction: deps.runAutomationBackedAction } : {}),
+    // Slice S9: the tenant-read seam, threaded beside the automation one so the capability and
+    // `achieve` rails run a tenant-read action exactly as the schedule and automation rails do.
+    ...(deps.readTenantDataset ? { readTenantDataset: deps.readTenantDataset } : {}),
     // Slice S1: the evidence seams, threaded whole. See `CapabilityContext.executorEvidence` for
     // why they are a bundle rather than two more fields to forget one of.
     ...(deps.executorEvidence ? { executorEvidence: deps.executorEvidence } : {}),
@@ -413,6 +417,8 @@ export function integrationsRouter(deps: {
   genId: () => string;
   /** The automation seam the composition root binds ONCE and hands to every executor rail. */
   runAutomationBackedAction?: AutomationBackedHandler;
+  /** The TENANT-READ seam (slice S9), bound once beside it - see `CapabilityContext`. */
+  readTenantDataset?: CapabilityContext['readTenantDataset'];
   /** The EVIDENCE seams (slice S1), bound once beside it. */
   executorEvidence?: CapabilityContext['executorEvidence'];
   /** The AUTHORING seam (D3): one drafting turn on D2's shared authoring core. */

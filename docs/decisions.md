@@ -5950,3 +5950,304 @@ DIAGRAM CHECK (FIXED-12): DONE, append-only. `docs/diagrams/02-module-map.excali
 capability's new seam, the two identifiers and which one is which, and the provisioning join that
 resolves between them. Appended as a single text element carrying `text`, `rawText` and
 `originalText`; no existing element was edited.
+
+## 2026-08-22 - S9: the Citius reference case - "os processos", honestly, and the reference schedule
+
+The convergence plan's S9 asked for two things: the "ongoing processes" action built honestly, and a
+reference schedule exercising the converged stack. Both landed. The first required a decision the
+plan explicitly left open, and it is the substance of this entry.
+
+### D-S9-1: the action reads what the sync already landed; it does NOT walk the portal again
+
+THE QUESTION. The plan offered two shapes for "list the mandatário's ongoing processes": a new
+`list-ongoing-processes` browser-steps automation template walking the portal's "Os meus processos"
+grid, or a trusted READ over data the Citius sync rail has already landed - if such data exists.
+
+IT EXISTS. `legal/citius-sync.ts` lands one row per notification into `citius_notifications`, keyed
+`(orgId, integrationKey, actionKey)` with the MANDATÁRIO folded into the action key, and every row
+carries `processo`, `data`, `tribunal`, `ato` and `temDocumento`. The set of distinct process
+numbers over those rows is a real answer to a real question.
+
+THE DECISION IS THE READ, for three reasons in descending order of weight.
+
+1. A SECOND WALK WOULD BE A SECOND CITIUS ENUMERATOR (Capability Contract rule 1). The portal walk
+   exists once, and its docblock is five named hazards long: a `pageTotal` that is a page count on
+   one side and an item total on the other, a `pages` that is a number upstream and an array
+   downstream, a `maxPages` that exists on both sides with only one applied, an actor term that must
+   be in the state key, and two coordinate systems in one comparison that was a LIVE silent miss
+   until CS8. FOUR OF THE FIVE ARE SILENT WHEN GOT WRONG - a truncated sweep certified as complete
+   is indistinguishable from a short list - and a second walk re-derives all of them.
+2. NOTHING COULD PROVE IT. A browser-steps template against an authenticated portal cannot run in CI
+   at all. The action would have shipped as a fixture with a promise attached, which is exactly what
+   the finding this slice closes was complaining about.
+3. IT WOULD SPEND A SESSION PER CALL. The sync spends one and makes every later read free; a
+   per-call walk re-authenticates a portal whose lock-out policy is unobserved (CS5's caller
+   contract), on a rail a SCHEDULE can fire on a timer.
+
+AND WHAT IT COSTS, RECORDED RATHER THAN GLOSSED. The coverage is "processes with notifications", not
+"processes". A case that generated no notification inside the window the sync has swept does not
+appear. That limit is in the action's own `description` under a `COBERTURA:` heading (so a caller
+reading the catalog sees it before a lawyer does), in the module docblock, and in `docs/findings.md`
+as the residual the acceptance run measures. The payload also names its own provenance in `origem`,
+so a consumer joining these rows can tell a notification-derived list from a portal process list
+without reading any document at all. The portal's own process list is the thing that would lift the
+limit; lifting it is later work behind the credential ceremony, not this slice's.
+
+REVIEW DATE (Rule 10): **2026-11-21**, or the first acceptance pass against a real Citius account,
+whichever comes first. The date is the half that matters and the first cut did not have it: it fixed
+only the EVENT ("when a real Citius account first runs the acceptance pass"), and that event needs a
+credential ceremony nobody has scheduled - an interactive Ordem dos Advogados certificate or Chave
+Móvel Digital with two factors. A review that fires only on an unscheduled event is the furniture
+Rule 10 exists to prevent, so the entry now carries the same event-plus-backstop shape this journal
+already uses elsewhere ("or by 2026-11-18, whichever is first"). On whichever trigger arrives first,
+the gap between this list and the portal's own is MEASURED and recorded in `docs/findings.md`; if the
+acceptance pass has still not happened by the date, THAT is the finding to record. If it is material,
+the `processos` action gains a second source and this decision is revisited; if it is not, this
+entry is confirmed and the automation template is dropped from the backlog rather than left as a
+permanent "one day". There is no parallel implementation in the meantime.
+
+### D-S9-2: the action declares NO arguments, deliberately
+
+`missingDeclaredArgs` offers the parametrize rung EVERY declared argument the caller left out, and
+`mayBeModelFilled` returns true for every argument of a `mutates: false` action. So an optional
+`desde` on this action would be a date a MODEL may choose on a goal that never mentioned dates - and
+the result of a wrong choice is not an error, it is a SHORTER LIST delivered confidently. A read
+whose whole purpose is to be narrowed downstream by the compose rung must not be narrowed upstream
+by a guess. Filters belong to compose, which joins against the caller's own data under a
+deterministic guardrail suite; they do not belong to a model filling a slot.
+
+### D-S9-3: `tenant-read` is a fourth BACKING, not a transport and not a fake HTTP call
+
+The action contacts nothing, so it fits none of the three existing backings. Three shapes were
+considered and two rejected:
+
+- AN httpConfig AT OUR OWN API. Rejected: the SSRF guard refuses loopback, it would need a
+  credential to call ourselves, and it would put a network hop and an auth exchange in front of a
+  local read.
+- A NEW `transport`. Rejected: `transport` names the WIRE PROTOCOL of a request, and there is no
+  wire. Declaring one would be the same class of lie as the `http://127.0.0.1:0` placeholder the
+  transport gate exists to refuse.
+- A NEW BACKING, `tenant-read`, with a `tenantRead.dataset` naming a key into a CLOSED set of
+  readers bound at the composition root. Taken: "how does this action run" is precisely the question
+  `resolveBackingType` answers, and this is a new answer to it.
+
+THE PROPERTY THE BACKING BUYS, and it is enforced rather than described: a tenant-read action NEVER
+CAUSES A CREDENTIAL TO BE DECRYPTED. The dispatch sits ABOVE `decryptCredentialFields`, so the
+decrypt, the WS-C shadow comparator, the provider credential resolver and the egress binding are not
+merely unused but unreached. It is proved behaviourally, not structurally: the suite corrupts the
+owner's stored ciphertext, watches an ordinary api-call action on the same config row fail with
+`credential_decrypt_failed`, and watches the tenant read answer anyway.
+
+EVERYTHING ABOVE THAT LINE STILL APPLIES. The write gate answers first (a mutating tenant-read
+action is gated exactly like any other and the reader is never called), and a disconnected or
+disabled integration still refuses. Reading a tenant's own rows is a reason not to spend a secret; it
+is not a reason to skip a gate.
+
+ADDITIVE (Rule 7), in both the places that could have bitten. The DERIVATION is unchanged for every
+action that ships today - an `automationBinding` still wins, and an action with none of the three
+shapes still derives `api-call` - because no package carried a `tenantRead` before this slice. And
+`actionShape` gains its new term ONLY WHEN THE FIELD IS PRESENT: that string is durable state, held
+on every standing approval and every authored action's `authoring.shape`, so an unconditional
+seventh tuple element would have silently unmatched approvals people had already given and demoted
+every `trusted` action to `provisional`. The pre-S9 fingerprint is pinned as a literal in the suite.
+
+NO EVIDENCE ROW, and that is the answer rather than a gap. `integration_action_evidence` is a sample
+of what an action did against a THIRD PARTY - a redacted request, a response excerpt, a step trace.
+A tenant read produced none of those, and storing the rows it returned would copy one tenant's own
+data into a second collection to prove it had been read out of the first. What a person should read
+to judge this action is the sync run that landed the rows, which `readCitiusSyncState` already
+surfaces.
+
+### D-S9-4: the action is named `processos` because the matcher's coverage rule says so
+
+`matchActionForGoal` requires the goal to name EVERY token of the action's name - the deliberate
+safety property that stops "arquivar um processo antigo" reaching `consultar_processo`. The canonical
+goal "todos os processos de clientes com menos de 40 anos" therefore reaches an action named
+`processos` and CANNOT reach one named `get-ongoing-processes`, with or without a Citius session.
+That was half of the finding this slice closes, and it is a NAMING CONSTRAINT the lexical planner
+imposes on every action this product ships, not a defect in it. The suite pins both halves: the
+shipped name reaches, and the plan's name still does not.
+
+### D-S9-5: the read stays inside the module that owns the collection
+
+`citius_notifications` is a module-local `Store` whose docblock said "exactly one writer and one
+reader, both in this file". The obvious way to feed the new action - export the handle, or register
+the collection in `data/stores.ts` - would have moved the scoping decision to whoever holds the
+handle, and hazard 4 is the reason that matters more here than in an ordinary collection: the key is
+per MANDATÁRIO, so a reader filtering on `orgId` alone hands one lawyer another lawyer's caseload
+with nothing failing anywhere. `listCitiusNotificationRows` therefore lives in `citius-sync.ts` and
+calls `syncStateKeyFor`, the writer's own derivation. `legal/citius-processos.ts` holds the
+projection and no collection handle at all.
+
+### The reference schedule proves the WIRING, which is the half a live run cannot check
+
+`api/tests/schedules/supervisor.test.ts` drives the supervisor with FAKE executor seams - correct for
+a suite about claiming, advancing, staleness and shutdown, and therefore silent about what happens
+when the seam is bound to the real thing. `api/tests/schedules/citius-reference-schedule.test.ts`
+binds `runIntegrationAction` byte for byte as `server.ts` binds it, points it at the SHIPPED citius
+package with a real encrypted config row, the real consent store and the real
+`integration_action_evidence` collection, and proves four converged pieces on one schedule-fired run:
+the supervisor reaches the action; an unapproved WRITE (`submeter_peca`) records `blocked` with
+`awaiting_consent` rather than `failed`, tells the owner, and contacts nothing; the owner's approval
+of that exact shape unblocks the same schedule; and a validated run leaves an evidence row keyed to
+the org AND the owner, which a peer of the same org cannot read.
+
+A LIVE RUN CANNOT PROVE THIS HALF. A live fire that works tells you nothing about what the gates
+would have done - the interesting outcomes are the refusals, and a working portal never produces
+them.
+
+### What only the acceptance run can prove, stated so it is not mistaken for done
+
+1. THAT THE PORTAL'S INBOX PARSES. Every fixture in the Citius workstream is speculative; the
+   authenticated mandatários inbox HTML has never been observed. Both new suites feed the sync rows
+   that ALREADY parsed, so neither says anything about the parse.
+2. THAT THE NOTIFICATIONS AUTOMATION DRIVES THE REAL SITE. `citius-notificacoes-template` is
+   natural-language browser steps; whether they find the inbox, the pager and the prazo cells live is
+   unobserved.
+3. THE SIZE OF THE COVERAGE GAP in D-S9-1. That is a question about one real caseload.
+
+The portal transport is faked at exactly one seam in each suite (CS4's `enumerate`), because a real
+Citius session cannot exist in CI: the login is an Ordem dos Advogados certificate or Chave Móvel
+Digital through autenticacao.gov.pt, interactively, with two factors. Everything downstream of that
+seam is production code, so the rows the suites read back are not fixtures shaped like what the sync
+produces - they are what the sync produces.
+
+## 2026-08-23 - S9 REVIEW ROUND: the bare-noun name inverts a safety property, and two bindings were re-declared rather than driven
+
+An adversarial pass over 1131da9 returned seven majors and twelve minors, one refuted. What follows
+is what changed and, where the review's reasoning needed correcting, what the evidence actually
+showed. Nothing here is a live production defect: every major is a verification gap or a false claim
+in a test or a doc. That is not a mitigation, it is the classification - the commit's own headline
+was that it PROVED things, and three of the proofs did not reach the code they named.
+
+### D-S9-6: a goal that asks to destroy is refused, and the bare-noun exposure is NOT new
+
+THE DEFECT. `matchActionForGoal`'s safety property is "a goal that omits the verb omits the action".
+It is a property of names that CARRY a verb. `processos` tokenises to a bare noun, so every goal
+naming processes covers it - including destructive ones. "apagar todos os processos antigos"
+matched the READ deterministically, the action is trusted by construction, and `achieve` answered
+`outcome: 'executed'`: a claim that a delete/archive/cancel goal had been ACHIEVED, when all that
+happened was a listing. Read-only and tenant-scoped, so nothing was destroyed and nothing leaked -
+the harm is a false-success decision surface feeding agent chains, schedules and API consumers.
+
+THE REVIEW SAID THIS ARRIVED WITH S9. IT DID NOT, AND THE CORRECTION MATTERS. The verdict states
+"every action name shipped on main across all 11 packages is multi-token verb_noun"; that is true of
+the literal names and false after tokenisation, because `get` IS A STOPWORD. `get_file`,
+`get_profile`, `get_agreement`, `get_invoice` and `get_request` all tokenise to ONE token today.
+Verified against the real matcher, not a copy of it: "delete the file from the drive" matches
+`get_file` as `one`; "cancel the agreement" matches `get_agreement`. The platform has been answering
+`executed` to destructive intents on google-workspace, microsoft-365, invoicexpress,
+adobe-acrobat-sign and zoho-sign - against real third-party accounts - since long before this slice.
+`processos` is the sixth instance, which is how the class was found; it is not the origin.
+
+THAT DECIDED THE FIX. The review offered a rename as one option. A rename is not available and would
+not have worked twice over. Not available: a verb-bearing name loses the canonical goal outright -
+`consultar_processos` and `listar_processos` are both UNCOVERED by "todos os processos de clientes
+com menos de 40 anos" (probed), so renaming would un-close the very finding S9 exists to close. Not
+sufficient: it would leave the five other shipped actions exposed. So the fix is the general one, on
+the reuse rung, where it protects every package.
+
+`mutatingGoalAgainstRead` refuses when BOTH halves hold - the goal names a verb from a small, closed
+PT+EN list of unambiguously state-changing words, and the matched action declares a literal
+`mutates: false`. A destructive goal matching a WRITE is congruent and passes straight to the write
+gate, where that decision belongs. The refusal NAMES the read it declined to run, so a caller who
+did mean it asks by name, exactly as `ambiguous_goal` expects.
+
+AND THE INVARIANT IT LOOKS LIKE IT BREAKS. D-S5-3 took four rounds to establish that a RUNG may only
+ADD an answer and never SUBTRACT one, pinned as a COUNT over `AchieveRefusalCode`. This adds a
+member, so the pin moves - and the reasoning has to be better than "we updated the test".
+`read_only_match` is not a rung: it sits on the MATCH arm beside `ambiguous_goal` and
+`provisional_match`, both of which pre-date the ladder and both of which refuse before anything
+runs. It is decided before any request leaves the building, spends no side effect and buys no model
+turn. What it removes is not an answer the product had - the product could never delete anything
+here - but a false claim that it had done so.
+
+The count was standing in for the invariant, and a count is a poor proxy in both directions: it
+would have been unmaintainable in the honest direction and satisfiable in the dishonest one, since a
+rung could refuse by REUSING an existing code without moving it. So the suite now asserts the
+invariant where it lives - NEITHER rung function may construct a refusal at all, whatever it is
+called - and separately pins that the new code is produced at exactly one call site, on the match
+arm. The count is still exact; it just no longer carries the whole argument alone.
+
+THE COST, STATED. A read goal that happens to name a mutating verb ("listar os processos que vou
+apagar") is refused. The refusal names the action and invites the caller to ask for it directly, so
+it is a redirect rather than a dead end - and the asymmetry is deliberate: a false positive costs
+one named refusal, a false negative is the confident wrong answer above.
+
+### D-S9-7: two composition-root bindings were RE-DECLARED, not driven
+
+Two suites carried comments claiming they bound things "BYTE FOR BYTE" as `server.ts` does. A copy
+of a binding proves nothing about the binding, and the review demonstrated both by mutation with the
+whole lane green:
+
+  1. `.then(mapIntegrationOutcome)` on the supervisor's `runIntegrationAction`. Collapse it to
+     `failed` for every non-success and nothing reddened - while in production a consent-blocked
+     schedule stops being reported blocked, so `notifyBlocked` never fires and the owner is never
+     told their schedule is waiting on them. That is P4.1's whole point.
+  2. `readTenantDataset` on the `integrationsRouter` mount - the ONLY binding behind the HTTP
+     execute and `achieve` routes, i.e. Rule 4's outside-consumer surface. Delete it and the shipped
+     `processos` action answers `unsupported_backing_type` for every interactive and API-key caller
+     while schedules and automations keep working: one rail quietly dead.
+
+Both are now driven, not described, in `api/tests/contract/citius-tenant-read-wiring.test.ts`: boot
+the REAL `buildApp`, execute the shipped action over HTTP, and fire an `integration_action` schedule
+through the supervisor `buildApp` itself configured. Both mutants verified dead. The reference
+suite's own comment is corrected to say what it actually proves - the behaviour of the rail GIVEN
+the binding - and to point at the file that proves the binding.
+
+### D-S9-8: the answer now says how fresh it is
+
+`{processos, origem}` made "the sync never ran", "the sync broke three weeks ago" and "the sync ran
+this morning and there is nothing" the same `success: true` document. A lawyer whose session lapsed
+got a stale list with nothing marking it; a schedule firing hourly recorded `ok` over dead data
+indefinitely - the confident-wrong-answer direction, and the very hazard the sibling suite had fixed
+for the unbound-reader case and left open for this one. The payload carries `sincronizacao`
+(last run, its outcome, the watermark, rows held), projected from `readCitiusSyncState` under the
+identical scope: no second source of truth, additive under Rule 7.
+
+### D-S9-9: the dataset is bound to the integration that declares it
+
+`legalTenantReadHandler` gated on `dataset` alone, so the name was a closed set of READERS and an
+open set of DECLARERS: any definition in the tenant - including a package another org published and
+this one installed - could declare `tenantRead: { dataset: 'citius.processos' }` under a name and
+description of its own choosing. No cross-tenant leak was ever possible, and that is precisely the
+point worth stating: what an alias takes is not the DATA but the DESCRIPTION. D-S9-1 words the
+COBERTURA limit carefully because a caller decides what the list MEANS from it. The handler now
+serves the dataset only for `citius`, and the composition-root seam test's foreign-key fixture
+asserts the refusal - a SHARPER observable than the success it used to assert, because only the real
+handler can produce it (an unbound seam answers `unsupported_backing_type` instead).
+
+### The public surface stopped misreporting itself
+
+Three fixes, all on fields a consumer reads and nothing pinned: the capability row reported
+`transport: 'http'` for an action whose own doctrine is that it has no wire (now `none`, in the
+PROJECTION only - the package must keep declaring nothing, because the executor's transport gate
+sits above the backing dispatch and would refuse the action outright); `target` reported the
+`destino indeterminado` fallback reserved for a package whose backing cannot be RESOLVED, for an
+action that resolves cleanly (now the dataset, which matters for a future MUTATING tenant-read
+action whose consent dialog would otherwise show a human no destination and key their approval on
+the cannot-resolve string); and the shared contract's own `backingType` enumeration had gone stale,
+which is exactly the docline a client author reads - and the first round had already had to fix the
+dashboard rendering the fourth value as "Misconfigured".
+
+### Three test-honesty fixes, and one claim refuted
+
+The blocked leg asserted ceiling-neutrality that PRODUCTION DOES NOT HAVE (`NEUTRAL_BLOCKED_CODES`
+holds only `awaiting_daemon`, so an `awaiting_consent` block drives the ceiling exactly as a failure
+does, deliberately) and backed it with assertions that could not fail after one fire. It now asserts
+`consecutiveFailures === 1` with prose matching the real semantics: `blocked` differs in the run
+status a person sees and in the owner notification, NOT in ceiling treatment. The evidence
+collector's fixture emitted the collector's INPUT shape behind an `as never`, so the row stored in
+the real collection held bytes production cannot write; it now emits `RunStepEvidence` and the cast
+is gone. The "answers from the rows the sync landed" case observed no rows at all - the mapper
+discards `data` and a run row has no output field - so it passed identically with zero rows landed;
+the test's own binding now records the executor result before mapping, and the rows are asserted.
+Both suites' "THE ONE FAKE" headers undercounted and are now inventories.
+
+REFUTED, and left alone: that the COBERTURA caveat does not travel with the composed answer. It
+does. `composeRows` returns the surviving action rows WHOLE and unprojected, so every composed item
+is a full row carrying `notificacoes`, `comDocumento`, `ultimaNotificacao` and `primeiraNotificacao`
+- per-row provenance naming notifications as the derivation - and `origem` travels inside
+`result.data`, which the composed outcome deliberately carries. The claim's picture of a bare list
+whose only marker needs a separate catalog fetch is wrong. (The team's summary mapped the refutation
+onto the compose-JOIN-seam finding instead; that one is real and its overstatements are fixed above.)

@@ -753,6 +753,13 @@ export function publishableActionOf(action: IntegrationAction): IntegrationActio
     ...(action.returnSchema !== undefined ? { returnSchema: action.returnSchema } : {}),
     ...(action.httpConfig !== undefined ? { httpConfig: action.httpConfig } : {}),
     ...(action.automationBinding !== undefined ? { automationBinding: action.automationBinding } : {}),
+    // Slice S9. OPTED IN deliberately, per this function's own rule. A `tenant-read` action is
+    // useless to a consuming org without the dataset name, and carrying it leaks nothing: the
+    // string is a key into a CLOSED set of readers the composition root binds, an unbound one is
+    // refused with `unknown_dataset`, and the reader is handed the RUNNING tenant's (orgId,
+    // ownerUserId) by the executor - never the publisher's. So a consumer of this package reads
+    // their own rows or nothing at all.
+    ...(action.tenantRead !== undefined ? { tenantRead: action.tenantRead } : {}),
     ...(action.backingType !== undefined ? { backingType: action.backingType } : {}),
     ...(action.capabilities !== undefined ? { capabilities: action.capabilities } : {}),
     ...(action.transport !== undefined ? { transport: action.transport } : {}),

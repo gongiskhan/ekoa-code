@@ -68,16 +68,59 @@ export interface IntegrationActionAutomationBinding {
 }
 
 /**
+ * A `tenant-read` action's backing: the NAME OF THE DATASET it reads (slice S9).
+ *
+ * ── WHY THIS IS A BACKING AND NOT A TRANSPORT ─────────────────────────────────────────────────
+ *
+ * `transport` answers "which wire protocol does this request need". A tenant read makes no request:
+ * it answers out of rows THIS platform already landed for THIS tenant, through a rail that did the
+ * contacting earlier and under its own verification. There is no wire to name, so naming one would
+ * be a lie of the same class as the `http://127.0.0.1:0` placeholder the transport gate exists to
+ * refuse. What it does have is a different answer to "how does this action run", which is exactly
+ * what `resolveBackingType` is for.
+ *
+ * ── WHAT IT BUYS, STATED AS THE PROPERTY THE EXECUTOR ENFORCES ────────────────────────────────
+ *
+ * A tenant-read action NEVER CAUSES A CREDENTIAL TO BE DECRYPTED. The executor dispatches it above
+ * `decryptCredentialFields`, so the whole credential half of the rail - the decrypt, the shadow
+ * comparator, the provider resolver, the egress binding - is not merely unused but unreached. That
+ * is the honest shape for an action whose answer costs no third-party access, and it is pinned by
+ * `api/tests/integrations/action-backing-type.test.ts` rather than left as a claim.
+ *
+ * It is still a FULL citizen of the rail above that line: the write gate answers first (a mutating
+ * tenant-read action would be gated exactly like any other), and a disconnected or disabled
+ * integration still refuses. Reading a tenant's own rows is not a reason to skip a gate; it is a
+ * reason not to spend a secret.
+ *
+ * ── THE DATASET NAME IS A SERVER-SIDE KEY, NEVER A QUERY ──────────────────────────────────────
+ *
+ * `dataset` names one of a CLOSED set of readers the composition root binds (`ExecutorDeps
+ * .readTenantDataset`). It is not a collection name, not a path and not a filter: a package that
+ * names a dataset the deployment does not bind is refused with `unknown_dataset`, and nothing about
+ * the string reaches a database. The scoping is the reader's own and is never taken from the
+ * package - the executor hands the reader the (orgId, ownerUserId) it already resolved, and a
+ * reader that widened that would be widening it for itself.
+ */
+export interface IntegrationActionTenantRead {
+  dataset: string;
+}
+
+/**
  * HOW an action is executed — the unified Action model's backing discriminator (decisions.md
  * 2026-08-01: "an action's backing type is one of api-call, mcp-call, bash-cli, browser-steps").
- * Only the three this build can execute or refuse coherently are modelled here; `mcp-call` lands
- * with the slice that implements it, and adding it is additive (this union is not on the wire).
+ * Only the ones this build can execute or refuse coherently are modelled here; `mcp-call` lands
+ * with the slice that implements it, and adding it is additive (this union is not on the wire -
+ * `shared/src/integrations.ts` publishes `backingType` as `z.string()`).
+ *
+ * `tenant-read` (slice S9) is the fourth, and it is the only one that contacts NOTHING: the answer
+ * is read out of data this platform already holds for the asking tenant. See
+ * `IntegrationActionTenantRead` for why that is a backing rather than a transport.
  *
  * NOT the same axis as `transport`, which names the WIRE PROTOCOL of an api-call action (`http`,
  * `imap`, …). An action is refused for an unimplemented transport and for an unimplemented backing
  * independently, with distinct codes.
  */
-export type IntegrationActionBackingType = 'api-call' | 'bash-cli' | 'browser-steps';
+export type IntegrationActionBackingType = 'api-call' | 'bash-cli' | 'browser-steps' | 'tenant-read';
 
 /**
  * HOW THE ORIGIN BEHIND AN ACTION TREATS AUTOMATION - the policy label, declared by the action's
@@ -270,6 +313,8 @@ export interface IntegrationAction {
   returnSchema?: Record<string, unknown>;
   httpConfig?: IntegrationActionHttpConfig;
   automationBinding?: IntegrationActionAutomationBinding;
+  /** Present ONLY on a `tenant-read` action (slice S9) - the dataset it answers from. */
+  tenantRead?: IntegrationActionTenantRead;
   /**
    * The action's BACKING — how it runs. ABSENT ⇒ derived from the action's shape by
    * `resolveBackingType`, which reproduces today's behaviour byte for byte, so the field is
@@ -383,19 +428,30 @@ export class IntegrationActionBackingTypeError extends Error {
  * DERIVATION (no explicit `backingType`), exactly today's executor precedence:
  *   - an `automationBinding` ⇒ `browser-steps` (a bound action delegates to the automation seam,
  *     and that binding has always won over any `httpConfig` on the same action);
+ *   - else a `tenantRead` ⇒ `tenant-read` (slice S9). It sits BELOW the binding for the same reason
+ *     the binding sits above `httpConfig`: the more specific shape wins, and an action carrying
+ *     both is a package defect the EXPLICIT branch below names rather than a precedence to rely on.
+ *     No shipped package carried a `tenantRead` before S9, so every existing action derives exactly
+ *     what it derived before this clause existed;
  *   - otherwise ⇒ `api-call` (the `httpConfig` path). An action with NEITHER shape also derives
  *     `api-call`: it is unexecutable, and the api-call branch is where the executor has always
  *     refused it, with the same code and the same message as before this field existed.
  *
  * EXPLICIT: validated against the shape, never guessed around. `api-call` needs an `httpConfig`
  * to call; `browser-steps` needs the `automationBinding` naming the steps to run; `bash-cli` must
- * NOT carry an `httpConfig` (it runs a command on the user's paired machine, not an HTTP request).
+ * NOT carry an `httpConfig` (it runs a command on the user's paired machine, not an HTTP request);
+ * `tenant-read` needs the `tenantRead` naming the dataset and must carry NEITHER request shape,
+ * because it contacts nothing and a request config nothing will dial is the dead weight the
+ * symmetry rule (C1 review F3) exists to refuse.
  * A contradiction — or a value outside the union, which an unvalidated `config.json` can carry —
  * throws `IntegrationActionBackingTypeError`.
  */
 export function resolveBackingType(action: IntegrationAction): IntegrationActionBackingType {
   const declared = action.backingType;
-  if (declared === undefined) return action.automationBinding ? 'browser-steps' : 'api-call';
+  if (declared === undefined) {
+    if (action.automationBinding) return 'browser-steps';
+    return action.tenantRead ? 'tenant-read' : 'api-call';
+  }
 
   const refuse = (why: string): never => {
     throw new IntegrationActionBackingTypeError(
@@ -423,6 +479,17 @@ export function resolveBackingType(action: IntegrationAction): IntegrationAction
     return action.httpConfig
       ? refuse('carries an httpConfig — a bash-cli action runs a command on the paired machine, never an HTTP request')
       : 'bash-cli';
+  }
+  if (declared === 'tenant-read') {
+    if (!action.tenantRead?.dataset) {
+      return refuse('carries no tenantRead.dataset - a tenant-read action must name the dataset it answers from');
+    }
+    if (action.httpConfig) {
+      return refuse('also carries an httpConfig - a tenant-read action contacts nothing, so the request config is dead weight');
+    }
+    return action.automationBinding
+      ? refuse('also carries an automationBinding - a tenant-read action answers from data this platform already holds, so there are no steps to run')
+      : 'tenant-read';
   }
   return refuse('that is not a backing type this version implements');
 }

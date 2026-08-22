@@ -15,6 +15,7 @@ import {
 import { automationRunStore } from '../../src/automation/persistence.js';
 import { actionEvidenceStore } from '../../src/integrations/action-evidence-store.js';
 import { buildApp } from '../../src/server.js';
+import { CITIUS_PROCESSOS_DATASET } from '../../src/legal/citius-processos.js';
 import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../../src/config.js';
 
 /**
@@ -51,6 +52,7 @@ const OWNER = 'u-root';
 const KEY = 'portal';
 const READ_ACTION = 'list_cases';
 const WRITE_ACTION = 'submit_case';
+const TENANT_ACTION = 'processos_do_mandatario';
 const AUTOMATION_ID = 'auto-never-runs';
 const ORIGIN = 'https://portal.example';
 const actor: Actor = { userId: OWNER, orgId: ORG, role: 'user' };
@@ -131,6 +133,15 @@ function definitionRow(): IntegrationDefinitionCreate {
         description: 'submete a peça',
         mutates: true,
         automationBinding: { automationId: AUTOMATION_ID },
+      },
+      {
+        // SLICE S9. A `tenant-read` action on the same definition, so the binding of the FOURTH
+        // backing is observable in the same place the automation seam's binding is.
+        actionName: TENANT_ACTION,
+        description: 'os processos, a partir do que a sincronização já guardou',
+        mutates: false,
+        backingType: 'tenant-read',
+        tenantRead: { dataset: CITIUS_PROCESSOS_DATASET },
       },
     ],
     skillMd: `# ${KEY}\n`,
@@ -240,6 +251,50 @@ describe('the integration-action executor bound by buildApp carries the discover
     // …and the answer is the replayed call's body, in the envelope every consumer reads.
     expect((result.data as { output: unknown }).output).toEqual({ items: [{ id: 41 }], total: 1 });
     // NO AUTOMATION RAN. The short-circuit is the whole point of the slice.
+    expect(await automationRuns.find({})).toEqual([]);
+  }, 30_000);
+
+  /**
+   * SLICE S9 - THE TENANT-READ SEAM IS BOUND, not merely declared.
+   *
+   * The same failure class this file exists for, one seam over. `server.ts` has exactly one line
+   * pointing production at the dataset readers:
+   *
+   *     readTenantDataset: legalTenantReadHandler,
+   *
+   * Delete it and NOTHING FAILS TO COMPILE and no other suite reddens: the seam is optional, and an
+   * unbound one refuses with `unsupported_backing_type`. The shipped `citius processos` action would
+   * simply stop working in production while every unit test that injects its own reader stays green -
+   * which is precisely how a slice ships dead.
+   *
+   * The assertion is an OBSERVABLE CONSEQUENCE rather than "a function is installed": the answer
+   * carries `origem`, a constant only the real handler produces, so a reader that had been bound to
+   * something else would not satisfy it either. The rows are empty because this org has never run a
+   * Citius sync - which is the correct answer, and is a different answer from every refusal.
+   */
+  it('S9: buildApp binds the tenant-read reader, so a tenant-read action ANSWERS', async () => {
+    const result = await executeIntegrationAction({
+      integrationKey: KEY,
+      actionName: TENANT_ACTION,
+      args: {},
+      ownerUserId: OWNER,
+    });
+
+    // THE OBSERVABLE IS THE DATASET-BINDING REFUSAL, and it is a SHARPER pin than a success would
+    // be. This fixture's integration key is `portal`, not `citius`, and since the review round the
+    // reader serves `citius.processos` only for the integration that declares it - so the honest
+    // answer here is a refusal. Crucially it is a refusal ONLY THE REAL HANDLER CAN PRODUCE: an
+    // UNBOUND seam answers `unsupported_backing_type` from the executor instead, so this
+    // distinguishes "buildApp bound the reader" from "buildApp bound nothing" exactly as a success
+    // would have, while also pinning the alias check that a success would have silently lost.
+    expect(result.success).toBe(false);
+    expect(result.details).toBe('unknown_dataset');
+    expect(result.error).toContain('citius');
+    expect(result.error).toContain('portal');
+    // NOT the unbound-seam refusal, which is what this case would report if the binding vanished.
+    expect(result.details).not.toBe('unsupported_backing_type');
+    // Nothing was contacted and no automation ran: a tenant read reaches neither rail.
+    expect(injected).toEqual([]);
     expect(await automationRuns.find({})).toEqual([]);
   }, 30_000);
 

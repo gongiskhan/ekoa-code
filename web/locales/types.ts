@@ -339,6 +339,8 @@ export interface Translations {
           apiCall: string;
           browserSteps: string;
           bashCli: string;
+          /** Slice S9: the action contacts nothing and answers from data already synced here. */
+          tenantRead: string;
           invalid: string;
         };
         /** The action reads; nothing it does needs authorising. */

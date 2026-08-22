@@ -306,6 +306,7 @@ export const en: Translations = {
           apiCall: 'API request',
           browserSteps: 'Browser steps',
           bashCli: 'Command line',
+          tenantRead: 'Synced data',
           invalid: 'Misconfigured',
         },
         readOnly: 'Read only',
