@@ -3358,6 +3358,38 @@ silently absorbed into a ledger note):
   disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
   `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
 
+## Recently fixed - 2026-08-22 the secrets gate stops arguing against itself
+
+- **`gitleaks-path-allowlists-contradicted-their-own-config`** (**FIXED 2026-08-22**, MEDIUM,
+  S6 review blocker 1b). `scripts/gitleaks.toml` allowlisted `spec/.*`, `docs/.*`, `.*\.example\..*`,
+  and `api/test/fake-daemon/fixtures/.*` by PATH, fifteen lines above its own comment explaining why
+  value allowlists beat path allowlists: a path allowlist *"would blind the scanner to a REAL token
+  pasted into a test file, which is a normal way credentials escape"*. Every argument in that comment
+  applied verbatim to the four path entries - docs/ is where evidence captures, runbooks, and pasted
+  terminal output land, which is exactly where a real token escapes to. **Measured before fixing**
+  (2026-08-22): the four path entries together masked exactly FOUR findings, all in the retired
+  `docs/release/evidence/` J-run tree, history-only (the tree is gone from the working tree), and all
+  dead - an `EKOA_LLM_DIRECT=1` env-flag false positive twice, a webhook secret minted by a local
+  ephemeral J-run stack, and a super-admin JWT signed with the dev-only secret that expired 2026-01.
+  The `spec/.*`, `.*\.example\..*`, and `fake-daemon` entries masked NOTHING. **FIX:** the paths
+  section is deleted outright; the four historical values are enumerated in the value allowlist (the
+  JWT by its signature segment, which is unique to that token - allowlisting the shared HS256 header
+  prefix would blind the scanner to every future dev JWT). Mutation-tested: a planted
+  `sk-ant-`-shaped literal under `docs/` now trips the scanner; before the fix it could not.
+
+- **`secret-shaped-fixture-skipped-the-convention-and-held-the-gate-red`** (**FIXED 2026-08-22**,
+  LOW, process). `api/tests/automation/discovery-replay-acceptance.test.ts` (commit `c43a190`, P2
+  round eight) introduced a deliberately secret-shaped `__VIEWSTATE` miniature - the suite needs a
+  value `looksLikeLiteralSecret` refuses, to prove the recipe store throws rather than persist it -
+  without the `EKOA-SYNTHETIC-` marker the gitleaks config's own convention prescribes for exactly
+  this case, and without a value-allowlist entry. `npm run gate:secrets` was red from `c43a190`
+  until today, the "already-failing check receives a real leak invisibly" state the
+  `gitleaks-red-on-synthetic-fixtures` entry (2026-07-29) named as the reason the gate must stay
+  green. It went unnoticed because that gate is not in the per-PR lane. **FIX:** the working-tree
+  fixture now carries `EKOA-SYNTHETIC-` (still >=24 chars, three character classes, so the predicate
+  still refuses it - the suite's 13 tests stay green); the historical literal, reachable forever in
+  `c43a190`, gets a one-off value entry with the reasoning inline. Gate green at zero findings.
+
 ## Recently fixed - 2026-08-21 action evidence round NINE (one major + three minors)
 
 - **`the-90-day-bound-was-contingent-on-somebody-deploying`** (**FIXED 2026-08-21**, S1 round nine,

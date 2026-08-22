@@ -104,12 +104,14 @@ let origin: string;
 /** Flipped by the drift test: the endpoint "moves" the way a real portal's does. */
 let apiPath = '/api/cases';
 /**
- * The opaque page-state value `/api/view` carries - an ASP.NET `__VIEWSTATE` in miniature. 38
+ * The opaque page-state value `/api/view` carries - an ASP.NET `__VIEWSTATE` in miniature. 33
  * characters of mixed case and digits, which is what `looksLikeLiteralSecret` refuses (a >=24-char
  * opaque run using all three character classes). NOT a credential and nothing in this suite holds
- * it as one: the point is precisely that the store cannot tell, refuses, and THROWS.
+ * it as one: the point is precisely that the store cannot tell, refuses, and THROWS. Carries the
+ * `EKOA-SYNTHETIC-` marker per the secret-shaped-fixture convention in `scripts/gitleaks.toml`
+ * (an earlier value did not, and its history entry sits in that file's value allowlist).
  */
-const PAGE_STATE_TOKEN = 'dDwtMTIzNDU2Nzg5MDtWaWV3U3RhdGUxMjM0NQ';
+const PAGE_STATE_TOKEN = 'EKOA-SYNTHETIC-ViewState12345dDwt';
 let requests: Array<{ method: string; url: string; headers: Record<string, string> }> = [];
 
 function startFixture(): Promise<void> {
