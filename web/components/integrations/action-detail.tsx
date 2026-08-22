@@ -28,15 +28,45 @@
  * `mutates` lives in `api/src/integrations/action-consent.ts` and is never re-derived here. When it
  * is not offered, the row still reads: the reason is stated, with a link to the page that can fix
  * it. A button that exists to be refused is worse than no button.
+ *
+ * ── THE ONE THING THIS VIEW DOES WRITE: THE READER'S OWN NOTES (slice S3) ──────────────────────
+ *
+ * A note is not a step, which is why it does not break the rule above. The steps stay read-only;
+ * what the reader may write is their OWN guidance about the action and about the steps of its plan
+ * - text nobody else can see, which the assistant reads back when it plans this action.
+ *
+ * THE NOTES ARE THEIR OWN SECTION UNDER THE STEPS RATHER THAN A CONTROL PER STEP ROW, and that is a
+ * deliberate reading of "an add-note affordance on the steps view". A textarea threaded between
+ * every step turns a plan somebody is trying to READ into a form; collecting the action's note and
+ * its steps' notes in one block directly beneath the plan keeps the plan legible and still sits
+ * exactly where the steps it describes are. Each box names the step it is about.
+ *
+ * ── AND IT REALLY DOES SHOW EVERY NOTE NOW (review round) ─────────────────────────────────────
+ *
+ * The paragraph above used to also claim this section "keeps every note the reader holds for this
+ * action visible at once (including a note whose step has since left the plan, which would
+ * otherwise be unreachable)". THAT WAS FALSE WHEN IT WAS WRITTEN, and the review proved it: this
+ * component resolved notes BY SLOT only - one lookup per current step - so a row whose `stepRef`
+ * matched no current `stepId` rendered nowhere and had no delete control; and the page builds one
+ * card per CAPABILITY action, so a note about a departed action had no card at all. Both kept
+ * riding into the author's prompts, and both `action-feedback.ts`'s justification for reading rows
+ * unfiltered AND the findings-ledger dismissal of the retention gap rested on that missing control.
+ *
+ * `orphanedSteps` below and `DepartedActionNotes` are that control, built rather than claimed.
+ *
+ * A STEP IS ADDRESSABLE ONLY IF IT HAS AN ID. `PlanStep.stepId` is optional, and a note keyed by
+ * POSITION would silently become a note about whatever step moved into that position - the same
+ * misalignment `stepSampleFit` exists to catch for evidence samples. So steps without an id get no
+ * per-step box, and the action-level note is always offered.
  */
 
-import { useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { AlertTriangle, CalendarClock, ChevronDown, Play, RefreshCw } from 'lucide-react';
-import type { IntegrationCapabilityAction, RunRecord, Schedule } from '@ekoa/shared';
+import { AlertTriangle, CalendarClock, ChevronDown, NotebookPen, Play, RefreshCw, Trash2 } from 'lucide-react';
+import { ACTION_FEEDBACK_MAX_CHARS, type IntegrationCapabilityAction, type RunRecord, type Schedule } from '@ekoa/shared';
 import { api } from '@/lib/api';
 import { useTranslation } from '@/stores/i18n';
-import { useIntegrationDetailStore, type ReadFailure } from '@/stores/integration-detail';
+import { useIntegrationDetailStore, feedbackSlot, type ReadFailure } from '@/stores/integration-detail';
 import { httpTemplateOf } from '@/lib/integrations/action-view';
 import { formatStamp, recurrenceText } from '@/lib/schedules/recurrence-text';
 import { Badge, type BadgeTone } from '@/components/ui/badge';
@@ -313,6 +343,9 @@ export function ActionDetail({
             )}
           </section>
 
+          {/* --- MY NOTES about this action and the steps of its plan (slice S3) --------------- */}
+          <ActionNotes actionName={action.actionName} planSteps={steps?.plan?.steps ?? []} t={t} common={common} />
+
           {/* --- THE SAMPLE of the last validated run ---------------------------------------- */}
           <section className="space-y-2" data-testid={`integration-action-evidence-${action.actionName}`}>
             <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{t.evidenceTitle}</h3>
@@ -445,6 +478,328 @@ export function ActionDetail({
 }
 
 // -----------------------------------------------------------------------------------------
+
+/**
+ * EVERY NOTE THIS READER HOLDS FOR ONE ACTION - the action's own, and one per addressable step.
+ *
+ * The READ failure is handled ONCE, here, and not inside each box: it is a single request that
+ * either arrived or did not, so one error row with one retry is the honest rendering. What it costs
+ * the boxes is stated rather than implied - while the read has not come back, every editor is
+ * disabled (`notesReadOnly`), because a box that opens empty over a note that is really there
+ * destroys it on the first save.
+ */
+function ActionNotes({
+  actionName,
+  planSteps,
+  t,
+  common,
+}: {
+  actionName: string;
+  planSteps: { stepId?: string }[];
+  t: DetailCopy;
+  common: ReturnType<typeof useTranslation>['common'];
+}) {
+  const integrationKey = useIntegrationDetailStore((s) => s.key);
+  const loaded = useIntegrationDetailStore((s) => s.feedbackLoaded);
+  const error = useIntegrationDetailStore((s) => s.feedbackError);
+  const feedback = useIntegrationDetailStore((s) => s.feedback);
+  const fetchFeedback = useIntegrationDetailStore((s) => s.fetchFeedback);
+
+  // Only steps the server can address. A note keyed by position would move when the plan does -
+  // see the module header. The index is kept for the LABEL, so a person reads "step 3" while the
+  // note is filed under that step's own id.
+  const addressable = planSteps
+    .map((step, index) => ({ index, stepId: step.stepId }))
+    .filter((s): s is { index: number; stepId: string } => typeof s.stepId === 'string' && s.stepId !== '');
+
+  // The live step ids, as a stable dependency: `addressable` is a fresh array every render, so
+  // memoising on it directly would recompute (and re-render) on every pass.
+  const liveStepIds = addressable.map((s) => s.stepId).join('\u0000');
+
+  /**
+   * NOTES WHOSE STEP IS NO LONGER IN THE PLAN - the rows this section used to drop on the floor.
+   *
+   * The module header promised these stayed visible and the API's own docblock justified reading
+   * them into prompts unfiltered on the grounds that "the surface renders such a note under its
+   * action name with the erasure control attached". Neither was true: this component only ever
+   * looked notes up BY SLOT, so a row whose `stepRef` matched no current `stepId` rendered nowhere
+   * and could not be deleted, while `feedbackPromptSection` kept feeding it to the author's
+   * planner, fixer and load_context turns. Iterating the map is what closes that.
+   *
+   * They stay EDITABLE as well as deletable: the write validates `actionName` against the
+   * definition and deliberately does not validate `stepRef` at all, so a correction still lands.
+   */
+  const orphanedSteps = useMemo(() => {
+    const live = new Set(liveStepIds === '' ? [] : liveStepIds.split('\u0000'));
+    return Object.values(feedback)
+      .filter((row) => row.actionName === actionName && row.stepRef !== undefined && !live.has(row.stepRef))
+      .sort((a, b) => (a.stepRef ?? '').localeCompare(b.stepRef ?? ''));
+  }, [feedback, actionName, liveStepIds]);
+
+  return (
+    <section className="space-y-2" data-testid={`integration-action-notes-${actionName}`}>
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{t.notesTitle}</h3>
+      {/* Said ABOVE the boxes, always, and not behind a tooltip: a person about to type into what
+          looks like a private memo has to know that a model reads it before they type. */}
+      <p className="text-[11px] text-neutral-500">{t.notesHint}</p>
+
+      {error ? (
+        <ErrorRow
+          message={t.notesError}
+          detail={error.detail}
+          onRetry={integrationKey ? () => void fetchFeedback(integrationKey) : undefined}
+          retryLabel={common.retry}
+        />
+      ) : null}
+
+      <NoteEditor actionName={actionName} label={t.notesActionLabel} t={t} readOnly={!loaded} />
+      {addressable.map((step) => (
+        <NoteEditor
+          key={step.stepId}
+          actionName={actionName}
+          stepRef={step.stepId}
+          label={t.notesStepLabel(step.index)}
+          t={t}
+          readOnly={!loaded}
+        />
+      ))}
+      {orphanedSteps.map((row) => (
+        <NoteEditor
+          key={row.stepRef}
+          actionName={actionName}
+          stepRef={row.stepRef as string}
+          label={t.notesOrphanStepLabel(row.stepRef as string)}
+          t={t}
+          readOnly={!loaded}
+          orphaned
+        />
+      ))}
+    </section>
+  );
+}
+
+/**
+ * NOTES ABOUT ACTIONS THIS INTEGRATION NO LONGER HAS - the second half of the same hole.
+ *
+ * The page renders one `ActionDetail` per action on the CAPABILITY, so a note whose action was
+ * re-authored out of the package, renamed, or hidden by a narrower resolution had no card to live
+ * under at all: `fetchFeedback` committed the row to the client store and nothing ever rendered it.
+ * It kept riding into the author's prompts with no way to see or remove it.
+ *
+ * DELETE ONLY, and that asymmetry is the honest one rather than an economy. `writeFeedbackFor`
+ * refuses an action that is not on the caller's resolved definition, so an edit here would be a
+ * control that exists to be refused - the same rule the run-now button follows one section up. The
+ * DELETE has no such check, deliberately, because a note whose action has gone is exactly the one
+ * its author most needs to remove.
+ */
+export function DepartedActionNotes({
+  liveActionNames,
+  t,
+}: {
+  liveActionNames: readonly string[];
+  t: DetailCopy;
+}) {
+  const feedback = useIntegrationDetailStore((s) => s.feedback);
+  const loaded = useIntegrationDetailStore((s) => s.feedbackLoaded);
+  const liveKey = [...liveActionNames].sort().join('\u0000');
+
+  const departed = useMemo(() => {
+    const live = new Set(liveKey === '' ? [] : liveKey.split('\u0000'));
+    return Object.values(feedback)
+      .filter((row) => !live.has(row.actionName))
+      .sort((a, b) => a.actionName.localeCompare(b.actionName) || (a.stepRef ?? '').localeCompare(b.stepRef ?? ''));
+  }, [feedback, liveKey]);
+
+  // Nothing to say when every note belongs to a live action, which is the ordinary case. The
+  // section appears only when there is something stranded - it is a recovery affordance, not
+  // furniture.
+  if (!loaded || departed.length === 0) return null;
+
+  return (
+    <section className="space-y-2" data-testid="integration-departed-notes">
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{t.notesOrphanTitle}</h2>
+      <Card padding="sm" className="space-y-2">
+        <p className="text-[11px] text-neutral-500">{t.notesOrphanHint}</p>
+        {departed.map((row) => (
+          <NoteEditor
+            key={feedbackSlot(row.actionName, row.stepRef)}
+            actionName={row.actionName}
+            {...(row.stepRef !== undefined ? { stepRef: row.stepRef } : {})}
+            label={t.notesOrphanActionLabel(row.actionName, row.stepRef)}
+            t={t}
+            readOnly={false}
+            orphaned
+            eraseOnly
+          />
+        ))}
+      </Card>
+    </section>
+  );
+}
+
+/**
+ * ONE note: read it, write it, erase it.
+ *
+ * THE DRAFT IS SEEDED WHEN THE EDITOR OPENS AND NOT ON EVERY RENDER, which is what lets somebody
+ * type. A `useEffect` mirroring the stored note into the draft would overwrite each keystroke the
+ * moment any other part of this page committed to the store.
+ *
+ * THE SAVE IS DISABLED FOR AN EMPTY DRAFT rather than being allowed to mean "erase". The server
+ * refuses an empty body at the schema, and the control that removes a note is the one labelled
+ * remove - a save that silently deletes is how people lose what they wrote.
+ */
+function NoteEditor({
+  actionName,
+  stepRef,
+  label,
+  t,
+  readOnly,
+  orphaned = false,
+  eraseOnly = false,
+}: {
+  actionName: string;
+  stepRef?: string;
+  label: string;
+  t: DetailCopy;
+  readOnly: boolean;
+  /** The thing this note is about is gone from the plan or the package - render it as stranded. */
+  orphaned?: boolean;
+  /** No edit control: the server would refuse the write. See `DepartedActionNotes`. */
+  eraseOnly?: boolean;
+}) {
+  const slot = feedbackSlot(actionName, stepRef);
+  const integrationKey = useIntegrationDetailStore((s) => s.key);
+  const note = useIntegrationDetailStore((s) => s.feedback[slot]);
+  const saving = useIntegrationDetailStore((s) => Boolean(s.feedbackSaving[slot]));
+  const writeError = useIntegrationDetailStore((s) => s.feedbackWriteError[slot]);
+  const saveFeedback = useIntegrationDetailStore((s) => s.saveFeedback);
+  const removeFeedback = useIntegrationDetailStore((s) => s.removeFeedback);
+
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  const open = (): void => {
+    setDraft(note?.note ?? '');
+    setEditing(true);
+  };
+
+  const commit = async (): Promise<void> => {
+    if (!integrationKey || draft.trim() === '') return;
+    // The editor closes only on a CONFIRMED save. A failure keeps the box open with the text still
+    // in it, under the error - closing it would throw away what the person just wrote.
+    if (await saveFeedback(integrationKey, actionName, stepRef, draft)) setEditing(false);
+  };
+
+  const erase = async (): Promise<void> => {
+    if (!integrationKey) return;
+    if (await removeFeedback(integrationKey, actionName, stepRef)) setEditing(false);
+  };
+
+  const testId = stepRef === undefined ? actionName : `${actionName}-${stepRef}`;
+
+  // An orphan is rendered in the warning register rather than the ordinary one: the reader needs to
+  // see at a glance that this note is about something that is no longer there, because that is
+  // precisely what makes it worth removing.
+  return (
+    <div
+      className={orphaned
+        ? 'space-y-1 rounded-lg border border-amber-200 bg-amber-50/40 p-2'
+        : 'space-y-1 rounded-lg border border-neutral-100 p-2'}
+      data-testid={`integration-note-${testId}`}
+      {...(orphaned ? { 'data-orphaned': 'true' } : {})}
+    >
+      <p className={orphaned ? 'text-[11px] font-medium text-amber-800' : 'text-[11px] font-medium text-neutral-500'}>
+        {label}
+      </p>
+
+      {editing ? (
+        <div className="space-y-1">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            maxLength={ACTION_FEEDBACK_MAX_CHARS}
+            rows={3}
+            placeholder={t.notesPlaceholder}
+            aria-label={label}
+            className="focus-ring w-full rounded-lg border border-neutral-200 p-2 text-xs text-neutral-700"
+            data-testid={`integration-note-input-${testId}`}
+          />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[11px] text-neutral-400">
+              {t.notesCounter(draft.length, ACTION_FEEDBACK_MAX_CHARS)}
+            </span>
+            <div className="flex items-center gap-1">
+              <Button variant="secondary" size="sm" onClick={() => setEditing(false)} disabled={saving}>
+                {t.notesCancel}
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                loading={saving}
+                // An empty draft cannot be saved: see the component docblock.
+                disabled={saving || draft.trim() === ''}
+                onClick={() => void commit()}
+                data-testid={`integration-note-save-${testId}`}
+              >
+                {saving ? t.notesSaving : t.notesSave}
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          {note ? (
+            <p className="min-w-0 whitespace-pre-wrap break-words text-xs text-neutral-700" data-testid={`integration-note-text-${testId}`}>
+              {note.note}
+            </p>
+          ) : (
+            /* Only once the read came BACK. While it is outstanding this says so, for the reason
+               the evidence section distinguishes its two silences: "you have no note" and "we do
+               not know yet" are different sentences. */
+            <p className="text-xs text-neutral-500">{readOnly ? t.notesLoading : t.notesEmpty}</p>
+          )}
+          <div className="flex shrink-0 items-center gap-1">
+            {/* No edit where the server would refuse the write - a button that exists to be
+                refused is worse than no button, the rule run-now already follows. */}
+            {!eraseOnly && (
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={NotebookPen}
+                disabled={readOnly || saving}
+                onClick={open}
+                data-testid={`integration-note-edit-${testId}`}
+              >
+                {note ? t.notesEdit : t.notesAdd}
+              </Button>
+            )}
+            {note && (
+              <Button
+                variant="danger-ghost"
+                size="sm"
+                icon={Trash2}
+                loading={saving}
+                disabled={readOnly || saving}
+                onClick={() => void erase()}
+                data-testid={`integration-note-remove-${testId}`}
+              >
+                {t.notesRemove}
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* The editor is disabled and the reason is SAID, rather than a control that looks broken. */}
+      {readOnly && !note && <p className="text-[11px] text-neutral-400">{t.notesReadOnly}</p>}
+      {writeError && (
+        <p className="text-[11px] text-red-600" data-testid={`integration-note-error-${testId}`}>
+          {writeError.detail || t.notesWriteError}
+        </p>
+      )}
+    </div>
+  );
+}
 
 /**
  * The bound automation's steps, READ-ONLY, with the evidence run's screenshot and output resolved

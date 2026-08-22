@@ -42,7 +42,7 @@ import { useSchedulesStore } from '@/stores/schedules';
 import { useTranslation } from '@/stores/i18n';
 import { toast } from '@/stores/toast';
 import { automationIdOf } from '@/lib/integrations/action-view';
-import { ActionDetail } from '@/components/integrations/action-detail';
+import { ActionDetail, DepartedActionNotes } from '@/components/integrations/action-detail';
 import { PageShell } from '@/components/ui/page-shell';
 import { PageHeader } from '@/components/ui/page-header';
 import { Badge } from '@/components/ui/badge';
@@ -264,6 +264,12 @@ export default function IntegrationDetailPage() {
           </div>
         )}
       </section>
+
+      {/* Notes whose ACTION is no longer on this capability. They have no card to live under, so
+          without this section they are invisible and unerasable while still reaching the author's
+          prompts - which is what the review found, and what the module header and the findings
+          ledger both wrongly claimed was already handled. Renders nothing when there are none. */}
+      <DepartedActionNotes liveActionNames={capability.actions.map((a) => a.actionName)} t={t} />
     </PageShell>
   );
 }

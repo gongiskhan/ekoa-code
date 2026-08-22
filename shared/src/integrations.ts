@@ -694,6 +694,130 @@ export type IntegrationActionEvidence = z.infer<typeof IntegrationActionEvidence
 export const IntegrationActionEvidenceListResponse = itemsResponse(IntegrationActionEvidence);
 export type IntegrationActionEvidenceListResponse = z.infer<typeof IntegrationActionEvidenceListResponse>;
 
+/* --- PER-USER ACTION FEEDBACK (slice S3) ----------------------------------------------------- */
+
+/**
+ * The ceiling on ONE note, stated ONCE so the zod `.max()` below, the store's own refusal
+ * (`api/src/integrations/action-feedback-store.ts`) and the dashboard's character counter cannot
+ * drift into three different numbers - the rule `INTEGRATION_LESSONS_MAX_CHARS` set, applied to the
+ * per-user surface.
+ *
+ * FAR SMALLER THAN THE LESSONS CEILING (20,000) AND THAT IS THE POINT. Lessons are ONE body per
+ * integration, written by whoever may save the package. A note exists per person, per action and
+ * per step, and every one of them rides into the planner, the rehearsal fixer and `load_context` -
+ * so the cost is multiplied by the collection's own shape. 2,000 characters is a long paragraph:
+ * enough for "this portal rejects the request unless the processo number is zero-padded", far short
+ * of a pasted document.
+ */
+export const ACTION_FEEDBACK_MAX_CHARS = 2_000;
+
+/**
+ * The ceiling on a `stepRef`, stated ONCE for the same reason the note's is: the zod `.max()` below
+ * and the store's own refusal must be one number.
+ *
+ * IT IS A CEILING ON AN IDENTIFIER, not on prose - a `PlanStep.stepId` is a slug the planner emits
+ * ("dismiss-cookies") or a uuid, so 200 characters is already far past generous. The store enforces
+ * it too, because a ceiling enforced only at the edge is a ceiling the next caller does not have.
+ */
+export const ACTION_FEEDBACK_STEP_REF_MAX_CHARS = 200;
+
+/**
+ * How many distinct notes one person may hold for ONE action of one integration.
+ *
+ * ADDED IN THE REVIEW ROUND, and it closes a real growth vector rather than a hypothetical one.
+ * `stepRef` is deliberately never validated against a live plan (a note is durable while a plan is
+ * edited), and each distinct `stepRef` hashes to a distinct deterministic `_id` - so without a cap
+ * one authenticated user can mint unbounded rows for a single action, none of which any retention
+ * sweep ever collects, all of which are read on the detail page and on two prompt hot paths.
+ *
+ * 50 is the plan-shaped bound: an automation with more than fifty steps a person has annotated
+ * individually is past what the read-only steps view renders usefully, and an api-call action holds
+ * exactly one. The refusal names the ceiling so a client can say why.
+ */
+export const ACTION_FEEDBACK_MAX_NOTES_PER_ACTION = 50;
+
+/**
+ * ONE note, as the wire carries it.
+ *
+ * THE STORAGE ENVELOPE STOPS AT THIS PROJECTION, for the reason `IntegrationActionEvidence`'s does:
+ * `_id`, `orgId` and `userId` are the tenancy substrate and never travel. Here the omission is
+ * stronger than a convention - `userId` is ALWAYS the caller's own, because there is no request
+ * shape that reaches somebody else's note, so a `userId` on the wire could only ever restate what
+ * the reader already is, while making the field look like something a client might be allowed to
+ * set.
+ *
+ * `stepRef` IS THE PLAN STEP'S OWN `stepId`, NOT ITS INDEX. A note is durable and a plan is edited,
+ * so an index addresses a different step the moment somebody reorders one - the misalignment
+ * `IntegrationAutomationEvidence`'s step pointers have to be checked for. An id moves with its step.
+ * ABSENT means the note is about the ACTION AS A WHOLE, which is the only shape available for an
+ * `api-call` action (it has no plan to point into).
+ */
+export const IntegrationActionFeedback = z.object({
+  actionName: z.string(),
+  /** The `PlanStep.stepId` this note is about; absent means the whole action. */
+  stepRef: z.string().min(1).max(ACTION_FEEDBACK_STEP_REF_MAX_CHARS).optional(),
+  /** The author's own text, byte-exact - see `setActionFeedback` for why it is not scrubbed here. */
+  note: z.string().min(1).max(ACTION_FEEDBACK_MAX_CHARS),
+  /** First write of this note. Survives an edit, so a client can show how long it has been held. */
+  createdAt: IsoTimestamp,
+  /** The write that produced the current text. Orders the prompt read, newest first. */
+  updatedAt: IsoTimestamp,
+})
+  /**
+   * STRICT, so the projection is a control the contract tests can actually see.
+   *
+   * zod's default is STRIP: a body carrying `_id`, `orgId` or `userId` would `safeParse` happily,
+   * silently dropping them, so every assertion in the contract suite would stay green if a later
+   * change returned the raw `ActionFeedbackDoc` instead of `feedbackView(doc)` - and the tenancy
+   * substrate, including a deterministic `_id` derived from the whole tuple, would land on the wire
+   * with nothing to notice. `feedbackView` is the single point of protection; this is what pins it.
+   * The house already does this on the response shapes in `auth.ts`, `cofre.ts` and
+   * `app-assistant.ts`, naming the same envelope-leak risk.
+   */
+  .strict();
+export type IntegrationActionFeedback = z.infer<typeof IntegrationActionFeedback>;
+
+export const IntegrationActionFeedbackListResponse = itemsResponse(IntegrationActionFeedback);
+export type IntegrationActionFeedbackListResponse = z.infer<typeof IntegrationActionFeedbackListResponse>;
+
+/**
+ * WRITE (or rewrite) the caller's own note.
+ *
+ * `note` is `.min(1)`: an empty body is a 400 and never a silent delete. "Remove this note" is
+ * `discardActionFeedback`, and a write that means delete is the overloading that produces an
+ * accidental erasure of the thing somebody typed.
+ *
+ * `stepRef` selects WHICH note of this action - the step's, or (absent) the action's own. It is on
+ * the BODY rather than in the path because it is optional and free-form: a second path segment
+ * would have to spell "the action as a whole" as some reserved word, and a reserved word is a
+ * `stepId` a plan can legitimately contain.
+ */
+export const SetIntegrationActionFeedbackRequest = z.object({
+  stepRef: z.string().min(1).max(ACTION_FEEDBACK_STEP_REF_MAX_CHARS).optional(),
+  note: z.string().min(1).max(ACTION_FEEDBACK_MAX_CHARS),
+});
+export type SetIntegrationActionFeedbackRequest = z.infer<typeof SetIntegrationActionFeedbackRequest>;
+
+/**
+ * The author's erasure control over one of their own notes.
+ *
+ * IDEMPOTENT BY CONTRACT, on `DiscardActionEvidenceResponse`'s reading: erasing a note that is not
+ * there answers `ok` with `discarded: false`, never a 404. The caller asked for a STATE - "I hold no
+ * note here" - and that state holds either way.
+ */
+export const DiscardActionFeedbackResponse = z.object({
+  ok: z.literal(true),
+  /** True when a row was actually removed; false means there was nothing of the CALLER'S to remove. */
+  discarded: z.boolean(),
+});
+export type DiscardActionFeedbackResponse = z.infer<typeof DiscardActionFeedbackResponse>;
+
+/** Which note the DELETE addresses. Absent `stepRef` removes the ACTION-level note, never a step's. */
+export const DiscardActionFeedbackQuery = z.object({
+  stepRef: z.string().min(1).max(ACTION_FEEDBACK_STEP_REF_MAX_CHARS).optional(),
+});
+export type DiscardActionFeedbackQuery = z.infer<typeof DiscardActionFeedbackQuery>;
+
 /* --- The PUBLIC capability surface (slice D1) ------------------------------------------------ */
 
 /**
@@ -1502,6 +1626,78 @@ export const integrationsEndpoints = {
     auth: 'user',
     params: IntegrationKeyParams,
     response: IntegrationActionEvidenceListResponse,
+  },
+
+  /* --- PER-USER ACTION FEEDBACK (slice S3) -------------------------------------------------- */
+
+  /**
+   * THE CALLER'S OWN NOTES about this integration's actions - what they learned about how each one
+   * behaves, read on the detail page and read back into the prompts that plan against it.
+   *
+   * `auth: 'user'` ON ALL THREE, AND THE WRITE'S REASON IS NOT THE READ'S. This is decision D2 of
+   * CONVERGENCE_PLAN, and it is a Rule 8 argument rather than the "narrow is reversible" one the
+   * sibling `user` descriptors make:
+   *
+   *   - THE WRITE is `user` because this text LANDS IN FUTURE PROMPTS. A key-bearing agent that
+   *     could POST here would be authoring its own future instructions, one turn writing what the
+   *     next turn is told - self-injection with the platform as the carrier, and no gate anywhere on
+   *     the path, because the platform's own prompt assembly is what delivers it. Agents READ this;
+   *     only a person WRITES it. Rule 8 says the provider never injects context or interprets prompt
+   *     content on the caller's behalf, and a key-writable prompt channel is exactly that.
+   *   - THE READ is `user` on the `listRecipes` / `listActionEvidence` reading: a note is one
+   *     person's prose about their own work, naming portals, colleagues and case numbers, and a key
+   *     that could read it would gain nothing it lacks (`achieve` and `executeAction` already see
+   *     the note's EFFECT in their own prompts, which is the whole point) while making a person's
+   *     private notes enumerable over an API.
+   *   - THE DELETE is `user` on `discardActionEvidence`'s reading: a destructive control over a
+   *     person's own data is the person's.
+   *
+   * Widening any of the three later is additive under Rule 7; narrowing one is not, so narrow is the
+   * reversible direction.
+   *
+   * NOT ON THE OPENAPI SPEC SURFACE, AND THAT IS A CONSEQUENCE RATHER THAN A CHOICE.
+   * `docs/openapi/cortex.v1.json` is generated by filtering the descriptors on
+   * `auth === PUBLIC_AUTH_CLASS` (`api/scripts/generate-openapi.mjs`, `'user-or-key'`) with no
+   * allowlist and no per-domain exception, so a `user`-class descriptor is definitionally outside
+   * the spec - and therefore outside the generated cortex-cli client the drift gate compares. These
+   * three add no spec entry and move neither `gate:openapi` nor `gate:client-drift`.
+   *
+   * SCOPED TWICE, exactly as the evidence read is. First by IDENTITY: the collection is keyed by
+   * `(orgId, userId, integrationKey, actionName, stepRef?)` and every route passes the VERIFIED
+   * actor's own org and user id, so a colleague's note for the very same action is not addressable
+   * at all. Then by DEFINITION: the routes resolve the integration under that same actor through
+   * `resolveCapabilityDefinition`, so an integration the caller may not see answers the house 404
+   * rather than a row, and the write additionally refuses an action that is not on THAT definition -
+   * otherwise the write surface would be an unbounded store of arbitrary text under arbitrary names.
+   */
+  listActionFeedback: {
+    method: 'GET',
+    path: '/api/v1/integrations/:key/feedback',
+    auth: 'user',
+    params: IntegrationKeyParams,
+    response: IntegrationActionFeedbackListResponse,
+  },
+  /**
+   * PUT and not POST: the note is IDEMPOTENT at its own address. `(key, actionName, stepRef?)` names
+   * exactly one row, and writing the same body twice leaves the same one row - so the verb that says
+   * "make this be the state" is the honest one, and a client that retries a timed-out write cannot
+   * end up with two notes.
+   */
+  setActionFeedback: {
+    method: 'PUT',
+    path: '/api/v1/integrations/:key/actions/:actionName/feedback',
+    auth: 'user',
+    params: IntegrationActionParams,
+    request: SetIntegrationActionFeedbackRequest,
+    response: IntegrationActionFeedback,
+  },
+  discardActionFeedback: {
+    method: 'DELETE',
+    path: '/api/v1/integrations/:key/actions/:actionName/feedback',
+    auth: 'user',
+    params: IntegrationActionParams,
+    query: DiscardActionFeedbackQuery,
+    response: DiscardActionFeedbackResponse,
   },
 
   /* --- The PUBLIC capability surface (slice D1) ---------------------------------------------- */

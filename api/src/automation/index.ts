@@ -176,6 +176,8 @@ export {
   setIntegrationOriginResolver,
   setIntegrationActionDeclarationResolver,
   setScopedMemoryResolver,
+  // S3 - the run owner's own integration notes, for the planner and the rehearsal fixer.
+  setIntegrationFeedbackResolver,
   setAppDataStore,
   setArtifactResolver,
   setCatalogSources,

@@ -7835,3 +7835,76 @@ re-implemented a live control had it trusted this heading over the code.
   control-charactered keys - which sort first, both sets arriving sorted - leaves the caller an EMPTY
   offered set. The docblock now states that consequence and disclaims the injection one; the test is
   a 100-refused + 100-good fixture that reads `[]` under the reversed order.
+
+- **`s3-a-bare-pasted-credential-in-note-prose-is-outside-the-value-anchored-floor`** (OPEN, MINOR,
+  2026-08-22, slice S3; journal entry `S3: a person's own notes about an action`). `scrubSecretText`
+  is the read-path egress floor for every free-text body that reaches a prompt, and it is
+  VALUE-ANCHORED on purpose: it redacts the value of a credential-named key (`api_key: …`) and the
+  text after an auth scheme word (`Bearer …`), so that documentation OF those field names survives
+  rather than coming back shredded (the A3 re-review LOW-2/LOW-3 note in `definitions.ts`). A token
+  pasted into an unanchored sentence - "a chave e sk_live_…" - is outside it. NOT introduced by this
+  slice: the identical gap applies to the `lessons` body that shares the floor, and to `SKILL.md`.
+  It is recorded here because S3 multiplies the SURFACE (a note per person, per action, per step) and
+  because a reader of the S3 suites would otherwise reasonably conclude a note cannot carry a
+  credential out. Pinned in both directions by
+  `api/tests/security/action-feedback-isolation.test.ts` ("THE FLOOR IS VALUE-ANCHORED"), so a future
+  widening of the floor turns that case red rather than passing unnoticed. Mitigations, such as they
+  are: the note never leaves its author's own prompts (org AND user scoped on every read), and the
+  editor says in both locales that the assistant reads what is typed. CLOSING IT means a
+  content-shaped detector rather than a position-shaped one, which is a change to the shared floor
+  and to every surface that uses it - not a change to this slice.
+
+- **`s3-a-note-outlives-the-action-it-was-written-about`** (OPEN, MINOR, 2026-08-22, slice S3; same
+  journal entry). A row is addressed by an action NAME, and the package naming that action is a
+  separate document with its own lifecycle - so a note survives the action being re-authored out of
+  the package, the caller's resolution narrowing under them, or the integration being disconnected.
+  Two consequences, deliberately different:
+  - on the DASHBOARD the note still renders under its action name WITH its erasure control, which is
+    the direction chosen on purpose - hiding it would strand the only copy of something a person
+    wrote with no way to reach the delete. **CORRECTED 2026-08-22 (review round): when this entry
+    was first written that control DID NOT EXIST, and this dismissal rested on it.** The component
+    resolved notes by slot only, so a note whose step had left the plan rendered nowhere, and the
+    page renders one card per capability action, so a note about a departed action had no card at
+    all - both invisible and unerasable while both kept reaching the author's prompts. The control
+    is built now (`orphanedSteps` and `DepartedActionNotes`), the departed-action case is
+    ERASE-ONLY because the write refuses an action off the definition, and all of it is pinned by
+    component tests plus a third e2e leg. The dismissal below stands only because the control it
+    names is now real;
+  - in a PROMPT (`feedbackSectionsForOwner`, the planner and fixer read) it is stale guidance about
+    an action the caller may no longer reach. That read deliberately does not re-resolve every row's
+    definition: it runs on the hot path of every automation plan, one resolution per row is one
+    round trip per note, and the row is the caller's OWN text going back into the caller's OWN
+    prompt, so this is staleness and not a disclosure.
+  There is no collector, and that is S1's removal rule inherited rather than an omission: nothing
+  synchronous decides a durable row is over. Unlike an evidence row this one holds no third-party
+  data and pins no screenshots, so the residual is a person's own capped sentence, closable by them
+  at any moment. CLOSING IT would mean either a reachability check (the design that cost the evidence
+  collection four rounds and five defects) or a retention sweep over text nobody asked to expire.
+
+- **`s3-an-anchored-credential-written-as-a-step-ref-escaped-the-prompt-floor`**
+  (**FIXED 2026-08-22**, S3 review round, was MINOR; journal entry `S3: a person's own notes about an
+  action`). `feedbackPromptSection` scrubbed `row.note` and then interpolated `row.stepRef` RAW into
+  the same prompt line. `stepRef` is caller-supplied free text that is deliberately never validated
+  against a plan, so a credential written in the shape the floor exists to catch
+  (`api_key: sk_live_…`, comfortably inside the ref's own ceiling) reached the `load_context`,
+  planner/rehearsal and `achieve` prompts unredacted, while the identical bytes in the note body
+  were redacted. The module header's claim that the floor is applied "to every row" was narrower
+  than it read: it covered one field of the row. Invisible to the M5 mutation proof, because every
+  scrub fixture planted its secret in the note body. FIXED by scrubbing the WHOLE COMPOSED LINE,
+  which costs no over-redaction (`SECRET_LINE_RE` anchors on a credential-named key and then scans
+  tokens, so only a token that `looksLikePastedSecret` is touched), plus a store-side ceiling on
+  `stepRef` so the bound is not only the wire schema's. Pinned in both directions: a secret in a
+  step ref is redacted, and an ordinary slug survives untouched.
+
+- **`s3-one-person-could-mint-unbounded-notes-for-a-single-action`** (**FIXED 2026-08-22**, S3 review
+  round, was MINOR; same journal entry). Every distinct `stepRef` hashes to a distinct deterministic
+  `_id` and `stepRef` is unvalidated by design, so one authenticated user could create unbounded
+  ~2 KB rows for a single (integration, action) - collected by nothing (there is no retention sweep
+  here, deliberately), materialised on the detail-page read and on two prompt hot paths. The
+  character budget bounded what reached the MODEL, never what was fetched or stored: a bounded
+  answer over an unbounded read, which is the exact distinction this slice's own `Store.find` limit
+  docblock draws and which had been applied to `listForOwner` alone. FIXED with
+  `ACTION_FEEDBACK_MAX_NOTES_PER_ACTION` (50) at the write - checked only when the write would
+  CREATE a row, so an edit at the ceiling still lands - and `listNewestForIntegration`, a query-side
+  sorted-and-limited read for the two prompt seams, leaving the author's page read unbounded because
+  completeness is its contract. Not a tenancy defect at any point: rows were always the caller's own.

@@ -319,6 +319,27 @@ const COVERED = new Set<string>([
   // mounts and requires a gateway key to be refused outside the capability set.)
   // ONE NEW descriptor, one COVERED entry: the pinned EXPECTED_PENDING_COUNT below is UNCHANGED.
   'integrations.listActionEvidence',
+
+  // 2026-08-22 (slice S3) - PER-USER ACTION FEEDBACK: the notes a person records about an action,
+  // and about the steps of its plan (integrations-action-feedback.test.ts, through the real app:
+  // the PUT -> GET round trip asserted BYTE-EXACT, including a three-cycle edit loop that would
+  // burn in a redaction if the author read were scrubbed; `createdAt` proven to survive an edit
+  // while `updatedAt` moves, which is what makes the write an insert-as-claim plus CAS rather than
+  // a `put`; the action-level note and a step's note proven to be DIFFERENT rows at the same
+  // action; the idempotent DELETE answering `discarded: false` rather than a 404; the over-length
+  // and empty bodies refused AT THE SCHEMA with the stored row untouched; an unknown action and an
+  // unknown key both the byte-identical house 404; the unauthenticated 401 on all three; and a real
+  // minted gateway key refused on the WRITE with the note still absent - decision D2, the reason
+  // these are `user` and not `user-or-key`. Tenancy: security/action-feedback-isolation.test.ts
+  // (Rule 5, memvault class) - cross-org AND cross-user on every method, the deterministic-id
+  // collision, and the three prompt seams proven to carry the caller's own notes and nobody else's.
+  // Admission is additionally walked off the router's own stack by integrations-capability.test.ts.
+  //
+  // THREE NEW descriptors, three COVERED entries: the pinned EXPECTED_PENDING_COUNT is UNCHANGED.
+  // None of the three reaches `docs/openapi/cortex.v1.json`: the generator filters on
+  // `auth === 'user-or-key'`, so a `user`-class descriptor is definitionally outside the spec and
+  // outside the generated cortex-cli client the drift gate compares.
+  'integrations.listActionFeedback', 'integrations.setActionFeedback', 'integrations.discardActionFeedback',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as

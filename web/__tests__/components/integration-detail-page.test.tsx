@@ -60,6 +60,9 @@ vi.mock('@/lib/api', () => ({
     integrations: {
       getIntegration: vi.fn(),
       listActionEvidence: vi.fn(),
+      listActionFeedback: vi.fn(),
+      setActionFeedback: vi.fn(),
+      discardActionFeedback: vi.fn(),
       executeAction: vi.fn(),
     },
     automations: { get: vi.fn(), listRuns: vi.fn() },
@@ -84,7 +87,11 @@ vi.mock('@/lib/api', () => ({
 const toastMessages = () => useToastStore.getState().toasts.map((t) => t.message);
 
 const mocked = api as unknown as {
-  integrations: Record<'getIntegration' | 'listActionEvidence' | 'executeAction', ReturnType<typeof vi.fn>>;
+  integrations: Record<
+    'getIntegration' | 'listActionEvidence' | 'listActionFeedback' | 'setActionFeedback'
+    | 'discardActionFeedback' | 'executeAction',
+    ReturnType<typeof vi.fn>
+  >;
   automations: Record<'get' | 'listRuns', ReturnType<typeof vi.fn>>;
   schedules: Record<'list', ReturnType<typeof vi.fn>>;
 };
@@ -162,6 +169,7 @@ beforeEach(() => {
   nav.search = '';
   mocked.integrations.getIntegration.mockResolvedValue(capability());
   mocked.integrations.listActionEvidence.mockResolvedValue({ items: [] });
+  mocked.integrations.listActionFeedback.mockResolvedValue({ items: [] });
   mocked.automations.get.mockResolvedValue({ id: AUTOMATION_ID, name: 'Citius pendentes', plan: { steps: [] } });
   mocked.automations.listRuns.mockResolvedValue({ items: [] });
   mocked.schedules.list.mockResolvedValue({ items: [] });
@@ -603,5 +611,244 @@ describe('run-now, and the controls the server would refuse', () => {
     await userEvent.click(await screen.findByTestId(`integration-action-run-${RUN_ACTION}`));
 
     await waitFor(() => expect(toastMessages()).toContain('Esta ação precisa de autorização.'));
+  });
+});
+
+
+// ---------------------------------------------------------------------------------------------
+// PER-USER NOTES (slice S3)
+// ---------------------------------------------------------------------------------------------
+
+/** The bound automation's plan with STABLE step ids - what makes a per-step note addressable. */
+function seedIdentifiedPlan() {
+  mocked.automations.get.mockResolvedValue({
+    id: AUTOMATION_ID,
+    name: 'Citius pendentes',
+    plan: {
+      steps: [
+        { stepId: 'abrir-portal', description: 'Abrir o portal' },
+        // NO `stepId`: this step is not addressable, so it must get no note box.
+        { description: 'Contar pendentes' },
+      ],
+    },
+  });
+}
+
+describe('the notes affordance', () => {
+  it('offers a box for the action, and one per step that has an ID - never one keyed by position', async () => {
+    seedIdentifiedPlan();
+    render(<IntegrationDetailPage />);
+    await openAction(RUN_ACTION);
+
+    const notes = await screen.findByTestId(`integration-action-notes-${RUN_ACTION}`);
+    // The action's own note, always - the only shape an api-call action can hold either.
+    expect(within(notes).getByTestId(`integration-note-${RUN_ACTION}`)).toBeTruthy();
+    await waitFor(() =>
+      expect(within(notes).getByTestId(`integration-note-${RUN_ACTION}-abrir-portal`)).toBeTruthy());
+    // …and exactly two boxes: the id-less step is not addressable, so it gets none. A note filed
+    // by POSITION would move when the plan does.
+    // The container test ids only - the edit/remove/save/input/text/error ids share the prefix.
+    expect(within(notes).getAllByTestId(/^integration-note-(?!edit-|remove-|save-|input-|text-|error-)/)).toHaveLength(2);
+  });
+
+  it('says that the assistant reads what is typed, before anything is typed', async () => {
+    render(<IntegrationDetailPage />);
+    await openAction(HTTP_ACTION);
+
+    const notes = await screen.findByTestId(`integration-action-notes-${HTTP_ACTION}`);
+    expect(within(notes).getByText(/o assistente lê-as/i)).toBeTruthy();
+  });
+
+  it('writes a note through the real store and renders what the SERVER answered', async () => {
+    mocked.integrations.setActionFeedback.mockResolvedValue({
+      actionName: HTTP_ACTION,
+      note: 'guardado pelo servidor',
+      createdAt: '2026-08-20T10:00:00.000Z',
+      updatedAt: '2026-08-22T10:00:00.000Z',
+    });
+    render(<IntegrationDetailPage />);
+    await openAction(HTTP_ACTION);
+
+    await userEvent.click(await screen.findByTestId(`integration-note-edit-${HTTP_ACTION}`));
+    await userEvent.type(screen.getByTestId(`integration-note-input-${HTTP_ACTION}`), 'o que escrevi');
+    await userEvent.click(screen.getByTestId(`integration-note-save-${HTTP_ACTION}`));
+
+    await waitFor(() =>
+      expect(screen.getByTestId(`integration-note-text-${HTTP_ACTION}`).textContent).toBe('guardado pelo servidor'));
+    expect(mocked.integrations.setActionFeedback).toHaveBeenCalledWith({
+      key: KEY, actionName: HTTP_ACTION, note: 'o que escrevi',
+    });
+  });
+
+  it('a failed save keeps the editor OPEN with the text in it, under the error', async () => {
+    mocked.integrations.setActionFeedback.mockRejectedValue(
+      new FakeApiError(400, 'VALIDATION_FAILED', 'A nota excede o limite.'));
+    render(<IntegrationDetailPage />);
+    await openAction(HTTP_ACTION);
+
+    await userEvent.click(await screen.findByTestId(`integration-note-edit-${HTTP_ACTION}`));
+    await userEvent.type(screen.getByTestId(`integration-note-input-${HTTP_ACTION}`), 'a minha nota');
+    await userEvent.click(screen.getByTestId(`integration-note-save-${HTTP_ACTION}`));
+
+    await waitFor(() =>
+      expect(screen.getByTestId(`integration-note-error-${HTTP_ACTION}`).textContent).toContain('excede o limite'));
+    // Closing the box on a failure would throw away what the person just wrote.
+    expect((screen.getByTestId(`integration-note-input-${HTTP_ACTION}`) as HTMLTextAreaElement).value)
+      .toBe('a minha nota');
+  });
+
+  it('a failed notes READ disables the editor and says why - it never opens empty over a real note', async () => {
+    mocked.integrations.listActionFeedback.mockRejectedValue(
+      new FakeApiError(500, 'INTERNAL', 'Notas indisponíveis.'));
+    render(<IntegrationDetailPage />);
+    await openAction(HTTP_ACTION);
+
+    const notes = await screen.findByTestId(`integration-action-notes-${HTTP_ACTION}`);
+    await waitFor(() =>
+      expect(within(notes).getByTestId('integration-detail-section-error')).toBeTruthy());
+    expect((within(notes).getByTestId(`integration-note-edit-${HTTP_ACTION}`) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(notes).getByText(/edição fica indisponível/i)).toBeTruthy();
+  });
+
+  it('the failed-read RETRY re-fires the read and re-enables the editors', async () => {
+    // The does-the-trigger-fire class: wiring onRetry to fetchEvidence, to a stale key, or to
+    // undefined would leave the previous test green - it only asserted the error row rendered.
+    // Every other section's failed-read test in this file clicks its retry; this one now does too.
+    mocked.integrations.listActionFeedback.mockRejectedValueOnce(
+      new FakeApiError(500, 'INTERNAL', 'Notas indisponíveis.'));
+    mocked.integrations.listActionFeedback.mockResolvedValue({ items: [] });
+    render(<IntegrationDetailPage />);
+    await openAction(HTTP_ACTION);
+
+    const notes = await screen.findByTestId(`integration-action-notes-${HTTP_ACTION}`);
+    const errorRow = await within(notes).findByTestId('integration-detail-section-error');
+    await userEvent.click(within(errorRow).getByRole('button', { name: /tentar novamente/i }));
+
+    // The read fired again AND the editor came back - the only path that flips feedbackLoaded.
+    await waitFor(() =>
+      expect((within(notes).getByTestId(`integration-note-edit-${HTTP_ACTION}`) as HTMLButtonElement).disabled)
+        .toBe(false));
+    expect(mocked.integrations.listActionFeedback).toHaveBeenCalledTimes(2);
+    expect(mocked.integrations.listActionFeedback).toHaveBeenLastCalledWith({ key: KEY });
+  });
+
+  it('says LOADING while the read is outstanding and EMPTY only once it came back', async () => {
+    // "you have no note" and "we do not know yet" are different sentences - the component's own
+    // comment. A mutant collapsing the ternary to notesEmpty used to stay green.
+    let release: (v: unknown) => void = () => {};
+    mocked.integrations.listActionFeedback.mockImplementation(() => new Promise((r) => { release = r; }));
+    render(<IntegrationDetailPage />);
+    await openAction(HTTP_ACTION);
+
+    const notes = await screen.findByTestId(`integration-action-notes-${HTTP_ACTION}`);
+    expect(within(notes).getByText(/a carregar as suas notas/i)).toBeTruthy();
+    expect(within(notes).queryByText(/ainda não há nota/i)).toBeNull();
+
+    release({ items: [] });
+    await waitFor(() => expect(within(notes).getByText(/ainda não há nota/i)).toBeTruthy());
+    expect(within(notes).queryByText(/a carregar as suas notas/i)).toBeNull();
+  });
+
+  it('refuses to SAVE an empty or whitespace draft, and counts what was typed', async () => {
+    render(<IntegrationDetailPage />);
+    await openAction(HTTP_ACTION);
+    await userEvent.click(await screen.findByTestId(`integration-note-edit-${HTTP_ACTION}`));
+
+    const save = screen.getByTestId(`integration-note-save-${HTTP_ACTION}`) as HTMLButtonElement;
+    expect(save.disabled, 'an empty draft cannot be saved - a save that deletes loses what people wrote').toBe(true);
+
+    await userEvent.type(screen.getByTestId(`integration-note-input-${HTTP_ACTION}`), '   ');
+    expect(save.disabled, 'whitespace is empty').toBe(true);
+    // The counter reflects what was typed, whitespace included.
+    expect(screen.getByText(/3\/2000 caracteres/)).toBeTruthy();
+
+    await userEvent.type(screen.getByTestId(`integration-note-input-${HTTP_ACTION}`), 'a nota');
+    expect(save.disabled).toBe(false);
+    expect(screen.getByText(/9\/2000 caracteres/)).toBeTruthy();
+    expect(mocked.integrations.setActionFeedback).not.toHaveBeenCalled();
+  });
+
+  it('a note whose STEP left the plan still renders, is labeled, and can be erased', async () => {
+    // THE REVIEW'S MAJOR. The component looked notes up only BY SLOT, so a row whose stepRef named
+    // no current step rendered nowhere and could not be deleted - while the API kept feeding it to
+    // the author's prompts, and the module header and findings.md both claimed otherwise.
+    seedIdentifiedPlan();
+    mocked.integrations.listActionFeedback.mockResolvedValue({
+      items: [{
+        actionName: RUN_ACTION, stepRef: 'passo-que-desapareceu', note: 'sobre um passo que ja nao existe',
+        createdAt: '2026-08-20T10:00:00.000Z', updatedAt: '2026-08-20T10:00:00.000Z',
+      }],
+    });
+    mocked.integrations.discardActionFeedback.mockResolvedValue({ ok: true, discarded: true });
+    render(<IntegrationDetailPage />);
+    await openAction(RUN_ACTION);
+
+    const orphan = await screen.findByTestId(`integration-note-${RUN_ACTION}-passo-que-desapareceu`);
+    expect(orphan.getAttribute('data-orphaned'), 'rendered in the stranded register').toBe('true');
+    expect(within(orphan).getByText(/passo que já não existe no plano/i)).toBeTruthy();
+    expect(within(orphan).getByTestId(`integration-note-text-${RUN_ACTION}-passo-que-desapareceu`).textContent)
+      .toBe('sobre um passo que ja nao existe');
+
+    // …and the erasure control WORKS, which is the half the findings ledger claimed and never had.
+    await userEvent.click(within(orphan).getByTestId(`integration-note-remove-${RUN_ACTION}-passo-que-desapareceu`));
+    await waitFor(() =>
+      expect(screen.queryByTestId(`integration-note-${RUN_ACTION}-passo-que-desapareceu`)).toBeNull());
+    expect(mocked.integrations.discardActionFeedback).toHaveBeenCalledWith({
+      key: KEY, actionName: RUN_ACTION, stepRef: 'passo-que-desapareceu',
+    });
+  });
+
+  it('a note whose ACTION left the package renders in its own section, ERASE-ONLY', async () => {
+    // The worse half: the page maps capability.actions, so a de-published action had no card at
+    // all and its notes were unreachable from the UI entirely.
+    mocked.integrations.listActionFeedback.mockResolvedValue({
+      items: [{
+        actionName: 'accao_removida', note: 'sobre uma acao que ja nao existe',
+        createdAt: '2026-08-20T10:00:00.000Z', updatedAt: '2026-08-20T10:00:00.000Z',
+      }],
+    });
+    mocked.integrations.discardActionFeedback.mockResolvedValue({ ok: true, discarded: true });
+    render(<IntegrationDetailPage />);
+
+    const section = await screen.findByTestId('integration-departed-notes');
+    expect(within(section).getByText(/ações que esta integração já não tem/i)).toBeTruthy();
+    const box = within(section).getByTestId('integration-note-accao_removida');
+    expect(within(box).getByTestId('integration-note-text-accao_removida').textContent)
+      .toBe('sobre uma acao que ja nao existe');
+    // NO edit control: writeFeedbackFor refuses an action off the definition, so an edit here would
+    // be a button that exists to be refused.
+    expect(within(box).queryByTestId('integration-note-edit-accao_removida')).toBeNull();
+
+    await userEvent.click(within(box).getByTestId('integration-note-remove-accao_removida'));
+    await waitFor(() => expect(screen.queryByTestId('integration-departed-notes')).toBeNull());
+    expect(mocked.integrations.discardActionFeedback).toHaveBeenCalledWith({ key: KEY, actionName: 'accao_removida' });
+  });
+
+  it('the departed-notes section is ABSENT when every note belongs to a live action', async () => {
+    // A recovery affordance, not furniture: it must not appear in the ordinary case.
+    mocked.integrations.listActionFeedback.mockResolvedValue({
+      items: [{
+        actionName: HTTP_ACTION, note: 'uma nota normal',
+        createdAt: '2026-08-20T10:00:00.000Z', updatedAt: '2026-08-20T10:00:00.000Z',
+      }],
+    });
+    render(<IntegrationDetailPage />);
+    await screen.findByTestId(`integration-action-${HTTP_ACTION}`);
+    await waitFor(() => expect(screen.queryByTestId('integration-departed-notes')).toBeNull());
+  });
+
+  it('erases a note only on a confirmed answer', async () => {
+    mocked.integrations.listActionFeedback.mockResolvedValue({
+      items: [{ actionName: HTTP_ACTION, note: 'para apagar', createdAt: '2026-08-20T10:00:00.000Z', updatedAt: '2026-08-20T10:00:00.000Z' }],
+    });
+    mocked.integrations.discardActionFeedback.mockResolvedValue({ ok: true, discarded: true });
+    render(<IntegrationDetailPage />);
+    await openAction(HTTP_ACTION);
+
+    await waitFor(() => expect(screen.getByTestId(`integration-note-text-${HTTP_ACTION}`).textContent).toBe('para apagar'));
+    await userEvent.click(screen.getByTestId(`integration-note-remove-${HTTP_ACTION}`));
+
+    await waitFor(() => expect(screen.queryByTestId(`integration-note-text-${HTTP_ACTION}`)).toBeNull());
+    expect(mocked.integrations.discardActionFeedback).toHaveBeenCalledWith({ key: KEY, actionName: HTTP_ACTION });
   });
 });

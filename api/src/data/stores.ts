@@ -211,6 +211,21 @@ export const integrationCapturedCalls = new Store<Doc>('integration_captured_cal
  * on a row every reader of every action already touches.
  */
 export const integrationActionEvidence = new Store<Doc>('integration_action_evidence');
+/**
+ * PER-USER NOTES ON AN ACTION, AND ON THE STEPS OF ITS PLAN (slice S3).
+ *
+ * One row per `(orgId, userId, integrationKey, actionName, stepRef?)` holding free text the person
+ * WROTE about how that action behaves in practice, read back into the three prompts that plan
+ * against it. NOT the run engine's per-run step feedback (`automationRuns[].steps[].feedback`),
+ * which is a thumbs verdict on ONE run that evicts a cache entry; this is durable guidance about
+ * the ACTION, and it outlives every run.
+ *
+ * ITS OWN COLLECTION for the reason the evidence rows have one, and the reason IS the privacy
+ * argument of decision D5: a field on the definition document would ride `publishedSnapshot` into
+ * every other organisation. This text is one person's and is read back only into that same
+ * person's prompts. See `integrations/action-feedback-store.ts`.
+ */
+export const integrationActionFeedback = new Store<Doc>('integration_action_feedback');
 /** Integration-builder chat sessions (ch03 §3.8.14). PERSISTED — the old cortex builder kept an
  *  in-memory Map that died on restart; load-by-key durability requires a store. Holds the running
  *  transcript + the last generated package/skill so a session can be reloaded and edited. */

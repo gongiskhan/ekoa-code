@@ -554,6 +554,47 @@ export async function automationContentSections(userId: string): Promise<string[
 }
 
 // ============================================================================
+// Per-user integration NOTES (slice S3) - the run owner's own recorded guidance
+// about the integration actions a plan may reach. `automation/` must not import
+// `integrations/` (the one-way tier rule that also puts `executeIntegrationAction`
+// here), so the direction is inverted: this declares the resolver and the
+// composition root binds it to `integrations/action-feedback.ts`.
+// ============================================================================
+
+/**
+ * The OWNER's notes, as prompt sections. The seam takes A USER ID AND NOTHING ELSE, and that is the
+ * load-bearing part of its signature rather than an economy:
+ *
+ *   - no ORG, because the org is a fact ABOUT the user that the composition root resolves from the
+ *     users store. An org on this seam is an org the automation tier could get wrong, and the wrong
+ *     org here is one tenant's free text landing in another tenant's model turn;
+ *   - no INTEGRATION KEY, because neither caller has one. The planner holds a goal and a catalog;
+ *     the fixer holds a failing step and a screenshot. Both are planning FOR A PERSON, so the person
+ *     is the whole scope.
+ *
+ * There is therefore no shape of call on this seam that asks for somebody else's notes, which is
+ * the property `api/tests/security/action-feedback-isolation.test.ts` attacks.
+ *
+ * HONEST DEFAULT: no sections. An unbound seam changes no prompt, exactly as the content resolver's
+ * does, and notes that cannot be read are never fatal to a plan or a repair.
+ */
+export type IntegrationFeedbackResolver = (ownerUserId: string) => Promise<string[]>;
+const defaultIntegrationFeedback: IntegrationFeedbackResolver = async () => [];
+let integrationFeedbackFn: IntegrationFeedbackResolver = defaultIntegrationFeedback;
+export function setIntegrationFeedbackResolver(fn: IntegrationFeedbackResolver): void {
+  integrationFeedbackFn = fn;
+}
+/** The run owner's own recorded notes as prompt sections (never throws a run). */
+export async function integrationFeedbackSections(ownerUserId: string): Promise<string[]> {
+  if (ownerUserId === '') return [];
+  try {
+    return await integrationFeedbackFn(ownerUserId);
+  } catch {
+    return [];
+  }
+}
+
+// ============================================================================
 // Reset (tests)
 // ============================================================================
 
@@ -573,4 +614,5 @@ export function __resetAutomationSeamsForTests(): void {
   localBrowserContextProvider = defaultLocalBrowserContextProvider;
   egressCandidateResolver = defaultEgressCandidateResolver;
   automationContentFn = defaultAutomationContent;
+  integrationFeedbackFn = defaultIntegrationFeedback;
 }

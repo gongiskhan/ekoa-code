@@ -19,10 +19,17 @@ import { uiLogin } from './helpers/ui-login';
  * withheld run-now control are both exercised on real server answers rather than on a fixture's
  * idea of them. Same package `integration-achieve.spec.ts` uses, for the same reason.
  *
- * HERMETIC AND LLM-FREE. Every path below is a READ. Nothing here clicks run-now: executing a
- * Slack action would need a credential and would reach an outside system, and what this spec is
- * for is the page, not the executor - which has its own contract suite. Re-runnable by
- * construction: it writes nothing.
+ * HERMETIC AND LLM-FREE. Nothing here clicks run-now: executing a Slack action would need a
+ * credential and would reach an outside system, and what this spec is for is the page, not the
+ * executor - which has its own contract suite.
+ *
+ * ── THE ONE WRITE, AND HOW IT STAYS RE-RUNNABLE (slice S3) ────────────────────────────────────
+ *
+ * The third test writes a NOTE, which is the only thing this page lets a person write. It is still
+ * LLM-free and still reaches no outside system - the note goes to this platform's own store - and
+ * it is re-runnable because it ERASES what it wrote through the page's own remove control, and
+ * asserts the erasure landed. The note text carries a run-unique marker so a leftover from an
+ * interrupted run can never make a later run pass on somebody else's row.
  */
 
 const INTEGRATION = 'slack';
@@ -118,6 +125,94 @@ test.describe('the integration detail page', () => {
       .toHaveAttribute('aria-expanded', 'true', { timeout: 15_000 });
     await expect(page.getByTestId(`integration-action-toggle-${READ_ACTION}`))
       .toHaveAttribute('aria-expanded', 'false');
+
+    expect(consoleErrors, consoleErrors.join('\n')).toEqual([]);
+  });
+
+  test('a note can be written, is read back, and can be erased again', async ({ page }) => {
+    const consoleErrors = trackConsoleErrors(page);
+    await login(page);
+
+    // Run-unique, so an interrupted earlier run cannot make this one pass on its leftover row.
+    const note = `nota e2e ${Date.now()}`;
+
+    await page.goto(`/integrations/${INTEGRATION}?action=${READ_ACTION}`);
+    await expect(page.getByTestId('integration-detail-page')).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId(`integration-action-toggle-${READ_ACTION}`))
+      .toHaveAttribute('aria-expanded', 'true', { timeout: 15_000 });
+
+    // The notes section is there for an api-call action too: it has no plan to point into, so the
+    // ACTION-level box is the whole affordance.
+    const notes = page.getByTestId(`integration-action-notes-${READ_ACTION}`);
+    await expect(notes).toBeVisible({ timeout: 15_000 });
+    // The read REACHED something: a failed one renders the error row and disables the editor, and
+    // every unit case would still be green.
+    await expect(notes.getByTestId('integration-detail-section-error')).toHaveCount(0);
+
+    // --- WRITE --------------------------------------------------------------------------------
+    const edit = notes.getByTestId(`integration-note-edit-${READ_ACTION}`);
+    await expect(edit).toBeEnabled({ timeout: 15_000 });
+    await edit.click();
+    await notes.getByTestId(`integration-note-input-${READ_ACTION}`).fill(note);
+    await notes.getByTestId(`integration-note-save-${READ_ACTION}`).click();
+
+    // The text on screen is what the SERVER answered, not what was typed into the box.
+    await expect(notes.getByTestId(`integration-note-text-${READ_ACTION}`)).toHaveText(note, { timeout: 15_000 });
+    await expect(notes.getByTestId(`integration-note-error-${READ_ACTION}`)).toHaveCount(0);
+
+    // --- IT SURVIVES A RELOAD, which is what proves the write was PERSISTED rather than local ---
+    await page.reload();
+    await expect(page.getByTestId(`integration-action-toggle-${READ_ACTION}`))
+      .toHaveAttribute('aria-expanded', 'true', { timeout: 30_000 });
+    await expect(page.getByTestId(`integration-action-notes-${READ_ACTION}`)
+      .getByTestId(`integration-note-text-${READ_ACTION}`)).toHaveText(note, { timeout: 15_000 });
+
+    // --- ERASE, so the estate is left exactly as it was found ---------------------------------
+    const after = page.getByTestId(`integration-action-notes-${READ_ACTION}`);
+    await after.getByTestId(`integration-note-remove-${READ_ACTION}`).click();
+    await expect(after.getByTestId(`integration-note-text-${READ_ACTION}`)).toHaveCount(0, { timeout: 15_000 });
+
+    expect(consoleErrors, consoleErrors.join('\n')).toEqual([]);
+  });
+
+  test('a note about a step that is not in the plan renders as stranded, and can be erased', async ({ page }) => {
+    const consoleErrors = trackConsoleErrors(page);
+    await login(page);
+    await page.goto(`/integrations/${INTEGRATION}?action=${READ_ACTION}`);
+    await expect(page.getByTestId('integration-detail-page')).toBeVisible({ timeout: 30_000 });
+
+    // THE ORPHAN IS MINTED THROUGH THE API, because the UI deliberately offers no control that
+    // creates one: a step note is only offered for a step the CURRENT plan carries. `list_channels`
+    // is an api-call action with no plan at all, so any `stepRef` note on it is stranded by
+    // construction - which is the exact state the review found unrenderable and unerasable.
+    //
+    // The token is the app's own, read from where `lib/api/token.ts` puts it, so this writes as the
+    // very user the page is rendering for. Nothing here bypasses the product's auth.
+    const token = await page.evaluate(() => window.localStorage.getItem('ekoa_token'));
+    expect(token, 'the e2e must write as the logged-in user').toBeTruthy();
+    const stepRef = `passo-fantasma-${Date.now()}`;
+    const apiBase = process.env.EKOA_API_BASE ?? 'http://127.0.0.1:4111';
+    const written = await page.request.put(
+      `${apiBase}/api/v1/integrations/${INTEGRATION}/actions/${READ_ACTION}/feedback`,
+      { headers: { authorization: `Bearer ${token}` }, data: { stepRef, note: 'nota orfa e2e' } },
+    );
+    expect(written.status(), await written.text()).toBe(200);
+
+    // …and now the PAGE must show it. Before the review round it rendered nowhere.
+    await page.reload();
+    await expect(page.getByTestId(`integration-action-toggle-${READ_ACTION}`))
+      .toHaveAttribute('aria-expanded', 'true', { timeout: 30_000 });
+    const orphan = page.getByTestId(`integration-note-${READ_ACTION}-${stepRef}`);
+    await expect(orphan).toBeVisible({ timeout: 15_000 });
+    await expect(orphan).toHaveAttribute('data-orphaned', 'true');
+    await expect(orphan.getByTestId(`integration-note-text-${READ_ACTION}-${stepRef}`))
+      .toHaveText('nota orfa e2e');
+
+    // ERASE IT THROUGH THE PAGE'S OWN CONTROL - the compensating control the findings ledger
+    // claimed and did not have. This also leaves the estate as found, so the spec stays re-runnable.
+    await orphan.getByTestId(`integration-note-remove-${READ_ACTION}-${stepRef}`).click();
+    await expect(page.getByTestId(`integration-note-${READ_ACTION}-${stepRef}`))
+      .toHaveCount(0, { timeout: 15_000 });
 
     expect(consoleErrors, consoleErrors.join('\n')).toEqual([]);
   });

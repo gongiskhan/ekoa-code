@@ -371,6 +371,51 @@ export interface Translations {
          * only identity available (its run id, found in this automation's own history) was not.
          */
         stepSamplesOlder: string;
+        /**
+         * PER-USER NOTES (slice S3). The author's own guidance about an action, or about one step
+         * of its plan - private to them, and read back into the prompts that plan against it.
+         *
+         * `notesHint` is the one string that has to earn its place: the box is a text field like
+         * any other, and nothing about it says that what is typed reaches a model. A person writing
+         * "the password is X" into a field they believe is a private memo is the failure this
+         * sentence exists to prevent, so it states BOTH facts - only you see it, and the assistant
+         * reads it.
+         */
+        notesTitle: string;
+        notesHint: string;
+        /** The note about the action as a whole - the only shape an api-call action can hold. */
+        notesActionLabel: string;
+        /** The note about ONE step of the bound automation's plan. */
+        notesStepLabel: (index: number) => string;
+        notesPlaceholder: string;
+        notesAdd: string;
+        notesEdit: string;
+        notesSave: string;
+        notesCancel: string;
+        notesRemove: string;
+        notesSaving: string;
+        notesLoading: string;
+        /** The read came BACK and this address holds no note - never shown while it is outstanding. */
+        notesEmpty: string;
+        /** The notes read failed. The boxes render READ-ONLY: see `notesReadOnly`. */
+        notesError: string;
+        /**
+         * Why the editor is disabled after a failed read. Said rather than left as a dead control:
+         * offering a save over a note that may really be there would overwrite it with an empty box.
+         */
+        notesReadOnly: string;
+        /** One note's SAVE or ERASE failed - reported under that box, never over the whole page. */
+        notesWriteError: string;
+        notesCounter: (used: number, limit: number) => string;
+        /**
+         * ORPHANS (review round). A note whose step has left the plan, or whose action has left the
+         * package, still reaches the author's prompts - so it must be visible and removable. The
+         * first cut rendered neither, while the module header and findings.md both claimed it did.
+         */
+        notesOrphanStepLabel: (stepRef: string) => string;
+        notesOrphanTitle: string;
+        notesOrphanHint: string;
+        notesOrphanActionLabel: (actionName: string, stepRef?: string) => string;
         historyTitle: string;
         historyLoading: string;
         historyEmpty: string;

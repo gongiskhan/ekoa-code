@@ -175,22 +175,44 @@ export async function lessonsForPrompt(
 }
 
 /**
- * Join an integration's knowledge body and its lessons into the ONE string `load_context` returns.
+ * Join an integration's knowledge body, its lessons and the CALLER'S OWN notes into the ONE string
+ * `load_context` returns.
  *
- * Both halves arrive already scrubbed (`resolveSkillMd` / `lessonsForPrompt`); this function only
- * decides the shape. It is separate from the two resolutions so the composition can be pinned
- * without a store, and so the frontmatter strip stays where it belongs (the composition root).
+ * Every half arrives already scrubbed (`resolveSkillMd` / `lessonsForPrompt` /
+ * `action-feedback.ts`'s `feedbackForPrompt`); this function only decides the shape. It is separate
+ * from the resolutions so the composition can be pinned without a store, and so the frontmatter
+ * strip stays where it belongs (the composition root).
  *
- * Returns `null` when there is nothing to say — an integration with neither body nor lessons must
- * leave `load_context` answering `null` exactly as it did before this slice.
+ * `feedback` IS OPTIONAL, and additive on purpose (Rule 7): every existing caller keeps its meaning
+ * unchanged, and a deployment that never resolves notes composes byte-identically to before S3.
+ *
+ * THE ORDER IS NOT COSMETIC. The knowledge body is what the package IS, the lessons are what the
+ * ORGANISATION learned, and the notes are what THIS PERSON learned - widest provenance first,
+ * narrowest last, so the most specific guidance is the closest thing to the turn. It is also the
+ * order of decreasing review: a shipped body was written by whoever ships packages, lessons by
+ * whoever may save the integration, and a note by one person with no reviewer at all. The three
+ * headings say which is which, so a model reading the composed body can tell the platform's words
+ * from a colleague's from the caller's own.
+ *
+ * Returns `null` when there is nothing to say - an integration with no body, no lessons and no
+ * notes must leave `load_context` answering `null` exactly as it did before these slices.
  */
-export function composeIntegrationContext(skillMd: string | null, lessons: string | null): string | null {
+export function composeIntegrationContext(
+  skillMd: string | null,
+  lessons: string | null,
+  feedback: string | null = null,
+): string | null {
   const body = skillMd?.trim() ? skillMd.replace(/\s+$/, '') : null;
   const learned = lessons?.trim() ? lessons.trim() : null;
-  if (body === null && learned === null) return null;
-  if (learned === null) return body;
-  const section = `${LESSONS_PROMPT_HEADING}\n\n${learned}\n`;
-  return body === null ? section : `${body}\n\n${section}`;
+  // Already carries its own heading (`FEEDBACK_PROMPT_HEADING`), because the section is built where
+  // the rows are scrubbed and capped - the one place a note becomes prompt text.
+  const notes = feedback?.trim() ? feedback.trim() : null;
+  const sections = [
+    ...(body === null ? [] : [body]),
+    ...(learned === null ? [] : [`${LESSONS_PROMPT_HEADING}\n\n${learned}\n`]),
+    ...(notes === null ? [] : [`${notes}\n`]),
+  ];
+  return sections.length === 0 ? null : sections.join('\n\n');
 }
 
 /**

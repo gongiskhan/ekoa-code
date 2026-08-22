@@ -25,7 +25,7 @@
 import { randomUUID } from 'node:crypto';
 import { decideForTier, LlmAbortedError } from '../llm/index.js';
 import { authorWithRepair, type AuthoringDraft } from '../agents/authoring-core.js';
-import { automationContentSections } from './seams.js';
+import { automationContentSections, integrationFeedbackSections } from './seams.js';
 import { parseFirstJsonObject } from './vision.js';
 import { formatCatalogForPrompt, type Catalog } from './catalog.js';
 import { loadAutomationConfig } from './config.js';
@@ -224,10 +224,23 @@ export async function planFromGoal(input: PlanFromGoalInput): Promise<PlanFromGo
   // contract) stays LAST so the output contract is the final word (composeAuthoringPrompt, in the
   // core). Content is never fatal, and it cannot change between the two passes of one plan, so it
   // is resolved ONCE here rather than per attempt.
-  const contentSections = await automationContentSections(input.userId);
+  //
+  // S3: and the PLAN OWNER'S OWN NOTES come with it - what this person recorded about how the
+  // integration actions in the catalog above actually behave, which is precisely the guidance a
+  // browser-steps plan needs and the catalog cannot carry (the catalog says an action EXISTS; a
+  // note says the portal rejects it unless the reference is zero-padded). Scrubbed and capped
+  // before it leaves `integrations/`; owner-scoped by the seam's signature, which takes a user id
+  // and nothing else. Resolved once, beside the content, and never fatal.
+  const [contentSections, feedbackSections] = await Promise.all([
+    automationContentSections(input.userId),
+    integrationFeedbackSections(input.userId),
+  ]);
 
   const outcome = await authorWithRepair<PlanFromGoalResult>({
-    contentSections,
+    // The notes sit AFTER the kind's content and BEFORE the output contract, which the core keeps
+    // last. Narrowest provenance closest to the turn, and never able to displace the JSON shape
+    // contract - a note is guidance about a portal, not a licence to change what the planner emits.
+    contentSections: [...contentSections, ...feedbackSections],
     outputContract: PLANNER_SYSTEM,
     decision: decideForTier('EXPERT'),
     attribution: { kind: 'user_work', agentType: 'automation-plan', billeeUserId: input.userId },

@@ -120,6 +120,9 @@ import {
   type CapabilityOutcome,
 } from './integration-capability.js';
 import type { ExecuteIntegrationActionResult } from './action-executor.js';
+// S3: the PROMPT view of the caller's own recorded notes - scrubbed and capped by that module, and
+// the only shape of it this file may reach (the byte-exact view exists for the editor alone).
+import { feedbackForPrompt } from './action-feedback.js';
 import { logActivity } from '../data/activity.js';
 
 // ---------------------------------------------------------------------------
@@ -719,6 +722,17 @@ export async function achieveIntegrationGoal(
   }
 
   const skillMd = await resolveSkillMd(definitionActor, integrationKey);
+  // S3: what the AUTHOR themselves recorded about this integration's existing actions - a hint for
+  // the draft, and the last content section before the output contract.
+  //
+  // `ctx.actor` AND NOT `definitionActor`, said here because the two are provably equal on this arm
+  // and the choice would otherwise read as arbitrary. LOCK 6 above has already refused unless
+  // `definitionActor.userId === ctx.actor.userId`, so the same rows come back either way today. The
+  // ACTING user is still the right term: a note is guidance the caller wrote for themselves, and
+  // reading it under the credential's CUSTODIAN would make "whose notes reach this prompt" depend
+  // on a rule about credentials rather than on who is asking. If LOCK 6 is ever relaxed, this line
+  // is already correct instead of needing to be found.
+  const feedback = await feedbackForPrompt(ctx.actor, integrationKey);
   const contentSections = [
     [
       '# The integration you are extending',
@@ -731,6 +745,9 @@ export async function achieveIntegrationGoal(
     `# Actions that already exist (do not duplicate one)\n${existingActionLines(definition.actions ?? [])}`,
     `# Hosts this integration's credential is bound to\n${binding.origins.map((o) => `- ${o}`).join('\n')}`,
     ...(skillMd ? [`# What is known about this integration\n${skillMd}`] : []),
+    // Already carries its own heading, because the section is built where the rows are scrubbed and
+    // capped - the one place a note becomes prompt text (`action-feedback.ts`).
+    ...(feedback ? [feedback] : []),
   ];
 
   const turn = await ctx.draftAction({

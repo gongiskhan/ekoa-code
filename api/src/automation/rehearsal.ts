@@ -14,6 +14,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { runOneShot, decideForTier } from '../llm/index.js';
+import { integrationFeedbackSections } from './seams.js';
 import { parseFirstJsonObject } from './vision.js';
 import type {
   FailureKind,
@@ -139,6 +140,20 @@ export async function proposePatch(input: ProposePatchInput): Promise<RehearsalP
       ]
     : [];
 
+  // S3: the RUN OWNER'S OWN notes about the integration actions this plan reaches. The fixer is the
+  // seam where recorded guidance pays best - "this portal shows a consent overlay on first load"
+  // turns an abort into an insert_before - and it is the seam the brief's "feedback feeds self-heal"
+  // assumption names. Scrubbed and capped inside `integrations/`; owner-scoped by the seam's
+  // signature; never fatal, so a repair still happens when the read fails.
+  //
+  // IT SITS IN THE USER TEXT AND NOT IN `FIXER_SYSTEM`, which is the placement that matters here.
+  // This module's own header calls the fixer the most prompt-injectable authoring surface in the
+  // engine - it reasons over a failure message and a screenshot that both come from the remote page
+  // - so its system prompt is the one thing on the turn that no tenant-authored byte may enter. A
+  // note is a person's guidance about a portal, and it goes where the other observations go.
+  const feedbackSection = (await integrationFeedbackSections(input.userId))
+    .flatMap((section) => [``, section]);
+
   const userText = [
     `## User goal`,
     input.goal || '(not provided)',
@@ -154,6 +169,7 @@ export async function proposePatch(input: ProposePatchInput): Promise<RehearsalP
     `[${input.currentIndex}] *FAILING* ${formatStepLine(currentStep)}`,
     ...afterCtx.map((s, i) => `[${input.currentIndex + 1 + i}] ${formatStepLine(s)}`),
     ...a11ySection,
+    ...feedbackSection,
     ``,
     `Return the JSON patch object now.`,
   ].join('\n');

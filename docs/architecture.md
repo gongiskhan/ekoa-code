@@ -1120,6 +1120,110 @@ history) or, failing that, where they at least address the steps on screen - and
 so, because nothing in `RunRecord` or the row fingerprints a PLAN. Spec:
 `web/e2e/integration-detail.spec.ts`.
 
+### Per-user action feedback (slice S3)
+
+A person who learns something about an action - "this portal rejects the request unless the processo
+number is zero-padded" - has, until this slice, nowhere to put it. `integration_action_feedback` is
+that place: ONE row per `(orgId, userId, integrationKey, actionName, stepRef?)`, holding free text the
+author wrote, read back into the three prompts that plan against the action.
+
+**IT IS NOT THE RUN ENGINE'S STEP FEEDBACK.** `POST /api/v1/automations/runs/:id/steps/:stepId/feedback`
+already exists and is a different artefact on a different lifecycle: a thumbs verdict on ONE run,
+whose effects are immediate and elsewhere (it evicts that step's cached action/assertion entries and
+may write a `user-correction` memory), and which dies with the run document. This is durable guidance
+about the ACTION and outlives every run it was learned from. Collapsing them would mean either
+attaching durable guidance to a document run retention takes away, or letting a thumbs-down on one
+run rewrite what every future prompt is told.
+
+**`stepRef` IS THE STEP'S OWN `stepId`, NEVER ITS INDEX.** A note is durable and a plan is edited, so
+an index addresses a different step the moment anyone reorders one - the misalignment `stepSampleFit`
+exists to DETECT for evidence samples, which is strictly worse to have silently in somebody's own
+words. `PlanStep.stepId` is optional, so a step without one is not addressable and the dashboard
+offers it no box; the action-level note (absent `stepRef`) is always available and is the only shape
+an api-call action can hold.
+
+**TENANCY IS ORG *AND USER*, AND THE REASON IS NOT THE EVIDENCE ROW'S.** An evidence row is org+owner
+scoped because it HOLDS third-party data. A note is org+user scoped because it is CONSUMED BY A
+PROMPT: free text written by one person that lands in another person's model turn is a peer-to-peer
+injection channel with the platform as the carrier and no gate on the path. Both terms are in the
+deterministic `_id`, on the row, in every query filter and re-checked on every fetched document;
+there is no method that addresses "every row of this org". Suite:
+`api/tests/security/action-feedback-isolation.test.ts`.
+
+**AUTH IS `user` ON ALL THREE ROUTES (CONVERGENCE_PLAN D2).** `GET /:key/feedback`,
+`PUT /:key/actions/:actionName/feedback` and `DELETE` the same path. The WRITE's reason is Rule 8
+rather than the usual narrow-is-reversible one: a key-bearing agent that could POST here would be
+authoring its own next prompt, one turn writing what the next turn is told. Agents READ these notes;
+only a person WRITES one. The read and the delete take `listActionEvidence`'s and
+`discardActionEvidence`'s readings. All three are therefore absent from `docs/openapi/cortex.v1.json`
+by construction (the generator's one filter rule is `auth === 'user-or-key'`), so the spec and the
+generated CLI client are untouched.
+
+**BOUNDED TWICE ON EVERY PROMPT PATH, AND CAPPED AT THE WRITE.** `listNewestForIntegration`
+(seams 1 and 3) and `listForOwner` (seam 2) both sort and limit IN THE QUERY
+(`FEEDBACK_PROMPT_MAX_NOTES`, newest first); the author's page read stays unbounded and
+action-sorted, because completeness is its contract. `ACTION_FEEDBACK_MAX_NOTES_PER_ACTION` (50)
+caps how many distinct notes one person may hold for one action, checked only when the write would
+CREATE a row so an edit is never refused at the ceiling - without it, `stepRef` being deliberately
+unvalidated meant one authenticated user could mint unbounded rows that nothing ever collects.
+
+**RAW TO THE AUTHOR, SCRUBBED TO THE PROMPT** - `definition-lessons.ts`'s split, applied unchanged.
+The author's own read is byte-exact, because the scrub is lossy and an editor seeded from a scrubbed
+body writes the redaction back on the next ordinary save. The prompt view goes through
+`scrubSecretText` unconditionally, including for the author's own text. That floor is VALUE-ANCHORED
+(the value of a credential-named key, or the text after an auth scheme word), so a bare token pasted
+into ordinary prose is outside it - recorded in `docs/findings.md`, not claimed as closed, and
+mitigated on the surface by copy that says the assistant reads what is typed.
+
+**THE THREE CONSUMING SEAMS, and one place a row becomes prompt text.**
+`action-feedback.ts`'s `feedbackPromptSection` is that place - scrub, cap, order, label - and all
+three seams go through it, so there is one floor to remove rather than three to forget. The scrub
+runs over the WHOLE COMPOSED LINE and not over `note` alone: `stepRef` is caller-supplied free text
+that is never validated against a plan, so scrubbing one field left an anchored credential written
+as a step ref riding into all three seams unredacted while the identical bytes in the note body were
+redacted (review round). Two of the three are bound in `server.ts` and both bindings are pinned by
+`api/tests/automation/composition-root-feedback-seam.test.ts`; seam 3 is not a binding at all, since
+`achieve` calls the module directly.
+
+**BOUNDED TWICE, ORPHANS INCLUDED.** A note whose step has left the plan, or whose action has left
+the package, still reaches its author's prompts - so the dashboard renders it stranded with its
+erasure control (`orphanedSteps`; `DepartedActionNotes` for the departed-action case, ERASE-ONLY
+because the write refuses an action off the definition). That control is what the no-retention-sweep
+decision rests on, and the review round is where it stopped being a claim and became code.
+
+The three seams:
+
+1. `load_context`, via `composeIntegrationContext(skillMd, lessons, feedback)`. The third parameter is
+   optional, so every pre-S3 call site composes byte-identically. Sections run widest provenance
+   first: the package, then the organisation, then the person - which is also decreasing review.
+2. the automation **planner** and **rehearsal fixer**, via the `integrationFeedback` seam
+   (`automation/seams.ts`). The seam takes a USER ID AND NOTHING ELSE: the org is resolved at the
+   composition root from the users store, so the automation tier cannot pass a wrong tenant, and
+   neither caller has an integration key to pass. On the fixer the section rides the USER text and
+   never `FIXER_SYSTEM` - that module is the most prompt-injectable authoring surface in the engine,
+   so no tenant-authored byte enters its instruction block.
+3. `achieve`'s drafting turn, as the last content section before the output contract.
+
+**BOUNDED TWICE.** `FEEDBACK_PROMPT_MAX_NOTES` (20, newest first) bounds the READ - applied in the
+query via `Store.find`'s `limit`, so a person holding thousands of notes costs what a person holding
+twenty costs - and `FEEDBACK_PROMPT_MAX_CHARS` (4,000) bounds the characters that reach a turn. Notes
+are carried whole or not at all, and the section DECLARES how many it left out.
+
+**REMOVAL: TWO SIGNALS, AND NO SWEEP.** The AUTHOR (`DELETE`) and A NEWER NOTE (supersede at the same
+deterministic `_id`). There is deliberately no retention sweep: the evidence collection needs one
+because its rows hold third-party response bodies and pin screenshots out of a 7-day sweep, and a
+note holds neither - it is the author's own capped prose, pinning nothing. Nothing synchronous
+decides a row is over, which is `action-evidence-store.ts`'s removal rule inherited whole. A note
+whose action stopped resolving is recorded as OPEN in `docs/findings.md`.
+
+**FORKING AND PUBLISH.** A note follows the KEY: a tenant row shadowing a package under the same key
+keeps its notes, a fork under a distinct key starts with none and none are copied, and promotion to
+`global` carries none by construction - the collection is structurally outside `publishedSnapshot`
+(decision D5). `api/tests/security/publish-doors-isolation.test.ts` carries this store's real field
+names in its planted battery and additionally proves that writing a real note leaves the definition
+document byte-unchanged.
+
+
 ## Billing
 
 Four tiers (`config.ts`, env-overridable models/efforts/weights): FAST (`claude-haiku-4-5-20251001`,

@@ -151,6 +151,8 @@ import {
   onCredentialEstablished,
   redispatchRunAwaitingCredentials,
   setScopedMemoryResolver,
+  // S3 - the run owner's own integration notes, for the planner and the rehearsal fixer.
+  setIntegrationFeedbackResolver,
   setAppDataStore,
   setArtifactResolver,
   setCatalogSources,
@@ -192,6 +194,12 @@ import {
   // of the `load_context` body are joined.
   lessonsForPrompt,
   composeIntegrationContext,
+  // Slice S3 - the two PROMPT views of a person's own notes: per-integration (the `load_context`
+  // third section) and per-owner (the automation planner + rehearsal seam). Both arrive already
+  // scrubbed and capped; the byte-exact author views live behind the route layer and this file
+  // never reaches them.
+  feedbackForPrompt,
+  feedbackSectionsForOwner,
   // Slice S1: the evidence store the executor's capture seam is bound to, which also owns the
   // retention pins the screenshot sweep must spare and the TTL sweep that is now the only automatic
   // collector, plus the window that sweep reports.
@@ -465,10 +473,17 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
         // halves come from the PROMPT views (`resolveSkillMd` / `lessonsForPrompt`), which are
         // scrubbed and cross-org-safe; the byte-exact views exist only for the editor and must
         // never be reached from here.
+        // S3: and the CALLER'S OWN notes are the third section. THREE halves now, and all three
+        // come from the PROMPT views: `resolveSkillMd` and `lessonsForPrompt` were already
+        // scrubbed and cross-org-safe, and `feedbackForPrompt` is scrubbed, capped and keyed by
+        // this actor's own org AND user id - so the notes a build/chat/automation agent sees
+        // through `load_context` are the notes of the person whose run it is, never a colleague's
+        // and never the org's pooled ones.
         const actor = { userId, orgId, role: 'user' as const };
         const raw = await resolveSkillMd(actor, key);
         const lessons = await lessonsForPrompt(actor, key);
-        const body = composeIntegrationContext(raw === null ? null : stripFrontmatter(raw), lessons);
+        const feedback = await feedbackForPrompt(actor, key);
+        const body = composeIntegrationContext(raw === null ? null : stripFrontmatter(raw), lessons, feedback);
         if (body !== null) return body;
       }
     }
@@ -646,6 +661,22 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       ...(action.authProfile ? { authProfile: action.authProfile } : {}),
       ...(action.httpConfig?.baseUrl ? { httpConfig: { baseUrl: action.httpConfig.baseUrl } } : {}),
     };
+  });
+  // 4b. Slice S3 - the RUN OWNER'S OWN integration notes, for the planner and the rehearsal fixer.
+  //
+  // THE ORG IS RESOLVED HERE AND NOWHERE ELSE, which is the whole reason this seam takes a user id
+  // alone (`automation/seams.ts`). The automation tier holds an owner user id on both callers and
+  // no org; handing it one to pass back would make "whose tenant" a value a run could carry
+  // wrongly, and the wrong tenant here is one org's free text landing in another's model turn. The
+  // users store is the single fact, exactly as the `load_context` integration fallback resolves it.
+  //
+  // A user with no org row resolves to no sections rather than to a wildcard: `feedbackSectionsForOwner`
+  // refuses an empty org, so an unresolvable owner reads nothing instead of everything.
+  setIntegrationFeedbackResolver(async (ownerUserId) => {
+    const user = (await users.get(ownerUserId)) as { orgId?: string } | null;
+    const orgId = user?.orgId;
+    if (!orgId) return [];
+    return feedbackSectionsForOwner({ userId: ownerUserId, orgId, role: 'user' });
   });
   // 5. Automation-scoped memory snippets for vision prompts (correction memories, §11.6).
   setScopedMemoryResolver(async (q) => {

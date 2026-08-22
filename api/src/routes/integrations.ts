@@ -42,6 +42,8 @@ import {
   IntegrationActionParams,
   IntegrationKeyParams,
   SetIntegrationLessonsRequest,
+  SetIntegrationActionFeedbackRequest,
+  DiscardActionFeedbackQuery,
   RequestDefinitionPublishRequest,
   PublishDefinitionRequest,
 } from '@ekoa/shared';
@@ -92,6 +94,11 @@ import { readLessons, writeLessons } from '../integrations/definition-lessons.js
 // member of it - evidence is `auth: 'user'` and must not become reachable by a key through a view
 // the capability core already serves.
 import { listActionEvidenceFor } from '../integrations/action-evidence-view.js';
+// Slice S3: the AUTHOR's three controls over their own notes, and deliberately only those. The
+// PROMPT views (`feedbackForPrompt` / `feedbackSectionsForOwner`) are not imported here and must
+// not be: this layer serves a person their own byte-exact text, and the scrubbed views exist for
+// the model seams alone (`action-feedback.ts`, the raw-vs-scrubbed split).
+import { listFeedbackFor, writeFeedbackFor, discardFeedbackFor } from '../integrations/action-feedback.js';
 import { integrationRecipeStore } from '../integrations/recipe-store.js';
 import { forgetRecipe } from '../integrations/recipe-lifecycle.js';
 // Slice S1: the owner's erasure control over their own action evidence. The ONE store method a
@@ -1279,6 +1286,95 @@ export function integrationsRouter(deps: {
     const out = await listActionEvidenceFor(actorOf(req), params.data.key);
     if (!out.ok) return refuseCapability(res, out.refusal);
     res.json({ items: out.value });
+  });
+
+  /* --- PER-USER ACTION FEEDBACK (slice S3) ---------------------------------------------------
+   *
+   * Three thin routes over `integrations/action-feedback.ts`. NOTHING about the raw-vs-scrubbed
+   * split, the ceiling, the definition predicate or the deterministic id is decided here - this
+   * layer validates the segment, calls once, and maps the verdict onto the envelope.
+   *
+   * ALL THREE SIT BELOW THE `requireAuth` BLANKET, and that position IS the admission: a gateway key
+   * never reaches them. For the READ and the DELETE that is the reading `listActionEvidence` and
+   * `discardActionEvidence` take. For the WRITE it is decision D2 and a Rule 8 argument of its own -
+   * this text lands in future prompts, so a key-bearing agent that could POST here would be writing
+   * its own next instructions. Agents read these notes; only a person writes one. The descriptors
+   * carry the full reasoning; these routes inherit it by sitting here rather than restating it.
+   */
+
+  /**
+   * GET /api/v1/integrations/:key/feedback -> { items: IntegrationActionFeedback[] } (auth: user).
+   *
+   * The caller's OWN notes, byte-exact, for the detail page's editors. Never a colleague's: the
+   * collection is keyed per user and the read passes the verified actor's own org and user id, so
+   * there is no shape of request that names somebody else.
+   */
+  r.get('/:key/feedback', async (req: AuthedRequest, res: Response) => {
+    const params = IntegrationKeyParams.safeParse(req.params);
+    if (!params.success) return sendError(res, 'VALIDATION_FAILED', 'Parâmetros inválidos.', { issues: params.error.issues });
+    const out = await listFeedbackFor(actorOf(req), params.data.key);
+    if (!out.ok) return refuseCapability(res, out.refusal);
+    res.json({ items: out.value });
+  });
+
+  /**
+   * PUT /api/v1/integrations/:key/actions/:actionName/feedback -> IntegrationActionFeedback.
+   *
+   * IDEMPOTENT AT ITS OWN ADDRESS: `(orgId, userId, key, actionName, stepRef?)` hashes to one
+   * deterministic `_id`, so writing twice leaves one row and a retried write cannot fork a second
+   * note. The over-length body is refused at the SCHEMA (`ACTION_FEEDBACK_MAX_CHARS`), which is why
+   * the store's own ceiling is never reached from here - it is there for the callers that are not
+   * this route.
+   */
+  r.put('/:key/actions/:actionName/feedback', async (req: AuthedRequest, res: Response) => {
+    const params = IntegrationActionParams.safeParse(req.params);
+    if (!params.success) return sendError(res, 'VALIDATION_FAILED', 'Parâmetros inválidos.', { issues: params.error.issues });
+    const body = parseBody(res, SetIntegrationActionFeedbackRequest, req.body);
+    if (!body) return;
+    const out = await writeFeedbackFor(actorOf(req), params.data.key, params.data.actionName, {
+      note: body.note,
+      ...(body.stepRef !== undefined ? { stepRef: body.stepRef } : {}),
+    });
+    if (!out.ok) {
+      // The ceiling is a 400 naming the limit, never the house 404: the caller CAN see this
+      // integration and this action, they simply hold too many notes here, and telling them so is
+      // the only answer they can act on.
+      if (out.refusal === 'too_many') {
+        return sendError(res, 'VALIDATION_FAILED', 'Já tem demasiadas notas nesta ação. Remova uma antes de escrever outra.', {
+          code: 'too_many_notes', limit: out.limit,
+        });
+      }
+      // Otherwise the house 404 for BOTH "no such integration for you" and "no such action on it",
+      // byte-identical, so this route cannot be walked to learn which actions a package carries.
+      return refuseCapability(res, out.refusal);
+    }
+    res.json(out.value);
+  });
+
+  /**
+   * DELETE /api/v1/integrations/:key/actions/:actionName/feedback?stepRef= -> { ok, discarded }.
+   *
+   * The author's erasure control over their own note. IDEMPOTENT: nothing to erase answers `ok`
+   * with `discarded: false` rather than a 404 - the caller asked for a STATE and it holds either
+   * way, and a 404 would be an existence oracle over whether they had ever written one.
+   *
+   * `stepRef` rides the QUERY because a DELETE carries no body. Absent removes the ACTION-level
+   * note and never a step's: the two are different rows, and a delete that swept every step's note
+   * because the caller omitted one field would be an erasure nobody asked for.
+   */
+  r.delete('/:key/actions/:actionName/feedback', async (req: AuthedRequest, res: Response) => {
+    const params = IntegrationActionParams.safeParse(req.params);
+    if (!params.success) return sendError(res, 'VALIDATION_FAILED', 'Parâmetros inválidos.', { issues: params.error.issues });
+    const query = DiscardActionFeedbackQuery.safeParse(req.query);
+    if (!query.success) return sendError(res, 'VALIDATION_FAILED', 'Parâmetros inválidos.', { issues: query.error.issues });
+    const out = await discardFeedbackFor(
+      actorOf(req),
+      params.data.key,
+      params.data.actionName,
+      query.data.stepRef,
+    );
+    if (!out.ok) return refuseCapability(res, out.refusal);
+    res.json({ ok: true, discarded: out.value });
   });
 
 

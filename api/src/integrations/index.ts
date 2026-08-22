@@ -133,6 +133,33 @@ export {
   type WriteLessonsResult,
   type LessonsStoreReader,
 } from './definition-lessons.js';
+// S3 - PER-USER ACTION FEEDBACK: the same raw (author) / scrubbed (prompt) split lessons made, over
+// a collection of its own. The composition root needs both PROMPT views (the `load_context`
+// concatenation and the automation seam's binding); the store is exported for the isolation suite
+// and for the seam wiring, never so a route can address a row directly.
+export {
+  listFeedbackFor,
+  writeFeedbackFor,
+  discardFeedbackFor,
+  feedbackForPrompt,
+  feedbackSectionsForOwner,
+  feedbackPromptSection,
+  FEEDBACK_PROMPT_HEADING,
+  FEEDBACK_PROMPT_MAX_CHARS,
+  FEEDBACK_PROMPT_MAX_NOTES,
+  ACTION_FEEDBACK_MAX_CHARS,
+  type ActionFeedbackReader,
+  type ActionFeedbackWriter,
+  type FeedbackWriteOutcome,
+} from './action-feedback.js';
+export {
+  actionFeedbackStore,
+  ActionFeedbackStore,
+  ActionFeedbackStoreError,
+  actionFeedbackIdFor,
+  type ActionFeedbackDoc,
+  type ActionFeedbackKey,
+} from './action-feedback-store.js';
 // E2 — the publish scrub: deterministic floor + one chokepoint model pass into a FROZEN snapshot
 // other orgs read, plus its dry-run preview. `applyPublishFloor`/`publishedViewOf` are the pure
 // read-time half; `previewPublish`/`publishDefinition` are the two doors the route layer mounts

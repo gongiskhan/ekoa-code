@@ -5361,3 +5361,154 @@ read module, the two scopes it enforces and the detail page's client modules (ro
 helpers, and the list->detail link); `docs/diagrams/03-request-crud.excalidraw` gains the request
 path of the new endpoint and the client's five failure channels. Appended as single text elements
 carrying `text`, `rawText` and `originalText`; no existing element was edited.
+
+## 2026-08-22 - S3: a person's own notes about an action, and why an agent may never write one
+
+**WHAT LANDED.** `integration_action_feedback` - one row per
+`(orgId, userId, integrationKey, actionName, stepRef?)` holding free text its author wrote - plus the
+three `auth: 'user'` routes over it, the note affordance on the integration detail page, and the
+three prompt seams that read it back (`load_context` through `composeIntegrationContext`, the
+automation planner and rehearsal fixer through a new `integrationFeedback` seam, and `achieve`'s
+drafting turn). Slice S3 of CONVERGENCE_PLAN.
+
+**D2, AND IT IS THE DECISION THIS ENTRY EXISTS FOR: THE WRITE IS `user`, NEVER `user-or-key`.** Not
+the usual "narrow is the reversible direction" argument, though that holds too. This text LANDS IN
+FUTURE PROMPTS. A key-bearing agent that could POST a note would be authoring its own next
+instructions - one turn writing what the next turn is told, with the platform's own prompt assembly
+as the delivery mechanism and no gate anywhere on the path, because the delivery IS the platform.
+That is self-injection, and Rule 8 says the provider authenticates, meters, routes and logs and does
+not interpret prompt content or inject context on the caller's behalf. Agents READ these notes; only
+a person WRITES one. The read is `user` on `listActionEvidence`'s reading (a note is one person's
+prose naming portals, colleagues and case numbers, and a key gains no capability by reading it -
+`achieve` already sees its EFFECT), and the delete on `discardActionEvidence`'s (a destructive
+control over a person's own data is the person's). All three are consequently outside
+`docs/openapi/cortex.v1.json`, which filters on `auth === 'user-or-key'` with no allowlist - so this
+slice regenerates the spec and the CLI client to no change, and that was verified rather than
+assumed.
+
+**THE UNIT OF CONSUMPTION IS THE CALLING USER, AND THAT IS A DIFFERENT ARGUMENT FROM THE EVIDENCE
+ROW'S.** S1 keys evidence by org AND owner because the ROW HOLDS third-party data. Feedback is keyed
+by org AND user because the row is READ BACK INTO A PROMPT: pooling an organisation's notes would
+make one member's free text an instruction in another member's model turn. So there is no org-wide
+read anywhere in this slice, and the seam that widens - the planner's, which has no integration key -
+widens the KEY and not the IDENTITY. Every seam is driven end to end in
+`api/tests/security/action-feedback-isolation.test.ts` with a peer's note planted beside the
+caller's own, because the store cannot see whether its caller passed the verified actor's id.
+
+**`stepRef` IS THE STEP'S OWN ID AND NEVER ITS INDEX.** A note is durable, a plan is edited, and an
+index addresses a different step the moment anyone reorders one. That is exactly the misalignment
+`stepSampleFit` was built to DETECT for evidence samples - and detecting it is not available here,
+because a note carries no run id to identify it by. So the address is `PlanStep.stepId`, which moves
+with its step. The cost is stated rather than hidden: `stepId` is optional on the wire schema, so a
+step without one is not addressable and gets no box. The action-level note (absent `stepRef`) is
+always offered and is the only shape an api-call action can hold.
+
+**THE WRITE IS AN INSERT-AS-CLAIM PLUS CAS, NOT A `put`.** The difference is `createdAt`. A `put`
+rewrites the whole document, so every edit of a note would restamp it as newly created and the row
+would lose the one fact it holds about its own history. Pinned behaviourally (an edit keeps
+`createdAt` and moves `updatedAt`) rather than by this sentence.
+
+**ONE PLACE A ROW BECOMES PROMPT TEXT.** `feedbackPromptSection` scrubs, caps, orders and labels, and
+all three seams reach it. Three copies of `scrubSecretText(row.note)` would be three chances for the
+fourth seam to forget, and a floor you can forget is not a floor - so the suites assert the PROPERTY
+at each seam (a planted credential does not reach that seam's prompt) rather than that each seam
+contains a call. Removing the single scrub reddens all three, which was measured.
+
+**AND THE FLOOR'S SHAPE IS RECORDED RATHER THAN OVERSOLD.** `scrubSecretText` is VALUE-ANCHORED - it
+redacts the value of a credential-named key and the text after an auth scheme word, deliberately, so
+that documentation of field names survives. A credential pasted into ordinary prose with no such
+anchor is outside it, here and in the lessons body that shares the floor. That is not something this
+slice introduced and not something it can claim to have closed; it is pinned by a test that asserts
+the survival, recorded in `docs/findings.md`, and mitigated on the surface by copy in both locales
+saying the assistant reads what is typed.
+
+**REMOVAL: TWO SIGNALS, AND DELIBERATELY NO SWEEP.** The author's delete, and a newer note
+superseding at the same deterministic `_id`. `action-evidence-store.ts` needs a retention sweep
+because its rows hold third-party response bodies and PIN a run's screenshots out of a 7-day sweep;
+a note holds neither - it is the author's own prose, capped at `ACTION_FEEDBACK_MAX_CHARS`, pinning
+nothing. Nothing synchronous decides a row is over (a definition edit, a re-author, a visibility
+flip, a disconnected credential and a failed resolve all record nothing and delete nothing), which
+is S1's removal rule inherited whole and for the same reason: four rounds of evidence say the guess
+is not reliable enough to spend a deletion on. The residual - an orphaned note - is OPEN in
+`docs/findings.md`.
+
+**FORKING, SAID AS BEHAVIOUR.** A note follows the KEY. A tenant row shadowing a package under the
+SAME key keeps its notes, which is the useful direction. A fork under a DISTINCT key starts with
+none, and none are copied - a copy would be this module inventing authorship, attributing to a person
+words they never wrote about that key. Promotion carries none by construction.
+
+**A NEW `Store.find` OPTION, ADDITIVE.** `opts.limit`, beside `opts.projection` and for the sibling
+reason: a projection bounds each ROW, and the owner-scoped prompt read needs to bound the COUNT on
+the hot path of every automation plan. Applied by the driver, so the cap governs what is fetched
+rather than what survives a `.slice()`.
+
+DIAGRAM CHECK (FIXED-12): DONE, append-only. `docs/diagrams/02-module-map.excalidraw` gains the S3
+store, the two-view module, the automation seam and its composition-root binding;
+`docs/diagrams/05-data-model.excalidraw` gains the `integration_action_feedback` collection with its
+five-term key and its structural exclusion from `publishedSnapshot`. Appended as single text elements
+carrying `text`, `rawText` and `originalText`; no existing element was edited.
+
+**REVIEW ROUND (2026-08-22), AND WHAT IT CORRECTED IN THIS ENTRY.** An adversarial pass returned
+three majors and thirteen minors against the entry above. Two claims it made are REFUTED and
+recorded here so they are not re-litigated; the rest is corrected IN PLACE where the entry was
+wrong, because this is one unmerged commit and a future editor would otherwise follow the wrong
+version.
+
+**THE COMPENSATING CONTROL THIS ENTRY RESTED ON DID NOT EXIST.** "Removal: two signals, and
+deliberately no sweep" was argued on the ground that an orphaned note is "the author's own capped
+prose, closable by them at any moment", and `docs/findings.md` dismissed the retention gap on the
+same basis. The dashboard did not render an orphan at all: the component resolved notes BY SLOT, so
+a note whose step had left the plan appeared nowhere, and the page builds one card per capability
+action, so a note about a departed action had no card either - both invisible and unerasable while
+both kept reaching the author's prompts. The written dismissal was factually false. The control is
+built now (`orphanedSteps`, and `DepartedActionNotes` for the departed-action case, ERASE-ONLY
+because the write refuses an action off the definition), and the no-sweep decision stands only
+because it is real. The lesson is the one this repo keeps paying for: a dismissal that rests on a
+compensating control has to name a test, not a paragraph.
+
+**"ONE PLACE A ROW BECOMES PROMPT TEXT" WAS TRUE OF ONE FIELD, NOT THE ROW.** The floor scrubbed
+`row.note` and interpolated `row.stepRef` raw into the same line, so an anchored credential written
+as a step ref reached all three seams unredacted. Every scrub fixture had planted its secret in the
+note body, which is precisely why M5 was blind to it. The scrub now runs over the whole composed
+line, and `stepRef` gains a store-side ceiling.
+
+**THE SEAM-1 BINDING HAD THE HOLE THIS SLICE NAMED AND CLOSED FOR SEAM 2.** M7's own argument -
+delete a `server.ts` binding and the estate stays green - applied verbatim to the `load_context`
+join, and the suite written to close that defect class covered only the automation resolver. It now
+drives the REAL `loadContextContent` that `buildApp` wires, which is the precedent
+`contract/integrations-lessons.test.ts` set for C3 and that this slice should have followed the
+first time. Seam 3 has no such hole: `achieve` calls the module directly, so there is no binding to
+lose, and that is now stated rather than left to be inferred.
+
+**A TEST TITLE CLAIMED WHAT NO ASSERTION ENFORCED.** "an edit keeps createdAt and moves updatedAt"
+asserted `second.updatedAt >= first.updatedAt`, which a stamp that never moves satisfies. Freezing
+`updatedAt` on the CAS swap reddened nothing anywhere - while in production `newestFirst` orders the
+prompt view by it and `listForOwner` keeps the newest twenty by it, so a frozen stamp makes the
+guidance a person most recently corrected the first thing the cap drops. The moves-half is now
+pinned on an INJECTED STEPPING CLOCK with strict inequality, and the same clock makes the
+createdAt-survival assertion deterministic - it had been riding the wall clock, where roughly a third
+of consecutive writes share a millisecond and a `put`-restamp regression passed on those runs.
+
+**TWO CLAIMS REFUTED, RECORDED SO THEY STAY REFUTED.** (1) That the planner places tenant-authored
+note text in the SYSTEM prompt while the fixer confines it to the user turn is CORRECT as a reading
+and NOT a defect: the fixer's exclusion is expressly scoped to the fixer's own threat model (it
+reasons over remote-page bytes, so its system prompt is the only trusted anchor on that turn), the
+planner's turn carries no remote bytes, `achieve` uses the same system placement through the same
+authoring core, and the exposure is self-scoped - the write is person-only and the read is always
+the caller's own rows, so a plan owner influencing their own planner gains nothing they could not
+type directly. (2) That a failed note save shows raw server prose ahead of localized copy is the
+page's uniform, deliberately documented precedence - identical on main for both read channels and
+for the run-now WRITE toast - and this endpoint's production refusals are hand-authored Portuguese,
+so the scenario is inverted. No change for either.
+
+**ALSO CLOSED IN THIS ROUND:** the two prompt-path reads are bounded in the QUERY, not only in the
+answer, and the write caps distinct notes per action (both were unbounded growth against a shared
+database); the `no_tenant` 403 is pinned on all three routes; the wire projection is pinned by an
+explicit absence assertion and the response schema is `.strict()`, so a regression returning the raw
+document fails the parse instead of being silently stripped; the S6 battery is tied to a REAL row
+built by the REAL store, so a store-side rename reddens it - which immediately caught two field
+names the battery had been missing; the write-path stale-key guards, the retry affordance, the
+loading-vs-empty copy and the empty-draft save refusal all gained the tests that were missing; the
+note fixture is parsed through the shared schema per the house rule; and the composition-root
+suite's "must start UNBOUND" guard, which could not fire against emptied collections, is replaced by
+one that plants a real fixture first and therefore can.

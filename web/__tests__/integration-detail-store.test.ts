@@ -20,9 +20,13 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { IntegrationActionEvidence, IntegrationCapability } from '@ekoa/shared';
+import { IntegrationActionFeedback } from '@ekoa/shared';
 
 const getIntegrationSpy = vi.fn();
 const listActionEvidenceSpy = vi.fn();
+const listActionFeedbackSpy = vi.fn();
+const setActionFeedbackSpy = vi.fn();
+const discardActionFeedbackSpy = vi.fn();
 const executeActionSpy = vi.fn();
 const automationGetSpy = vi.fn();
 const automationListRunsSpy = vi.fn();
@@ -32,6 +36,9 @@ vi.mock('@/lib/api', () => ({
     integrations: {
       getIntegration: (...args: unknown[]) => getIntegrationSpy(...args),
       listActionEvidence: (...args: unknown[]) => listActionEvidenceSpy(...args),
+      listActionFeedback: (...args: unknown[]) => listActionFeedbackSpy(...args),
+      setActionFeedback: (...args: unknown[]) => setActionFeedbackSpy(...args),
+      discardActionFeedback: (...args: unknown[]) => discardActionFeedbackSpy(...args),
       executeAction: (...args: unknown[]) => executeActionSpy(...args),
     },
     automations: {
@@ -48,7 +55,7 @@ vi.mock('@/lib/api', () => ({
   },
 }));
 
-import { useIntegrationDetailStore, ACTION_RUN_HISTORY_LIMIT } from '@/stores/integration-detail';
+import { useIntegrationDetailStore, feedbackSlot, ACTION_RUN_HISTORY_LIMIT } from '@/stores/integration-detail';
 
 const KEY = 'citius';
 const HTTP_ACTION = 'consultar_processo';
@@ -99,12 +106,16 @@ const evidenceRow = (over: Partial<IntegrationActionEvidence> = {}): Integration
   }) as IntegrationActionEvidence;
 
 beforeEach(() => {
-  for (const spy of [getIntegrationSpy, listActionEvidenceSpy, executeActionSpy, automationGetSpy, automationListRunsSpy]) {
+  for (const spy of [
+    getIntegrationSpy, listActionEvidenceSpy, listActionFeedbackSpy, setActionFeedbackSpy,
+    discardActionFeedbackSpy, executeActionSpy, automationGetSpy, automationListRunsSpy,
+  ]) {
     spy.mockReset();
   }
   useIntegrationDetailStore.getState().reset();
   getIntegrationSpy.mockResolvedValue(capability());
   listActionEvidenceSpy.mockResolvedValue({ items: [evidenceRow()] });
+  listActionFeedbackSpy.mockResolvedValue({ items: [] });
 });
 
 describe('load - the page\'s own read', () => {
@@ -344,5 +355,171 @@ describe('runNow - every failure reaches the user', () => {
     executeActionSpy.mockResolvedValue({ success: true });
     await useIntegrationDetailStore.getState().runNow(KEY, HTTP_ACTION);
     expect(useIntegrationDetailStore.getState().running[HTTP_ACTION]).toBeUndefined();
+  });
+});
+
+
+// ---------------------------------------------------------------------------------------------
+// PER-USER NOTES (slice S3)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * One note as the wire carries it. `stepRef` absent addresses the ACTION's own note.
+ *
+ * PARSED THROUGH THE SHARED SCHEMA, not hand-rolled: the house rule is that a stub for an API
+ * response is schema-validated, so a wire-shape drift makes the fixture fail rather than letting
+ * the store be tested against a shape the server can no longer emit. `.parse` throws on drift, and
+ * the schema is `.strict()`, so an extra key here is a failure too.
+ */
+const noteRow = (over: Record<string, unknown> = {}): IntegrationActionFeedback =>
+  IntegrationActionFeedback.parse({
+    actionName: HTTP_ACTION,
+    note: 'o portal quer o numero com zeros a esquerda',
+    createdAt: '2026-08-20T10:00:00.000Z',
+    updatedAt: '2026-08-22T10:00:00.000Z',
+    ...over,
+  });
+
+describe('the notes read', () => {
+  it('keys the action note and a step note into DIFFERENT slots', async () => {
+    listActionFeedbackSpy.mockResolvedValue({
+      items: [noteRow(), noteRow({ stepRef: 'abrir-portal', note: 'este passo demora' })],
+    });
+    await useIntegrationDetailStore.getState().load(KEY);
+    const s = useIntegrationDetailStore.getState();
+
+    expect(s.feedbackLoaded).toBe(true);
+    expect(s.feedback[feedbackSlot(HTTP_ACTION)]?.note).toContain('zeros a esquerda');
+    expect(s.feedback[feedbackSlot(HTTP_ACTION, 'abrir-portal')]?.note).toBe('este passo demora');
+  });
+
+  it('a failed read leaves `feedbackLoaded` FALSE - the surface must not offer an empty editor', async () => {
+    listActionFeedbackSpy.mockRejectedValue(new FakeApiError(500, 'INTERNAL', 'notas indisponiveis'));
+    await useIntegrationDetailStore.getState().load(KEY);
+    const s = useIntegrationDetailStore.getState();
+
+    expect(s.feedbackLoaded, 'a box that opens empty over a real note destroys it on save').toBe(false);
+    expect(s.feedbackError?.detail).toBe('notas indisponiveis');
+    // The PAGE still stands: a failed notes read is a section's failure, not the page's.
+    expect(s.capability?.integration.key).toBe(KEY);
+    expect(s.capabilityError).toBeNull();
+  });
+
+  it('a late answer for a PREVIOUS key is dropped (the stale-key guard)', async () => {
+    let release: (v: unknown) => void = () => {};
+    listActionFeedbackSpy.mockImplementation(() => new Promise((r) => { release = r; }));
+    const pending = useIntegrationDetailStore.getState().fetchFeedback(KEY);
+
+    // The page moved on to another integration before the answer came back.
+    useIntegrationDetailStore.setState({ key: 'other', requestedKey: 'other' });
+    release({ items: [noteRow()] });
+    await pending;
+
+    expect(
+      useIntegrationDetailStore.getState().feedback,
+      'a note for integration A must not commit under integration B\'s same-named action',
+    ).toEqual({});
+  });
+});
+
+describe('the notes writes', () => {
+  it('commits the SERVER\'s row rather than the text that was typed', async () => {
+    await useIntegrationDetailStore.getState().load(KEY);
+    setActionFeedbackSpy.mockResolvedValue(noteRow({ note: 'guardado pelo servidor' }));
+
+    const ok = await useIntegrationDetailStore.getState().saveFeedback(KEY, HTTP_ACTION, undefined, 'o que escrevi');
+    const s = useIntegrationDetailStore.getState();
+
+    expect(ok).toBe(true);
+    expect(setActionFeedbackSpy).toHaveBeenCalledWith({ key: KEY, actionName: HTTP_ACTION, note: 'o que escrevi' });
+    // The stamps come from the answer; echoing the local string would show a guess.
+    expect(s.feedback[feedbackSlot(HTTP_ACTION)]?.note).toBe('guardado pelo servidor');
+    expect(s.feedback[feedbackSlot(HTTP_ACTION)]?.createdAt).toBe('2026-08-20T10:00:00.000Z');
+    expect(s.feedbackSaving[feedbackSlot(HTTP_ACTION)]).toBeUndefined();
+  });
+
+  it('passes `stepRef` through, and files the answer under the step\'s own slot', async () => {
+    await useIntegrationDetailStore.getState().load(KEY);
+    setActionFeedbackSpy.mockResolvedValue(noteRow({ stepRef: 'abrir-portal', note: 'sobre o passo' }));
+
+    await useIntegrationDetailStore.getState().saveFeedback(KEY, HTTP_ACTION, 'abrir-portal', 'sobre o passo');
+
+    expect(setActionFeedbackSpy).toHaveBeenCalledWith({
+      key: KEY, actionName: HTTP_ACTION, note: 'sobre o passo', stepRef: 'abrir-portal',
+    });
+    const s = useIntegrationDetailStore.getState();
+    expect(s.feedback[feedbackSlot(HTTP_ACTION, 'abrir-portal')]?.note).toBe('sobre o passo');
+    expect(s.feedback[feedbackSlot(HTTP_ACTION)], 'the action note is a different row').toBeUndefined();
+  });
+
+  it('a failed save reports under THAT slot and keeps whatever was already stored', async () => {
+    listActionFeedbackSpy.mockResolvedValue({ items: [noteRow()] });
+    await useIntegrationDetailStore.getState().load(KEY);
+    setActionFeedbackSpy.mockRejectedValue(new FakeApiError(400, 'VALIDATION_FAILED', 'nota demasiado longa'));
+
+    const ok = await useIntegrationDetailStore.getState().saveFeedback(KEY, HTTP_ACTION, undefined, 'x');
+    const s = useIntegrationDetailStore.getState();
+
+    expect(ok).toBe(false);
+    expect(s.feedbackWriteError[feedbackSlot(HTTP_ACTION)]?.detail).toBe('nota demasiado longa');
+    expect(s.feedback[feedbackSlot(HTTP_ACTION)]?.note, 'the stored note survives a refused write')
+      .toContain('zeros a esquerda');
+    // …and a DIFFERENT slot carries no error: the channel is per note, not per action.
+    expect(s.feedbackWriteError[feedbackSlot(HTTP_ACTION, 'abrir-portal')]).toBeUndefined();
+  });
+
+  it('a late SAVE answer for a previous key is dropped (the write-path stale guard)', async () => {
+    // The read guard was pinned; these two were not, and the review proved both deletable with the
+    // whole web suite green. The consequence is the same one the read guard names: `feedback` is
+    // keyed by action + step with no integration component and `load` resets it, so a save
+    // resolving after the user has navigated commits integration A's row into integration B's map
+    // under an identically-named action.
+    await useIntegrationDetailStore.getState().load(KEY);
+    let release: (v: unknown) => void = () => {};
+    setActionFeedbackSpy.mockImplementation(() => new Promise((r) => { release = r; }));
+
+    const pending = useIntegrationDetailStore.getState().saveFeedback(KEY, HTTP_ACTION, undefined, 'o que escrevi');
+    // The page moved to another integration while the save was in flight.
+    useIntegrationDetailStore.setState({ key: 'other', requestedKey: 'other', feedback: {} });
+    release(noteRow({ note: 'a resposta tardia' }));
+    await pending;
+
+    expect(
+      useIntegrationDetailStore.getState().feedback,
+      "a note for integration A must not commit under integration B's same-named action",
+    ).toEqual({});
+  });
+
+  it('a late ERASE answer for a previous key is dropped', async () => {
+    listActionFeedbackSpy.mockResolvedValue({ items: [noteRow()] });
+    await useIntegrationDetailStore.getState().load(KEY);
+    let release: (v: unknown) => void = () => {};
+    discardActionFeedbackSpy.mockImplementation(() => new Promise((r) => { release = r; }));
+
+    const pending = useIntegrationDetailStore.getState().removeFeedback(KEY, HTTP_ACTION, undefined);
+    const otherIntegrationsNote = { [feedbackSlot(HTTP_ACTION)]: noteRow({ note: 'a nota da outra integracao' }) };
+    useIntegrationDetailStore.setState({ key: 'other', requestedKey: 'other', feedback: otherIntegrationsNote });
+    release({ ok: true, discarded: true });
+    await pending;
+
+    expect(
+      useIntegrationDetailStore.getState().feedback[feedbackSlot(HTTP_ACTION)]?.note,
+      'a late erase must not delete the NEW integration\'s same-named note',
+    ).toBe('a nota da outra integracao');
+  });
+
+  it('a confirmed erase drops the row; a failed one leaves it exactly where it was', async () => {
+    listActionFeedbackSpy.mockResolvedValue({ items: [noteRow()] });
+    await useIntegrationDetailStore.getState().load(KEY);
+
+    discardActionFeedbackSpy.mockRejectedValue(new FakeApiError(500, 'INTERNAL', 'sem ligacao'));
+    expect(await useIntegrationDetailStore.getState().removeFeedback(KEY, HTTP_ACTION, undefined)).toBe(false);
+    expect(useIntegrationDetailStore.getState().feedback[feedbackSlot(HTTP_ACTION)], 'never optimistic').toBeTruthy();
+
+    discardActionFeedbackSpy.mockResolvedValue({ ok: true, discarded: true });
+    expect(await useIntegrationDetailStore.getState().removeFeedback(KEY, HTTP_ACTION, undefined)).toBe(true);
+    const s = useIntegrationDetailStore.getState();
+    expect(s.feedback[feedbackSlot(HTTP_ACTION)]).toBeUndefined();
+    expect(s.feedbackWriteError[feedbackSlot(HTTP_ACTION)], 'the earlier failure is cleared by the retry').toBeUndefined();
   });
 });

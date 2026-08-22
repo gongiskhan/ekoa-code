@@ -23,6 +23,10 @@ import {
 import { publishDefinition, scrubPublishText } from '../../src/integrations/publish-scrub.js';
 import { resolveDefinition } from '../../src/integrations/definition-registry.js';
 import { isTrustedAction } from '../../src/integrations/authored-action.js';
+// S3: the REAL feedback store, so the half this suite used to defer to "another stream" can be
+// asserted here - that writing a note leaves the definition document alone.
+import { actionFeedbackStore } from '../../src/integrations/action-feedback-store.js';
+import { integrationActionFeedback } from '../../src/data/stores.js';
 
 /**
  * PUBLISH-DOOR ISOLATION (slice S6) - a memvault-class suite for the three properties that only
@@ -34,23 +38,31 @@ import { isTrustedAction } from '../../src/integrations/authored-action.js';
  *
  * 1. THE STRUCTURAL EXCLUSION (decision D5). Per-action evidence and per-user feedback live in
  *    tenant-scoped collections that are structurally OUTSIDE the published snapshot, so promotion
- *    carries none BY CONSTRUCTION. Those two stores are being built by another stream and cannot be
- *    imported here, so the property is asserted FROM THE PUBLISH SIDE and in the strongest form
- *    available from here: the snapshot's content is built by an explicit WHITELIST
+ *    carries none BY CONSTRUCTION. The property is asserted FROM THE PUBLISH SIDE and in the
+ *    strongest form available from here: the snapshot's content is built by an explicit WHITELIST
  *    (`packageConfigFromDoc`), so this suite plants a battery of evidence- and feedback-shaped
  *    fields ON the definition document - top level and per action - publishes, and proves the
  *    snapshot has no field either could occupy. The assertion is whitelist-shaped rather than
- *    name-shaped: it holds for whatever the other stream ends up calling its fields, because a field
- *    the whitelist does not name cannot appear whatever it is called.
+ *    name-shaped: it holds whatever those fields end up being called, because a field the whitelist
+ *    does not name cannot appear under any name.
  *
- *    WHAT THIS SUITE CANNOT PROVE, stated rather than implied: it proves the SNAPSHOT excludes them.
- *    The other stream must confirm the other half - that neither store writes onto the definition
- *    document at all - because `publishedViewOf` spreads the stored doc (`{...doc}`) before
- *    overlaying the snapshot's content fields, so a hypothetical evidence field placed ON the row
- *    would ride the in-process cross-org VIEW even though it never entered the snapshot. Today
- *    nothing places one, and the wire projection (`definitionFromDoc`) is itself a whitelist, so
- *    nothing reaches a client either. Both facts are asserted below so that a change to either one
- *    reddens here.
+ *    THE BATTERY NOW CARRIES THE FEEDBACK STORE'S REAL FIELD NAMES (slice S3), and that is an
+ *    addition rather than a replacement. `integrationActionFeedback` (the collection's own name),
+ *    `note`, `stepRef`, `createdAt`/`updatedAt` and the row shape `action-feedback-store.ts`
+ *    actually writes are planted beside the invented ones, so the suite would redden for the
+ *    concrete regression - somebody moving a real note onto the definition row - and not only for a
+ *    hypothetical one. The generic battery stays because the whitelist argument is the stronger of
+ *    the two and must not decay into a list of today's names.
+ *
+ *    AND THE OTHER HALF IS NO LONGER DEFERRED. The previous revision said "the other stream must
+ *    confirm that neither store writes onto the definition document at all", because
+ *    `publishedViewOf` spreads the stored doc (`{...doc}`) before overlaying the snapshot's content
+ *    fields - so a feedback field placed ON the row would ride the in-process cross-org VIEW even
+ *    though it never entered the snapshot. The feedback store exists now and is imported below: a
+ *    REAL note is written through the REAL store and the definition document is then read back and
+ *    proven byte-unchanged, which is the half the snapshot assertions cannot reach. The wire
+ *    projection (`definitionFromDoc`) is itself a whitelist, so nothing reaches a client either.
+ *    All three facts are asserted so that a change to any one of them reddens here.
  *
  * 2. THE PROVENANCE PROJECTION. `authoring.authoredBy`, `authoring.trustedBy`, `authoring.goal` and
  *    `verification.checks[].detail` used to ride into the snapshot whole. They identify people in
@@ -116,6 +128,13 @@ class RecordingStore extends Store<Doc> {
   }
 }
 
+/** Field names one level inside a planted value - arrays of row shapes and plain objects alike. */
+function nestedKeys(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(nestedKeys);
+  if (value !== null && typeof value === 'object') return Object.keys(value as Record<string, unknown>);
+  return [];
+}
+
 /**
  * THE PLANTED BATTERY: every field name the evidence store (S1) or the feedback store (S3) could
  * plausibly want, at both levels the definition document has. None of these exists in production -
@@ -129,6 +148,17 @@ const EVIDENCE_SHAPED_DOC_FIELDS: Record<string, unknown> = {
   feedback: [{ userId: 'userA1', note: S_FEEDBACK }],
   userFeedback: { 'userA1': S_FEEDBACK },
   stepFeedback: [{ stepIndex: 0, note: S_FEEDBACK }],
+  // S3's REAL names: the collection `integration_action_feedback` camel-cased as a field, holding
+  // the row shape `ActionFeedbackDoc` actually has (`userId`, `actionName`, `stepRef`, `note`,
+  // `createdAt`, `updatedAt`). Planted BESIDE the invented shapes above rather than instead of
+  // them - the whitelist argument is what generalises, and this is what makes the concrete
+  // regression fail here too.
+  integrationActionFeedback: [
+    {
+      orgId: 'orgA', userId: 'userA1', integrationKey: KEY, actionName: 'send', stepRef: 'open-portal',
+      note: S_FEEDBACK, createdAt: '2026-08-22T09:00:00.000Z', updatedAt: '2026-08-22T09:00:00.000Z',
+    },
+  ],
 };
 const EVIDENCE_SHAPED_ACTION_FIELDS: Record<string, unknown> = {
   evidence: { requestSummary: S_EVIDENCE, responseSample: S_EVIDENCE },
@@ -136,6 +166,11 @@ const EVIDENCE_SHAPED_ACTION_FIELDS: Record<string, unknown> = {
   screenshots: [{ stepIndex: 0, ref: S_EVIDENCE }],
   feedback: [{ userId: 'userA1', note: S_FEEDBACK }],
   lastRun: { runId: 'run_1', output: S_EVIDENCE },
+  // S3 again, at the level a per-STEP note would most plausibly be folded onto if the collection
+  // were ever collapsed into the package: the action carrying its own steps' notes.
+  stepRef: 'open-portal',
+  note: S_FEEDBACK,
+  notes: [{ userId: 'userA1', stepRef: 'open-portal', note: S_FEEDBACK }],
 };
 
 /** The ONE action, carrying a full D3 authoring record - the provenance under test. */
@@ -227,7 +262,7 @@ afterAll(async () => {
 
 beforeEach(async () => {
   __resetActivationForTests(); __resetRevocationsForTests();
-  for (const s of [users, integrationDefinitions]) await s.deleteMany({});
+  for (const s of [users, integrationDefinitions, integrationActionFeedback]) await s.deleteMany({});
   clock = 0;
   await seed();
 });
@@ -237,6 +272,36 @@ beforeEach(async () => {
 // ---------------------------------------------------------------------------------------------
 
 describe('D5 - promotion carries no evidence and no feedback, by construction', () => {
+  it('THE BATTERY TRACKS THE REAL STORE: every ActionFeedbackDoc field name is planted', async () => {
+    // THE REVIEW'S FINDING, closed. Shrinking the battery is invisible by construction - the
+    // non-vacuity test iterates the battery's OWN keys and the snapshot assertions are key-set
+    // equalities - so the S3 additions could be deleted with all 20 cases green, and a store-side
+    // RENAME would silently decay the "real field names" this file advertises back into invented
+    // ones. This ties the fixture to a real row built by the real store, so either drift reddens.
+    const real = await actionFeedbackStore.putFeedback(
+      { orgId: 'orgA', userId: 'userA1', integrationKey: 'battery-probe', actionName: 'send', stepRef: 'open-portal' },
+      'uma nota real',
+    );
+    // The row's own field names, minus the storage envelope the publish path could never carry.
+    const carried = Object.keys(real).filter((k) => k !== '_id' && k !== '_rev');
+    expect(carried.length, 'a real row must have fields to plant').toBeGreaterThan(4);
+
+    const planted = new Set([
+      ...Object.keys(EVIDENCE_SHAPED_DOC_FIELDS),
+      ...Object.keys(EVIDENCE_SHAPED_ACTION_FIELDS),
+      // The names nested INSIDE the planted row shapes count too - that is where the store's own
+      // field names actually sit.
+      ...Object.values(EVIDENCE_SHAPED_DOC_FIELDS).flatMap(nestedKeys),
+      ...Object.values(EVIDENCE_SHAPED_ACTION_FIELDS).flatMap(nestedKeys),
+    ]);
+    const missing = carried.filter((name) => !planted.has(name));
+    expect(
+      missing,
+      `the battery no longer plants every ActionFeedbackDoc field - add ${missing.join(', ')} to it`,
+    ).toEqual([]);
+    await integrationActionFeedback.deleteMany({});
+  });
+
   it('THE FIXTURE IS REAL: every planted field IS on the stored row (non-vacuity floor)', async () => {
     const live = (await store.getById(ID)) as unknown as Record<string, unknown>;
     for (const name of Object.keys(EVIDENCE_SHAPED_DOC_FIELDS)) {
@@ -273,6 +338,29 @@ describe('D5 - promotion carries no evidence and no feedback, by construction', 
     // The consequence, said in one line: neither sentinel is anywhere in the published artifact.
     expect(JSON.stringify(snap)).not.toContain(S_EVIDENCE);
     expect(JSON.stringify(snap)).not.toContain(S_FEEDBACK);
+  });
+
+  it('a REAL note written through the REAL store leaves the definition document byte-unchanged', async () => {
+    // THE HALF THE SNAPSHOT ASSERTIONS CANNOT REACH, and the one this suite used to defer. The
+    // whitelist proves nothing PLANTED on the row survives the publish; it says nothing about
+    // whether the feedback store puts anything there in the first place - and `publishedViewOf`
+    // spreads the stored document, so a note written onto the row would cross an org boundary
+    // through the in-process view without ever entering the snapshot.
+    const before = JSON.stringify(await store.getById(ID));
+    const written = await actionFeedbackStore.putFeedback(
+      { orgId: 'orgA', userId: 'userA1', integrationKey: KEY, actionName: 'send', stepRef: 'open-portal' },
+      `o portal recusa sem o referer, e a chave e ${S_FEEDBACK}`,
+    );
+    // NON-VACUITY: the write really happened, into ITS OWN collection. Without this the case would
+    // pass just as happily against a store that silently did nothing.
+    expect(await integrationActionFeedback.get(written._id), 'the note must really be stored').toBeTruthy();
+    expect(JSON.stringify(await store.getById(ID)), 'writing a note must not touch the definition row').toBe(before);
+
+    // And the publish that follows still carries neither sentinel, with a live note in existence.
+    const doc = await publishSeeded();
+    expect(JSON.stringify(doc.publishedSnapshot)).not.toContain(S_FEEDBACK);
+    const seen = await resolveDefinition(foreign, KEY);
+    expect(JSON.stringify(seen)).not.toContain(S_FEEDBACK);
   });
 
   it('nothing reaches ANOTHER ORGANISATION through the definition read the executor and catalog use', async () => {

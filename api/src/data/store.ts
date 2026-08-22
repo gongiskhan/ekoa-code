@@ -83,16 +83,26 @@ export class Store<T extends Doc> {
    * allocation. That failure is NOT catchable: an OOM abort kills the process rather than rejecting
    * the promise, so a `.catch` around such a read degrades nothing. Naming the two fields a reader
    * actually needs is what makes the read bounded.
+   *
+   * `opts.limit` is the OTHER size bound, on the same option bag and additive in the same way
+   * (Rule 7 - every existing caller keeps its meaning). A projection bounds each ROW; some reads
+   * need to bound the COUNT. `integration_action_feedback` is the case that forced this one: its
+   * owner-scoped prompt read runs on the hot path of every automation plan and wants the newest
+   * twenty notes of a person who may hold thousands. Applied by the DRIVER (`.limit()`), so the cap
+   * governs what is FETCHED rather than what survives a `.slice()` afterwards - which is the whole
+   * difference between a bounded read and a bounded answer. Pair it with `sort`: a limit over an
+   * unordered cursor answers an arbitrary subset.
    */
   async find(
     filter: Record<string, unknown> = {},
     sort?: Record<string, 1 | -1>,
-    opts: { projection?: Record<string, 0 | 1> } = {},
+    opts: { projection?: Record<string, 0 | 1>; limit?: number } = {},
   ): Promise<T[]> {
     let q = opts.projection
       ? this.col().find(filter as Filter<T>, { projection: opts.projection })
       : this.col().find(filter as Filter<T>);
     if (sort) q = q.sort(sort);
+    if (opts.limit !== undefined && Number.isFinite(opts.limit) && opts.limit > 0) q = q.limit(opts.limit);
     return (await q.toArray()) as unknown as T[];
   }
 

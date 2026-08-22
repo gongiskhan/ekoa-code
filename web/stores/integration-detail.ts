@@ -25,11 +25,21 @@
  *                        user their integration does not exist because a server hiccuped.
  *   `evidenceError`    - the samples did not arrive. The steps view still renders (the steps come
  *                        from the definition and the automation), with the sample's absence stated.
+ *   `feedbackError`    - the caller's own notes did not arrive (slice S3). Its own channel and NOT
+ *                        merged into `evidenceError`, because the two demand opposite behaviour
+ *                        from the surface: a missing sample is information the page simply lacks,
+ *                        while a missing NOTE is the user's own text - the editor must refuse to
+ *                        offer a save at all rather than open empty over a note that is really
+ *                        there and overwrite it on the first keystroke.
  *   `stepsError[a]`    - one action's bound automation did not load.
  *   `runsError[a]`     - one action's run history did not load.
  *   `actionError`      - a RUN the user just asked for failed. Never merged into the read errors:
  *                        a failed write must leave the page standing and be reported at the point
  *                        of the click, and a failed read must replace the thing it was reading.
+ *   `feedbackWriteError[n]` - saving or erasing ONE note failed. Per NOTE and not per action: an
+ *                        action carries one note of its own plus one per step of its plan, and a
+ *                        failure on any of them must be reported under the box it belongs to
+ *                        rather than over all of them at once.
  *
  * THE ABSENT/LOADING DISTINCTION IS STRUCTURAL, not a boolean. `evidence`, `steps` and `runs` are
  * left UNSET while their fetch is outstanding and set (possibly to `[]` / `null`) when it comes
@@ -65,12 +75,33 @@ import type {
   Automation,
   ExecuteIntegrationActionResponse,
   IntegrationActionEvidence,
+  IntegrationActionFeedback,
   IntegrationCapability,
   RunRecord,
 } from '@ekoa/shared';
 
 /** How many runs of one action's bound automation the history shows. */
 export const ACTION_RUN_HISTORY_LIMIT = 20;
+
+/**
+ * The address of ONE note within this page's state (slice S3).
+ *
+ * A composite because the unit is `(actionName, stepRef?)` and not the action: an action holds one
+ * note of its own plus one per step of its plan, and a map keyed by action alone would let a step's
+ * note overwrite the action's.
+ *
+ * JSON-ENCODED, which is the SERVER'S OWN injective encoding (`actionFeedbackIdFor`) applied to a
+ * client-side map, and for the same reason: a `${a}:${b}` join is not injective when either half may
+ * contain the separator, so an action named `a:b` with no step would share a slot with an action
+ * named `a` at step `b` - one note silently rendering in the other's box. `null` for an absent
+ * `stepRef` keeps "the action as a whole" a distinct point rather than a prefix of every step's.
+ *
+ * Exported because the surface builds the same address to read a note back, and two spellings of
+ * this rule would eventually disagree about which box a save landed in.
+ */
+export function feedbackSlot(actionName: string, stepRef?: string): string {
+  return JSON.stringify([actionName, stepRef ?? null]);
+}
 
 /**
  * A failed READ, as the store records it.
@@ -114,6 +145,16 @@ interface IntegrationDetailState {
   evidenceLoaded: boolean;
   evidenceError?: ReadFailure;
 
+  /** The caller's own notes, by `feedbackSlot`. Unset ⇒ they hold no note at that address. */
+  feedback: Record<string, IntegrationActionFeedback>;
+  /** Set exactly once the notes read has come back; `false` while it is outstanding. */
+  feedbackLoaded: boolean;
+  feedbackError?: ReadFailure;
+  /** Notes with a save or an erase in flight, by slot - so one box's spinner is one box's. */
+  feedbackSaving: Record<string, boolean>;
+  /** A failed WRITE, by slot, in the SERVER's own prose. Cleared by the next attempt at that slot. */
+  feedbackWriteError: Record<string, ReadFailure>;
+
   /** The bound automation per action name. `null` ⇒ the fetch came back with nothing. */
   steps: Record<string, Automation | null>;
   stepsError: Record<string, ReadFailure>;
@@ -133,9 +174,14 @@ interface IntegrationDetailState {
 }
 
 interface IntegrationDetailActions {
-  /** The page's own read: the capability view and the evidence samples, together. */
+  /** The page's own read: the capability view, the evidence samples and the caller's notes. */
   load: (key: string) => Promise<void>;
   fetchEvidence: (key: string) => Promise<void>;
+  fetchFeedback: (key: string) => Promise<void>;
+  /** Write one note. `stepRef` absent addresses the ACTION's own note, never a step's. */
+  saveFeedback: (key: string, actionName: string, stepRef: string | undefined, note: string) => Promise<boolean>;
+  /** Erase one note. Idempotent on the server: nothing there is `ok`, not a 404. */
+  removeFeedback: (key: string, actionName: string, stepRef: string | undefined) => Promise<boolean>;
   fetchSteps: (actionName: string, automationId: string) => Promise<void>;
   fetchRuns: (actionName: string, automationId: string) => Promise<void>;
   runNow: (key: string, actionName: string) => Promise<RunNowOutcome>;
@@ -150,6 +196,10 @@ const EMPTY: Omit<IntegrationDetailState, 'key' | 'requestedKey'> = {
   capabilityError: null,
   evidence: {},
   evidenceLoaded: false,
+  feedback: {},
+  feedbackLoaded: false,
+  feedbackSaving: {},
+  feedbackWriteError: {},
   steps: {},
   stepsError: {},
   runs: {},
@@ -184,11 +234,12 @@ export const useIntegrationDetailStore = create<IntegrationDetailState & Integra
    */
   async load(key) {
     set({ key, requestedKey: key, ...EMPTY, loading: true });
-    // The samples are fired here but NOT awaited before the capability is committed: they are a
-    // section's read, and holding the whole page on a spinner until they land would make one slow
-    // section's latency the page's. The promise is kept so `load()` still resolves when both are
-    // done, which is what lets a caller (and a test) await the page's full settle.
+    // The samples and the notes are fired here but NOT awaited before the capability is committed:
+    // they are sections' reads, and holding the whole page on a spinner until they land would make
+    // one slow section's latency the page's. The promises are kept so `load()` still resolves when
+    // all three are done, which is what lets a caller (and a test) await the page's full settle.
     const evidence = get().fetchEvidence(key);
+    const feedback = get().fetchFeedback(key);
     const capability = await tryCall(() => api.integrations.getIntegration<IntegrationCapability>({ key }));
     // A key change mid-flight: the answer is about an integration the page is no longer showing.
     if (get().requestedKey !== key) return;
@@ -197,7 +248,7 @@ export const useIntegrationDetailStore = create<IntegrationDetailState & Integra
     } else {
       set({ loading: false, capability: null, capabilityError: capability.error });
     }
-    await evidence;
+    await Promise.all([evidence, feedback]);
   },
 
   /**
@@ -218,6 +269,96 @@ export const useIntegrationDetailStore = create<IntegrationDetailState & Integra
       // and `evidenceError` is what tells it the difference between that and "there is none".
       set({ evidenceError: failureOf(res.error) });
     }
+  },
+
+  /**
+   * The caller's own notes for this integration (slice S3).
+   *
+   * A failure here is NOT the page's and is NOT the samples': the surface renders the note boxes
+   * READ-ONLY when this read failed, because an editor that opens empty over a note that is really
+   * there destroys it on the first save. `feedbackLoaded` staying false is what says so.
+   */
+  async fetchFeedback(key) {
+    set({ feedbackError: undefined });
+    const res = await tryCall(() => api.integrations.listActionFeedback({ key }));
+    // The same stale-key guard every other read here carries: `feedback` is keyed by action + step
+    // alone, so a late answer for integration A commits under integration B's identically-named
+    // action - and it sticks, because the surface only re-reads a section that is still unset.
+    if (get().requestedKey !== key) return;
+    if (res.ok) {
+      const feedback: Record<string, IntegrationActionFeedback> = {};
+      for (const row of res.data.items) feedback[feedbackSlot(row.actionName, row.stepRef)] = row;
+      set({ feedback, feedbackLoaded: true, feedbackError: undefined });
+    } else {
+      set({ feedbackError: failureOf(res.error) });
+    }
+  },
+
+  /**
+   * WRITE one note, and commit the SERVER's row rather than the text that was typed.
+   *
+   * The answer carries `createdAt`/`updatedAt`, and echoing the local string instead would leave
+   * the box showing a note whose stamps are a guess - and, on the first edit of an existing note,
+   * showing it as newly created when the server preserved the original `createdAt`.
+   */
+  async saveFeedback(key, actionName, stepRef, note) {
+    const slot = feedbackSlot(actionName, stepRef);
+    set((s) => ({
+      feedbackSaving: { ...s.feedbackSaving, [slot]: true },
+      feedbackWriteError: without(s.feedbackWriteError, slot),
+    }));
+    const res = await tryCall(() =>
+      api.integrations.setActionFeedback<IntegrationActionFeedback>({
+        key,
+        actionName,
+        note,
+        ...(stepRef !== undefined ? { stepRef } : {}),
+      }),
+    );
+    if (get().requestedKey !== key) return res.ok;
+    if (res.ok) {
+      set((s) => ({
+        feedback: { ...s.feedback, [slot]: res.data },
+        feedbackSaving: without(s.feedbackSaving, slot),
+        feedbackWriteError: without(s.feedbackWriteError, slot),
+      }));
+      return true;
+    }
+    set((s) => ({
+      feedbackSaving: without(s.feedbackSaving, slot),
+      feedbackWriteError: { ...s.feedbackWriteError, [slot]: failureOf(res.error) },
+    }));
+    return false;
+  },
+
+  /** ERASE one note. The row leaves the map only on a confirmed answer - never optimistically. */
+  async removeFeedback(key, actionName, stepRef) {
+    const slot = feedbackSlot(actionName, stepRef);
+    set((s) => ({
+      feedbackSaving: { ...s.feedbackSaving, [slot]: true },
+      feedbackWriteError: without(s.feedbackWriteError, slot),
+    }));
+    const res = await tryCall(() =>
+      api.integrations.discardActionFeedback({
+        key,
+        actionName,
+        ...(stepRef !== undefined ? { stepRef } : {}),
+      }),
+    );
+    if (get().requestedKey !== key) return res.ok;
+    if (res.ok) {
+      set((s) => ({
+        feedback: without(s.feedback, slot),
+        feedbackSaving: without(s.feedbackSaving, slot),
+        feedbackWriteError: without(s.feedbackWriteError, slot),
+      }));
+      return true;
+    }
+    set((s) => ({
+      feedbackSaving: without(s.feedbackSaving, slot),
+      feedbackWriteError: { ...s.feedbackWriteError, [slot]: failureOf(res.error) },
+    }));
+    return false;
   },
 
   /** One action's bound automation, for the read-only steps view. */
