@@ -1733,7 +1733,7 @@ async function runOrRehearse(
         // .message` is a raw step failure (an integration's HTTP body, a stack, an internal
         // path) and belongs in the step record the run UI already renders per step, not in the
         // run's headline (finding `run-error-text-leak`).
-        emit?.runError(runId, 'A automação não foi concluída.', stepRecords);
+        emit?.runError(runId, 'A execução não foi concluída.', stepRecords);
         return finalizeReturn({
           runId,
           status: 'failed',

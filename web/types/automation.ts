@@ -83,6 +83,13 @@ export interface Automation {
   trigger?: AutomationTrigger;
   /** Set by the integration provisioner when this automation was materialized from an integration template. */
   source?: { integrationKey: string; templateKey: string };
+  /**
+   * The owning tenant. Present on the wire (the service's projection emits it) and needed by the
+   * `/automations/<id>` redirect, whose destination page renders in the VIEWER's org: a super-admin
+   * may read another org's row, and replacing them onto their own org's page for that key would be
+   * a convincing wrong answer (review round F14).
+   */
+  orgId?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -116,21 +116,6 @@ pages:
     path: /artifacts
     mode: steps
     selected: true
-  - id: automation-detail-unknown
-    title: Automatização (detail, unknown id)
-    path: /automations/00000000-0000-0000-0000-000000000000
-    mode: steps
-    selected: true
-  - id: automations
-    title: Automatizações (list)
-    path: /automations
-    mode: steps
-    selected: true
-  - id: automations-new
-    title: Nova automatização (create form)
-    path: /automations/new
-    mode: steps
-    selected: true
   - id: change-password
     title: Alterar Palavra-passe
     path: /change-password

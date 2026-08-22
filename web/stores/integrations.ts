@@ -446,7 +446,7 @@ export const useIntegrationsStore = create<IntegrationsState>()((set, get) => ({
         }
         return { success: true };
       }
-      const errorMsg = res.error.message || 'Não foi possível criar as automatizações.';
+      const errorMsg = res.error.message || 'Não foi possível preparar os passos.';
       return { success: false, error: errorMsg };
     } finally {
       set((state) => ({ sessionBusy: { ...state.sessionBusy, [integrationKey]: false } }));

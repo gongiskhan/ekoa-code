@@ -21,6 +21,7 @@ import type { LucideIcon } from 'lucide-react';
 import type { Schedule, ScheduleRun, ScheduleTarget } from '@ekoa/shared';
 import { api, tryCall, type ApiError } from '@/lib/api';
 import { useSchedulesStore } from '@/stores/schedules';
+import type { Automation } from '@/types/automation';
 import { useAuthStore } from '@/stores/auth';
 import { useTranslation } from '@/stores/i18n';
 import { toast } from '@/stores/toast';
@@ -69,6 +70,26 @@ export default function ScheduleDetailPage() {
   const [editing, setEditing] = useState(false);
   const [firing, setFiring] = useState(false);
 
+  /**
+   * S8: an `automation` target used to link to `/automations/<id>`, a page that no longer exists.
+   * The destination now is the INTEGRATION that owns the steps, which only the automation row knows
+   * (`source.integrationKey`).
+   *
+   * A PER-ROW READ, WITH THE ApiError KEPT (review round F13). The first cut fetched the caller's
+   * whole visible LIST and `find()`-ed the id in it, which answers at the wrong unit and collapses
+   * three different states into one raw UUID on screen: a peer's PRIVATE automation (owner-only,
+   * with no admin exception, so it is never in the viewer's list) looked identical to "the list has
+   * not loaded yet" and to "the list failed to load" - a load failure presented as absence, which is
+   * the direction-of-failure conflation this page already refuses for the schedule itself. So it
+   * uses the same shape it uses two functions down: one read for the row that is actually needed,
+   * and the error kept rather than discarded.
+   */
+  const currentTarget = current?.target;
+  const targetAutomationId = currentTarget?.kind === 'automation' ? currentTarget.automationId : undefined;
+  /** `undefined` = not asked / in flight. `null` = asked, and nothing came back. */
+  const [targetAutomation, setTargetAutomation] = useState<Automation | null | undefined>(undefined);
+  const [targetError, setTargetError] = useState<ApiError | null>(null);
+
   const load = useCallback(async () => {
     if (!id) return;
     setRequestedId(id);
@@ -86,6 +107,26 @@ export default function ScheduleDetailPage() {
   useEffect(() => {
     if (id) void fetchRuns(id);
   }, [id, fetchRuns]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (targetAutomationId === undefined) {
+      setTargetAutomation(undefined);
+      setTargetError(null);
+      return;
+    }
+    setTargetAutomation(undefined);
+    setTargetError(null);
+    void (async () => {
+      const res = await tryCall(() => api.automations.get({ id: targetAutomationId }));
+      if (cancelled) return;
+      setTargetAutomation(res.ok ? (res.data as unknown as Automation) : null);
+      setTargetError(res.ok ? null : res.error);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [targetAutomationId]);
 
   /** Same report-or-stay-silent rule as the list: a refused mutation never passes unnoticed. */
   const reportFailure = useCallback(() => {
@@ -227,7 +268,7 @@ export default function ScheduleDetailPage() {
 
       <Card as="section" className="space-y-3">
         <CardTitle icon={Icon}>{t.detail.targetTitle}</CardTitle>
-        <TargetSummary target={current.target} />
+        <TargetSummary target={current.target} automation={targetAutomation} loadError={targetError} />
       </Card>
 
       <section className="space-y-2">
@@ -275,7 +316,16 @@ export default function ScheduleDetailPage() {
 
 // ---------------------------------------------------------------------------------------
 
-function TargetSummary({ target }: { target: ScheduleTarget }) {
+function TargetSummary({
+  target,
+  automation,
+  loadError,
+}: {
+  target: ScheduleTarget;
+  /** `undefined` = still resolving. `null` = resolved to nothing (absent, refused, or cross-tenant). */
+  automation?: Automation | null;
+  loadError?: ApiError | null;
+}) {
   const { schedules: t } = useTranslation();
 
   if (target.kind === 'manual') {
@@ -294,13 +344,36 @@ function TargetSummary({ target }: { target: ScheduleTarget }) {
     return (
       <div className="space-y-2">
         <Badge tone="neutral">{t.targetKinds.automation}</Badge>
-        <div>
-          <Link
-            href={`/automations/${target.automationId}`}
-            className="text-sm font-medium text-teal-600 underline-offset-2 hover:text-teal-700 hover:underline"
-          >
-            {t.detail.openAutomation}
-          </Link>
+          {/* S8: the steps are shown on the integration that owns them. Without integration
+            provenance there is no page to open, so the sequence is NAMED rather than linked into a
+            route that would only bounce the reader somewhere generic.
+            REVIEW ROUND F13: the four states below used to be one - a raw UUID - so "you cannot see
+            this", "not loaded yet" and "the read failed" were indistinguishable on screen. */}
+        <div data-testid="schedule-target-automation">
+          {automation === undefined && loadError == null ? (
+            <p className="text-sm text-neutral-400">{t.detail.targetResolving}</p>
+          ) : automation?.source?.integrationKey ? (
+            <Link
+              href={`/integrations/${encodeURIComponent(automation.source.integrationKey)}`}
+              className="text-sm font-medium text-teal-600 underline-offset-2 hover:text-teal-700 hover:underline"
+            >
+              {t.detail.openIntegration}
+            </Link>
+          ) : automation ? (
+            <p className="text-sm text-neutral-700">{automation.name}</p>
+          ) : loadError && loadError.status !== 404 ? (
+            // Came back BROKEN, not empty. Distinguished from the 404 for the same reason the
+            // schedule's own read distinguishes them: a person must not read "failed" as "gone".
+            <p className="text-sm text-neutral-500" data-testid="schedule-target-error">
+              {t.detail.targetUnreadable}
+            </p>
+          ) : (
+            // One uniform 404 covers absent, refused and cross-tenant, so this says only what is
+            // true for all three, and never invents a name the caller may not see.
+            <p className="text-sm text-neutral-500" data-testid="schedule-target-hidden">
+              {t.detail.targetNotVisible}
+            </p>
+          )}
         </div>
         {target.inputs && Object.keys(target.inputs).length > 0 && (
           <div>
@@ -365,13 +438,13 @@ function RunRow({ run, target }: { run: ScheduleRun; target: ScheduleTarget }) {
           {t.detail.noteLabel}: {run.note}
         </p>
       )}
+      {/* S8: the run id stays VISIBLE and stops being a link. It used to open the automation
+          editor, which is gone; the integration detail page shows an ACTION's runs and cannot be
+          addressed by an automation run id, so there is nothing honest to link to here. */}
       {run.automationRunId && target.kind === 'automation' && (
-        <Link
-          href={`/automations/${target.automationId}`}
-          className="inline-block font-mono text-[11px] text-teal-600 underline-offset-2 hover:underline"
-        >
+        <span className="inline-block font-mono text-[11px] text-neutral-500">
           {t.detail.runIdLabel} {run.automationRunId.slice(0, 8)}
-        </Link>
+        </span>
       )}
     </Card>
   );

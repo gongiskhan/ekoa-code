@@ -70,7 +70,7 @@ describe('automation catalog (§5.5.2 layer 4)', () => {
     expect(text).toContain('me@example.com');
     expect(text).toContain('crm.add_client');
     // The standing PT-PT note that triggered automations must not be invoked directly.
-    expect(text).toContain('Automações com gatilho executam-se sozinhas');
+    expect(text).toContain('Sequências com gatilho executam-se sozinhas');
   });
 
   it('an empty catalog formats to an empty string', () => {

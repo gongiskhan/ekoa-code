@@ -1,345 +1,72 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+/**
+ * S8: the automation EDITOR is gone, and this address resolves INTO the integration that owns the
+ * work rather than dumping every visitor on the list.
+ *
+ * WHY THIS ONE IS NOT A FOUR-LINE SERVER REDIRECT like `/automations` beside it. The destination
+ * depends on the row: an automation provisioned from an integration template carries
+ * `source.integrationKey` and belongs on `/integrations/<key>`, where S2's detail page shows its
+ * steps, its evidence and its runs. A server component cannot resolve that - the caller's bearer
+ * lives in the browser - so the lookup happens here, once, and the answer is a `router.replace`.
+ *
+ * REPLACE, NEVER PUSH. `redirect()` in a server component replaces, and this page must behave the
+ * same way or the back button walks straight back into a route that immediately redirects again.
+ *
+ * EVERY FAILURE LANDS SOMEWHERE REAL. A row that does not resolve, one the caller may not see, a
+ * network error, or an automation with no integration provenance: all of them go to `/integrations`.
+ * There is no not-found state here, because "this automation is gone" is not an answer this address
+ * can usefully give any more - the page that could act on it no longer exists.
+ *
+ * AND A FOREIGN ORG IS ONE OF THOSE FAILURES (review round F14). `canReadAutomation` grants a
+ * super-admin any org's row, so a super-admin following another tenant's link used to be replaced,
+ * silently, onto `/integrations/<key>` rendered in their OWN org - a page where that automation, its
+ * sessions and its runs do not live, looking for all the world like the right one. The destination
+ * page's unit is the viewer's org, so a row from outside it has no destination here and falls back
+ * to the list rather than to a convincing wrong answer.
+ */
+
+import { useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import Link from 'next/link';
-import { Play, Plug, Save, Trash2 } from 'lucide-react';
-import GoalEditor from '@/components/automations/goal-editor';
-import StepList from '@/components/automations/step-list';
-import RunViewer from '@/components/automations/run-viewer';
-import RunHistory from '@/components/automations/run-history';
-import RunActivityBar from '@/components/automations/run-activity-bar';
-import { TriggerPicker } from '@/components/automations/trigger-picker';
 import { useAutomationsStore } from '@/stores/automations';
+import { useAuthStore } from '@/stores/auth';
 import { useTranslation } from '@/stores/i18n';
-import { useAutomationRun } from '@/hooks/useAutomationRun';
-import { useDocumentTitleAlert } from '@/hooks/useDocumentTitleAlert';
-import { buildPatchInfoByIndex } from '@/lib/automations/activity-state';
-import { api, tryCall } from '@/lib/api';
-import { useConfirm } from '@/components/ui/confirm-dialog';
-import { Button, IconButton } from '@/components/ui/button';
-import { Tabs } from '@/components/ui/tabs';
-import { LoadingState } from '@/components/ui/spinner';
 import { PageShell } from '@/components/ui/page-shell';
-import { PageHeader } from '@/components/ui/page-header';
-import { EmptyState } from '@/components/ui/empty-state';
-import type { Step, StepStatus } from '@/types/automation';
+import { LoadingState } from '@/components/ui/spinner';
 
-interface TriggerRow {
-  id: string;
-  automationId: string;
-  artifactId?: string;
-  kind: 'webhook' | 'listener';
-  integrationKey: string;
-  eventName: string;
-  registrationState: 'auto' | 'manual' | 'pending' | 'failed';
-  createdAt: string;
-}
-
-export default function AutomationEditorPage() {
-  useAutomationRun();
+export default function AutomationDetailRedirect() {
   const params = useParams<{ id: string }>();
   const id = typeof params?.id === 'string' ? params.id : '';
   const router = useRouter();
-  const confirm = useConfirm();
-  const { automations } = useTranslation();
-  const t = automations.editor;
-
-  const current = useAutomationsStore((s) => s.current);
-  const currentLoading = useAutomationsStore((s) => s.currentLoading);
-  const currentRequestedId = useAutomationsStore((s) => s.currentRequestedId);
   const fetchOne = useAutomationsStore((s) => s.fetchOne);
-  const update = useAutomationsStore((s) => s.update);
-  const remove = useAutomationsStore((s) => s.remove);
-  const planFromGoal = useAutomationsStore((s) => s.planFromGoal);
-  const resetActiveRun = useAutomationsStore((s) => s.resetActiveRun);
-  const recoverActiveRun = useAutomationsStore((s) => s.recoverActiveRun);
-  const activeRunAutomationId = useAutomationsStore((s) => s.activeRun.automationId);
-  const activeRunStatus = useAutomationsStore((s) => s.activeRun.status);
-  const activeRunKind = useAutomationsStore((s) => s.activeRun.kind);
-  const liveSteps = useAutomationsStore((s) => s.activeRun.liveSteps);
-  const timeline = useAutomationsStore((s) => s.activeRun.timeline);
-
-  const [draftName, setDraftName] = useState('');
-  const [draftDescription, setDraftDescription] = useState('');
-  const [draftSteps, setDraftSteps] = useState<Step[]>([]);
-  const [saving, setSaving] = useState(false);
-  const [planLoading, setPlanLoading] = useState(false);
-  const [tab, setTab] = useState<'editor' | 'history'>('editor');
-  const [storedTrigger, setStoredTrigger] = useState<TriggerRow | null>(null);
-  const lastSeenStatusRef = useRef<typeof activeRunStatus>('idle');
-
-  // Fetch the actual persisted trigger row for accurate registrationState +
-  // eventName. The denormalised Automation.trigger summary lacks
-  // registrationState and uses pollAction (not eventName) for listeners,
-  // so reading the trigger registry directly is the only way to render
-  // the correct UI state on page reload.
-  useEffect(() => {
-    if (!id) return;
-    void (async () => {
-      const r = await tryCall(() => api.triggers.listForAutomation({ id }));
-      setStoredTrigger(r.ok && r.data.items.length > 0 ? (r.data.items[0] as unknown as TriggerRow) : null);
-    })();
-  }, [id]);
-
-  // Tab-title alert: prepend "(needs you)" while a run targeted at
-  // this automation is paused for human action (CAPTCHA, MFA, payment
-  // confirmation). Lets the user notice from another browser tab.
-  useDocumentTitleAlert(
-    activeRunAutomationId === id && activeRunStatus === 'paused_for_user',
-    'needs you',
-  );
-  // `activeRunKind` is no longer used in JSX after the activity bar
-  // replaced the old "Rehearsing…" pill, but referencing it here keeps
-  // the selector hot in case it's needed for future state derivation.
-  void activeRunKind;
+  const viewerOrgId = useAuthStore((s) => s.user?.orgId);
+  const { common } = useTranslation();
 
   useEffect(() => {
-    if (id) fetchOne(id);
-  }, [id, fetchOne]);
-
-  useEffect(() => {
-    if (id && activeRunAutomationId && activeRunAutomationId !== id) {
-      resetActiveRun();
-    }
-  }, [id, activeRunAutomationId, resetActiveRun]);
-
-  // After a reload the in-memory store is empty, so an in-flight run for this
-  // automation has to be recovered explicitly (per-run SSE streams need a run
-  // id to subscribe to). No-op when a run for this automation is already live.
-  useEffect(() => {
-    if (id) void recoverActiveRun(id);
-  }, [id, recoverActiveRun]);
-
-  // Detect rehearsal completion: when a run targeted at this automation
-  // transitions out of 'running', refetch so the refined steps land in
-  // the editor.
-  useEffect(() => {
-    if (activeRunAutomationId !== id) return;
-    const prev = lastSeenStatusRef.current;
-    const curr = activeRunStatus;
-    if (prev === 'running' && curr !== 'running' && curr !== 'idle') {
-      fetchOne(id);
-    }
-    lastSeenStatusRef.current = curr;
-  }, [activeRunAutomationId, activeRunStatus, id, fetchOne]);
-
-  // Mid-rehearsal: every time a patch is applied, the engine has just
-  // persisted the refined steps to the store. Refetch so the editor's
-  // step list reflects what's actually being executed (otherwise the
-  // run viewer renders stale step descriptions for newly-inserted
-  // steps).
-  const lastTimelineLen = useRef(0);
-  useEffect(() => {
-    if (activeRunAutomationId !== id) {
-      lastTimelineLen.current = timeline.length;
+    let cancelled = false;
+    if (id === '') {
+      router.replace('/integrations');
       return;
     }
-    const prev = lastTimelineLen.current;
-    const curr = timeline.length;
-    lastTimelineLen.current = curr;
-    if (curr <= prev) return;
-    // Only refetch on `applied` patches (insert/replace/skip) — these
-    // change the step list. `proposing` and `aborted` don't.
-    const newEvents = timeline.slice(prev);
-    const hasApplied = newEvents.some(
-      (e) => e.type === 'automation_run_patch' && e.phase === 'applied',
-    );
-    if (hasApplied) fetchOne(id);
-  }, [timeline, activeRunAutomationId, id, fetchOne]);
-
-
-  const liveStepsForThisAutomation = activeRunAutomationId === id ? liveSteps : {};
-
-  useEffect(() => {
-    if (current && current.id === id) {
-      setDraftName(current.name);
-      setDraftDescription(current.description);
-      setDraftSteps(current.steps);
-    }
-  }, [current, id]);
-
-  // Per-step indicators of whether the rehearsal fixer touched a step
-  // (proposing in flight, inserted by fixer, rewritten). Must be
-  // computed BEFORE the early-return below, otherwise the hook count
-  // differs between the loading and loaded renders and React throws a
-  // rules-of-hooks violation.
-  const patchInfoByIndex = useMemo(
-    () => (activeRunAutomationId === id ? buildPatchInfoByIndex(timeline) : {}),
-    [activeRunAutomationId, id, timeline],
-  );
-
-  if (!current || current.id !== id) {
-    // The fetch has finished (or never started) and still produced nothing for
-    // this id: the automation was deleted, never existed, or is not ours. A
-    // spinner here would be a lie - the request is over - and it strips the
-    // user of any chrome to escape with, so render a real not-found state.
-    // `currentRequestedId` is what keeps the very first render (before the
-    // fetch effect has run, when `currentLoading` is still false) on the
-    // spinner instead of flashing not-found.
-    if (currentRequestedId === id && !currentLoading) {
-      return (
-        <PageShell testId="automation-editor-page">
-          <PageHeader icon={Play} title={automations.list.title} />
-          <EmptyState
-            icon={Play}
-            title={t.notFoundTitle}
-            description={t.notFoundDescription}
-            action={
-              <Link href="/automations">
-                <Button variant="primary" size="sm">
-                  {t.notFoundBack}
-                </Button>
-              </Link>
-            }
-          />
-        </PageShell>
-      );
-    }
-    return (
-      <div className="flex-1 overflow-y-auto scrollbar-light" data-testid="automation-editor-page">
-        <LoadingState label={t.loading} />
-      </div>
-    );
-  }
-
-  const dirty =
-    draftName !== current.name ||
-    draftDescription !== current.description ||
-    JSON.stringify(draftSteps) !== JSON.stringify(current.steps);
-
-  const save = async () => {
-    setSaving(true);
-    await update(current.id, { name: draftName, description: draftDescription, steps: draftSteps });
-    setSaving(false);
-  };
-
-  const regenerate = async (newGoal: string) => {
-    setPlanLoading(true);
-    setDraftDescription(newGoal);
-    // Pass the current automation id so the backend updates this record
-    // in place (instead of creating a new one) and rehearses it.
-    const res = await planFromGoal(newGoal, draftName, current.id);
-    if (res.ok && res.automation) {
-      setDraftSteps(res.automation.steps);
-    }
-    setPlanLoading(false);
-  };
-
-  // Map indexes to live step status for the editor's step cards
-  const liveStatuses: Record<number, StepStatus> = {};
-  for (const event of Object.values(liveStepsForThisAutomation)) {
-    if (event.type === 'automation_run_step') {
-      liveStatuses[event.stepIndex] = event.status;
-    }
-  }
+    void (async () => {
+      const automation = await fetchOne(id).catch(() => null);
+      if (cancelled) return;
+      // A row from another org has no destination on this viewer's integrations page, whatever key
+      // it names. Only compared when BOTH sides name a real org: an absent orgId on either side is
+      // not evidence of a mismatch, and must not turn an ordinary same-org resolve into a fallback.
+      const rowOrgId = automation?.orgId;
+      const foreign = rowOrgId !== undefined && viewerOrgId !== undefined && rowOrgId !== viewerOrgId;
+      const key = foreign ? undefined : automation?.source?.integrationKey;
+      router.replace(key ? `/integrations/${encodeURIComponent(key)}` : '/integrations');
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id, fetchOne, router, viewerOrgId]);
 
   return (
-    <div className="flex-1 overflow-y-auto scrollbar-light" data-testid="automation-editor-page">
-      <header className="sticky top-0 z-10 border-b border-line bg-surface px-6 py-4 md:px-8">
-        <div className="flex items-center justify-between gap-3">
-          <input
-            type="text"
-            value={draftName}
-            onChange={(e) => setDraftName(e.target.value)}
-            placeholder={t.namePlaceholder}
-            aria-label={t.namePlaceholder}
-            className="min-w-0 flex-1 border-0 bg-transparent font-display text-2xl font-semibold tracking-tight text-neutral-900 focus:outline-none focus-ring rounded"
-          />
-          <div className="flex shrink-0 items-center gap-2">
-            <Button
-              variant="primary"
-              size="sm"
-              icon={Save}
-              disabled={!dirty || saving}
-              loading={saving}
-              onClick={save}
-            >
-              {saving ? t.saving : dirty ? t.save : t.saved}
-            </Button>
-            <IconButton
-              icon={Trash2}
-              label={t.deleteAria}
-              size="sm"
-              variant="danger-ghost"
-              onClick={async () => {
-                if (await confirm({ title: t.deleteConfirm(current.name), tone: 'danger' })) {
-                  const ok = await remove(current.id);
-                  if (ok) router.push('/automations');
-                }
-              }}
-            />
-          </div>
-        </div>
-        <div className="mt-4">
-          <Tabs
-            variant="pills"
-            value={tab}
-            onChange={(k) => setTab(k as 'editor' | 'history')}
-            items={[
-              { key: 'editor', label: t.tabEditor },
-              { key: 'history', label: t.tabHistory },
-            ]}
-          />
-        </div>
-        {/* Activity bar — sits inside the sticky header so it stays
-            visible whether the user is on Editor or Run-history tab,
-            and however far they've scrolled in a long step list. */}
-        <div className="mt-3">
-          <RunActivityBar steps={draftSteps} scopedAutomationId={current.id} />
-        </div>
-      </header>
-
-      {/* Slim banner for automations materialized by an integration
-          (provisioner sets `source`). Editing stays fully available -
-          the integration's actions execute these steps. */}
-      {current.source && (
-        <div
-          className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b border-line bg-neutral-50 px-6 py-2.5 md:px-8"
-          data-testid="automation-managed-banner"
-        >
-          <Plug size={13} className="shrink-0 text-neutral-400" aria-hidden />
-          <p className="text-xs text-neutral-600">{t.managedBanner(current.source.integrationKey)}</p>
-          <Link
-            href="/integrations?tab=plataforma"
-            className="text-xs font-medium text-teal-600 underline-offset-2 hover:text-teal-700 hover:underline"
-          >
-            {t.managedBannerLink}
-          </Link>
-        </div>
-      )}
-
-      {tab === 'editor' ? (
-        <div className="grid gap-6 p-4 md:px-8 lg:grid-cols-2 lg:py-6">
-          <div className="space-y-4">
-            <GoalEditor
-              goal={draftDescription}
-              onChange={setDraftDescription}
-              onRegenerate={regenerate}
-              savedGoal={current.description}
-              loading={planLoading}
-            />
-            <TriggerPicker
-              automationId={current.id}
-              initialTrigger={storedTrigger}
-            />
-            <StepList
-              steps={draftSteps}
-              selfAutomationId={current.id}
-              onChange={setDraftSteps}
-              liveStatuses={liveStatuses}
-              patchInfoByIndex={patchInfoByIndex}
-            />
-          </div>
-          <div>
-            <RunViewer automationId={current.id} steps={draftSteps} />
-          </div>
-        </div>
-      ) : (
-        <div className="p-4 md:px-8 lg:py-6">
-          <RunHistory automationId={current.id} />
-        </div>
-      )}
-    </div>
+    <PageShell testId="automation-detail-redirect">
+      <LoadingState label={common.loading} />
+    </PageShell>
   );
 }

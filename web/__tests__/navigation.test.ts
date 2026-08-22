@@ -45,6 +45,15 @@ describe('lib/navigation NAV_ITEMS', () => {
     }
   });
 
+  it('S8 (2026-08-22): Automations is no longer a nav row - integrations is the single surface', () => {
+    // The row's removal is otherwise only observable through an e2e run against a live boot, and
+    // "put the row back" is a one-line change. Pinned here so CI answers it deterministically.
+    expect(NAV_ITEMS.find((i) => i.href === '/automations')).toBeUndefined();
+    // …and the sidebar locale slice lost its key with it, so a restored row could not even label
+    // itself through `labelKey` without the locale change coming back too.
+    expect('automations' in en.sidebar).toBe(false);
+  });
+
   it('WS1: Cofre uses the Vault (safe) icon, not the privacy ShieldCheck icon it used to share', () => {
     const cofre = NAV_ITEMS.find((i) => i.href === '/cofre');
     expect(cofre?.icon).toBe(Vault);

@@ -157,7 +157,7 @@ export default function CofrePage() {
   async function doLockAll() {
     const ok = await confirm({
       title: 'Bloquear tudo?',
-      description: 'Todas as credenciais desbloqueadas voltam a ficar bloqueadas. Automações em curso que dependam delas vão falhar.',
+      description: 'Todas as credenciais desbloqueadas voltam a ficar bloqueadas. As execuções em curso que dependam delas vão falhar.',
       confirmLabel: 'Bloquear tudo',
     });
     if (!ok) return;

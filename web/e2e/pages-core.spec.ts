@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { uiLogin } from './helpers/ui-login';
 
 /**
- * S4 pages-core: the automations / knowledge / usage / settings-platform
+ * S4 pages-core: the integrations / knowledge / usage / settings-platform
  * surfaces are migrated to the S1 design system — each wrapped in
  * PageShell + PageHeader (Lora h1), primitives only, PT-PT copy. This
  * spec drives the real dev servers (admin / tmp12345, no stubs) and
@@ -33,14 +33,17 @@ function assertNoConsoleErrors(errors: string[]) {
 }
 
 test.describe('pages-core (S4)', () => {
-  test('automations list renders a PageHeader h1 with no console errors', async ({ page }) => {
+  // REWRITTEN AT S8 (2026-08-22): this case asserted the design system on `/automations`, a page
+  // that is now a redirect. The subject moves to `/integrations`, which is what replaced it and is
+  // the one page of this spec's four that was NOT already covered here.
+  test('integrations list renders a PageHeader h1 with no console errors', async ({ page }) => {
     const errors = trackConsoleErrors(page);
     await login(page);
 
-    await page.goto('/automations');
-    await expect(page.getByTestId('automations-page')).toBeVisible({ timeout: 15_000 });
+    await page.goto('/integrations');
+    await expect(page.getByTestId('integrations-page')).toBeVisible({ timeout: 15_000 });
     // The Lora page title lives in the PageHeader h1.
-    await expect(page.locator('h1').first()).toHaveText(/Automa/i, { timeout: 15_000 });
+    await expect(page.locator('h1').first()).toHaveText(/Integraç/i, { timeout: 15_000 });
 
     assertNoConsoleErrors(errors);
   });

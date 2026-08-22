@@ -59,7 +59,7 @@ vi.mock('@/lib/api', () => ({
       listAllRuns: vi.fn(),
       completeRun: vi.fn(),
     },
-    automations: { list: vi.fn() },
+    automations: { list: vi.fn(), get: vi.fn() },
     integrations: { listSkills: vi.fn(), listConfigs: vi.fn() },
   },
   tryCall: async (fn: () => Promise<unknown>) => {
@@ -80,6 +80,7 @@ vi.mock('@/lib/api', () => ({
 
 const mocked = api as unknown as {
   schedules: Record<'get' | 'listRuns' | 'patch' | 'remove' | 'runNow', ReturnType<typeof vi.fn>>;
+  automations: Record<'list' | 'get', ReturnType<typeof vi.fn>>;
 };
 
 const ME = 'u-me';
@@ -261,5 +262,85 @@ describe('a blocked run in the history says WHICH block it was', () => {
     renderPage();
 
     expect(await screen.findByTestId('schedule-run-status-blocked')).toHaveTextContent('Aguarda o seu computador');
+  });
+});
+
+
+/**
+ * S8 REVIEW ROUND (F27 + F13) - the automation TARGET, which S8 rewrote and shipped untested.
+ *
+ * S8 replaced a static `/automations/<id>` link with resolution logic that has four outcomes, and
+ * none of them had a test at any layer: "restore the old link" or "break the provenance lookup"
+ * would have passed every gate green, against the repo's own rule that modules travel with their
+ * tests. The four outcomes exist because the first cut had ONE - a raw UUID - which made "you
+ * cannot see this", "not loaded yet" and "the read failed" indistinguishable on screen (F13).
+ */
+const automationTarget = () => schedule({ target: { kind: 'automation', automationId: 'auto-7' } } as Partial<Schedule>);
+
+describe('the automation target resolves to the integration that owns its steps', () => {
+  beforeEach(() => {
+    mocked.schedules.get.mockResolvedValue(automationTarget());
+  });
+
+  it('an integration-provisioned automation links to that integration, and never to /automations', async () => {
+    mocked.automations.get.mockResolvedValue({
+      id: 'auto-7',
+      name: 'consultar notificações',
+      source: { integrationKey: 'citius', templateKey: 'notificacoes' },
+    });
+    renderPage();
+
+    const link = await screen.findByRole('link', { name: 'Abrir integração' });
+    expect(link).toHaveAttribute('href', '/integrations/citius');
+    // The read is per ROW, not a scan of the caller's whole list.
+    expect(mocked.automations.get).toHaveBeenCalledWith({ id: 'auto-7' });
+    expect(mocked.automations.list).not.toHaveBeenCalled();
+  });
+
+  it('an automation with NO provenance is NAMED rather than linked somewhere generic', async () => {
+    mocked.automations.get.mockResolvedValue({ id: 'auto-7', name: 'Uma rotina minha' });
+    renderPage();
+
+    expect(await screen.findByText('Uma rotina minha')).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Abrir integração' })).toBeNull();
+  });
+
+  it('a row the caller may not see says so, and does not print a bare id', async () => {
+    mocked.automations.get.mockRejectedValue(new FakeApiError(404, 'NOT_FOUND', 'nope'));
+    renderPage();
+
+    expect(await screen.findByTestId('schedule-target-hidden')).toBeTruthy();
+    // The precise F13 regression: the UUID must not be what a person is left reading.
+    expect(screen.queryByText('auto-7')).toBeNull();
+  });
+
+  it('a FAILED read is told apart from an absent one: broken is not gone', async () => {
+    mocked.automations.get.mockRejectedValue(new FakeApiError(500, 'INTERNAL', 'boom'));
+    renderPage();
+
+    expect(await screen.findByTestId('schedule-target-error')).toBeTruthy();
+    expect(screen.queryByTestId('schedule-target-hidden')).toBeNull();
+  });
+
+  it('a non-automation target asks for no automation at all', async () => {
+    mocked.schedules.get.mockResolvedValue(schedule());
+    renderPage();
+
+    await screen.findByTestId('schedule-detail-page');
+    await waitFor(() => expect(mocked.automations.get).not.toHaveBeenCalled());
+  });
+});
+
+describe('the per-run chip stops being a link into a route that no longer renders a page', () => {
+  it('renders the run id as text, with no /automations anchor anywhere on the page', async () => {
+    mocked.schedules.get.mockResolvedValue(automationTarget());
+    mocked.automations.get.mockResolvedValue({ id: 'auto-7', name: 'r', source: { integrationKey: 'citius', templateKey: 't' } });
+    mocked.schedules.listRuns.mockResolvedValue({ items: [run({ automationRunId: 'abcdef1234567890' })] });
+    renderPage();
+
+    const row = await screen.findByTestId('schedule-run-row');
+    expect(within(row).getByText(/abcdef12/)).toBeTruthy();
+    expect(within(row).queryByRole('link')).toBeNull();
+    expect(document.querySelectorAll('a[href^="/automations/"]')).toHaveLength(0);
   });
 });

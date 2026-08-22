@@ -230,9 +230,12 @@ export function formatCatalogForPrompt(catalog: Catalog): string {
     const total = automations.length;
     const shown = automations.slice(0, MAX_DESCRIBED);
     const truncated = total > MAX_DESCRIBED;
+    // S8/D4: the heading a person can end up reading back through an agent's reply no longer
+    // brands the product with a surface that has none. The TOOL NAMES below are untouched on
+    // purpose - they are identifiers a model must emit exactly, not prose.
     const header = truncated
-      ? `## Available automations (${total} total; showing top ${MAX_DESCRIBED} by recency)`
-      : `## Available automations (${total})`;
+      ? `## Available step sequences (${total} total; showing top ${MAX_DESCRIBED} by recency)`
+      : `## Available step sequences (${total})`;
     lines.push(header, '');
     for (const a of shown) {
       const inputs = a.inputs.length > 0
@@ -303,8 +306,8 @@ export function formatCatalogForPrompt(catalog: Catalog): string {
     const hasTriggered = automations.some((a) => a.trigger);
     if (hasTriggered) {
       lines.push(
-        'Automações com gatilho executam-se sozinhas; não invoques `call_automation` sobre uma ' +
-          'automação com gatilho excepto se o utilizador o pedir explicitamente.',
+        'Sequências com gatilho executam-se sozinhas; não invoques `call_automation` sobre uma ' +
+          'sequência com gatilho excepto se o utilizador o pedir explicitamente.',
       );
     }
   }

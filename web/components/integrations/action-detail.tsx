@@ -129,8 +129,9 @@ interface EvidenceStepSample {
  *
  * The evidence row numbers its steps by `stepIndex` INTO THE PLAN AS IT WAS WHEN THE RUN HAPPENED.
  * The plan rendered here is the one fetched for whatever automation the action's binding names
- * TODAY. Those are two different things the moment anyone edits the automation on `/automations` or
- * re-binds the action, and joining by index across that gap files one step's screenshot and output
+ * TODAY. Those are two different things the moment the bound plan changes (a re-provision from the
+ * integration's template, an edit through `/api/v1/automations`, or a re-bind of the action) and
+ * joining by index across that gap files one step's screenshot and output
  * under a DIFFERENT step and labels it as that step's evidence - a lie about what the system did,
  * rendered with no signal at all.
  *

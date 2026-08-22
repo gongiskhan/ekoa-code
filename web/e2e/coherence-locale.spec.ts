@@ -3,7 +3,13 @@ import { uiLogin } from './helpers/ui-login';
 
 /**
  * S3 coherence-locale: PT-PT is the product language, EN stays available,
- * and previously-hardcoded surfaces (automations, settings/platform) are i18n.
+ * and previously-hardcoded surfaces (integrations, settings/platform) are i18n.
+ *
+ * REWRITTEN AT S8 (2026-08-22). The i18n flip was demonstrated on `/automations`, which is now a
+ * redirect. The vehicle moves to `/integrations` - the surface that replaced it, and the one this
+ * spec's own subject (a page whose copy was hardcoded English before it was localised) now points
+ * at. The assertion shape is unchanged: PT by default, EN after one toggle with NO Portuguese
+ * heading surviving, PT restored for the specs that follow.
  *
  * Real login (admin / tmp12345) against the live dev servers, no stubs.
  */
@@ -29,7 +35,7 @@ test.describe('coherence-locale (S3)', () => {
     }
   });
 
-  test('automations renders PT by default and flips to EN via the header toggle', async ({ page }) => {
+  test('integrations renders PT by default and flips to EN via the header toggle', async ({ page }) => {
     const consoleErrors: string[] = [];
     page.on('console', (msg) => {
       if (msg.type() === 'error') consoleErrors.push(msg.text());
@@ -42,27 +48,26 @@ test.describe('coherence-locale (S3)', () => {
     await expect(page.locator('h1').first()).toBeVisible({ timeout: 15_000 });
     expect(await page.getByText('Platform Settings', { exact: true }).count()).toBe(0);
 
-    await page.goto('/automations');
+    await page.goto('/integrations');
 
-    // Default language is Portuguese: the list title ("Automatizações") or the
-    // empty-state heading ("Ainda não há automatizações") — both match /Automatiza/.
+    // Default language is Portuguese: the page title is "Integrações".
     await expect(
-      page.getByRole('heading', { name: /Automatiza/i }).first(),
+      page.getByRole('heading', { name: /Integraç/i }).first(),
     ).toBeVisible({ timeout: 15_000 });
 
     // Flip to English.
     await langToggle(page).click();
 
-    // Now English: "Automations" / "No automations yet"; the PT heading is gone.
+    // Now English: "Integrations"; no Portuguese heading survives the flip.
     await expect(
-      page.getByRole('heading', { name: /Automations|No automations yet/ }).first(),
+      page.getByRole('heading', { name: /^Integrations/ }).first(),
     ).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole('heading', { name: /Automatiza/i })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: /Integraç/i })).toHaveCount(0);
 
     // Restore PT for subsequent specs.
     await langToggle(page).click();
     await expect(
-      page.getByRole('heading', { name: /Automatiza/i }).first(),
+      page.getByRole('heading', { name: /Integraç/i }).first(),
     ).toBeVisible({ timeout: 15_000 });
 
     expect(

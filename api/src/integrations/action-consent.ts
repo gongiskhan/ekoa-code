@@ -251,9 +251,14 @@ export function actionTarget(action: IntegrationAction, resolution?: TargetResol
   const binding = action.automationBinding;
   if (binding) {
     const named = binding.automationTemplate ?? binding.automationId;
+    // S8/D4: the product no longer calls this an "automação" anywhere a person can read.
+    // CONSEQUENCE, RECORDED RATHER THAN SLIPPED IN: this string is the approval KEY as well as the
+    // dialog's words (see `idFor` below), so changing it retires every standing approval for a
+    // bound MUTATING action - the next run re-prompts instead of failing, which is the module's own
+    // "a miss is a re-prompt" rule, and docs/findings.md carries the entry.
     return backing === 'bash-cli'
-      ? `comando na máquina emparelhada (automação ${named})`
-      : `automação ${named}`;
+      ? `comando na máquina emparelhada (sequência de passos ${named})`
+      : `sequência de passos ${named}`;
   }
   return 'destino indeterminado';
 }

@@ -20,7 +20,10 @@ import type { StreamingConnectionStatus } from '@/types/automation';
  */
 export default function PauseForUserOverlay() {
   const status = useAutomationsStore((s) => s.activeRun.status);
-  const automationId = useAutomationsStore((s) => s.activeRun.automationId);
+  // REVIEW ROUND F5/F26: the S8 rebrand renamed this footer's label from "Run is on automation" to
+  // "Run", and left the VALUE as the automation id - so the overlay told a person their run id was
+  // an identifier that matches no run. The run id is in the same slice and is what the label claims.
+  const runId = useAutomationsStore((s) => s.activeRun.runId);
   const pauseRequest = useAutomationsStore((s) => s.activeRun.pauseRequest);
   const streamingSession = useAutomationsStore((s) => s.activeRun.streamingSession);
   const resume = useAutomationsStore((s) => s.resume);
@@ -165,7 +168,7 @@ export default function PauseForUserOverlay() {
           </div>
 
           <div className="mt-4 text-center text-xs text-neutral-500">
-            {t.runOnAutomationPrefix}<span className="font-mono">{automationId?.slice(0, 8) ?? '-'}</span>.
+            {t.runIdPrefix}<span className="font-mono" data-testid="pause-overlay-run-id">{runId?.slice(0, 8) ?? '-'}</span>.
             {' '}
             <FootnoteCopy streamingStatus={streamingStatus} hasScreenshot={!!screenshotSrc} />
           </div>

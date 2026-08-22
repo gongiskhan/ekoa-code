@@ -141,15 +141,21 @@ test.describe('dashboard regressions (post-rc-1 fixes)', () => {
     expect(Array.isArray(body.actions), 'session status carries an actions array').toBe(true);
     expect(typeof body.sessionConnect?.available, 'session status carries sessionConnect').toBe('boolean');
 
-    // CITIUS carries automation-bound actions — the exact card the deref crash killed.
+    // CITIUS carries step-backed actions - the exact card the deref crash killed.
     const citiusCard = page
       .locator('div.bg-white', { has: page.getByRole('heading', { name: /CITIUS/i }) })
       .first();
     await expect(citiusCard).toBeVisible({ timeout: 30_000 });
 
-    // Expand and assert the action rows render (an automation-bound action is visible).
+    // Expand and assert the action rows render (a step-backed action is visible).
     await citiusCard.getByRole('button', { name: /mostrar mais/i }).click();
     await expect(citiusCard.getByText('consultar_notificacoes')).toBeVisible();
+
+    // S8 RE-ANCHOR: the row's own affordance moved from `/automations/<id>` to the integration
+    // detail. The action NAME above is what the deref regression is about and is unchanged; this
+    // line is the part of the row S8 touched, and pinning it here is what stops a later tidy-up
+    // from restoring a link into a route that no longer renders a page.
+    await expect(citiusCard.locator('a[href^="/automations/"]')).toHaveCount(0);
 
     expect(errors, `console errors on /integrations:\n${errors.join('\n')}`).toEqual([]);
   });

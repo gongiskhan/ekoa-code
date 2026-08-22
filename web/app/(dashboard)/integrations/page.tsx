@@ -460,23 +460,28 @@ function IntegrationCard({
                                 <div className="flex min-w-0 items-center gap-1.5 pl-4 text-[10px]">
                                   <span className="inline-flex flex-shrink-0 items-center gap-1 rounded bg-teal-50 px-1 py-px font-medium text-teal-600">
                                     <Workflow size={9} />
-                                    {t.actionAutomationTag}
+                                    {t.actionStepsTag}
                                   </span>
                                   {row?.provisioned && row.automationId ? (
                                     <>
                                       <span className="truncate text-neutral-500">
                                         {row.automationName || row.automationId}
                                       </span>
+                                      {/* S8: the steps live on the DETAIL page now, read-only, with
+                                          the evidence run's screenshots and output resolved onto
+                                          them. `?action=` expands this exact action, so the link
+                                          lands on the thing it names rather than on a page the
+                                          reader then has to search. */}
                                       <Link
-                                        href={`/automations/${row.automationId}`}
+                                        href={`/integrations/${encodeURIComponent(skill.integrationKey)}?action=${encodeURIComponent(action.actionName)}`}
                                         onClick={(e) => e.stopPropagation()}
                                         className="flex-shrink-0 whitespace-nowrap text-teal-600 underline-offset-2 hover:text-teal-700 hover:underline"
                                       >
-                                        {t.actionRefineSteps}
+                                        {t.actionViewSteps}
                                       </Link>
                                     </>
                                   ) : (
-                                    <span className="text-neutral-400">{t.actionAutomationPending}</span>
+                                    <span className="text-neutral-400">{t.actionStepsPending}</span>
                                   )}
                                 </div>
                               )}
@@ -493,7 +498,7 @@ function IntegrationCard({
                             loading={isSessionBusy}
                             onClick={handleProvisionAutomations}
                           >
-                            {t.createAutomations}
+                            {t.prepareSteps}
                           </Button>
                         </div>
                       )}

@@ -118,7 +118,7 @@ async function assertTargetValid(target: ScheduleTarget, actor: Actor): Promise<
       | { ownerUserId?: string; orgId?: string }
       | null;
     if (!doc || doc.orgId !== actor.orgId || doc.ownerUserId !== actor.userId) {
-      throw new ScheduleServiceError('VALIDATION', 'Automação não encontrada.', 'unknown_automation');
+      throw new ScheduleServiceError('VALIDATION', 'Sequência de passos não encontrada.', 'unknown_automation');
     }
     return;
   }

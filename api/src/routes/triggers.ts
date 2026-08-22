@@ -41,7 +41,7 @@ export function triggersRouter(deps: { now: () => number; genId: () => string })
       try {
         await getAutomation(actor, body.automationId as string);
       } catch (err) {
-        if (err instanceof AutomationServiceError) return sendError(res, 'NOT_FOUND', 'Automação não encontrada.');
+        if (err instanceof AutomationServiceError) return sendError(res, 'NOT_FOUND', 'Sequência de passos não encontrada.');
         throw err;
       }
     } else {

@@ -178,8 +178,8 @@ export function ArtifactBackendPanel({ appId }: { appId: string }) {
         <p data-testid="backend-none" className="text-sm text-neutral-500">
           Esta aplicação não tem código de servidor. Um backend é código versionado com a aplicação
           (pasta <code className="rounded bg-neutral-100 px-1">backend/</code>) que o Ekoa executa em
-          resposta a eventos. Os eventos (por exemplo, vigiar uma caixa de correio) configuram-se em
-          Automações.
+          resposta a eventos. Os eventos (por exemplo, vigiar uma caixa de correio) configuram-se na
+          integração que os produz.
         </p>
       ) : (
         <>

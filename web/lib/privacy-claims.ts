@@ -316,7 +316,7 @@ export const PRIVACY_COPY = {
     write: 'Escrita',
     denial: 'Recusa',
     cap_consent: 'Limite',
-    automation: 'Automação',
+    automation: 'Sequência de passos',
   } as Record<string, string>,
 
   // FC-408 masking summary
@@ -331,7 +331,7 @@ export const PRIVACY_COPY = {
   commandsSectionDesc:
     'A primeira utilização de cada novo comando local exige a sua aprovação. As aprovações são desta conta e podem ser revogadas aqui.',
   commandsEmpty:
-    'Ainda não aprovou nenhum comando. Na primeira vez que uma automação tentar correr um comando local, verá aqui o pedido de consentimento.',
+    'Ainda não aprovou nenhum comando. Na primeira vez que uma sequência de passos tentar correr um comando local, verá aqui o pedido de consentimento.',
   commandsLoadError: 'Não foi possível carregar as aprovações.',
   commandRevoke: 'Revogar',
   commandRevoking: 'A revogar...',

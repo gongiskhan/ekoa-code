@@ -5701,3 +5701,166 @@ structural overclaim (the contrast the sentence draws is with a flag-gated write
 sole store operation is one projected find); and spec-rewrite dispositions being absent from
 `SUITE_LEDGER.json` (the ledger's one write obligation is registering NEW specs, which S8 did; the
 dispositions belong to the decision journal).
+
+## 2026-08-22 - S8: the automations surface is hidden, and the word goes with it
+
+**WHAT WENT.** The Automations nav row; the three `/automations` pages; every affordance in the
+product that pointed at them; and the word "automatização" everywhere a person can read it. What did
+NOT go, and is verified untouched at the end of the slice: `web/stores/automations.ts`,
+`web/hooks/useAutomationRun.ts`, every `/api/v1/automations` descriptor and every line of
+`api/src/routes/automations.ts`. That API is a public, versioned capability surface pinned by the
+coverage gates, and S8 removes PAGES, never capabilities. The engine, its triggers and its schedules
+run exactly as they did.
+
+**THE THREE ADDRESSES ANSWER THREE DIFFERENT THINGS, AND THAT IS DELIBERATE.**
+- `/automations` -> a server `redirect()` to `/integrations`. Four lines, on the
+  `users`/`orgs`/`pedidos` precedent: `redirect()` REPLACES rather than pushes, so the old path does
+  not sit in history as a trap.
+- `/automations/<id>` -> NOT a four-line redirect, because the right destination depends on the row.
+  An automation provisioned from an integration template carries `source.integrationKey` and belongs
+  on `/integrations/<key>`, where S2's detail page shows its steps, its evidence and its runs. A
+  server component cannot resolve that (the caller's bearer lives in the browser), so the lookup
+  happens client-side once and the answer is a `router.replace` - replace, not push, or the back
+  button walks straight back into a route that redirects again. Every failure - unresolved row,
+  refused row, network error, no provenance - lands on `/integrations`. There is no not-found state:
+  "this automation is gone" stopped being a useful answer when the page that could act on it went.
+- `/automations/new` -> 410 Gone, as a route handler rather than a page, because the status IS the
+  point. `notFound()` answers 404 ("we have no idea what this is") and a page cannot set a status of
+  its own. This address had a meaning and no longer has one; a link to it should be corrected, not
+  retried. A route handler and a page cannot share a segment, so the page is deleted.
+
+**THE AFFORDANCES RE-POINT AT SOMETHING SPECIFIC, NOT AT A LIST.** The integrations list's per-action
+link now goes to `/integrations/<key>?action=<name>` - the deep link S2 built - so it lands on the
+action it names rather than on a page the reader then has to search. "Criar automações" keeps its
+BEHAVIOUR (it POSTs `provision-automations`, which materialises the step sequences the actions run)
+and loses its wording: it is "Preparar passos" now. The schedules detail page resolves an
+`automation` target with a PER-ROW read (the error kept, exactly as it already reads the schedule
+itself) and links to the INTEGRATION that owns the steps; where a target has no integration
+provenance there is no page to open, so the sequence is NAMED rather than linked into a route that
+would only bounce the reader somewhere generic, and "you cannot see this", "still resolving" and "the
+read failed" are three distinguishable states rather than one raw id. See the review round below. The per-run
+chip stops being a link for the same reason: the detail page's run history is keyed by ACTION and
+cannot be addressed by an automation run id.
+
+**THE VOCABULARY, CHOSEN ONCE.** PT "sequência de passos", EN "step sequence", and on a per-action
+chip simply "Passos" / "Steps". It is the vocabulary S2's detail page already shipped ("passos",
+"execuções") rather than a new coinage, so the product does not now carry two replacement words for
+one thing. `PauseForUserOverlay` keeps working unchanged - it pops for headless runs regardless of
+which surface started them - and names the RUN instead of the surface that used to own it
+(`runOnAutomationPrefix` -> `runIdPrefix`, "Execução <id>"), rendering `activeRun.runId`. The first
+cut renamed the label and left the automation id underneath; see the review round below.
+
+**D4, THE SERVER PROSE, AND THE ONE PLACE IT STOPS.** Reworded: the consent dialog's destination
+string, the engine's run-level terminal message, `RUN_FAILED` in the shared white-label table, the
+triggers route's 404, the schedules service's validation refusal, the chat catalog's heading and its
+PT trigger caveat, and the approved-commands empty state in `privacy-claims.ts`. NOT reworded, and
+this is a deliberate stop rather than an oversight: `api/src/routes/automations.ts`'s
+"Automação não encontrada." and `automation/service.ts`'s plan-endpoint guidance. Those are the
+error prose of the `/api/v1/automations` CONTRACT, where the resource genuinely is an automation and
+an outside client reads that vocabulary in the OpenAPI document and the generated client. The
+product's UI drops the word; the public API keeps its own nouns. That file is also on this slice's
+untouched list, and honouring both rules at once means the string stays.
+
+**THE TOOL NAMES ARE NOT RENAMED.** `call_automation`, `list_automations`, `call_integration_action`
+are identifiers a model must emit exactly, registered in `agents/sdk-tools.ts`. Renaming them is a
+behaviour change with its own compatibility story (every in-flight session's tool vocabulary), and
+doing it inside a copy sweep is how a rename becomes an outage. The catalog's PROSE stops branding
+the product; the identifiers it names stay accurate.
+
+**A CONSEQUENCE WITH A REAL BLAST RADIUS, RECORDED RATHER THAN SLIPPED IN.** `actionTarget`'s string
+is both what the consent dialog shows and what the approval is KEYED on (`idFor` takes the resolved
+target). Rewording it therefore retires every standing approval for a MUTATING action whose backing
+is an automation binding - in the shipped estate, citius `submeter_peca`, plus any user-authored
+bound write. It degrades safely (the module's own rule is that a miss is a re-prompt, never a
+failure) and it is not silent: `docs/findings.md` carries the entry with the affected set and the
+operator note for the cutover. The alternative - keying the approval on a stable token instead of
+the display string - was considered and rejected FOR THIS SLICE: it changes the write gate's key
+derivation, which is an auth-class change needing its own adversarial review, and it would retire
+exactly the same approvals on the way through.
+
+**SPEC DISPOSITIONS, EACH WRITTEN DOWN.** Three band1 zero-change specs hard-asserted automation UI
+and each got an explicit disposition, all three REWRITTEN rather than retired:
+`coherence-locale` (the i18n flip moves its vehicle from `/automations` to `/integrations`, same
+assertion shape), `pages-core` (the design-system case moves to the page that replaced it, which was
+also the one page of its four not already covered), and `integration-session-automations` (case 1
+re-anchors to the new chip, button, link text and href; case 2 changed SUBJECT - it asserted an
+EDITABLE step list on the editor, and what replaced editability is a read-only steps view on the
+detail page, so that is what it now pins). `automation-deterministic` drops its UI leg and keeps
+both API legs, with a new assertion over the run record's steps so a run that settled having
+executed nothing cannot pass. `regressions-dashboard`'s CITIUS case keeps its action-name assertion
+untouched (that is what the deref regression was about) and gains the S8 re-anchor: no
+`/automations/` anchor survives on the row. A new `automations-hidden` spec pins all three addresses
+plus the back-button behaviour and the absent nav row; it is registered in band4_gap_plan with the
+UNVERIFIED-against-a-live-boot formula, so its ratchet starts when a live run first proves it green.
+
+**THE DRILL PAGES GO WITH THEIR SUBJECT.** Three drillbook pages and their three auto-emitted spec
+files drove `/automations`, `/automations/new` and an unknown automation detail. They are outside
+CI and dispatch manually, which is exactly why leaving them would have been the quiet option:
+26 tests asserting content on routes that now redirect or answer 410, failing on whichever run
+happened next. Removed with the pages they were emitted from.
+
+**WHAT IS NOW UNREACHABLE AND IS DELIBERATELY NOT DELETED.** Fourteen files under
+`web/components/automations/` lose their only importer with the editor and list pages, and so does
+most of the `automations` locale slice. They are NOT swept in this slice: S7's Rule 10 review date
+(2026-11-14) is when the migration either lands - and the wrapper-minting work may want the authoring
+surface - or is removed, and a fourteen-file deletion riding inside a hide slice is a second change
+wearing the first one's clothes. `docs/findings.md` carries the named, dated entry rather than
+leaving it to be rediscovered. `pause-for-user-overlay` and `pause-for-user-canvas` stay live: they
+are mounted by both layouts and pop for headless runs.
+
+DIAGRAM CHECK (FIXED-12): DONE, append-only. `docs/diagrams/02-module-map.excalidraw` gains the S8
+surface change - the removed nav row, the three addresses and what each answers, the re-pointed
+affordances, and the set of client modules that become unreachable without being deleted. Appended as
+a single text element carrying `text`, `rawText` and `originalText`; no existing element was edited.
+
+**REVIEW ROUND (2026-08-22), AND WHAT IT CORRECTED ABOVE.** The adversarial round returned five
+majors and nine minors against this slice. Everything above is now what the code does.
+
+*THE CENSUS WAS NOT COMPLETE, and the commit said it was.* Four reachable user-facing strings
+survived the sweep, one of them actively harmful: `artifact-backend-panel.tsx` told a person that
+events "configuram-se em Automações" - guidance naming, as the place to act, a surface this very
+slice removed. It renders in the ordinary no-backend case on `/artifacts` and the repo's own e2e
+asserts that paragraph visible. The other three: the provision fallback toast behind the button S8
+itself reworded (`stores/integrations.ts`), the Cofre lock-all confirm, and the privacy ledger's
+`Tipo` label in `privacy-claims.ts` - a file this commit already edited fourteen lines away. The
+lesson is that "the word is gone" was verified by grepping the locale files, which is where it was
+NOT hiding; the sweep is now over reachable strings wherever they live.
+
+*THE OVERLAY LABELLED THE WRONG IDENTIFIER.* Renaming `runOnAutomationPrefix` to `runIdPrefix`
+changed the words and not the value, so the footer read "Execução 1a2b3c4d" where that is the
+AUTOMATION id - an identifier matching no run, quoted to support by whoever reads it. The run id was
+one selector away in the same store slice. Nothing could have caught it: the overlay had no test at
+any layer, which is exactly why it now has one, and why it is registered in the ledger. It is the one
+automation-branded component S8 deliberately keeps alive, so it is the one that will keep being
+edited.
+
+*THE `[id]` RESOLVER WAS PINNED AGAINST A MOCK OF ITSELF.* The unit suite mocked the whole
+automations store, so patching the real `fetchOne` to always return null left every web test green,
+and the one live e2e case used an unknown id whose expected answer IS the failure fallback - so
+nothing could tell working resolution from total failure. The suite now mocks only the typed client
+and drives the real store, which puts the wire shape and `normalizeWireAutomation` (what actually
+carries `source` and `orgId`) into the path. While fixing it: a super-admin may read another org's
+automation, and the redirect was replacing them, silently, onto their OWN org's page for that key - a
+wrong answer that looks right. A foreign row now falls back to the list.
+
+*THE SCHEDULES RE-POINT SHIPPED WITH NO TEST,* against the repo's own rule that modules travel with
+their tests: three outcomes of new resolution logic, and "restore the old link" would have passed
+every gate. It also answered at the wrong unit - it scanned the caller's whole visible LIST, so a
+peer's private automation (owner-only, no admin exception) looked identical to "not loaded yet" and
+to "the read failed", and all three rendered a bare UUID. Replaced with the per-row read the page
+already uses for the schedule itself, four distinguishable states, and a test for each.
+
+*ONE OF MY OWN REWRITES WAS DETERMINISTICALLY RED.* `automation-deterministic`'s new API-leg
+assertion probed the run record for step DESCRIPTIONS, which the wire never carries - `toWireStep`
+projects a record down to `{stepId, index, status, tier, durationMs, error, screenshotUrl}`. It could
+not pass in any outcome. That is worse than the weak assertion it replaced, and it means the claim in
+the amended message that the API leg "is the leg that does keep working" was never demonstrated. Now
+pinned on what the wire does carry: both step records present by INDEX, neither left pending.
+
+*FOUR CLAIMS-ACCURACY CORRECTIONS.* The unreachable-set entry in `docs/findings.md` listed
+`runHistory` as orphaned when the live S2 detail page reads it as deliberately shared copy, and
+omitted the three panels under `components/automations/results/` - the true orphan set is SEVENTEEN
+files, not fourteen, and a cleanup driven by the wrong list would have left three behind. The ledger
+note claimed `automations-hidden` proves replace-never-push "on both the server route and the client
+one"; it covers the server route only, and now says so. And the em dash appeared in newly authored
+spec prose against the standing rule, swept from every line this branch added.

@@ -1,6 +1,5 @@
 import {
   MessageSquare,
-  Play,
   CalendarClock,
   Box,
   Plug2,
@@ -46,7 +45,9 @@ export interface NavItem {
 
 export const NAV_ITEMS: NavItem[] = [
   { href: "/chat", icon: MessageSquare, labelKey: "chat" },
-  { href: "/automations", icon: Play, labelKey: "automations" },
+  // S8: the Automations row is GONE. Integrations is the single user-facing surface for work that
+  // touches outside systems; the engine, its API and its schedules keep running underneath, and the
+  // three /automations routes answer as redirects (or a 410) rather than as pages.
   { href: "/schedules", icon: CalendarClock, labelKey: "schedules" },
   { href: "/artifacts", icon: Box, labelKey: "artifacts" },
   { href: "/integrations", icon: Plug2, labelKey: "integrations" },

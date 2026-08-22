@@ -281,10 +281,14 @@ export interface Translations {
       sessionRenew: string;
       sessionRetry: string;
       sessionFailedDefault: string;
-      actionAutomationTag: string;
-      actionAutomationPending: string;
-      actionRefineSteps: string;
-      createAutomations: string;
+      /** Chip on an action whose backing is a saved step sequence rather than one request. */
+      actionStepsTag: string;
+      /** The step sequence has not been materialised for this owner yet. */
+      actionStepsPending: string;
+      /** Into `/integrations/[key]?action=...`, where the steps are shown read-only (S8). */
+      actionViewSteps: string;
+      /** Materialise the step sequences this integration's actions run (POST provision). */
+      prepareSteps: string;
       // --- Write gate (slice C2): a `mutates` action needs the owner's approval before it runs ---
       writeGate: {
         /** Chip on a mutating action that has no live approval. */
@@ -1481,7 +1485,6 @@ export interface Translations {
     settings: string;
     artifacts: string;
     integrations: string;
-    automations: string;
     schedules: string;
     users: string;
     memory: string;
@@ -1971,7 +1974,8 @@ export interface Translations {
       stopRun: string;
       continue: string;
       enterHint: string;
-      runOnAutomationPrefix: string;
+      /** S8: the overlay names the RUN, not the surface that used to own it. */
+      runIdPrefix: string;
       badge: {
         live: string;
         connecting: string;
@@ -2186,7 +2190,12 @@ export interface Translations {
       instructionsTitle: string;
       inputsTitle: string;
       argsTitle: string;
-      openAutomation: string;
+      /** S8: an automation-target schedule links to the INTEGRATION that owns its steps. */
+      openIntegration: string;
+      /** The three states the S8 review round separated from one raw UUID (F13). */
+      targetResolving: string;
+      targetUnreadable: string;
+      targetNotVisible: string;
       historyTitle: string;
       historyEmpty: string;
       historyLoading: string;

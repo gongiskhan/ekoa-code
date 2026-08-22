@@ -3650,6 +3650,113 @@ silently absorbed into a ledger note):
   disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
   `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
 
+- **`crawl-in-flight-tests-race-under-load`** (2026-08-22, **FIXED ON MAIN by `a99c0da`** - diagnosed
+  here, fixed there as its own change; **LOW, flakiness not correctness** -
+  found by the S7/S8 verification lane, NOT caused by it). Two cases in
+  `api/tests/contract/f5-ui-endpoints.test.ts` go red on a loaded machine and green on an idle one:
+  *"a second POST while one is in flight answers alreadyRunning:true, never a duplicate run"* and the
+  `crawlStatus` case that follows it. Observed once during the S7 full-suite run (2 failed of 5642)
+  while other work shared the box; the SAME tree re-run idle was 417/417 green, the file alone is
+  green on both trees, and pristine `main` under the same conditions is green too - so it is load,
+  not the change.
+
+  **THE MECHANISM, and it is structural rather than environmental.** The test fires the first crawl
+  WITHOUT awaiting it and immediately posts a second, expecting the second to be refused as
+  `alreadyRunning`. Nothing synchronises the two: the assertion holds only while the first crawl is
+  still running. The seeded source is `http://127.0.0.1:1/refused-by-ssrf`, which the SSRF guard
+  refuses IMMEDIATELY (`Blocked host: 127.0.0.1`, `services/url-safety.ts`), so the in-flight window
+  is close to zero by construction. Under load the first crawl finishes before the second request
+  lands, the refusal never happens, and the leftover progress record from that completed run is what
+  reddens the `crawlStatus` case on the next line.
+
+  **NOT FIXED HERE, deliberately, AND FIXED ON MAIN INSTEAD.** A real fix has to give the first crawl
+  a measurable lifetime (a fixture host that is permitted and then stalls) or give the runner a
+  barrier the test can wait on - either is a change to the knowledge-crawl test fixture, in an area
+  neither S7 nor S8 touches, and landing it inside "hide the automations surface" is the kind of
+  ride-along a reviewer cannot review. That is exactly how it went: the diagnosis above was recorded
+  on the S7/S8 branch and the fix landed separately on main as `a99c0da`. This entry stays as the
+  record of the mechanism, because the next red run of this class should be recognised rather than
+  re-diagnosed - and because the three-way provenance proof (pristine main green, the same tree green
+  when idle, the file green alone on both) is the method, not just the verdict.
+
+- **`s8-consent-reword-retires-standing-approvals`** (2026-08-22, ACCEPTED with an operator note,
+  **MEDIUM on a cutover, none on a fresh estate** - a consequence of slice S8's D4 copy sweep, not a
+  defect in it). `action-consent.ts`'s `actionTarget` produces the destination string the write-gate
+  dialog shows, and that same string is an INPUT TO THE APPROVAL KEY: `idFor(scope, integrationKey,
+  actionName, shape, decision, TARGET)`. The module says so in place ("that string is what the human
+  is shown AND what the approval is keyed on, so the two can never disagree"), and the property is
+  deliberate - a config edit that moves the destination moves the key, so a standing approval stops
+  covering a destination the human never saw.
+
+  S8 rewords that string for automation-backed actions, from `automação <template>` to
+  `sequência de passos <template>` (and the bash-cli form alongside it), because D4's whole point is
+  that the word must not survive anywhere a person reads it. **The key moves with it.** Every
+  standing approval for a MUTATING action whose backing is an `automationBinding` stops matching.
+
+  **BLAST RADIUS, named rather than estimated.** Actions with `mutates: true` AND an
+  `automationBinding`. In the shipped packages that is exactly one: citius `submeter_peca`. Plus any
+  user-authored bound write in a tenant's own definitions, which this repo cannot enumerate from
+  source. Read actions are unaffected (they never needed an approval); api-call actions are
+  unaffected (their target is `METHOD baseUrl+path`, untouched).
+
+  **IT DEGRADES SAFELY AND THAT IS WHY IT IS ACCEPTED RATHER THAN OPEN.** The consent module's own
+  rule is that a key miss is a RE-PROMPT, never a failure: the next run of an affected action shows
+  the dialog again with the new wording, the human approves once, and the new key stands. Nothing
+  breaks, nothing runs unapproved, and no approval is widened - the fail direction is toward asking.
+
+  **OPERATOR NOTE FOR THE CUTOVER.** On a deploy carrying S8, expect one re-approval per user per
+  affected action. It is invisible on the dev estate (approvals are seeded, if they exist at all) and
+  visible on a production cutover, so it belongs in that runbook rather than in a release note nobody
+  reads. Not fixed by keying the approval on a stable token instead of the display string: that is a
+  change to the WRITE GATE's key derivation - an auth-class change needing its own adversarial review
+  - and it would retire exactly the same set of approvals on the way through, so it buys nothing here
+  and costs a review.
+
+- **`s8-automation-authoring-components-unreachable`** (2026-08-22, OPEN, **LOW, with a review date
+  that is already fixed** - dead code created deliberately and named rather than left to be
+  rediscovered). S8 replaced `/automations` and `/automations/[id]` with redirects and deleted
+  `/automations/new`. Those three pages were the only importers of fourteen files under
+  `web/components/automations/`: `automation-empty-state`, `goal-editor`, `run-activity-bar`,
+  `run-history`, `run-viewer`, `step-list`, `trigger-picker` directly, and `step-card`, `inline-edit`,
+  `integration-action-picker`, `step-forms`, `step-type-selector`, `sub-automation-picker`,
+  `consent-dialog` transitively through those - **plus the three panels under
+  `web/components/automations/results/`** (`api-call-result-panel`, `ekoa-action-result-panel`,
+  `local-command-result-panel`), whose only importer is `run-viewer.tsx`. **THE ORPHAN SET IS
+  SEVENTEEN FILES, NOT FOURTEEN**, corrected in the review round (F9): the first count omitted the
+  `results/` directory entirely, so a cleanup driven by this list at the Rule 10 review date would
+  have left three dead files behind.
+
+  Most of the `automations` locale slice (`list`, `emptyState`, `editor`, `newPage`, `goalEditor`,
+  `steps`, `stepList`, `stepTypes`, `forms`, `integrationPicker`, `subAutomationPicker`, `consent`,
+  `runViewer`, `runActivityBar`, `triggerPicker`) goes with them. **`runHistory` DOES NOT** - also
+  corrected in the review round: `web/components/integrations/action-detail.tsx` reads
+  `automations.runHistory.status`, deliberately, as shared copy on the live S2 detail page, and its
+  own comment says so. Deleting that subtree would have been caught by the locale types lockstep at
+  compile time, but the entry naming it as orphaned was wrong. **`automation-empty-state` is the one
+  worth naming twice**: its primary button pushes `/automations/new`, which now answers 410 - inert
+  only because nothing renders it.
+
+  **STILL REACHABLE, and verified so at the end of the slice**: `pause-for-user-overlay` and
+  `pause-for-user-canvas` (mounted by both layouts - the overlay pops for headless runs whatever
+  started them), `web/stores/automations.ts` (the overlay, the schedules form, the schedule detail
+  page and the `[id]` redirect all read it) and `web/hooks/useAutomationRun.ts` (the dashboard
+  layout). Those three are on S8's untouched list and are untouched.
+
+  **WHY IT IS NOT SWEPT IN THIS SLICE, and this is a decision rather than an omission.** S7 opened a
+  Rule 10 state migration with **REVIEW DATE 2026-11-14**: by then the wrapper-minting write half
+  lands or the migration report is deleted. The authoring surface is plausibly an input to that work,
+  and a fourteen-file deletion riding inside a hide slice is a second change wearing the first one's
+  clothes - the exact shape a reviewer cannot review. **This entry closes at the S7 review date, on
+  the same day and by the same decision**: if the migration lands and does not use these components,
+  they go; if the migration is removed, they go with it.
+
+  **WHY THIS IS NOT THE DEAD-BINDING CLASS this ledger has logged four times.** Every prior instance
+  (`screenshot-erasure-path-has-no-production-caller`,
+  `the-attended-session-ceremony-was-built-tested-and-unreachable`,
+  `m365proxy-manifest-flag-stripped`, `P4.2-was-dead-code-in-production`) was code that LOOKED like
+  coverage: a correct, tested function kept plausible by a docblock describing a caller it never got.
+  Nothing here claims to be reachable, and this entry is the record that it is not.
+
 ## Recently fixed - 2026-08-22 S2 review round (one blocker, five majors, six minors)
 
 The integration detail slice (`f262e09`, branch `feat/s2-s3-detail-surface`) went through the review
