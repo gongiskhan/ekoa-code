@@ -77,8 +77,12 @@ const capability = (over: Partial<IntegrationCapability> = {}): IntegrationCapab
       actions: [
         { actionName: HTTP_ACTION, description: 'consulta', mutates: false,
           httpConfig: { method: 'get', baseUrl: 'https://citius.example', path: 'processos/{{input.ref}}' } },
+        // The binding rides the DEFINITION with the id its package DECLARES - a placeholder that
+        // names nothing. The fixture keeps it so the shape is honest, and deliberately gives it a
+        // DIFFERENT value from the org's real id below: a reader that goes back to reading this
+        // one fails these tests instead of passing them (S8 live pass).
         { actionName: RUN_ACTION, description: 'lista', mutates: true,
-          automationBinding: { automationId: AUTOMATION_ID } },
+          automationBinding: { automationId: 'citius-lista-template', automationTemplate: 'lista' } },
       ],
     },
     connected: true,
@@ -86,7 +90,9 @@ const capability = (over: Partial<IntegrationCapability> = {}): IntegrationCapab
       { actionName: HTTP_ACTION, description: 'consulta', backingType: 'api-call', transport: 'http',
         target: 'GET https://citius.example/processos', shape: 'sha-http', requiresApproval: false, approved: false },
       { actionName: RUN_ACTION, description: 'lista', backingType: 'browser-steps', transport: 'http',
-        target: 'browser: citius', shape: 'sha-run', requiresApproval: true, approved: true },
+        target: 'browser: citius', shape: 'sha-run', requiresApproval: true, approved: true,
+        // THE ORG'S OWN id, which is what the server resolves and the client must read.
+        automationId: AUTOMATION_ID },
     ],
     ...over,
   }) as IntegrationCapability;

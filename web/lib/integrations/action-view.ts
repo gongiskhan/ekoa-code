@@ -34,18 +34,22 @@ export function actionRecordOf(
 }
 
 /**
- * The automation an action's binding names.
+ * The automation this action runs, IN THIS CALLER'S ORG.
  *
- * Absent for every api-call action, which is why the caller treats `undefined` as "this action has
- * no run history" rather than as an error.
+ * Read off the typed capability ACTION, not off the definition's `automationBinding`. The binding's
+ * `automationId` is a placeholder the package author wrote (`citius-notificacoes-template`) and
+ * names nothing: a tenant's row is minted per org and joined back by provenance, so the server
+ * resolves it and puts the real id here. Reading the declared id was what made this page render
+ * "automation not found" beside four automations that existed - caught by the S8 live pass.
+ *
+ * Absent for every api-call action, and absent for a bound action this org has not provisioned yet,
+ * which is why the caller treats `undefined` as "no run history to show" rather than as an error.
  */
 export function automationIdOf(
   capability: IntegrationCapability | null | undefined,
   actionName: string,
 ): string | undefined {
-  const binding = actionRecordOf(capability, actionName)?.['automationBinding'];
-  if (typeof binding !== 'object' || binding === null) return undefined;
-  const id = (binding as { automationId?: unknown }).automationId;
+  const id = (capability?.actions ?? []).find((a) => a.actionName === actionName)?.automationId;
   return typeof id === 'string' && id !== '' ? id : undefined;
 }
 

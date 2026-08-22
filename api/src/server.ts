@@ -172,6 +172,7 @@ import {
   collectRunEvidence,
   buildMigrationReport,
   migrationBootSummary,
+  managedAutomationIdsFor,
   type RunEventEmitter,
 } from './automation/index.js';
 import { type ActionDrafter, type PlanDrafter } from './integrations/integration-achieve.js';
@@ -1377,6 +1378,13 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       appCollections: achieveCollections,
       callPlatform,
       platformConnected,
+      // S8 live pass: the caller's org's REAL automation ids for automation-backed actions. Bound
+      // here because `integrations/` may not import `automation/` - the same reason the evidence
+      // collector above is a seam. Without it the detail page read the id a package DECLARES, which
+      // is a placeholder naming nothing, and rendered "automation not found" beside automations that
+      // existed.
+      resolveManagedAutomationIds: (orgId, integrationKey) =>
+        managedAutomationIdsFor({ userId: '', orgId, role: 'user' }, integrationKey),
     }),
   );
   // ch03 §3.8.14 — the AI integration builder (chat/load/save/test).

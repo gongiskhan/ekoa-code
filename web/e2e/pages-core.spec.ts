@@ -17,19 +17,34 @@ async function login(page: Page) {
   await uiLogin(page);
 }
 
+/**
+ * CONSOLE ERRORS PINNED BY RESPONSE, NOT BY RAW CONSOLE LINE (S8 live pass). A raw
+ * "Failed to load resource" line carries no URL, so a page making one legitimate 404 could only be
+ * accommodated by ignoring the whole class. `/integrations` makes exactly one: the CS6 sync-state
+ * endpoint with its flag off, which `citius-sync-outcome.spec.ts` documents as the behaviour under
+ * test. Scoped to that single URL, so every other non-2xx still fails here.
+ */
 function trackConsoleErrors(page: Page): string[] {
   const errors: string[] = [];
+  const devAssetNoise = /\/_next\/|hot-update|favicon/;
   page.on('console', (msg) => {
-    if (msg.type() === 'error') errors.push(msg.text());
+    if (msg.type() !== 'error') return;
+    if (/^Failed to load resource/.test(msg.text())) return; // pinned by URL below
+    if (msg.text().includes('Download the React DevTools')) return;
+    errors.push(msg.text());
+  });
+  page.on('pageerror', (err) => errors.push(`pageerror: ${err.message}`));
+  page.on('response', (r) => {
+    if (r.status() < 400 || devAssetNoise.test(r.url())) return;
+    if (r.status() === 404 && /\/api\/v1\/sync\/citius\/notificacoes\/state$/.test(r.url())) return;
+    if (r.status() === 404 && /\/api\/v1\/sessions\/[0-9a-f-]{36}$/.test(r.url())) return;
+    errors.push(`${r.status()} ${r.url()}`);
   });
   return errors;
 }
 
 function assertNoConsoleErrors(errors: string[]) {
-  const meaningful = errors.filter(
-    (e) => !e.includes('favicon') && !e.includes('Download the React DevTools'),
-  );
-  expect(meaningful, `console errors: ${meaningful.join(' | ')}`).toHaveLength(0);
+  expect(errors, `console errors: ${errors.join(' | ')}`).toHaveLength(0);
 }
 
 test.describe('pages-core (S4)', () => {

@@ -84,6 +84,7 @@ export {
   provisionIntegrationAutomations,
   sessionActionRows,
   managedAutomationId,
+  managedAutomationIdsFor,
   type ProvisionBinding,
   type IntegrationAutomationTemplate,
   type SessionActionRow,

@@ -9,11 +9,13 @@ import {
   integrationConfigs,
   integrationDefinitions,
   approvedIntegrationActions,
+  automations,
 } from '../../src/data/stores.js';
 import { setActivation, __resetActivationForTests } from '../../src/data/activation.js';
 import { __resetRevocationsForTests } from '../../src/auth/revocation.js';
 import { __resetCapabilityRateForTests } from '../../src/auth/api-key-rate.js';
 import { __resetGatewayKeysServiceForTests } from '../../src/auth/gateway-keys-service.js';
+import { managedAutomationId } from '../../src/automation/integration-automations.js';
 import { login } from '../../src/auth/service.js';
 import { hashPassword } from '../../src/auth/password.js';
 import { buildApp } from '../../src/server.js';
@@ -158,7 +160,7 @@ beforeEach(async () => {
   upstream.calls.length = 0;
   upstream.status = 200;
   upstream.body = '{"ok":true}';
-  for (const s of [users, gatewayKeys, activityLogs, integrationConfigs, integrationDefinitions, approvedIntegrationActions]) {
+  for (const s of [users, gatewayKeys, activityLogs, integrationConfigs, integrationDefinitions, approvedIntegrationActions, automations]) {
     await s.deleteMany({});
   }
   await mkUser('ownerA', 'orgA');
@@ -384,6 +386,90 @@ describe('POST /:key/actions/:actionName/execute', () => {
     const res = await call(`/api/v1/integrations/${KEY}/actions/list_things/execute`, token, { method: 'POST' });
     expect(res.status).toBe(200);
     expect(ExecuteIntegrationActionResponse.safeParse(await res.json()).success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// 2b. THE ORG'S OWN AUTOMATION ID (S8 live pass)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * WHAT THIS PINS, and why it is a contract test rather than a unit one.
+ *
+ * A package's `automationBinding.automationId` is a PLACEHOLDER its author wrote. The row a tenant
+ * actually runs is minted per org (`managedAutomationId(orgId, key, templateKey)`) and joined back
+ * by provenance. Before this field existed the integration detail page read the declared id off the
+ * definition, fetched it, and rendered "automation not found" beside automations that existed - and
+ * every hermetic test passed, because their fixtures mocked a capability carrying a binding whose id
+ * WAS the real one, a shape no production writer can emit.
+ *
+ * So the assertion has to run against the real assembly: seed a bound action, provision the row the
+ * way the product does, and read the capability over HTTP.
+ */
+describe('the capability reports the CALLER ORG\'s automation id, never the id a package declares', () => {
+  const BOUND_KEY = 'd1-managed';
+  const DECLARED = 'declared-placeholder-id';
+
+  async function seedBound(): Promise<void> {
+    await seed([
+      {
+        actionName: 'run_bound',
+        description: 'Ação por sequência de passos',
+        mutates: false,
+        automationBinding: { automationId: DECLARED, automationTemplate: 'probe', passCredentials: false },
+      },
+      { actionName: 'plain_http', description: 'Uma chamada', mutates: false,
+        httpConfig: { method: 'GET', baseUrl: 'https://example.test', path: '/x' } },
+    ], BOUND_KEY);
+  }
+
+  /** The row provisioning would mint: org-scoped id, joined by `source`. */
+  async function provisionRow(orgId: string): Promise<string> {
+    const id = managedAutomationId(orgId, BOUND_KEY, 'probe');
+    await automations.insert({
+      _id: id, id, orgId, ownerUserId: 'ownerA', name: 'probe', description: 'g',
+      steps: [{ id: 's1', description: 'click', type: 'browser' }],
+      source: { integrationKey: BOUND_KEY, templateKey: 'probe' },
+      createdAt: '2026-08-01T00:00:00.000Z', updatedAt: '2026-08-01T00:00:00.000Z',
+    } as never);
+    return id;
+  }
+
+  const capabilityFor = async (token: string) => {
+    const res = await call(`/api/v1/integrations/${BOUND_KEY}`, token);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(IntegrationCapability.safeParse(body).success, JSON.stringify(body)).toBe(true);
+    return body as { actions: Array<{ actionName: string; automationId?: string }> };
+  };
+
+  it('a bound action carries the ORG\'s id, and it is NOT the one the package declares', async () => {
+    await seedBound();
+    const realId = await provisionRow('orgA');
+    const body = await capabilityFor(await tokenFor('ownerA'));
+
+    const bound = body.actions.find((a) => a.actionName === 'run_bound');
+    expect(bound?.automationId, JSON.stringify(body.actions)).toBe(realId);
+    expect(bound?.automationId).not.toBe(DECLARED);
+  });
+
+  it('an api-call action carries NO automation id: absence is the honest answer, not an empty string', async () => {
+    await seedBound();
+    await provisionRow('orgA');
+    const body = await capabilityFor(await tokenFor('ownerA'));
+
+    const plain = body.actions.find((a) => a.actionName === 'plain_http');
+    expect(plain).toBeDefined();
+    expect('automationId' in (plain as object)).toBe(false);
+  });
+
+  it('a bound action nobody has provisioned reports NO id rather than one that 404s', async () => {
+    await seedBound();
+    const body = await capabilityFor(await tokenFor('ownerA'));
+
+    const bound = body.actions.find((a) => a.actionName === 'run_bound');
+    expect(bound).toBeDefined();
+    expect(bound?.automationId).toBeUndefined();
   });
 });
 

@@ -885,6 +885,17 @@ export const IntegrationCapabilityAction = z.object({
    * read it is not misled by it, because the gate is `requiresApproval` either way.
    */
   authoringState: z.enum(['none', 'provisional', 'trusted']).optional(),
+  /**
+   * THE CALLER'S OWN ORG'S automation id for an automation-backed action, when that org has
+   * materialised it. Absent for an api-call action, and absent for a bound action nobody has
+   * provisioned yet.
+   *
+   * ADDITIVE (Rule 7), and it exists because the id a package DECLARES is not one:
+   * `automationBinding.automationId` is a placeholder its author wrote, while the row a tenant runs
+   * is minted per org and joined back by provenance. A client reading the declared id fetches a 404,
+   * which is what the S8 live pass caught on the integration detail page.
+   */
+  automationId: z.string().optional(),
 });
 export type IntegrationCapabilityAction = z.infer<typeof IntegrationCapabilityAction>;
 

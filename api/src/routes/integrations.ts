@@ -360,6 +360,7 @@ function capabilityCtxOf(
     appCollections?: AppCollections;
     callPlatform?: CapabilityContext['callPlatform'];
     platformConnected?: CapabilityContext['platformConnected'];
+    resolveManagedAutomationIds?: CapabilityContext['resolveManagedAutomationIds'];
   },
 ): AchieveContext {
   const p = res.locals.apiKeyPrincipal as ApiKeyPrincipal | undefined;
@@ -385,6 +386,10 @@ function capabilityCtxOf(
     // is the correct closed answer rather than a silent cross-custody read.
     ...(deps.callPlatform ? { callPlatform: deps.callPlatform } : {}),
     ...(deps.platformConnected ? { platformConnected: deps.platformConnected } : {}),
+    // S8 live pass: the caller's org's real automation ids for a bound action. A seam because
+    // `integrations/` may not import `automation/`; unbound, the capability reports no automation
+    // id, which reads as "not provisioned yet" rather than as a wrong id.
+    ...(deps.resolveManagedAutomationIds ? { resolveManagedAutomationIds: deps.resolveManagedAutomationIds } : {}),
   };
 }
 
@@ -420,6 +425,8 @@ export function integrationsRouter(deps: {
   callPlatform?: CapabilityContext['callPlatform'];
   /** Its read-side counterpart, so the catalog's `connected` agrees with that rail. */
   platformConnected?: CapabilityContext['platformConnected'];
+  /** S8 live pass: the caller's org's REAL automation ids for automation-backed actions. */
+  resolveManagedAutomationIds?: CapabilityContext['resolveManagedAutomationIds'];
 }): Router {
   const r = Router();
 

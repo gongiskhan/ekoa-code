@@ -112,6 +112,20 @@ export interface CapabilityActionView {
    * exactly the same reason the executor's gate re-prompts for it.
    */
   authoringState: 'none' | 'provisional' | 'trusted';
+  /**
+   * THE ORG'S OWN automation id for an automation-backed action, when one has been materialised.
+   *
+   * NOT the id the package declares. `automationBinding.automationId` on a shipped package is a
+   * PLACEHOLDER its author wrote (`citius-notificacoes-template`) and names nothing; the row a
+   * tenant runs is minted per org and joined back by provenance. The S8 live pass is where that
+   * bit: the detail page read the declared id straight off the definition, fetched it, and rendered
+   * "automation not found" beside four automations that existed.
+   *
+   * ABSENT for every api-call action (there is no automation) AND for a bound action this org has
+   * not provisioned yet - which is a state the reader must be able to see rather than a 404 one
+   * fetch later.
+   */
+  automationId?: string;
 }
 
 /** The capability view of one integration (shared/src/integrations.ts `IntegrationCapability`). */
@@ -151,6 +165,16 @@ export interface CapabilityContext {
   username?: string;
   /** The automation seam, bound once by the composition root and handed to every rail. */
   runAutomationBackedAction?: ExecutorDeps['runAutomationBackedAction'];
+  /**
+   * Resolve the caller's org's materialised automation ids for one integration, keyed by
+   * `templateKey`. A SEAM rather than an import because `integrations/` may not reach into
+   * `automation/` (the S1 evidence collector is the standing precedent), and the composition root
+   * binds it to `managedAutomationIdsFor`.
+   *
+   * Unbound, every action reports no automation id - the honest degradation, and the same one an
+   * unprovisioned integration produces.
+   */
+  resolveManagedAutomationIds?: (orgId: string, integrationKey: string) => Promise<Record<string, string>>;
   /**
    * THE EVIDENCE SEAMS (slice S1), bound once by the composition root alongside the automation one
    * and merged into the executor deps at the dispatch below.
@@ -252,6 +276,18 @@ export async function resolveCapabilityDefinition(
 }
 
 /**
+ * The org's automation id for one action, or `undefined`.
+ *
+ * Keyed on the binding's `automationTemplate` - the provenance the materialised row carries - and
+ * never on its `automationId`, which is the placeholder that caused this field to exist.
+ */
+function managedAutomationIdFor(action: IntegrationAction, managedIds: Record<string, string>): string | undefined {
+  const templateKey = action.automationBinding?.automationTemplate;
+  if (templateKey === undefined || templateKey === '') return undefined;
+  return managedIds[templateKey];
+}
+
+/**
  * Project ONE integration onto its capability view.
  *
  * `connected` mirrors the executor's own two refusals (`not_connected`, `disabled`) rather than
@@ -283,6 +319,19 @@ export async function getIntegrationCapability(
   // executor would actually make. Non-secret values only, straight off the un-decrypted row.
   const resolution = targetResolutionOf(def.configSchema, config?.publicConfigValues);
 
+  // ONE resolution for the whole integration, before the per-action loop: the seam's query is
+  // already narrowed by (org, integrationKey), and asking per action would multiply it by five.
+  let managedIds: Record<string, string> = {};
+  if (ctx.resolveManagedAutomationIds) {
+    try {
+      managedIds = await ctx.resolveManagedAutomationIds(ctx.actor.orgId, integrationKey);
+    } catch {
+      // A failed lookup reports NO automation id rather than a wrong one: the reader then sees the
+      // same "not prepared yet" state an unprovisioned integration shows, which is recoverable.
+      managedIds = {};
+    }
+  }
+
   const actions: CapabilityActionView[] = [];
   for (const action of def.actions ?? []) {
     const descriptor = describeAction(integrationKey, action, resolution);
@@ -308,6 +357,9 @@ export async function getIntegrationCapability(
       requiresApproval,
       approved: live !== null,
       authoringState: authoringStateOf(integrationKey, action),
+      ...(managedAutomationIdFor(action, managedIds) !== undefined
+        ? { automationId: managedAutomationIdFor(action, managedIds) }
+        : {}),
     });
   }
 

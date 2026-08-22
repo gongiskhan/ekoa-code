@@ -105,8 +105,9 @@ const capability = (over: Partial<IntegrationCapability> = {}): IntegrationCapab
       actions: [
         { actionName: HTTP_ACTION, description: 'consulta um processo', mutates: false,
           httpConfig: { method: 'get', baseUrl: 'https://citius.example', path: 'processos/{{input.ref}}' } },
+        // Declared placeholder, deliberately NOT the org's id - see the store suite's note.
         { actionName: RUN_ACTION, description: 'lista os pendentes', mutates: true,
-          automationBinding: { automationId: AUTOMATION_ID } },
+          automationBinding: { automationId: 'citius-lista-template', automationTemplate: 'lista' } },
       ],
     },
     connected: true,
@@ -114,7 +115,8 @@ const capability = (over: Partial<IntegrationCapability> = {}): IntegrationCapab
       { actionName: HTTP_ACTION, description: 'consulta um processo', backingType: 'api-call', transport: 'http',
         target: 'GET https://citius.example/processos', shape: 'sha-http', requiresApproval: false, approved: false },
       { actionName: RUN_ACTION, description: 'lista os pendentes', backingType: 'browser-steps', transport: 'http',
-        target: 'browser: citius', shape: 'sha-run', requiresApproval: true, approved: true },
+        target: 'browser: citius', shape: 'sha-run', requiresApproval: true, approved: true,
+        automationId: AUTOMATION_ID },
     ],
     ...over,
   }) as IntegrationCapability;

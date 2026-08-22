@@ -763,6 +763,7 @@ export interface components {
             approved: boolean;
             /** @enum {string} */
             authoringState?: "none" | "provisional" | "trusted";
+            automationId?: string;
             backingType: string;
             description: string;
             requiresApproval: boolean;

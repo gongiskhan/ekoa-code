@@ -92,6 +92,31 @@ async function managedByTemplate(actor: Actor, integrationKey: string): Promise<
   return map;
 }
 
+/**
+ * THE ORG'S REAL AUTOMATION ID FOR EACH BOUND TEMPLATE, keyed by `templateKey`.
+ *
+ * WHY THIS EXISTS AT ALL (S8 live pass). A shipped package's `automationBinding.automationId` is a
+ * PLACEHOLDER the package author wrote - `citius-notificacoes-template` - and it is not the id of
+ * anything. The row a tenant actually runs is minted under `managedAutomationId(orgId, key,
+ * templateKey)`, a per-org sha256, and the only join back is PROVENANCE: `source.{integrationKey,
+ * templateKey}`. A client that reads the declared id off the wire and fetches it gets a 404, which
+ * is exactly what the integration detail page did.
+ *
+ * ONE QUERY for the whole integration, not one per action: the caller is a per-action loop, and the
+ * rows are already narrowed by (org, integrationKey).
+ *
+ * ABSENT MEANS NOT PROVISIONED, and that is a real state the caller must be able to see: the id is
+ * deterministic, so it could be computed for a row that does not exist - and answering with it would
+ * turn "nobody has prepared these steps yet" into "here is an automation" and a 404 one fetch later.
+ * Only materialised rows are reported.
+ */
+export async function managedAutomationIdsFor(actor: Actor, integrationKey: string): Promise<Record<string, string>> {
+  const byTemplate = await managedByTemplate(actor, integrationKey);
+  const out: Record<string, string> = {};
+  for (const [templateKey, row] of byTemplate) if (row.id) out[templateKey] = row.id;
+  return out;
+}
+
 /** Map a template's engine-native steps defensively (repo-authored, but never trust a type blindly). */
 function templateSteps(t: IntegrationAutomationTemplate): Step[] {
   return (t.steps ?? []).map((s, i) => {
