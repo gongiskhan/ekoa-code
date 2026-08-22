@@ -12,7 +12,8 @@ import { managedAutomationId } from '../../src/automation/integration-automation
 import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../../src/config.js';
 import * as bridgeRegistry from '../../src/bridge/registry.js';
 import { __resetCeremoniesForTests, __openCeremonyCount } from '../../src/bridge/attended.js';
-import { __resetCrawlRunnerForTests } from '../../src/knowledge/crawl/runner.js';
+import { __resetCrawlRunnerForTests, startCrawl, isCrawlRunning } from '../../src/knowledge/crawl/runner.js';
+import { getSourceByIdUnscoped } from '../../src/knowledge/service.js';
 import {
   KnowledgeSource, CrawlStartResponse, CrawlStatusResponse, RefreshScheduleResponse,
   SessionCaptureStatus, ConnectSessionResponse, ProvisionAutomationsResponse, ErrorEnvelope,
@@ -143,11 +144,26 @@ describe('knowledge: crawl endpoints (WS8c - real crawler; trigger gated to supe
   it('a second POST while one is in flight answers alreadyRunning:true, never a duplicate run', async () => {
     await seedCrawlableSource();
     const admin = await mkSuperAdmin();
-    const first = authed('/api/v1/knowledge/sources/s1/crawl', admin, { method: 'POST' });
+    // The in-flight window is held open DETERMINISTICALLY through the runner's own lookup seam,
+    // not by racing two HTTP requests. The racing version was flaky by construction
+    // (`crawl-in-flight-tests-race-under-load` in docs/findings.md): the seeded loopback URL is
+    // refused by the SSRF guard synchronously, so the first run could SETTLE before the second
+    // request arrived and the guard would honestly answer started:true - and that stray second
+    // run then raced the next test. `startCrawl` reserves the slot synchronously before its first
+    // await, so the slot is taken the moment this call returns control, for as long as the gate
+    // holds; the production lookup (`getSourceByIdUnscoped`) is what the gate wraps.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const first = startCrawl('s1', async (id) => { await gate; return getSourceByIdUnscoped(id); });
     const second = await readJson(await authed('/api/v1/knowledge/sources/s1/crawl', admin, { method: 'POST' }));
     expect(second.started).toBe(false);
     expect(second.alreadyRunning).toBe(true);
-    await first; // drain the in-flight request before the test ends
+    release();
+    expect((await first).started).toBe(true);
+    // Drain the real (instantly SSRF-refused) background run to completion so nothing it leaves
+    // behind can leak into the next case - the second half of the recorded flake.
+    for (let i = 0; i < 50 && isCrawlRunning('s1'); i++) await new Promise((r) => setTimeout(r, 20));
+    expect(isCrawlRunning('s1')).toBe(false);
   });
 
   it('GET /sources/:id/crawl (crawlStatus, ordinary `user` tier) validates with no run yet: running:false, no progress, real ledger stats', async () => {
