@@ -3650,6 +3650,43 @@ silently absorbed into a ledger note):
   disposed KEEP+UPGRADE and its screenshot bug should be root-caused before Stage C investment;
   `sales-crm` is disposed DEMOTE so its bug is lower priority but still real.
 
+## Recently fixed - 2026-08-22 the estate verification could not fail, twice over
+
+- **`estate-run-raced-its-own-build-and-the-tail-swallowed-the-red`** (**FIXED 2026-08-22**, MEDIUM,
+  process - the verification harness, not the product; self-reported by the session that did it,
+  sibling of `workspace-scoped-verification-misses-two-workspaces`). Three interlocking measurement
+  defects in how the S6 and S4/S5 pre-merge estates were run, each individually able to pass a red
+  estate, jointly used to merge S6:
+
+  **(a) THE ESTATE RACED ITS OWN BUILD.** The five-workspace `npm test` and a `npm run build`-first
+  gates lane were launched CONCURRENTLY in the same worktree, so the api suite could read a
+  `shared/dist` that the gates lane was rebuilding underneath it. Observed directly on the S4/S5
+  branch: the estate reported api RED (35 S6-suite failures) while the identical tree, re-run after
+  the build had finished, was green everywhere - the red was the race, and a real red would have
+  been indistinguishable from it. The same race ran under S6's estate.
+
+  **(b) THE TAIL PIPE DESTROYED THE FAILURE SIGNAL.** `npm test 2>&1 | tail -N`: the pipeline exit
+  is tail's (no pipefail in this shell), npm prints a workspace's failure block MID-STREAM
+  immediately after that workspace, npm then CONTINUES into the remaining workspaces, and npm prints
+  NO final aggregate error. So a red api produces a run whose last N lines are entirely passing
+  output with "exit 0" - measured, not inferred: the S4/S5 estate's tail showed web, bridge and
+  cortex-cli green over a red api. S6 was merged on exactly this evidence shape.
+
+  **(c) THE ABORT-ON-FAILURE INFERENCE WAS FALSE.** The S6 merge decision rested on "the workspace
+  fan-out aborts on the first failure, cortex-cli ran last and passed, therefore everything before
+  it passed". `npm run test --workspaces` does not abort; (b)'s run proves it continuing straight
+  through a failed api into three more green workspaces.
+
+  **GROUND TRUTH RESTORED before anything further merged:** the post-S6, post-S4/S5 tree (ff2a109)
+  re-verified with builds SEQUENCED before tests and every run's full output kept to a file with its
+  own exit code echoed - api green in two runs covering every test dir (2472 + 3080 tests), shared
+  127, web 559, bridge 527, cortex-cli 111, all gates green. The stale-dist red first blamed on main
+  reproduced the same 35 failures from the main checkout's own unrebuilt dist and disappeared on
+  rebuild, which is `openapi-drift`'s "this gate reads dist, not src" doing its job.
+  **RULES:** never run the estate concurrently with a build over the same tree; never let
+  verification evidence pass through `| tail`/`| grep` without the full stream preserved and the
+  producer's own exit code captured; never infer a workspace's result from a later workspace's.
+
 ## Recently fixed - 2026-08-22 the secrets gate stops arguing against itself
 
 - **`gitleaks-path-allowlists-contradicted-their-own-config`** (**FIXED 2026-08-22**, MEDIUM,
