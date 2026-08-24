@@ -33,6 +33,34 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   DOES pause the run at the sign-in wall. The residual is the durability shape above, plus the
   missing-browser companion fix.
 
+  TWO FURTHER GAPS CONFIRMED LIVE the same session, which together make an ad-hoc adversarial
+  read-after-login impossible to complete end to end today (all real, all logged for the follow-up):
+  (a) THE SESSION IS NOT CAPTURED AND DOES NOT SURVIVE A RUN BOUNDARY. The human logged in during the
+  `paused_for_user` window (into the headed persistent profile), but that path never runs
+  `captureSessionWithGrant` - only the declared-integration `ensureSession` path does - so nothing
+  lands in the Cofre. A second run authored to read the orders started UNAUTHENTICATED: measured, its
+  verify step reported "a página apresenta o formulário de início de sessão da Uber Eats" - the login
+  form again. The per-run `clearCookies` at run end (P1.1, "no session stays resident") plus the lack
+  of capture means a manually-established ad-hoc session is gone by the next run.
+  (b) THE PLANNER MAKES THE LOGIN A BROWSER-ACTION STEP, WHICH CANNOT RECOGNISE "ALREADY DONE". The
+  goal produced a `sign-in-if-needed` BROWSER step; the vision resolver is asked to PERFORM a sign-in
+  action, and on an already-logged-in page there is no such action, so it returns "low confidence -
+  refusing to execute" and re-pauses `paused_for_user` on every resume - an infinite re-pause loop
+  after the human has already logged in. A human-login pause must be a WAIT-FOR-HUMAN step the resume
+  steps PAST, not a browser action the model must execute.
+  (c) PROFILE-LOCK CONTENTION: a paused run holds the origin-keyed persistent profile
+  (Chromium SingletonLock), so a second run against the same origin cannot acquire it and times out
+  at the 120s invocation - measured. Two runs cannot share one adversarial profile, and the paused
+  one must be cancelled first, which (per (a)) clears the session.
+  NET, corrected scope: this is not one "ceremony gap" but the whole ad-hoc-adversarial session
+  LIFECYCLE (capture -> durable store -> re-inject, plus a wait-for-human login step and profile
+  arbitration) being absent on the undeclared-origin path, while the declared-integration path
+  (Citius, run 2) has exactly this lifecycle via `ensureSession`/`captureSessionWithGrant`. What IS
+  proven live and is real acceptance evidence for the execution plane: the capability grant landed
+  today, P4 locality routing an adversarial run to the granted bridge (refusing the datacenter), the
+  headed executor driving a real adversarial site, the vision detector catching the sign-in wall and
+  pausing for the human, and a human completing a direct (non-Google) login in the headed window.
+
 - **`google-sso-refuses-the-automated-ceremony-browser`** (2026-08-24, OPEN, **MEDIUM**, external
   constraint; found in acceptance run 1). When the attended-ceremony window (Playwright/CDP-driven
   headed Chrome on the bridge, `channel:'chrome'`, `--disable-blink-features=AutomationControlled`,
