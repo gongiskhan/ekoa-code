@@ -6,28 +6,6 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
-- **`capability-grants-have-no-route-or-ui-so-the-whole-browser-execution-path-is-unreachable`**
-  (2026-08-24, OPEN, **HIGH** - found while staging acceptance run 1; a ground-truth divergence from
-  the brief's "locality wired for real in every environment"). `grantCapability` /
-  `revokeCapability` (`api/src/bridge/capability-grants.ts`) have NO HTTP route
-  (`api/src/routes/bridge.ts` mounts only `/token`, `DELETE /pairings/:id`, `/status`) and NO web
-  caller (grep across `web/app`, `web/components`, `web/stores`, `web/lib` returns nothing). Only the
-  security suites call `grantCapability()`, directly. The enforcement half is real and correct:
-  `daemon-step-seam.ts:130` refuses a browser step from a machine the org has not granted
-  (`esta máquina não está autorizada para desktop.automation nesta organização`), default-deny, and
-  a live acceptance run confirmed it refuses rather than falling back to the datacenter. But because
-  nothing in the product can WRITE a grant, `desktop.automation` and `local.bash` can never be turned
-  on for any machine through the running system - so every adversarial browser run and every bash-cli
-  run refuses forever, and the entire P1-P4 execution plane is dead in production. The module's own
-  docblock says "only the tenant can answer" the grant question; there is no tenant-facing surface
-  that asks it. Same class as `the-self-extension-loop-has-no-ui-for-its-promotion-step` (a built,
-  tested, unreachable capability) but HIGH not MINOR, because it gates the headline feature of the
-  whole convergence rather than one promotion step. CLOSE BY: a `user`-class (admin-gated within the
-  tenant) grant/revoke route pair over `capability-grants.ts`, mounted, contract-tested, with the
-  `egress.residential` endpoint requirement surfaced; and a Settings/Devices UI that lists a paired
-  machine's advertised capabilities and lets an admin grant each (the `egress.residential` one taking
-  its endpoint). Blocks acceptance runs 1-3.
-
 - **`bridge-device-verification-url-uses-the-api-origin-not-the-dashboard`** (2026-08-24, OPEN,
   **MINOR**, UX/product). `ekoa-bridge pair` printed
   `Para autorizar este dispositivo, abra ... https://<host>:4111/settings/devices` - the API origin
@@ -3921,6 +3899,57 @@ silently absorbed into a ledger note):
   `m365proxy-manifest-flag-stripped`, `P4.2-was-dead-code-in-production`) was code that LOOKED like
   coverage: a correct, tested function kept plausible by a docblock describing a caller it never got.
   Nothing here claims to be reachable, and this entry is the record that it is not.
+
+## Recently fixed - 2026-08-24 the capability grant had no door, so the execution plane was dead
+
+- **`capability-grants-have-no-route-or-ui-so-the-whole-browser-execution-path-is-unreachable`**
+  (**FIXED 2026-08-24**, was HIGH, found while staging acceptance run 1). `grantCapability` /
+  `revokeCapability` (`api/src/bridge/capability-grants.ts`) were built, security-tested and called
+  by nothing but those tests: no HTTP route, no web caller. The enforcement half was real and
+  correct - `bridge/daemon-step-seam.ts` refuses a step whose machine the org has not granted,
+  default-deny, checked before any credential is delivered - so the product enforced an answer to a
+  question it never asked anyone. Nothing could WRITE a grant, so `desktop.automation` and
+  `local.bash` could never be turned on and every browser and bash step in production refused
+  forever.
+
+  FIXED by the surface, with the enforcement untouched. Three routes on the existing
+  `bridgeTokenRouter` (`api/src/routes/bridge.ts`): `GET /api/v1/bridge/machines`,
+  `POST /api/v1/bridge/pairings/:pairingId/capabilities`,
+  `DELETE /api/v1/bridge/pairings/:pairingId/capabilities/:capability`, all declaring
+  `auth: 'org-admin'` (the per-endpoint tier marking of api-contract.md CONV-1) and mounting
+  `requireRole('org-admin', 'super-admin')` - both roles named, because `requireRole` is an exact
+  membership test that does not treat super-admin as a superset of org-admin. Domain functions with
+  their Registo writes in `bridge/capability-grants.ts`
+  (`orgMachines`, `machineForOrg`, `grantedEgressEndpoint`, `grantCapabilityAudited`,
+  `revokeCapabilityAudited`), exported through `bridge/index.ts` because `routes/` may not import
+  `data/`. Web: `web/stores/bridge-machines.ts` +
+  `web/components/settings/paired-machines-section.tsx`, on the EXISTING `/settings/devices` page,
+  which now also appears in the settings nav (it was reachable only by the URL the bridge CLI
+  prints). Journal: `docs/decisions.md` 2026-08-24.
+
+  THE MECHANISM THAT MAKES THE CLOSURE REAL, rather than a route that writes a row nothing reads:
+  `api/tests/contract/bridge-capabilities.test.ts` asserts `isCapabilityGranted` - the exact
+  predicate the composition root hands the daemon step seam - is false before the route call and
+  true after it, and false again after the revoke. A suite that only validated JSON would have
+  passed over a route wired to the wrong store. 43 cases across that suite and
+  `api/tests/security/capability-grant-isolation.test.ts` (Rule 5, memvault class): the plain user
+  refused 403 even on the machine they own with nothing written; the admin gate proven to refuse
+  BEFORE any store read, so its 403 is byte-identical for an own, a foreign and a non-existent
+  machine and cannot be used to map a fleet; another org's machine absent from the listing, its
+  advertised address absent from the response bytes, and grant/revoke on it answering a 404
+  byte-identical to a machine that does not exist, with nothing written under EITHER org's key;
+  `egress.residential` refused 400 with no row stored when it names no usable endpoint; the closed
+  write vocabulary refused at the schema; revoke idempotent as a 200 carrying `revoked: false`.
+
+  NOT PROVEN HERE, and registered UNVERIFIED for live acceptance: that a real paired daemon,
+  granted through this UI, then executes a browser step. That needs a paired machine, which CI has
+  none of. What is proven is that the grant the UI writes is the grant the refusal reads.
+
+  Note on the report that `/settings/devices` returned `Cannot GET`: that page existed all along.
+  The "Cannot GET" is the separate OPEN finding
+  `bridge-device-verification-url-uses-the-api-origin-not-the-dashboard` - the CLI printed the API
+  origin `:4111`, which serves no dashboard page. The address was fine; the machine list was what
+  was missing, and it is what landed.
 
 ## Recently fixed - 2026-08-22 S2 review round (one blocker, five majors, six minors)
 

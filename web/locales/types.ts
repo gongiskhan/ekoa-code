@@ -642,6 +642,42 @@ export interface Translations {
       denied: string;
       invalid: string;
       incomplete: string;
+      /** I-3 capability grants for the org's paired machines (admin-only section). */
+      machines: {
+        title: string;
+        description: string;
+        loading: string;
+        loadError: string;
+        retry: string;
+        empty: string;
+        emptyDescription: string;
+        live: string;
+        offline: string;
+        advertisesNothing: string;
+        advertisedAddress: string;
+        authorisedAddress: string;
+        noAddress: string;
+        granted: string;
+        grantedNotAdvertised: string;
+        notGrantable: string;
+        egressMismatch: string;
+        grant: string;
+        granting: string;
+        revoke: string;
+        revoking: string;
+        revokeConfirm: string;
+        egressLabel: string;
+        egressHint: string;
+        /** Human names for the closed `BridgeCapability` vocabulary. The raw id is shown beside
+         *  the name, because the id is what the refusal on a blocked step names. */
+        capabilities: {
+          'local.filesystem': string;
+          'local.bash': string;
+          'attended.card_login': string;
+          'egress.residential': string;
+          'desktop.automation': string;
+        };
+      };
     };
 
     // ============================================
@@ -654,6 +690,7 @@ export interface Translations {
       users: string;
       offices: string;
       privacy: string;
+      devices: string;
       apiKeys: string;
     };
     knowledge: {

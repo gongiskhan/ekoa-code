@@ -4,9 +4,16 @@
  * - which makes its two rules worth pinning rather than assuming.
  *
  * RULE 1: the tab strip renders only on the tab routes. `/settings/*` also holds pages that are
- * NOT tabs (branding, bridge, devices), and drawing a "Plataforma | Pedidos | Utilizadores |
- * Escritórios | Privacidade | Chaves de API" bar above those would claim they belong to a group
+ * NOT tabs (branding, bridge), and drawing a "Plataforma | Pedidos | Utilizadores | Escritórios |
+ * Privacidade | Dispositivos | Chaves de API" bar above those would claim they belong to a group
  * they do not.
+ *
+ * DEVICES JOINED THE GROUP on 2026-08-24 with the capability-grant surface. It had been reachable
+ * only by the URL the bridge CLI prints, which is how an org-admin surface stayed invisible: the
+ * page now carries the machine list where a paired computer is authorised for `desktop.automation`
+ * / `local.bash`, and an administrator has no way to guess an address nothing links to. It is
+ * UNGATED here because the device-approval half is per-user; the machine section gates itself on
+ * role, and that gating is asserted where it lives, not here.
  *
  * RULE 2: role gating is COSMETIC and is deliberately tested as such. Hiding a tab is not
  * authorization - the pages behind them read through the typed client, and the API refuses a
@@ -54,6 +61,7 @@ describe('settings tab-group layout', () => {
       'Utilizadores',
       'Escritórios',
       'Privacidade',
+      'Dispositivos',
       'Chaves de API',
     ]);
   });
@@ -75,7 +83,7 @@ describe('settings tab-group layout', () => {
     asRole('user');
     render(<SettingsLayout><div>conteúdo</div></SettingsLayout>);
     const labels = tabLabels();
-    expect(labels).toEqual(['Plataforma', 'Privacidade', 'Chaves de API']);
+    expect(labels).toEqual(['Plataforma', 'Privacidade', 'Dispositivos', 'Chaves de API']);
   });
 
   it('renders NO tab strip on a settings page outside the group', () => {

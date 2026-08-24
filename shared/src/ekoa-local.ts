@@ -78,6 +78,99 @@ export const BridgeStatusResponse = z.object({
 });
 export type BridgeStatusResponse = z.infer<typeof BridgeStatusResponse>;
 
+// ---------------------------------------------------------------------------
+// The CAPABILITY-GRANT admin surface (I-3). A machine ADVERTISES what it can do;
+// the ORG GRANTS what its work may be routed through it for. Both facts travel
+// here, side by side and clearly distinguished, because the whole point of I-3 is
+// that they are different questions and only the tenant answers the second one.
+// ---------------------------------------------------------------------------
+
+/**
+ * One paired machine as its org's administrator sees it.
+ *
+ * THE TWO CAPABILITY LISTS ARE `z.array(z.string())`, NOT `z.array(BridgeCapability)`, and that is
+ * deliberate on a READ. Both lists are STORED data: `advertisedCapabilities` is whatever the daemon
+ * last put in its `hello` frame and `grantedCapabilities` is whatever was granted at the time. A
+ * machine running a newer build advertises a capability this vocabulary does not have yet, and a
+ * grant may outlive a capability removed from it. Narrowing the read to the closed enum would make
+ * the WHOLE fleet listing fail validation because one machine is ahead of the server - the admin
+ * surface would go blank exactly when someone needs to look at it. The WRITE stays closed
+ * (`BridgeGrantCapabilityRequest.capability` is the enum), which is the direction that matters: a
+ * capability nobody can name cannot be granted.
+ *
+ * THE TWO ADDRESSES ARE ALSO SEPARATE, for the same reason the two capability lists are.
+ * `egressEndpoint` is what the machine ADVERTISES; `grantedEgressEndpoint` is what the org
+ * AUTHORISED. `egressCandidatesForOrg` routes traffic only when the two match in canonical form,
+ * so a surface carrying one of them cannot show an administrator why a machine they believe they
+ * granted is carrying nothing - and a surface carrying only the NAME of the capability is how a
+ * machine-supplied address gets authorised by someone who never saw it (`bridge/registry.ts`).
+ */
+export const BridgeMachineSummary = z.object({
+  pairingId: z.string(),
+  /** A live daemon socket in the serving process right now. Presence, never a grant. */
+  live: z.boolean(),
+  advertisedCapabilities: z.array(z.string()),
+  grantedCapabilities: z.array(z.string()),
+  /** The address the MACHINE advertises for residential egress. A self-assertion. */
+  egressEndpoint: z.string().optional(),
+  /** The address the ORG authorised, in the canonical form it was stored in. Absent when
+   *  `egress.residential` is not granted. Traffic flows only where this equals the advertised one. */
+  grantedEgressEndpoint: z.string().optional(),
+});
+export type BridgeMachineSummary = z.infer<typeof BridgeMachineSummary>;
+
+export const BridgeMachinesResponse = z.object({ items: z.array(BridgeMachineSummary) });
+export type BridgeMachinesResponse = z.infer<typeof BridgeMachinesResponse>;
+
+/** Path params for the two grant writes. The capability segment is a free string on the wire for
+ *  the same reason the read lists are: a grant for a capability since dropped from the vocabulary
+ *  must stay REVOCABLE. The route applies its own charset guard. */
+export const BridgePairingParams = z.object({ pairingId: z.string().min(1).max(128) });
+export type BridgePairingParams = z.infer<typeof BridgePairingParams>;
+
+export const BridgeCapabilityParams = z.object({
+  pairingId: z.string().min(1).max(128),
+  capability: z.string().min(1).max(64),
+});
+export type BridgeCapabilityParams = z.infer<typeof BridgeCapabilityParams>;
+
+/**
+ * Grant one capability on one machine.
+ *
+ * `egressEndpoint` is REQUIRED by the service for `egress.residential` and meaningless for every
+ * other capability, so it is optional HERE and enforced THERE (`bridge/capability-grants.ts`
+ * throws `CapabilityGrantError`, which the route answers as a 400). Encoding the conditional in
+ * the schema would put the same rule in two places, and the service's copy is the one that also
+ * guards every non-HTTP caller.
+ *
+ * The org and the granting user are NEVER body fields: both come from the authenticated caller.
+ */
+export const BridgeGrantCapabilityRequest = z.object({
+  capability: BridgeCapability,
+  egressEndpoint: z.string().max(255).optional(),
+});
+export type BridgeGrantCapabilityRequest = z.infer<typeof BridgeGrantCapabilityRequest>;
+
+/** The machine as it now stands, so a client renders the truth it just created rather than the
+ *  truth it assumed. `advertised` is echoed back too: granting a capability the machine does not
+ *  advertise is permitted (grant now, upgrade the daemon later) and produces nothing USABLE, and
+ *  this shape is what lets a surface show that honestly instead of implying it took effect. */
+export const BridgeGrantCapabilityResponse = z.object({
+  ok: z.literal(true),
+  machine: BridgeMachineSummary,
+});
+export type BridgeGrantCapabilityResponse = z.infer<typeof BridgeGrantCapabilityResponse>;
+
+/** `revoked` is false when there was no live grant to turn off - the idempotent case. Not a 404:
+ *  the state the caller asked for holds either way, and a 404 here would answer a different
+ *  question (does this grant exist) than the one asked (make sure it does not). */
+export const BridgeRevokeCapabilityResponse = z.object({
+  ok: z.literal(true),
+  revoked: z.boolean(),
+  machine: BridgeMachineSummary,
+});
+export type BridgeRevokeCapabilityResponse = z.infer<typeof BridgeRevokeCapabilityResponse>;
+
 export const BridgeDebugInvokeRequest = z.unknown();
 export type BridgeDebugInvokeRequest = z.infer<typeof BridgeDebugInvokeRequest>;
 
@@ -151,6 +244,37 @@ export const ekoaLocalEndpoints = {
     path: '/api/v1/bridge/status',
     auth: 'user',
     response: BridgeStatusResponse,
+  },
+  // I-3 capability grants. `auth: 'org-admin'` is the CONTRACT-LEVEL TIER MARKING, not a note about
+  // which middleware happens to be mounted: `docs/api-contract.md` CONV-1 lists
+  // `super-admin` / `org-admin` as "marked per endpoint", and a consumer reads an endpoint's tier
+  // off its descriptor. `org-admin` names the NARROWEST role admitted - exactly as
+  // `registo.listRegisto` declares `org-admin` for a router that mounts
+  // `requireRole('org-admin', 'super-admin')`. A super-admin is admitted alongside, not instead.
+  //
+  // Declaring `user` here would be a contract-accuracy defect on a PRIVILEGE-WIDENING surface: it
+  // would tell every reader and every generated client that an ordinary member may grant
+  // `local.bash` on a machine, which is the opposite of what these endpoints do.
+  bridgeListMachines: {
+    method: 'GET',
+    path: '/api/v1/bridge/machines',
+    auth: 'org-admin',
+    response: BridgeMachinesResponse,
+  },
+  bridgeGrantCapability: {
+    method: 'POST',
+    path: '/api/v1/bridge/pairings/:pairingId/capabilities',
+    auth: 'org-admin',
+    params: BridgePairingParams,
+    request: BridgeGrantCapabilityRequest,
+    response: BridgeGrantCapabilityResponse,
+  },
+  bridgeRevokeCapability: {
+    method: 'DELETE',
+    path: '/api/v1/bridge/pairings/:pairingId/capabilities/:capability',
+    auth: 'org-admin',
+    params: BridgeCapabilityParams,
+    response: BridgeRevokeCapabilityResponse,
   },
   bridgeConnect: {
     method: 'GET',

@@ -575,6 +575,44 @@ export const pt: Translations = {
       denied: 'Pedido recusado. O dispositivo não recebeu qualquer acesso.',
       invalid: 'Código de dispositivo inválido ou expirado.',
       incomplete: 'Introduza o código completo (8 caracteres).',
+      machines: {
+        title: 'Máquinas emparelhadas',
+        description:
+          'A máquina comunica o que consegue fazer. É o utilizador que decide para que pode o trabalho desta organização ser encaminhado através dela, e uma capacidade só funciona quando ambas se verificam.',
+        loading: 'A carregar máquinas...',
+        loadError: 'Não foi possível carregar a lista de máquinas.',
+        retry: 'Tentar novamente',
+        empty: 'Sem máquinas emparelhadas',
+        emptyDescription:
+          'Emparelhe um computador com o comando ekoa-bridge e aprove-o acima. Aparece aqui assim que o respetivo daemon ligar.',
+        live: 'Ligada',
+        offline: 'Desligada',
+        advertisesNothing:
+          'Esta máquina ainda não comunicou qualquer capacidade. Comunica-as quando o daemon liga.',
+        advertisedAddress: 'Endereço comunicado pela máquina',
+        authorisedAddress: 'Endereço autorizado',
+        noAddress: 'nenhum registado',
+        granted: 'Autorizada',
+        grantedNotAdvertised: 'Não comunicada pela máquina',
+        notGrantable: 'Não reconhecida por este servidor',
+        egressMismatch:
+          'A máquina está a comunicar um endereço diferente do autorizado, pelo que nada é encaminhado através dela. Retire a autorização e autorize o novo endereço se o reconhecer.',
+        grant: 'Autorizar',
+        granting: 'A autorizar...',
+        revoke: 'Retirar',
+        revoking: 'A retirar...',
+        revokeConfirm: 'esta máquina deixa de ser usada para esta capacidade a partir da próxima execução. Continuar?',
+        egressLabel: 'Endereço a autorizar',
+        egressHint:
+          'O tráfego sai por este endereço exato e apenas enquanto a máquina o continuar a comunicar.',
+        capabilities: {
+          'local.filesystem': 'Ler ficheiros autorizados',
+          'local.bash': 'Executar comandos',
+          'attended.card_login': 'Realizar autenticações com cartão',
+          'egress.residential': 'Encaminhar tráfego por esta ligação',
+          'desktop.automation': 'Conduzir um navegador neste computador',
+        },
+      },
     },
 
     settingsNav: {
@@ -583,6 +621,7 @@ export const pt: Translations = {
       users: 'Utilizadores',
       offices: 'Escritórios',
       privacy: 'Privacidade',
+      devices: 'Dispositivos',
       apiKeys: 'Chaves de API',
     },
     knowledge: {

@@ -574,6 +574,44 @@ export const en: Translations = {
       denied: 'Request denied. The device received no access.',
       invalid: 'Invalid or expired device code.',
       incomplete: 'Enter the full code (8 characters).',
+      machines: {
+        title: 'Paired machines',
+        description:
+          "A machine reports what it is able to do. You decide what this organisation's work may be routed through it for, and a capability runs only where both are true.",
+        loading: 'Loading machines...',
+        loadError: 'The machine list could not be loaded.',
+        retry: 'Try again',
+        empty: 'No paired machines',
+        emptyDescription:
+          'Pair a computer with the ekoa-bridge command and approve it above. It appears here once its daemon connects.',
+        live: 'Connected',
+        offline: 'Offline',
+        advertisesNothing:
+          'This machine has not reported any capability yet. It reports them when its daemon connects.',
+        advertisedAddress: 'Address reported by the machine',
+        authorisedAddress: 'Authorised address',
+        noAddress: 'none recorded',
+        granted: 'Authorised',
+        grantedNotAdvertised: 'Not reported by the machine',
+        notGrantable: 'Not recognised by this server',
+        egressMismatch:
+          'The machine is now reporting a different address from the one authorised, so nothing is routed through it. Withdraw the authorisation and authorise the new address if you recognise it.',
+        grant: 'Authorise',
+        granting: 'Authorising...',
+        revoke: 'Withdraw',
+        revoking: 'Withdrawing...',
+        revokeConfirm: 'this machine stops being used for this capability from the next run. Continue?',
+        egressLabel: 'Address to authorise',
+        egressHint:
+          'Traffic leaves through this exact address, and only while the machine keeps reporting it.',
+        capabilities: {
+          'local.filesystem': 'Read granted files',
+          'local.bash': 'Run commands',
+          'attended.card_login': 'Hold card sign-in ceremonies',
+          'egress.residential': 'Route traffic through this connection',
+          'desktop.automation': 'Drive a browser on this computer',
+        },
+      },
     },
 
     settingsNav: {
@@ -582,6 +620,7 @@ export const en: Translations = {
       users: 'Users',
       offices: 'Offices',
       privacy: 'Privacy',
+      devices: 'Devices',
       apiKeys: 'API keys',
     },
     knowledge: {

@@ -10,14 +10,21 @@ import { Button } from '@/components/ui/button';
 import { api, tryCall } from '@/lib/api';
 import { normalizeUserCode } from '@/lib/device-code';
 import { useTranslation } from '@/stores/i18n';
+import { PairedMachinesSection } from '@/components/settings/paired-machines-section';
 
 /**
- * Device approval page (run s3; D5). The RFC-8628-style device flow's approval half
- * (ch03 §3.8.1): a device (the ekoa-bridge CLI's `pair` command) starts the flow,
- * shows a short `XXXX-XXXX` code and points the user HERE; the authenticated user
- * types the code and approves (or denies). Approval binds the APPROVER's identity to
- * the device token, so the page is authed. The endpoints are carried F1 surfaces
- * (`POST /api/v1/auth/device/approve`); this page is their first in-app consumer.
+ * Devices: approving one, and authorising what the approved ones may do.
+ *
+ * The first half is the RFC-8628-style device flow's approval (ch03 §3.8.1; run s3, D5): a device
+ * (the ekoa-bridge CLI's `pair` command) starts the flow, shows a short `XXXX-XXXX` code and points
+ * the user HERE; the authenticated user types the code and approves (or denies). Approval binds the
+ * APPROVER's identity to the device token, so the page is authed.
+ *
+ * The second half is the I-3 capability grants for the machines that pairing produced, admin-only
+ * and rendered only for admins. The two belong on one page because they are the two halves of one
+ * act: approving a computer, and saying what the org's work may be routed through it for. Pairing
+ * alone grants NOTHING - the daemon step seam is default-deny - so a page that stopped at approval
+ * left every administrator believing they had finished.
  */
 
 type Outcome = { kind: 'approved' | 'denied' | 'error'; message: string } | null;
@@ -101,6 +108,8 @@ export default function DevicesSettingsPage() {
           </p>
         )}
       </Card>
+
+      <PairedMachinesSection />
     </PageShell>
   );
 }

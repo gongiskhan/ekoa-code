@@ -69,6 +69,21 @@ export { invokeTool, ToolInvocationRefused, type ToolResult } from './tool-invoc
 // implementation - a root-local wrapper is where a second, drifting copy of it would start.
 export { isCapabilityGranted } from './capability-grants.js';
 
+// The tenant-facing half of I-3. `grantCapability`/`revokeCapability` had no caller outside the
+// security suites, so no org could ever turn a capability on and the default-deny refused every
+// browser/bash step in production. These are what `routes/bridge.ts` mounts; the audited variants
+// exist because a route may not import `data/` (ch02 §2.7) and a grant change belongs in the
+// Registo. `CapabilityGrantError` is exported so the route can answer it as a 400 rather than
+// letting a missing egress endpoint surface as a 500.
+export {
+  grantCapabilityAudited,
+  revokeCapabilityAudited,
+  orgMachines,
+  machineForOrg,
+  CapabilityGrantError,
+  type GrantActor,
+} from './capability-grants.js';
+
 // P1.2/P1.3 - the automation-step seam (one place a resolved step becomes a `tool.invoke`) and the
 // I9 delivery half it calls. `secret-delivery.ts` was built, tested and had no production caller;
 // exporting it here is what makes the composition root able to be one.

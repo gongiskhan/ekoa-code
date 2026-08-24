@@ -6251,3 +6251,165 @@ is a full row carrying `notificacoes`, `comDocumento`, `ultimaNotificacao` and `
 `result.data`, which the composed outcome deliberately carries. The claim's picture of a bare list
 whose only marker needs a separate catalog fetch is wrong. (The team's summary mapped the refutation
 onto the compose-JOIN-seam finding instead; that one is real and its overstatements are fixed above.)
+
+## 2026-08-24 - the capability-grant surface is admin-gated, and lives on Settings/Devices
+
+Closes `capability-grants-have-no-route-or-ui-so-the-whole-browser-execution-path-is-unreachable`
+(docs/findings.md, HIGH, found staging acceptance run 1).
+
+### The gap: an authorisation nobody could give
+
+`grantCapability` / `revokeCapability` (`api/src/bridge/capability-grants.ts`) were built,
+security-tested and called by NOTHING but those tests. The enforcement half was real and correct -
+`bridge/daemon-step-seam.ts` refuses a step whose machine the org has not granted, default-deny, and
+checks it BEFORE any credential is delivered - so the product was in the state where the answer was
+enforced and the question was never asked. `desktop.automation` and `local.bash` could not be turned
+on through the running system by anyone, and therefore every browser and every bash step in
+production refused forever: the whole P1-P4 execution plane, dead behind a control that was working
+exactly as designed. The module's own docblock says "only the tenant can answer" the grant question.
+There was no tenant-facing surface that asked it.
+
+The enforcement is untouched by this slice. What lands is the surface.
+
+### D1 - granting is ORG ADMINISTRATION, not machine ownership
+
+`DELETE /api/v1/bridge/pairings/:pairingId` beside it is owner-OR-admin, deliberately: cutting off a
+compromised machine is an emergency anyone must be able to perform on their own hardware. The grant
+routes are org-admin/super-admin ONLY, including for the owner of the machine.
+
+The asymmetry is the direction of the act. Revoking NARROWS what the org's work may run on; granting
+WIDENS it. A plain user who could grant their own laptop `local.bash` would be authorising their own
+computer to execute the organisation's automations, and a user who could grant `egress.residential`
+would be nominating their own home connection as the address the org's portal traffic leaves by.
+That is self-authorisation, which is the exact category of control I-3 exists to remove from the
+machine and give to the tenant. Handing it back to whoever holds the machine would restore it under
+a different name.
+
+### D2 - the role check runs BEFORE any store read, and that ordering is the property
+
+A non-admin is refused 403 without a lookup, so the refusal is byte-identical for a machine in their
+org, a machine in another org, and a machine that does not exist. Had the check run after the
+lookup, the 403-vs-404 split would itself have been the oracle: 403 would mean "this exists in your
+tenant" and 404 "it does not", and a plain user could map the fleet they were just refused access
+to. Callers past the role check reach an org-scoped lookup (`machineForOrg` -> `getPairingById` with
+the expected org) whose 404 is uniform across unknown and foreign. Pinned in
+`api/tests/security/capability-grant-isolation.test.ts` by comparing response BODIES, not statuses.
+
+### D3 - `auth: 'org-admin'`, because the descriptor auth class IS the per-endpoint tier marking
+
+The three descriptors declare `auth: 'org-admin'` and the routes mount
+`requireRole('org-admin', 'super-admin')`, matching `routes/registo.ts` for the same tier.
+
+`docs/api-contract.md` CONV-1 lists `super-admin` / `org-admin` as "marked per endpoint", 40 sibling
+descriptors already use them as their auth class, and `knowledge.test.ts` contract-TESTS
+`crawlSource.auth === 'super-admin'`. So the class is a contract fact a consumer reads, not a note
+about middleware. `org-admin` names the NARROWEST role admitted; a super-admin is admitted
+alongside, exactly as `registo.listRegisto` declares `org-admin` over a router gated on both.
+
+`requireRole` IS AN EXACT MEMBERSHIP TEST (`auth/middleware.ts`) - it does NOT treat `super-admin`
+as a superset of `org-admin`. Both roles are therefore named at every mount. Recorded because the
+opposite assumption is the natural one and is silently wrong: `requireRole('org-admin')` alone locks
+super-admins out of a surface the contract admits them to, and the mutation proving it reddens only
+"a super-admin may grant too".
+
+Consequence recorded so it is not rediscovered: the OpenAPI generator filters on
+`auth === 'user-or-key'`, so an `org-admin` descriptor is outside `docs/openapi/cortex.v1.json` just
+as a `user` one is. This slice moves neither the spec nor the generated client.
+
+**REVIEW ROUND (2026-08-24), superseded in place because the commit is unmerged.** The first cut
+declared all three `auth: 'user'` and hand-rolled the role check as the first line of each handler,
+justified by "the auth class names how a caller is IDENTIFIED, not what they may do" and "there is
+no `org-admin` admission class to mount". Both halves were false for this codebase, and the second
+was checkable in one grep. The defect was contract accuracy on a PRIVILEGE-WIDENING surface: the
+descriptor told every reader and every generated client that an ordinary member may grant
+`local.bash` on a machine. The behaviour was already correct - the hand-rolled check admitted
+exactly org-admin and super-admin - so no test caught it, which is precisely why the tier is now
+asserted directly (`bridge-capabilities.test.ts`, "the declared auth tier") in the way
+`knowledge.test.ts` asserts its own. Moving the gate from handler body to middleware also turned
+the check-before-any-store-read ordering from a convention into a structural property.
+
+### D4 - the READ vocabulary is open and the WRITE vocabulary is closed
+
+`advertisedCapabilities` and `grantedCapabilities` cross the wire as `z.array(z.string())`;
+`BridgeGrantCapabilityRequest.capability` is the closed `BridgeCapability` enum.
+
+Both lists are STORED history. A machine running a newer daemon advertises a capability this server
+has no name for, and a grant can outlive a capability removed from the vocabulary. Narrowing the
+READ to the enum would make the entire fleet listing fail validation because one machine is ahead of
+the server - the admin surface would blank exactly when someone needs to look at it. Narrowing the
+WRITE is the fail-closed direction and costs nothing: a capability nobody can name cannot be
+granted, while a grant made before a capability left the vocabulary stays revocable (which is why
+the DELETE route's capability segment is a charset guard and not the enum). The UI mirrors this: an
+unrecognised advertised capability is SHOWN, and has no grant affordance.
+
+### D5 - the grant names the ADDRESS, and the surface shows both addresses
+
+`egress.residential` requires an `egressEndpoint` and `grantCapability` throws
+`CapabilityGrantError` without a usable one. The route answers that as a 400 carrying the service's
+own message, and stores nothing - never a 200 over a grant that authorises no route, which is the
+failure the error was raised to stop.
+
+`BridgeMachineSummary` carries `egressEndpoint` (what the machine ADVERTISES) and
+`grantedEgressEndpoint` (what the org AUTHORISED) as separate fields, and the UI shows both.
+`egressCandidatesForOrg` routes traffic only where the two match in canonical form, so a surface
+carrying one of them could not show an administrator why a machine they believe they granted is
+carrying nothing - and, per `bridge/registry.ts`, a surface that showed capability NAMES alone is how
+a machine-supplied address gets authorised by someone who never saw it.
+
+### D6 - the surface goes on the EXISTING /settings/devices page, which joins the nav
+
+The finding said to build a Settings/Devices UI and reported `Cannot GET /settings/devices`. That
+page already existed (the RFC-8628 device-code approval half): the "Cannot GET" is the SEPARATE
+finding `bridge-device-verification-url-uses-the-api-origin-not-the-dashboard` - the CLI printed the
+API origin `:4111`, which serves no dashboard page. Nothing was missing at that address; the machine
+list was.
+
+So the capability section is appended to that page rather than given a new route. The two halves are
+one act: approving a computer, and saying what the org's work may be routed through it for. Pairing
+alone grants NOTHING, so a page that stopped at approval left every administrator believing they had
+finished. The page was reachable only by the URL the CLI prints, which is how an admin surface
+stayed invisible, so `devices` is added to the settings nav - not `adminOnly`, because the approval
+half is per-user; the machine section gates itself on role and renders nothing for a non-admin
+(rendering an empty box would mean fetching a 403 to draw it).
+
+### D7 - grant and revoke are audited in `bridge/`, and the ineffective revoke is audited too
+
+`grantCapabilityAudited` / `revokeCapabilityAudited` follow `revokePairingAudited`'s shape: the
+Registo write lives in the domain module because `routes/` may not import `data/` (ch02 2.7). The
+revoke is recorded even when nothing was live to turn off, because the ATTEMPT is the administrative
+act and a trail carrying only effective revocations would omit exactly the case someone later asks
+about. The metadata is ids, a capability name and an outcome flag; the authorised egress address
+rides the grant row because a residential grant authorises a DESTINATION and a trail that recorded
+the capability alone could not say which door was opened.
+
+### What only a live paired machine can prove
+
+The suites pin that a grant written through the route is the grant `isCapabilityGranted` reads - the
+exact predicate the composition root hands the daemon step seam. They do NOT prove that a real
+daemon, granted through this UI, then executes a browser step: that needs a paired machine, which CI
+has none of. Registered UNVERIFIED for live acceptance.
+
+### REVIEW ROUND (2026-08-24) - two surfaces that were honest only by accident
+
+The adversarial round returned one major (D3 above, corrected in place) and two web defects. Both
+were states the UI could reach in which it told an administrator something that was not true, and
+both had the same shape: a value that was correct WHEN IT WAS SET and never asked again.
+
+**The residential endpoint field did not follow the advertisement.** It was seeded once from
+`machine.egressEndpoint`, so a card that stayed mounted across a refetch kept offering the address
+it mounted with while the machine advertised a different one - and the admin authorised a
+destination nobody was offering. It failed safe (routing withholds on mismatch, and the card warns),
+but by accident rather than design: the person was being asked to approve an address the surface
+itself had already superseded. It now re-seeds during render when the advertisement moves,
+discarding a half-typed edit, because the new address is the fact worth looking at.
+
+**A failed load could claim the org had no machines.** `isLoaded` was set on failure as well as
+success, so a retry after a failed first load carried `isLoaded: true`, `error: null` (cleared as
+the retry begins) and an empty list - which renders the "no paired machines" empty state while the
+request is still in flight. The surface stated a fact about the fleet it had never once managed to
+read. `isLoaded` now means a SUCCESSFUL read, so the retry shows the loading state instead.
+
+Both are pinned by cases in `web/__tests__/components/paired-machines-section.test.tsx` with their
+own mutations. Four other findings in the same round were REFUTED and no change was made: the
+post-write 404 race, the egress 400 message, the tombstone-through-route case, and the
+`grantedByUserId` tautology.

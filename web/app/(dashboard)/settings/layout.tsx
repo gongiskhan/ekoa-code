@@ -18,6 +18,10 @@ const ALL_TABS: (Omit<TabItem, "label"> & {
   { key: "users", href: "/settings/users", adminOnly: true },
   { key: "offices", href: "/settings/offices", superAdminOnly: true },
   { key: "privacy", href: "/settings/privacy" },
+  // Devices was reachable only by the URL the bridge CLI prints, which is how the capability
+  // grants an admin has to make there stayed invisible. Not adminOnly: the device-approval half
+  // is per-user; the grants half gates itself on role.
+  { key: "devices", href: "/settings/devices" },
   { key: "apiKeys", href: "/settings/api-keys" },
 ];
 

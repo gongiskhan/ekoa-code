@@ -355,6 +355,30 @@ const COVERED = new Set<string>([
   // module-level filter arithmetic beside it.)
   // ONE NEW descriptor, one COVERED entry: the pinned EXPECTED_PENDING_COUNT below is UNCHANGED.
   'integrations.automationMigrationReport',
+
+  // 2026-08-24 - THE CAPABILITY-GRANT SURFACE (I-3). `grantCapability`/`revokeCapability` were
+  // built, security-tested and had NO route and NO web caller, so no org could ever turn on
+  // `desktop.automation` or `local.bash` and the default-deny in `bridge/daemon-step-seam.ts`
+  // refused every browser and bash step forever (finding
+  // `capability-grants-have-no-route-or-ui...`). Three descriptors, three routes, exercised by
+  // contract/bridge-capabilities.test.ts through the real app: the grant proven to flip
+  // `isCapabilityGranted` - the exact predicate the composition root hands the step seam, so the
+  // suite pins the route to the ENFORCEMENT rather than to its own JSON; the org-admin/super-admin
+  // grant and the plain user refused 403 even on the machine they own; the advertised and granted
+  // lists proven DIFFERENT on one machine (the whole of I-3); `egress.residential` refused 400 with
+  // no row stored when it names no usable endpoint, and recording the authorised address when it
+  // does; the closed write vocabulary refused at the schema; revoke idempotent as a 200 with
+  // `revoked:false` rather than a 404; the Registo rows for both writes. Tenancy:
+  // security/capability-grant-isolation.test.ts (Rule 5, memvault class) - another org's machine is
+  // absent from the listing, its address never in the body, and grant/revoke on it answer a 404
+  // BYTE-IDENTICAL to a machine that does not exist, with nothing written under either org's key.
+  // All three carry `auth: 'org-admin'`, the per-endpoint tier marking of api-contract.md CONV-1;
+  // the tier itself is asserted in the same suite, the way knowledge.test.ts asserts crawlSource's.
+  // THREE NEW descriptors, three COVERED entries: the pinned EXPECTED_PENDING_COUNT is UNCHANGED -
+  // an auth class is not a descriptor, so marking the tier moves no count here.
+  // None reaches `docs/openapi/cortex.v1.json`: the generator filters on `auth === 'user-or-key'`,
+  // so an `org-admin` descriptor is outside the spec and the generated client just as a `user` one is.
+  'ekoaLocal.bridgeListMachines', 'ekoaLocal.bridgeGrantCapability', 'ekoaLocal.bridgeRevokeCapability',
 ]);
 
 // Not-yet-landed endpoints (committed allowlist; SHRINKS each gate, EMPTY at G9). Computed as
