@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Lock, LockOpen, ShieldCheck, Loader2 } from 'lucide-react';
+import { Lock, LockOpen, ShieldCheck, Loader2, KeyRound } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
 import { PageHeader } from '@/components/ui/page-header';
 import { Card } from '@/components/ui/card';
@@ -143,14 +143,95 @@ function ItemRow({ item }: { item: CofreItem }) {
   );
 }
 
+/**
+ * THE OTHER END OF A RUN'S `needs_credentials` DEEP LINK.
+ *
+ * A run that walked into a sign-in wall on a site nobody declared halts and sends the person here
+ * with `?origin=<host>` (`portalDeepLink`, api/src/automation/credential-gate.ts). Without this card
+ * they would arrive at a list of credentials none of which is the one they were sent to create, and
+ * the halted run would sit there with no way for anyone to answer it.
+ *
+ * IT OPENS A WINDOW ON THEIR OWN MACHINE, not here. The session has to be established from the
+ * vantage point it will be replayed from, and the Ponte Ekoa is what has one - so this button only
+ * ever ASKS, and the outcome shows up as the run continuing, minutes later, on its own page.
+ */
+function EstablishSessionCard({ origin }: { origin: string }) {
+  const { establishSession } = useCofreStore();
+  const [busy, setBusy] = useState(false);
+  const [outcome, setOutcome] = useState<{ started: boolean; message: string } | null>(null);
+
+  async function doEstablish() {
+    setBusy(true);
+    setOutcome(await establishSession(origin));
+    setBusy(false);
+  }
+
+  return (
+    <Card className="border-primary/40 p-4" data-testid="cofre-establish-session">
+      <div className="flex items-start gap-3">
+        <div className="rounded-full bg-primary/10 p-2 shrink-0">
+          <KeyRound className="h-4 w-4 text-primary" />
+        </div>
+        <div className="min-w-0 flex-1 space-y-2">
+          <div>
+            <h2 className="text-sm font-semibold">Iniciar sessão em {origin}</h2>
+            <p className="text-sm text-muted-foreground">
+              Uma execução parou porque este site pediu autenticação. Abrimos uma janela na sua máquina para
+              iniciar sessão; a sessão fica cifrada no cofre e a execução continua sozinha.
+            </p>
+          </div>
+          {/*
+            Said BEFORE they go, not diagnosed after they come back. Google refuses OAuth from the
+            browser this ceremony runs in (findings: `google-sso-refuses-the-automated-ceremony-browser`),
+            and on most sites the button people reach for first is the one that cannot work.
+          */}
+          <p className="text-sm text-muted-foreground">
+            Se o site oferecer início de sessão com a Google, use o email ou o telemóvel - a Google bloqueia
+            navegadores automatizados.
+          </p>
+          <div className="flex items-center gap-3">
+            <Button size="sm" onClick={doEstablish} disabled={busy}>
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <KeyRound className="h-3 w-3" />}
+              Abrir janela de autenticação
+            </Button>
+            {outcome ? (
+              <span
+                className={`text-xs ${outcome.started ? 'text-muted-foreground' : 'text-destructive'}`}
+                data-testid="cofre-establish-outcome"
+              >
+                {outcome.message}
+              </span>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 export default function CofrePage() {
   const { items, isLoading, error, fetchItems, lockAll } = useCofreStore();
   const confirm = useConfirm();
   const [lockingAll, setLockingAll] = useState(false);
+  /**
+   * Read from `window.location` in an effect rather than through `useSearchParams`, which is the
+   * convention this dashboard already follows (`integrations/page.tsx`): the hook forces a Suspense
+   * boundary on the route, and one query parameter is not worth restructuring the page for.
+   */
+  const [halterOrigin, setHalterOrigin] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchItems();
   }, [fetchItems]);
+
+  useEffect(() => {
+    const raw = new URLSearchParams(window.location.search).get('origin')?.trim() ?? '';
+    // A HOST AND NOTHING ELSE. The parameter arrives from a link, so it is caller-supplied text that
+    // gets rendered and then sent back as the ceremony's target: anything that is not a plain
+    // hostname is dropped rather than cleaned up, because a "cleaned up" hostname is a guess about
+    // where someone should type their password.
+    setHalterOrigin(/^[a-z0-9.-]{1,253}$/i.test(raw) && raw.includes('.') ? raw.toLowerCase() : null);
+  }, []);
 
   const anyUnlocked = items.some((i) => i.state !== 'locked');
 
@@ -181,6 +262,7 @@ export default function CofrePage() {
           ) : null
         }
       />
+      {halterOrigin ? <EstablishSessionCard origin={halterOrigin} /> : null}
       {error ? (
         <Card className="border-destructive/40 p-4 text-sm text-destructive">{error}</Card>
       ) : null}

@@ -221,6 +221,33 @@ describe('attended ceremony — the machine half of J-5', () => {
     expect(h.browser.closed).toBe(true);
   });
 
+  /**
+   * THE AD-HOC CEREMONY IS THE SAME CEREMONY (docs/decisions.md 2026-08-24, D-ADHOC-1).
+   *
+   * `login` joins `card_login` and `relay_code` as an attended kind, and this pins that it changes
+   * NOTHING here: a card in a reader and a plain sign-in are the same errand from this machine's
+   * point of view - open a headed window at the origin Cortex declared, hold it, push what the human
+   * ends up with. If a `kind` branch ever appeared in `runAttendedCeremony`, the ad-hoc capture would
+   * be a second implementation of the rail rather than a second caller of it, and this case is where
+   * that shows up.
+   */
+  it('runs a `login` ceremony byte-for-byte like a card one - the kind is not a branch', async () => {
+    const card = harness();
+    closeSoon(card);
+    await runAttendedCeremony(REQ, card.deps);
+
+    const login = harness();
+    closeSoon(login);
+    const ok = await runAttendedCeremony({ ...REQ, kind: 'login' }, login.deps);
+
+    expect(ok).toBe(true);
+    expect(login.page.gotoCalls).toEqual(card.page.gotoCalls);
+    expect(login.sent.find((f) => f.type === 'session.push')).toEqual(
+      card.sent.find((f) => f.type === 'session.push'),
+    );
+    expect(login.logs).toEqual(card.logs);
+  });
+
   it('normalises a bare host into an https origin before navigating', async () => {
     const h = harness();
     closeSoon(h);

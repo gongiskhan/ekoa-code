@@ -183,6 +183,7 @@ Rules:
 - If the step is unambiguous, use confidence "high"; if reasonable but uncertain, "medium"; if guessing, "low".
 - If you cannot resolve a deterministic action from the screenshot, return {"kind":"screenshot"} with confidence "low" and explain in reasoning.
 - If the page is ALREADY in the state the step is asking for (e.g. the step says "click the Submit button to submit the search" but the page already shows the submitted results — the previous step typed and the form auto-submitted; or the step says "dismiss the cookie banner" but no banner is present), return {"kind":"noop","reason":"<one short sentence>"} with confidence "high". The engine treats noop as a successful no-op and moves on. Don't invent a click on an irrelevant element just because the step mentioned one.
+- SIGN-IN STEPS ARE THE MOST IMPORTANT CASE OF THAT RULE. If the step is about signing in / logging in / authenticating ("sign in if needed", "log in to the site", "authenticate") and the page shows the user is ALREADY SIGNED IN - an account or profile menu, an avatar, a "Sign out" / "Terminar sessão" control, a personalised dashboard, order history, a basket with the user's name, or simply the content that sits behind the sign-in wall - return {"kind":"noop","reason":"already signed in"} with confidence "high". Do NOT hunt for a sign-in control, and do NOT return a low-confidence screenshot: the run may have started from a stored session, in which case there is no sign-in left to perform and reporting one blocks the run on a wall that is not there. Only resolve a real action when a sign-in form, a "Sign in" prompt or an account-chooser is actually on the screen.
 - For SEARCH SUBMISSION (Google search, in-site search, autocomplete-driven inputs) prefer {"kind":"press","key":"Enter","locator":<the search input>} over clicking the submit button. Reason: search inputs almost always show an autocomplete suggestions dropdown that overlays the submit button — clicking the button is blocked by the overlay ("subtree intercepts pointer events"). Pressing Enter on the input dismisses the dropdown and submits the form in one action.
 - For LOGIN / SIGN-UP form submission, the same applies — press Enter on the password / last-required field rather than clicking the submit button when the page has any kind of suggestion or validation overlay visible.
 - If the page has an obvious DISMISSIBLE OVERLAY (autocomplete suggestions, pop-up dialog, "what's new" tooltip, cookie banner) covering the element you'd click, return {"kind":"press","key":"Escape"} (no locator) so the overlay closes; the engine will run the click on the next attempt.
@@ -301,8 +302,25 @@ export async function resolvePlaywrightAction(input: ResolveActionInput): Promis
   return validateResolveActionOutput(parsed);
 }
 
+/**
+ * The kinds a model may return, and the set BOTH validators below filter against.
+ *
+ * `signature` was missing, and its absence was silent in the worst way: both prompts ask for it by
+ * name (the verifier's enum above, and the classifier's dedicated rule below explaining that a
+ * document-signing ceremony is NOT a login), and `HumanActionKind` declares it - so a model that
+ * correctly identified a Chave Movel Digital or citizen-card signing prompt had its answer DROPPED
+ * here, and the page fell through to the generic paths as an unclassified failure. That is exactly
+ * the collapse `human-action-routing.ts` says was deliberately undone ("signature is now its own
+ * kind, because I8 requires that a login-typed relay cannot satisfy a signature completion"),
+ * reintroduced one layer further down.
+ *
+ * Downstream was already written for it: `routeForHumanAction` sends it to `attended`, and the run
+ * loop's ceremony fork excludes it from `CEREMONY_CLEARABLE_HUMAN_ACTIONS`. So a signature page now
+ * reaches the ordinary human pause carrying its true kind - and the I8 exclusion becomes a branch
+ * that can be entered, and therefore one a test can pin.
+ */
 const VALID_HUMAN_ACTION_KINDS: ReadonlySet<string> = new Set([
-  'captcha', 'mfa', 'payment', 'identity', 'login', 'other',
+  'captcha', 'mfa', 'payment', 'identity', 'login', 'signature', 'other',
 ]);
 
 // ============================================================================

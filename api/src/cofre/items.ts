@@ -26,6 +26,7 @@ const TTL_MS: Record<Exclude<GrantDuration, 'this_run' | 'until_locked'>, number
   '40_minutes': 40 * 60_000,
   '1_day': 24 * 60 * 60_000,
   '1_week': 7 * 24 * 60 * 60_000,
+  '2_weeks': 14 * 24 * 60 * 60_000,
   '1_month': 30 * 24 * 60 * 60_000,
 };
 

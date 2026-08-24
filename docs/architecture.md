@@ -451,6 +451,18 @@ after it unlocks a credential. An origin whose login is OTP / MFA / CAPTCHA gate
 `mode: 'ceremony'` and is established by the human in a headed window; there is no typed-OTP path and
 `cofre/relay.ts` deliberately ships the login prompt's producer with no completion half.
 
+THERE IS A SECOND PRODUCER OF THAT HALT, and it is the only place a run stops for a credential it
+never declared (docs/decisions.md 2026-08-24, D-ADHOC-5). When a BRIDGE-routed run walks into a
+sign-in wall on an origin it resolved for ITSELF and that origin classifies adversarial, `engine.ts`
+takes the same durable halt instead of `paused_for_user` - the in-process pause that dies with the
+process and holds the machine's browser profile for as long as the human is away. The human clears it
+through the existing attended ceremony (`POST /api/v1/cofre/sessions/establish` -> `bridge/attended.ts`),
+whose capture is armed with a bounded TTL grant rather than the declared rail's `until_locked`, and
+the ordinary waiter path re-dispatches the run with the captured session injected. A PERMISSIVE
+origin keeps `paused_for_user`: that fork is the whole behavioural difference. Because the halt is a
+RETURN, the run loop's outer `finally` releases the browser lease, which is what ends the two-run
+profile contention a pause used to create.
+
 ### The discovery spine: learn an action once, replay it without a model
 
 A `browser-steps` action used to re-derive its whole flow, vision-first, on every run - so its cost

@@ -48,7 +48,15 @@ where they touch the dashboard.
   body for a name nobody holds anywhere; and since the planning prompt now carries each collection's
   FIELD names as well as its name - it has to, or a model invents one and silently narrows somebody's
   answer - the same three tests assert the absence of a peer's FIELD names too, because "org B tracks
-  salaries" is a leak before a single row moves), and the bridge S1-S6 scenarios (`fake-daemon/`).
+  salaries" is a leak before a single row moves), `adhoc-session-isolation.test.ts` and
+  `adhoc-ceremony-capture.test.ts` (Rule 5 for the ad-hoc adversarial session lifecycle: the
+  generalized session GATE and the ceremony CAPTURE are both per-user, so a run for owner A can
+  neither see nor receive owner B's session for the identical origin, the two answers are
+  indistinguishable rather than merely different - no existence oracle - and a capture wakes only
+  its own owner's parked runs; the capture half also pins the custody properties that arming a
+  capture creates: a bounded TTL grant rather than the declared rail's standing one, the grant
+  named by the REQUESTER at ceremony-open time rather than taken from the push, and the declared
+  card ceremony still minting a locked item), and the bridge S1-S6 scenarios (`fake-daemon/`).
   Those same field names are also THIRD-PARTY WRITABLE - a remote API's own JSON keys on one side,
   `app_data` field names on the other, which pass no guard on any write path - so what enters that
   prompt is bounded and sanitised before it gets there. That is a PROMPT-CONTENT property rather

@@ -17,7 +17,7 @@
  * point: replaying a residential-established session from a datacenter IP is exactly the pattern
  * portals flag. The router reads this at checkout (WS-I).
  */
-import type { Actor, SessionMetadata } from '@ekoa/shared';
+import type { Actor, GrantDuration, SessionMetadata } from '@ekoa/shared';
 import { hostMatchesOrigin } from '../security/origin-binding.js';
 import { issueGrant, mintCofreItem, type CofreDeps } from './items.js';
 import { cofreItems } from './store.js';
@@ -25,6 +25,24 @@ import type { CofreGrantDoc, CofreItemDoc } from './types.js';
 
 /** How long a captured session is assumed good before it must be re-established or re-checked. */
 export const DEFAULT_SESSION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * THE GRANT AN AD-HOC CAPTURED SESSION GETS (docs/decisions.md 2026-08-24, D-ADHOC-2).
+ *
+ * A session captured for an origin the user reached ad-hoc is bounded rather than standing. The
+ * declared rail's `until_locked` is right for a portal someone deliberately connected: it is part of
+ * their setup and ends when they revoke it. An UNDECLARED origin was reached once, from one goal,
+ * and giving that a session that never expires by itself would quietly accumulate standing access to
+ * every site a free-text run ever walked into.
+ *
+ * `2_weeks` and not `this_run`: `this_run` dies with the run that asked, and the run that asks is the
+ * one that HALTED - it is re-dispatched as a NEW pass, so the grant would already be gone by the time
+ * the session is needed, which reinstates the pause loop this whole lifecycle exists to end. It is
+ * pinned to `DEFAULT_SESSION_TTL_MS` below so the grant and the item expire together; a grant
+ * outliving its item is a live permission over nothing, and an item outliving its grant is a stored
+ * credential nothing can use.
+ */
+export const ADHOC_SESSION_GRANT: GrantDuration = '2_weeks';
 
 export interface CaptureSessionInput {
   /** The integration or portal this session belongs to — becomes the item label. */
@@ -86,10 +104,17 @@ export async function captureSessionToCofre(
  * lock-out policy is precisely the risk the at-most-once rule exists to avoid.
  *
  * SO: ESTABLISHING A SESSION IS THE CONSENT CEREMONY, and this is where that is written down. The
- * grant is `until_locked` — the narrowest scope the model has that survives the run that made it
- * (`this_run` would expire before the next run and reinstate the re-login loop, and a `ttl` would
- * pick an arbitrary clock). Lock-now / lock-all remain the kill switch, unchanged: the user
- * revoking it is what ends the session's usability, exactly as for a password.
+ * grant DEFAULTS to `until_locked` - the narrowest scope the model has that survives the run that
+ * made it (`this_run` would expire before the next run and reinstate the re-login loop). Lock-now /
+ * lock-all remain the kill switch, unchanged: the user revoking it is what ends the session's
+ * usability, exactly as for a password.
+ *
+ * `options.grant` NARROWS that, and exists for exactly one caller: the ad-hoc adversarial ceremony,
+ * which passes `ADHOC_SESSION_GRANT` (D-ADHOC-2). It is an OPTION rather than a second function
+ * because both directions here are grants issued through the one grant API - `lockItem` / `lockAll`
+ * revoke either identically - so a second function would duplicate the round trip to express a
+ * duration. The default is the standing one, so a caller that says nothing gets the behaviour that
+ * predates this parameter.
  *
  * It is a DISTINCT function rather than a flag on `captureSessionToCofre` so that the plain capture
  * stays locked-by-default and the security suite keeps testing that; a boolean would make the
@@ -99,11 +124,12 @@ export async function captureSessionWithGrant(
   actor: Actor,
   input: CaptureSessionInput,
   deps: CofreDeps = {},
+  options: { grant?: GrantDuration } = {},
 ): Promise<{ item: CofreItemDoc; grant: CofreGrantDoc }> {
   const item = await captureSessionToCofre(actor, input, deps);
-  // `until_locked` goes through the ordinary grant API — no new grant kind, no second code path
-  // that `lockItem`/`lockAll` would have to learn about to be able to revoke.
-  const grant = await issueGrant(actor, item._id, 'until_locked', {}, deps);
+  // The ordinary grant API - no new grant kind, no second code path that `lockItem`/`lockAll` would
+  // have to learn about to be able to revoke.
+  const grant = await issueGrant(actor, item._id, options.grant ?? 'until_locked', {}, deps);
   // A run halted in `needs_credentials` for this origin is woken from inside `mintCofreItem` and
   // `issueGrant` (`items.ts`, P3.1). Nothing to add here: announcing again would only re-dispatch
   // the same run a second time.

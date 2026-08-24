@@ -981,6 +981,7 @@ export interface components {
             portalDeepLink: string;
             preferredPairingId?: string;
             reason: string;
+            resumeFromStepIndex?: number;
             stepIndex: number;
         };
         RunListResponse: {

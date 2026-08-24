@@ -22,6 +22,18 @@ interface CofreState {
   unlock: (id: string, duration: GrantDuration) => Promise<{ success: boolean; error?: string }>;
   lock: (id: string) => Promise<{ success: boolean; error?: string }>;
   lockAll: () => Promise<{ success: boolean; error?: string }>;
+  /**
+   * Ask the user's own machine to open a login window for `origin` and capture the session.
+   *
+   * Returns the server's own words rather than a boolean, because BOTH outcomes are things the
+   * person has to read: `started: false` here is a refusal they can act on ("no machine connected",
+   * "that Ponte is too old"), not an error to swallow into a red banner.
+   *
+   * It does NOT resume anything. The capture wakes the halted run server-side through the ordinary
+   * credential-waiter path the moment the session lands, and the ceremony happens minutes later in
+   * another window - so a resume fired from here would fire before there was anything to resume.
+   */
+  establishSession: (origin: string) => Promise<{ started: boolean; message: string }>;
   clearError: () => void;
 }
 
@@ -103,6 +115,17 @@ export const useCofreStore = create<CofreState>()((set, get) => ({
     }
     await get().fetchItems();
     return { success: true };
+  },
+
+  establishSession: async (origin) => {
+    set({ error: null });
+    const response = await tryCall(() => api.cofre.cofreSessionEstablish({ origin }));
+    if (!response.ok) {
+      const message = response.error.message || 'Não foi possível iniciar a autenticação.';
+      set({ error: message });
+      return { started: false, message };
+    }
+    return { started: response.data.started, message: response.data.message };
   },
 
   clearError: () => set({ error: null }),

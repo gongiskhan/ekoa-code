@@ -904,7 +904,12 @@ async function dispatchCredentialResume(run: StoredRun): Promise<boolean> {
   const owner = run.ownerUserId;
   const orgId = run.orgId;
   if (!owner || !orgId) return false;
-  const resumeFrom = run.credentialRequest?.stepIndex ?? 0;
+  // WHERE THE NEW PASS STARTS. `stepIndex` names the step the HUMAN was told about; the optional
+  // `resumeFromStepIndex` names where the run can actually pick up, and the two differ for exactly
+  // one halt - the ad-hoc adversarial one, which fires mid-run on a page that is gone by the time
+  // anyone answers it (docs/decisions.md 2026-08-24, D-ADHOC-5). Falling back to `stepIndex` keeps
+  // every gate-raised halt, and every row written before this field existed, exactly as it was.
+  const resumeFrom = run.credentialRequest?.resumeFromStepIndex ?? run.credentialRequest?.stepIndex ?? 0;
 
   // THE CLAIM, and it is not decoration. Resume is driven from TWO independent places by design —
   // the server-side observer and the client's own call after it unlocks a credential — and they

@@ -5954,6 +5954,10 @@
           "stepIndex": {
             "type": "integer"
           },
+          "resumeFromStepIndex": {
+            "type": "integer",
+            "minimum": 0
+          },
           "origin": {
             "$ref": "#/components/schemas/BoundOrigin"
           },

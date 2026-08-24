@@ -6553,3 +6553,138 @@ reddens one case rather than the cross-user one. That is defence in depth and is
 original commit message's mutation claim described a different mutation (substituting the actor at
 the gate, upstream of both layers, which does redden the cross-user case); it is restated precisely
 in the amended message so the two are not confused.
+
+## 2026-08-24 - the durable-halt fork: an adversarial login wall stops the run instead of pausing it
+
+The capture/pause half of the ad-hoc lifecycle (D-ADHOC-1/2/5), landing on top of the delivery half.
+A bridge run that walks into a sign-in wall on an origin it resolved for ITSELF now halts
+`needs_credentials(ceremony)` and returns, rather than blocking in `paused_for_user`; the human
+completes the existing attended ceremony from the Cofre deep link the halt already wrote; the capture
+is armed with a bounded grant and wakes the halted run through the credential-waiter path that
+already existed; the re-dispatch injects it through the S-inject channel. The ad-hoc path is now
+structurally the declared path, which was the point.
+
+**THE FORK IS ONE `if`, AND IT IS DELIBERATELY NARROW.** It sits inside the engine's existing
+pause-detection block (`engine.ts`), immediately before `pauseRunForUser`, and takes the DURABLE-HALT
+exit instead. Five conditions, each carrying its own weight:
+
+- the detected `humanAction` kind is one a login ceremony can actually clear -
+  `CEREMONY_CLEARABLE_HUMAN_ACTIONS` = `login | captcha | mfa`. `payment` and `identity` are step-ups
+  INSIDE an authenticated flow, `signature` is I8's subject and must never touch a login rail, and
+  `other` is the model saying it does not know. Sending a person to log in to clear a 3-D Secure
+  screen would be a wrong instruction rather than a slow one;
+- the run is BRIDGE-routed (`stepLocality.kind === 'bridge'`): the ceremony opens a headed browser on
+  a machine of this owner's, and a hosted run has none to send anyone to;
+- an ORIGIN resolved, and its posture is ADVERSARIAL. **A PERMISSIVE origin keeps `paused_for_user`,
+  unchanged.** That is the whole behavioural fork, and it is pinned from both sides: two runs
+  identical in routing, step type and failure message, differing only in the declared posture.
+
+The posture is read from `stepOriginPosture`, assigned where `resolveLocalityForStep` already
+computes the classification. It is NOT re-derived at the pause site, and that is a security property
+rather than a tidiness one: `classifyOrigin(url)` with no action declaration is CLOSED, so a
+re-derivation that forgot to pass the action would not fail - it would silently answer "adversarial"
+for every origin, and the permissive branch would quietly stop existing.
+
+**THE GRANT IS A BOUNDED TTL, NOT `until_locked` (D-ADHOC-2).** `captureSessionWithGrant` takes an
+optional duration; the ad-hoc ceremony passes `ADHOC_SESSION_GRANT` (`2_weeks`, an additive member of
+the existing `GrantDuration` enum, pinned to `DEFAULT_SESSION_TTL_MS` so the grant and the item it
+unlocks expire together). `this_run` is out for a concrete reason: the run that ASKS is the run that
+HALTED, and it comes back as a NEW pass, so a `this_run` grant would already be spent by the time the
+session was needed and the pause loop would reopen. The declared card ceremony is untouched and still
+mints a LOCKED item - the grant is named by whoever OPENS the ceremony, recorded on it at request
+time, and never taken from the push, because a daemon that could name its own grant would be choosing
+how long its own capture lives.
+
+**THE HALT IS A RETURN, AND THAT IS THE WHOLE OF S-PROFILE.** `pauseRunForUser` blocks inside the run
+loop, holding the browser session, the machine's browser lease and with it the per-owner Chromium
+profile's SingletonLock - which is why a second run against the same origin could not acquire the
+profile and died at the 120s invocation window (finding gap (c)). Returning runs the loop's outer
+`finally`, the only place `releaseBrowserLease` is called. Nothing was built for this; it is a
+consequence of the halt shape, and it is pinned by asserting the release frame is sent.
+
+**S-LOGIN-STEP, WHICH IS WHAT STOPS THE CEREMONY MAKING THINGS WORSE.** A re-dispatched run restarts
+on the same sign-in step with the session already injected, and the resolver - asked to PERFORM a
+sign-in on an authenticated page - refuses with low confidence, which every detection layer reads as
+"a human is needed" again. That is the infinite loop gap (b) measured, and with a ceremony attached
+each round of it would cost a walk to a machine. Three answers, in order of how much they are relied
+on: the engine ANSWERS a `login` ask on a run it already handed a session to, completing the step as
+a no-op (capped at once per run - a second wall is a genuinely new fact and gets the ordinary pause);
+the vision resolver is told to return `noop` on a page that is plainly already signed in; and the
+planner is told never to emit a sign-in browser step at all, because signing in is not an action this
+engine performs. The engine guard is the deterministic one and the only one a test can pin.
+
+**A RESUME NEEDS A PAGE, so `RunCredentialRequest` gains an optional `resumeFromStepIndex`.** Every
+gate-raised halt fires BEFORE its step runs, so restarting at `stepIndex` is right and the field stays
+absent. This halt fires mid-run on a page that the return then destroys, so it names the nearest
+preceding `navigate` - the only step type that STATES where it goes and is therefore idempotent to
+re-run - while `stepIndex` keeps naming the step the human was told about. Conflating the two would
+force one of them to be wrong.
+
+**THE HUMAN'S ENTRY POINT.** `POST /api/v1/cofre/sessions/establish` (`auth: 'user'`, never
+`user-or-key` - a gateway key is precisely the caller who is not a human at a machine) opens the
+ceremony for a caller-named origin under the caller's own actor, and the `/cofre?origin=` deep link
+the halt already wrote now renders a card that calls it. No posture check on that door, deliberately:
+a person asking to log into their own account on their own machine could do it with a browser, and a
+posture gate there would refuse exactly the un-curated origin the feature exists for. D-ADHOC-5
+governs when a RUN may open one unasked; this is a person asking.
+
+**WHAT ONLY A LIVE BRIDGE CAN PROVE**, and it is registered UNVERIFIED against the finding: a human
+hits a wall, logs in through the ceremony window, and the next pass of that run comes up
+authenticated. The deterministic suites prove the fork, the durability, the grant shape, the tenancy
+and the loop closure; none of them proves a real portal accepts a replayed jar.
+
+### REVIEW ROUND (2026-08-24) - the binding came from the jar, and one test was guarding nothing
+
+Custody-scoped review of this slice returned one major and three minors, all confirmed and all fixed
+here. Two of them are the same defect seen from opposite ends, and the third is a latent drop the
+fix for it uncovered.
+
+**1. THE ATTENDED CAPTURE BOUND ITSELF TO THE WHOLE COOKIE JAR (major).** `acceptSessionPush`
+derived `boundOrigins` from `originsFromStorageState` - every cookie domain in the pushed jar - and
+never intersected it with the ceremony's own origin. The rail's only origin check compares
+`ceremony.origin` to `input.origin`, a field the DAEMON declares, so it constrained nothing about
+what the item ended up usable for: a machine could agree with itself about `input.origin` and push a
+jar for somewhere else entirely. The module's docblock claimed that case was closed ("a mismatched
+push would produce a valid item for the WRONG SITE"); it was not. An HONEST daemon produced the
+softer version of the same thing, because a real login leaves analytics, CDN, SSO and parent-domain
+cookies beside the portal's own.
+
+This was LATENT on main, because the declared rail mints a LOCKED item. THIS SLICE made it live: the
+ad-hoc capture is armed with a 14-day grant, so an over-bound item is immediately unwrappable AND
+wakeable (`credential-waiters` matches on the same over-broad `boundOrigins`) across every domain in
+the jar, for an origin nobody curated. The binding is now `boundOriginsForEstablishedHost(
+storageState, ceremony.origin)` - the same function, with the same matcher, that the typist's
+capture path already used precisely to avoid this. It narrows to the one host Cortex named and uses
+the jar only as EVIDENCE; when no cookie covers that host it returns `[]` and `captureSessionToCofre`
+refuses the push, which is the origin cross-check the field comparison only pretended to be. It
+tightens `card_login` too, deliberately - a strict improvement, and it leaves the GRANT as the only
+remaining difference between the two errands, which is the difference that was designed.
+
+**2. THE S-LOGIN-STEP GUARD WAS RUN-SCOPED WHERE THE FORK IS ORIGIN-SCOPED (minor, two framings).**
+The guard fired on `sessionState !== undefined`, a fact about the RUN, while the claim it makes is
+about an ORIGIN. A run holding a session for portal A that then walked into a sign-in wall on a
+different undeclared adversarial portal B would answer B with A's session: mark a genuine login wall
+"already signed in", stamp that false sentence onto B's step record, and pre-empt the durable fork
+for an origin that qualifies for it. That is the run-level `preferredPairingId` defect again, in the
+one place this slice had not yet applied the lesson its own per-step `stepOriginPosture` reset
+encodes. `CredentialGateVerdict`'s `ready` member now carries the `origin` it was checked out for -
+both producers had it in hand - and the run loop keeps `sessionOrigin` beside `sessionState`,
+`null` for a caller-passed `inputs.credentials` blob whose origin nothing here knows. The guard
+requires exact host equality; a null on either side withholds the answer, which is the closed
+direction and the pre-existing pause.
+
+**3. THE I8 TEST WAS UNFAILABLE, AND FIXING IT FOUND A LATENT DROP (major, as a test defect).** The
+signature case asserted only that an UNCLASSIFIED failure opens no ceremony: there is no `signature`
+rule in the regex table, so `detectedKind` was `null` and the fork declined for the wrong reason.
+The reviewer proved it by adding `signature` to `CEREMONY_CLEARABLE_HUMAN_ACTIONS` and watching the
+suite stay green. Rewriting it to drive a real `kind: 'signature'` through the verifier surfaced why
+that was possible: `VALID_HUMAN_ACTION_KINDS` in `vision.ts` did not contain `signature`, so the
+validator silently dropped it - even though BOTH prompts ask for it by name (the classifier has a
+dedicated rule explaining a signing ceremony is NOT a login) and `HumanActionKind` declares it. A
+model that correctly identified a Chave Movel Digital or citizen-card signing prompt had its answer
+discarded, which is exactly the collapse `human-action-routing.ts` says was deliberately undone,
+reintroduced one layer lower. The validator now accepts it; downstream was already written for it
+(`routeForHumanAction` -> attended, and the ceremony fork excludes it), so a signature page reaches
+the ordinary human pause carrying its true kind - and the I8 exclusion is now a branch a test can
+enter. Both halves are mutation-proven: re-adding `signature` to the clearable set, and re-dropping
+it from the validator, each redden the case.

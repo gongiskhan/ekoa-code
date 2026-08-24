@@ -6,96 +6,6 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
-- **`ad-hoc-adversarial-browser-run-pauses-in-process-not-durably`** (2026-08-24, OPEN, **MEDIUM**;
-  found running acceptance matrix run 1 - Uber Eats - live on a real bridge. CORRECTED from an
-  earlier same-day HIGH draft that read "never engages the attended ceremony" - that draft was WRONG
-  and is retracted here: the first run failed because Playwright's chromium was not installed on the
-  bridge, so the navigate/launch hung to the 120s invocation timeout before any verify step. With
-  chromium present the run navigates cleanly - open -> verify -> orders -> sign-in in ~15s - the
-  VISION detector catches the sign-in wall on the sign-in step, and the run PAUSES for the human,
-  exactly as designed. What remains, at MEDIUM: it pauses via `paused_for_user` (the in-process
-  250ms-poll path, resumed by an explicit `POST /runs/:id/resume` that sets an in-process
-  `signals.get(runId).resumeFlag`), NOT via `needs_credentials` (the durable halt + re-dispatch that
-  survives an api restart, which the plan's P3.1 specified as the credential-pause shape). For an
-  ad-hoc automation goal the vision `humanAction` path lands on `paused_for_user`, so a pause that
-  outlives the api process (a deploy, a crash, a long human delay past the run budget) is lost and
-  the run must be re-fired rather than resumed. The declarative `needs_credentials` path is reached
-  only by an integration action declaring `authProfile.attended` (Citius, run 2). CLOSE BY: route
-  the vision `humanAction: 'login'` (and captcha/mfa) on an ADVERSARIAL origin to
-  `needs_credentials` with the durable re-dispatch, not only to `paused_for_user`, so an attended
-  browser login survives a restart on the ad-hoc path too.
-  The earlier same-day HIGH draft ("neither ceremony trigger engaged; the run reached the login page
-  but failed") was measured with no chromium on the bridge and mistook the missing-browser hang for a
-  missing ceremony path. It is retracted: with chromium present, the vision `humanAction` detector
-  DOES pause the run at the sign-in wall. The residual is the durability shape above.
-
-  THE MISSING-BROWSER COMPANION FIX IS SHIPPED (2026-08-24), and measuring it corrected the
-  companion's own premise. Playwright 1.62 does NOT hang on a missing binary: measured against this
-  repo's own playwright, a missing `channel` throws in ~14ms and a missing bundled chromium in
-  ~14ms, so what the user actually got was FAST but useless - Playwright's own prose, box-drawing
-  banner included, wrapped in "não foi possível abrir o navegador", which reads exactly like a site
-  that would not load and invites a retry that cannot work. What genuinely could reach the 120s
-  invocation window is the LAUNCH CHAIN: chrome-then-bundled at `LAUNCH_TIMEOUT_MS` (60s) EACH sums
-  to 120s, which is `INVOCATION_TIMEOUT_MS` exactly, so a launch that hangs rather than throws cost
-  the run its whole budget and surfaced as "the machine did not answer in time" with no cause on it.
-  Both halves are closed in `clients/bridge/src/browser/profile.ts`: `isMissingBrowserBinary` tells
-  Playwright's three missing-executable shapes from a transient failure, a missing binary throws the
-  typed `BrowserUnavailableError` naming `npx playwright install chromium` (a transient one keeps
-  the generic wrap, because retrying that is reasonable), and the two attempts now share ONE
-  `LAUNCH_TIMEOUT_MS` instead of one each, so the chain cannot reach Cortex's window. Pinned by
-  `clients/bridge/test/browser/profile.test.ts` ("a browser that is NOT INSTALLED fails fast and by
-  name", 3 cases, against Playwright's verbatim messages).
-
-  TWO FURTHER GAPS CONFIRMED LIVE the same session, which together make an ad-hoc adversarial
-  read-after-login impossible to complete end to end today (all real, all logged for the follow-up):
-  (a) THE SESSION IS NOT CAPTURED AND DOES NOT SURVIVE A RUN BOUNDARY. The human logged in during the
-  `paused_for_user` window (into the headed persistent profile), but that path never runs
-  `captureSessionWithGrant` - only the declared-integration `ensureSession` path does - so nothing
-  lands in the Cofre. A second run authored to read the orders started UNAUTHENTICATED: measured, its
-  verify step reported "a página apresenta o formulário de início de sessão da Uber Eats" - the login
-  form again. The per-run `clearCookies` at run end (P1.1, "no session stays resident") plus the lack
-  of capture means a manually-established ad-hoc session is gone by the next run.
-  (b) THE PLANNER MAKES THE LOGIN A BROWSER-ACTION STEP, WHICH CANNOT RECOGNISE "ALREADY DONE". The
-  goal produced a `sign-in-if-needed` BROWSER step; the vision resolver is asked to PERFORM a sign-in
-  action, and on an already-logged-in page there is no such action, so it returns "low confidence -
-  refusing to execute" and re-pauses `paused_for_user` on every resume - an infinite re-pause loop
-  after the human has already logged in. A human-login pause must be a WAIT-FOR-HUMAN step the resume
-  steps PAST, not a browser action the model must execute.
-  (c) PROFILE-LOCK CONTENTION: a paused run holds the origin-keyed persistent profile
-  (Chromium SingletonLock), so a second run against the same origin cannot acquire it and times out
-  at the 120s invocation - measured. Two runs cannot share one adversarial profile, and the paused
-  one must be cancelled first, which (per (a)) clears the session.
-  NET, corrected scope: this is not one "ceremony gap" but the whole ad-hoc-adversarial session
-  LIFECYCLE (capture -> durable store -> re-inject, plus a wait-for-human login step and profile
-  arbitration) being absent on the undeclared-origin path, while the declared-integration path
-  (Citius, run 2) has exactly this lifecycle via `ensureSession`/`captureSessionWithGrant`. What IS
-  proven live and is real acceptance evidence for the execution plane: the capability grant landed
-  today, P4 locality routing an adversarial run to the granted bridge (refusing the datacenter), the
-  headed executor driving a real adversarial site, the vision detector catching the sign-in wall and
-  pausing for the human, and a human completing a direct (non-Google) login in the headed window.
-
-  UPDATE 2026-08-24 (S-inject landed - this finding STAYS OPEN, deliberately). The RE-INJECT half of
-  gap (a) now exists. `shared/src/ekoa-local.ts` gains a `session.deliver { runId, storageState }`
-  frame; `bridge/daemon-step-seam.ts` sends it under the same capability grant that authorises the
-  step and before the invoke that consumes it; the daemon holds it RAM-only in
-  `runtime/session-hold.ts`, wears it when it takes the run's lease, and drops it at lease release,
-  socket loss and shutdown; and `credential-gate.ts` will now look a stored session up by an
-  ADVERSARIAL origin the run resolved for ITSELF with nothing declared - reuse only, so it cannot
-  halt a run, ask for a person or reach the typist. Journal: docs/decisions.md 2026-08-24 "the
-  downward session-delivery frame". Diagrams 02 and 11 carry the as-built.
-  WHY IT DOES NOT CLOSE: nothing yet CAPTURES an ad-hoc session, so the new channel currently only
-  carries sessions some other path already stored. Gap (a)'s first half (capture -> durable Cofre
-  store on the undeclared-origin path), gap (b) (the wait-for-human login STEP a resume steps PAST
-  rather than a browser action the model must execute) and gap (c) (profile-lock arbitration) are
-  untouched, as is the `paused_for_user` vs `needs_credentials` durability shape at the head of this
-  entry. Those are the S-durable / S-login-step / S-profile / S-cap slice, which lands as one change
-  on top of this one. `clearCookies` at run end STAYS as designed: the durable copy of a session
-  lives in the Cofre and is never resident on the shared per-owner profile.
-  NOT PROVEN YET, and registered UNVERIFIED: "a real bridge run against a captured origin starts
-  logged in" is a LIVE-VERIFICATION item. The deterministic suites that landed with S-inject prove
-  the wiring, the per-user isolation and the no-leak properties; only a live bridge can prove the
-  page actually comes up authenticated.
-
 - **`google-sso-refuses-the-automated-ceremony-browser`** (2026-08-24, OPEN, **MEDIUM**, external
   constraint; found in acceptance run 1). When the attended-ceremony window (Playwright/CDP-driven
   headed Chrome on the bridge, `channel:'chrome'`, `--disable-blink-features=AutomationControlled`,
@@ -4031,6 +3941,65 @@ silently absorbed into a ledger note):
   `m365proxy-manifest-flag-stripped`, `P4.2-was-dead-code-in-production`) was code that LOOKED like
   coverage: a correct, tested function kept plausible by a docblock describing a caller it never got.
   Nothing here claims to be reachable, and this entry is the record that it is not.
+
+## Recently fixed - 2026-08-24 the ad-hoc adversarial session lifecycle closes
+
+- **`ad-hoc-adversarial-browser-run-pauses-in-process-not-durably`** (**FIXED 2026-08-24**, was
+  MEDIUM, found running acceptance matrix run 1 - Uber Eats - live on a real bridge). A bridge run
+  that hit a sign-in wall on an undeclared origin paused via `paused_for_user`, the in-process
+  250 ms-poll path resumed by an in-memory `resumeFlag`. That pause did not outlive the api process,
+  so a deploy, a crash or a long human delay lost it and the run had to be re-fired. Three further
+  gaps, all confirmed live in the same session, made an ad-hoc read-after-login impossible end to
+  end: (a) nothing CAPTURED the session the human established, so the next run started signed out;
+  (b) the planner made the login a browser-ACTION step, which on an already-authenticated page
+  resolves to nothing and re-paused on every resume - an infinite loop after the human had already
+  logged in; (c) the paused run held the origin-keyed Chromium profile, so a second run against the
+  same origin timed out at the 120s invocation window.
+
+  THE MECHANISM THAT CLOSES IT. `engine.ts` gains ONE fork in the existing pause-detection block:
+  when the detected `humanAction` kind is one a login ceremony can clear (`login | captcha | mfa`),
+  the run is bridge-routed, and the step's resolved origin classifies ADVERSARIAL, the run takes the
+  DURABLE-HALT exit - `needs_credentials` + `credentialRequest(mode: ceremony)` persisted, a
+  credential waiter parked, and a RETURN - instead of `pauseRunForUser`. A PERMISSIVE origin keeps
+  `paused_for_user`, unchanged; that is the entire behavioural change. The human completes the halt
+  through the EXISTING attended rail (`bridge/attended.ts`, now carrying an additive `login` kind)
+  from `POST /api/v1/cofre/sessions/establish`, reached by the `/cofre?origin=` deep link the halt
+  already wrote; the capture is armed with a bounded 14-day TTL grant rather than the declared
+  rail's standing `until_locked`, and the declared card ceremony still mints a locked item. The
+  capture wakes the halted run through the credential-waiter path that already existed, and the
+  re-dispatch injects the session through the S-inject channel - so gap (a) closes in both
+  directions. Gap (b) closes three ways, of which the first is the deterministic one: the engine
+  ANSWERS a `login` ask on a run it already handed a session to (the step completes as a no-op,
+  capped at once per run), the vision resolver is told to return `noop` on a page that is plainly
+  already signed in, and the planner is told never to emit a sign-in browser step at all. Gap (c)
+  closes as a consequence of the halt being a RETURN: the loop's outer `finally` is the only place
+  the browser lease is released, and a pause never reaches it. Journal: docs/decisions.md 2026-08-24
+  "the durable-halt fork". Suites: `api/tests/automation/engine-adhoc-durable-halt.test.ts` (the
+  fork from both sides, the persisted row, the waiter, the resume index, the lease release, the
+  loop closure) and `api/tests/security/adhoc-ceremony-capture.test.ts` (the TTL grant, the declared
+  path unchanged, Rule 5 per-user custody). Diagrams 02 and 11 carry the as-built.
+
+  REVIEW ROUND (custody-scoped, same day) found and fixed three things in this slice, recorded
+  because two of them were live defects rather than polish. The attended capture BOUND ITSELF TO THE
+  WHOLE COOKIE JAR (`originsFromStorageState`) and never intersected that with the ceremony's own
+  origin - latent while the rail minted locked items, live the moment this slice armed the ad-hoc
+  capture with a 14-day grant, because the over-bound item was then unwrappable and wakeable across
+  every analytics / SSO / parent domain in the jar. It now binds through
+  `boundOriginsForEstablishedHost(storageState, ceremony.origin)`, the same narrowing the typist's
+  capture path already used, which also refuses a push whose jar covers no cookie for the ceremony
+  origin. The S-login-step guard was RUN-scoped where the durable fork is ORIGIN-scoped, so a run
+  holding portal A's session could answer a sign-in wall at portal B with it; the gate's `ready`
+  verdict now carries the origin it checked out for and the guard requires exact host equality. And
+  the signature/I8 case was UNFAILABLE - which, on being rewritten to drive a real `signature` kind,
+  surfaced that `vision.ts`'s `VALID_HUMAN_ACTION_KINDS` silently dropped that kind although both
+  prompts ask for it by name, making the I8 exclusion unreachable. All three are mutation-proven.
+
+  STILL UNVERIFIED, and deliberately carried forward rather than closed with the finding: "a human
+  hits the wall, logs in through the ceremony window, and the next pass of that run comes up
+  authenticated" is a LIVE-VERIFICATION acceptance item. Every suite here is deterministic and
+  proves wiring, custody and routing; only a live bridge against a real portal can prove the page
+  comes up authenticated. It sits with the S-inject item of the same class ("a real bridge run
+  against a captured origin starts logged in"), and the two are one live pass.
 
 ## Recently fixed - 2026-08-24 the capability grant had no door, so the execution plane was dead
 

@@ -41,7 +41,13 @@ const LAUNCH_TIMEOUT_MS = 60_000;
 
 export interface CeremonyRequest {
   requestId: string;
-  kind: 'card_login' | 'relay_code';
+  /**
+   * WHICH ERRAND, and nothing this function branches on. A card in a reader, a relay code and a
+   * plain sign-in are the same ceremony from here: a headed window at a declared origin, held until
+   * the human closes it. `login` is the ad-hoc adversarial capture (docs/decisions.md 2026-08-24,
+   * D-ADHOC-1) and travels only so Cortex's Registo row can name the errand.
+   */
+  kind: 'card_login' | 'relay_code' | 'login';
   origin: string;
   reason: string;
 }

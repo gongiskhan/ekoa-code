@@ -15,6 +15,7 @@ import {
   CofreGrantResponse,
   CofreLockResponse,
   CofreDeleteResponse,
+  CofreSessionEstablishResponse,
   cofreEndpoints,
   ErrorEnvelope,
 } from '@ekoa/shared';
@@ -213,11 +214,50 @@ describe('cofre contract', () => {
     expect(ErrorEnvelope.safeParse(await g.json()).success).toBe(true);
   });
 
+  /**
+   * The ad-hoc ceremony's entry point (D-ADHOC-1). NO MACHINE IS CONNECTED in this suite, which is
+   * the case worth having in a contract test: the endpoint answers `started: false` WITH A MESSAGE
+   * and a 200, because "nobody is at a machine right now" is a refusal the user can act on rather
+   * than an error. A 4xx here would put a red banner in front of someone whose only problem is that
+   * their laptop is closed.
+   */
+  it('session establish -> CofreSessionEstablishResponse, and refuses in-band with no machine', async () => {
+    const t = await tokenFor('usr');
+    const res = await authed('/api/v1/cofre/sessions/establish', t, {
+      method: 'POST',
+      body: JSON.stringify({ origin: 'orders.adhoc.example' }),
+    });
+    expect(res.status).toBe(200);
+    const body: unknown = await res.json();
+    expect(CofreSessionEstablishResponse.safeParse(body), JSON.stringify(body)).toMatchObject({ success: true });
+    expect((body as { started: boolean }).started).toBe(false);
+    expect((body as { message: string }).message.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * The value becomes the address a headed browser opens on the caller's own machine, so the
+   * contract has to be "a hostname" and not "a string". A URL would carry a path and a query, and a
+   * login link's query routinely carries a token; the daemon prepends `https://` to whatever it is
+   * handed, so anything richer than a host is refused at the boundary rather than normalised.
+   */
+  it('session establish: anything that is not a bare hostname is a 4xx envelope, never a ceremony', async () => {
+    const t = await tokenFor('usr');
+    for (const origin of ['', 'https://orders.example/login?token=abc', 'orders.example/login', 'orders.example:8443', 'localhost']) {
+      const res = await authed('/api/v1/cofre/sessions/establish', t, {
+        method: 'POST',
+        body: JSON.stringify({ origin }),
+      });
+      expect(res.status, origin).toBeGreaterThanOrEqual(400);
+      expect(ErrorEnvelope.safeParse(await res.json()).success, origin).toBe(true);
+    }
+  });
+
   it('every endpoint requires auth', async () => {
     for (const [p, method] of [
       ['/api/v1/cofre/items', 'GET'],
       ['/api/v1/cofre/items', 'POST'],
       ['/api/v1/cofre/lock-all', 'POST'],
+      ['/api/v1/cofre/sessions/establish', 'POST'],
     ] as const) {
       const res = await fetch(`http://127.0.0.1:${port}${p}`, { method, headers: { 'content-type': 'application/json' }, body: method === 'POST' ? '{}' : undefined });
       expect(res.status, `${method} ${p}`).toBe(401);

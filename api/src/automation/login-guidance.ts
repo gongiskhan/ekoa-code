@@ -50,7 +50,17 @@ export const GOOGLE_SSO_PAUSE_GUIDANCE_EN =
  */
 export function withGoogleSsoGuidance(userInstructions: string, kind: string | null | undefined): string {
   if (kind !== 'login') return userInstructions;
-  if (userInstructions.includes('bloqueia navegadores automatizados')) return userInstructions;
+  // BOTH LANGUAGES, because both producers can now reach this function. The English fast-path copy
+  // carries the sentence inline (`rehearsal.ts`), and once that path started reporting a `login`
+  // KIND it started reaching this append too - which without the second check would staple the
+  // Portuguese sentence onto the English one, saying the same thing twice, in two languages, on the
+  // one pause where the wording is the whole point.
+  if (
+    userInstructions.includes('bloqueia navegadores automatizados') ||
+    userInstructions.includes(GOOGLE_SSO_PAUSE_GUIDANCE_EN)
+  ) {
+    return userInstructions;
+  }
   const trimmed = userInstructions.trimEnd();
   return trimmed.length === 0 ? GOOGLE_SSO_PAUSE_GUIDANCE_PT : `${trimmed}\n\n${GOOGLE_SSO_PAUSE_GUIDANCE_PT}`;
 }

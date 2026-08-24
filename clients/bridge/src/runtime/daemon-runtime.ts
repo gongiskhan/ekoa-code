@@ -15,7 +15,7 @@ import { verifyDelegatedTask, type VerifyContext } from '../verify/index.js';
 import { runDelegatedTask, type EngineDeps } from '../engine/index.js';
 import type { GrantTable, NonceCache, EgressAccounting } from '../session/index.js';
 import type { EgressLedger, ReadLedgerRow } from '../ledger/index.js';
-import { runAttendedCeremony, type CeremonyDeps } from '../attended/index.js';
+import { runAttendedCeremony, type CeremonyDeps, type CeremonyRequest } from '../attended/index.js';
 import type { ProfileManager } from '../browser/index.js';
 import type { AutomationEnablement } from '../tools/tier2/index.js';
 import { executeToolInvocation, type ToolExecutorDeps } from './tool-executor.js';
@@ -353,7 +353,7 @@ export class DaemonRuntime {
     };
   }
 
-  private async handleAttended(frame: { requestId: string; kind: 'card_login' | 'relay_code'; origin: string; reason: string }): Promise<void> {
+  private async handleAttended(frame: CeremonyRequest): Promise<void> {
     const log = this.deps.log ?? ((): void => undefined);
     if (this.ceremonyInFlight) {
       log('Já está uma autenticação a decorrer nesta máquina; conclua-a primeiro.');

@@ -29,6 +29,10 @@ const COVERED = new Set<string>([
   // I6/I7 refusals asserted as proper 4xx envelopes rather than 500s.
   'cofre.cofreItemsList', 'cofre.cofreItemsCreate', 'cofre.cofreItemsDelete',
   'cofre.cofreItemGrant', 'cofre.cofreItemLock', 'cofre.cofreLockAll',
+  // The ad-hoc ceremony's entry point (D-ADHOC-1), covered by the same suite: the response shape,
+  // the in-band refusal when no machine is connected, the 4xx on a malformed origin, and the auth
+  // wall. Additive on an already-covered domain, so EXPECTED_PENDING_COUNT is unchanged.
+  'cofre.cofreSessionEstablish',
 
   // batch1 F1 — auth lifecycle (auth.test.ts)
   'auth.refresh', 'auth.logout', 'auth.changePassword', 'auth.deviceStart', 'auth.devicePoll', 'auth.deviceApprove',

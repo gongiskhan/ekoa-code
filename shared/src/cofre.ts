@@ -115,6 +115,13 @@ export type CofreItem = z.infer<typeof CofreItem>;
  * The unlock durations the consent page offers, as a CLOSED enum so the UI and the API cannot
  * drift into offering different sets. `until_locked` is deliberately part of the same enum rather
  * than a separate boolean: it is a scope choice, not a modifier.
+ *
+ * `2_weeks` is the AD-HOC CAPTURED SESSION's duration (docs/decisions.md 2026-08-24, D-ADHOC-2) and
+ * exists so that grant can be expressed in the model that already exists rather than beside it. It
+ * is the one duration that names the same span as `DEFAULT_SESSION_TTL_MS` - the item's own expiry -
+ * so an ad-hoc session's grant and the session itself die together instead of one outliving the
+ * other. Added at the END of the ttl group and never inserted between existing members: this enum is
+ * persisted on grant rows, so its members are values, not positions.
  */
 export const GrantDuration = z.enum([
   'this_run',
@@ -122,6 +129,7 @@ export const GrantDuration = z.enum([
   '40_minutes',
   '1_day',
   '1_week',
+  '2_weeks',
   '1_month',
   'until_locked',
 ]);
@@ -152,7 +160,7 @@ export const Grant = z.discriminatedUnion('scope', [
   z.object({
     ...GrantBase,
     scope: z.literal('ttl'),
-    duration: z.enum(['10_minutes', '40_minutes', '1_day', '1_week', '1_month']),
+    duration: z.enum(['10_minutes', '40_minutes', '1_day', '1_week', '2_weeks', '1_month']),
     expiresAt: z.string(),
     /** Refused for `certificate_identity` — see `assertGrantAllowedForItemType`. */
     itemType: CofreItemType.refine((t) => t !== 'certificate_identity', {
@@ -281,6 +289,22 @@ export type CredentialEstablishmentMode = z.infer<typeof CredentialEstablishment
 export const RunCredentialRequest = z.object({
   /** Index of the step that is blocked, matching `RunStepRecord.index`. */
   stepIndex: z.number().int(),
+  /**
+   * WHERE THE RE-DISPATCH RESTARTS, when that is not the blocked step itself.
+   *
+   * Absent means "at `stepIndex`", which is every halt raised by the credential gate and every
+   * pre-existing row: the gate runs BEFORE its step executes, so the blocked step never ran and
+   * restarting at it is exactly right.
+   *
+   * The AD-HOC ADVERSARIAL halt (docs/decisions.md 2026-08-24, D-ADHOC-5) is the case that needs the
+   * two to differ. It fires MID-RUN, on a page the run had already navigated to, and the halt
+   * RETURNS the run - which disposes the browser session and releases the machine's profile lease.
+   * By the time a human has finished the ceremony there is no page left, so a resume that started at
+   * the blocked step would drive a blank tab. This names the step that PUT the run on that page (the
+   * nearest preceding navigation), while `stepIndex` keeps naming the step the human is being told
+   * about. Conflating them would force one of the two to be wrong.
+   */
+  resumeFromStepIndex: z.number().int().nonnegative().optional(),
   /** The portal origin the step could not reach. A HOST or scheme+host, never a URL with secrets. */
   origin: BoundOrigin,
   /** Which integration the step was running. Trace + label only; never branched on (Rule 3). */
@@ -397,7 +421,7 @@ export const BridgeRegistoMetadata = z
     grantRefCount: z.number().int().nonnegative().optional(),
     itemCount: z.number().int().nonnegative().optional(),
     targetOrigin: z.string().max(253).optional(),
-    attendedKind: z.enum(['card_login', 'relay_code']).optional(),
+    attendedKind: z.enum(['card_login', 'relay_code', 'login']).optional(),
     /** Why a dispatch was refused, from a closed set — never an error string that could echo input. */
     refusal: z.enum(['write_not_approved', 'no_signing_secret', 'offline', 'not_admitted']).optional(),
   })
@@ -500,6 +524,52 @@ export type CofreLockResponse = z.infer<typeof CofreLockResponse>;
 export const CofreDeleteResponse = z.object({ ok: z.literal(true) });
 export type CofreDeleteResponse = z.infer<typeof CofreDeleteResponse>;
 
+/**
+ * Open an attended ceremony for an origin the user reached AD-HOC (D-ADHOC-1/5).
+ *
+ * THE ORIGIN IS THE WHOLE REQUEST, AND IT IS A BARE HOST, enforced here rather than described here.
+ * The value ends up as the address a headed browser opens on the caller's machine, so "a host" and
+ * "any string" are very different contracts: a full URL carries a path and a query, a login link's
+ * query routinely carries a token, and `https://` is prepended by the daemon to whatever it is
+ * given. A hostname is the narrowest thing that still names a portal, so that is what is accepted
+ * and everything else is a 400. The ceremony then opens at `https://<origin>` and nowhere else.
+ *
+ * WHY THE USER MAY NAME IT AT ALL, when the declared rail resolves the origin from a package. The
+ * ad-hoc rail has no package: the run reached an undeclared portal from a free-text goal, and the
+ * only statement of where the human must log in is the halt the run already wrote. Naming an origin
+ * here therefore grants nothing - the ceremony captures a session INTO THE CALLER'S OWN Cofre, under
+ * their own actor, on their own machine, which is a thing they could do by opening a browser. What
+ * it must not become is a way to reach someone else's: every read on the way back is owner-scoped
+ * (D-ADHOC-3), and this endpoint adds no lookup keyed by anything but the caller.
+ *
+ * NO RUN ID, and the omission is the design. The halted run is woken by the ordinary
+ * credential-waiter path the moment the capture lands (`onCredentialEstablished` matches the item's
+ * bound origins against parked runs of the same owner), so a run id here would be a field nothing
+ * reads: it could not grant anything, could not be trusted if it did, and would invite a later
+ * reader to believe the resume depends on the client naming the right run.
+ */
+export const CofreSessionEstablishRequest = z.object({
+  origin: BoundOrigin.regex(
+    /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/i,
+    'origin must be a bare hostname (no scheme, no port, no path, no query)',
+  ),
+});
+export type CofreSessionEstablishRequest = z.infer<typeof CofreSessionEstablishRequest>;
+
+/**
+ * The answer is STATUS ONLY - no requestId, no handle, and above all no session.
+ *
+ * `started: false` with a message is a REFUSAL the user can act on (no machine connected, a daemon
+ * too old to hold a ceremony), not an error: nothing went wrong, the ceremony simply cannot happen
+ * right now. The client learns the OUTCOME by watching the run it was blocking, exactly as the
+ * declared rail's `POST /:key/session` does.
+ */
+export const CofreSessionEstablishResponse = z.object({
+  started: z.boolean(),
+  message: z.string().max(500),
+});
+export type CofreSessionEstablishResponse = z.infer<typeof CofreSessionEstablishResponse>;
+
 export const cofreEndpoints = {
   cofreItemsList: {
     method: 'GET',
@@ -538,5 +608,17 @@ export const cofreEndpoints = {
     path: '/api/v1/cofre/lock-all',
     auth: 'user',
     response: CofreLockResponse,
+  },
+  /**
+   * `auth: 'user'` and NOT `user-or-key`, deliberately. A ceremony needs a human standing at a
+   * machine; a gateway key is exactly the caller who is not one, and putting this on the capability
+   * surface would publish an endpoint no API client could ever complete.
+   */
+  cofreSessionEstablish: {
+    method: 'POST',
+    path: '/api/v1/cofre/sessions/establish',
+    auth: 'user',
+    request: CofreSessionEstablishRequest,
+    response: CofreSessionEstablishResponse,
   },
 } as const satisfies DomainDescriptorMap;

@@ -19,6 +19,7 @@ import { parseFirstJsonObject } from './vision.js';
 import { GOOGLE_SSO_PAUSE_GUIDANCE_EN } from './login-guidance.js';
 import type {
   FailureKind,
+  HumanActionKind,
   RehearsalPatch,
   Step,
   StepType,
@@ -351,6 +352,21 @@ export { REHEARSAL_BUDGET } from './budgets.js';
 interface FastPathMatch {
   reasoning: string;
   userInstructions: string;
+  /**
+   * The `HumanActionKind` this rule stands for, where the rule maps cleanly onto one.
+   *
+   * The verifier and the FAST classifier both return a kind; this path did not, so a pause detected
+   * HERE reached the engine unclassified. That was invisible while every detection layer fed the
+   * same pause, and stopped being invisible once the kind became a ROUTING input: the adversarial
+   * durable halt fires only for `login` / `captcha` / `mfa` (docs/decisions.md 2026-08-24,
+   * D-ADHOC-5), so a regex-detected sign-in wall carrying no kind would silently take the in-process
+   * pause the halt exists to replace.
+   *
+   * Only rules whose pattern IS the kind carry one. A rule matching several states leaves it absent
+   * rather than guessing, which reads downstream as "detected, unclassified" - the honest
+   * description of a keyword hit.
+   */
+  kind?: HumanActionKind;
 }
 
 /**
@@ -372,6 +388,7 @@ export function detectHumanActionable(failureMessage: string): FastPathMatch | n
     {
       pattern: /(re-?capt?cha|cap?tcha|i'?m not a robot|não sou um robô|i am not a robot|hcaptcha|cloudflare.*(challenge|verify)|are you a robot|bot[- ]?check|bot[- ]?detection|\bgoogle.*\/sorry\/|\/sorry\/[^"\s]|unusual (traffic|activity)|automated (traffic|requests|queries)|verify (you are |that you are |you'?re )?(a )?human|prove (you'?re|you are) (a )?human|are you (a )?human|press (and hold|& hold).*\bhuman\b|akamai.*(challenge|verify))/i,
       out: {
+        kind: 'captcha',
         reasoning: 'Detected a CAPTCHA / bot-check page',
         userInstructions: 'Solve the bot-check / CAPTCHA in the open browser window, then click Continue.',
       },
@@ -379,6 +396,7 @@ export function detectHumanActionable(failureMessage: string): FastPathMatch | n
     {
       pattern: /(two[- ]?factor|2[- ]?factor|2fa|mfa|authenticator (app|code)|6[- ]?digit code|enter (the|your) code|security code|one[- ]?time (passcode|password)|otp\b|verification code)/i,
       out: {
+        kind: 'mfa',
         reasoning: 'Detected a multi-factor authentication step',
         userInstructions: 'Open your authenticator app or check your phone for the code, type it in the open browser window, then click Continue.',
       },
@@ -386,6 +404,7 @@ export function detectHumanActionable(failureMessage: string): FastPathMatch | n
     {
       pattern: /(3-?d secure|3ds|sca challenge|step[- ]?up authentication|confirm.*payment|confirm.*purchase|confirm.*transaction|approve.*payment)/i,
       out: {
+        kind: 'payment',
         reasoning: 'Detected a payment confirmation prompt',
         userInstructions: 'Confirm the payment in the open browser window, then click Continue.',
       },
@@ -393,6 +412,7 @@ export function detectHumanActionable(failureMessage: string): FastPathMatch | n
     {
       pattern: /(verify (your|it'?s) (you|identity)|confirm (your|it'?s) (you|identity)|trusted device|unusual sign[- ]?in|unusual activity|let'?s make sure it'?s you)/i,
       out: {
+        kind: 'identity',
         reasoning: 'Detected an identity-verification prompt',
         userInstructions: 'Complete the identity check in the open browser window (answer the prompt, click the email link, etc.), then click Continue.',
       },
@@ -400,6 +420,7 @@ export function detectHumanActionable(failureMessage: string): FastPathMatch | n
     {
       pattern: /(enter (your|the) password|password.*required|sign in to continue|you need to sign in|please sign in|please log in)/i,
       out: {
+        kind: 'login',
         reasoning: 'Detected a login prompt',
         // The Google-SSO sentence rides on the login rule and on no other: the browser this pause
         // happens in is refused by Google's automation detection, so the button most people would

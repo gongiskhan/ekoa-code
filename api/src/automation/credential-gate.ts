@@ -121,6 +121,18 @@ export type CredentialGateVerdict =
       itemId: string;
       storageState: unknown;
       /**
+       * THE ORIGIN THIS SESSION WAS CHECKED OUT FOR, carried because a run is not a portal.
+       *
+       * `storageState` alone says nothing about where it may be used, and the run loop holds ONE
+       * session variable for a whole run. Without this the loop can only ask "is a session in hand",
+       * which is true for a run that checked one out at portal A and has since navigated to portal
+       * B - and answering a login wall at B with A's session is the "judging one portal by another's
+       * facts" pattern that produced the run-level `preferredPairingId` defect. Both producers of
+       * this verdict have already resolved the origin, so carrying it costs nothing and makes the
+       * question the loop actually needs answerable.
+       */
+      origin: string;
+      /**
        * P4.2 - the pairing where this session's ceremony happened
        * (`sessionMetadata.establishedBy.pairingId`, stamped by `bridge/attended.ts`), TOGETHER WITH
        * THE ORIGIN IT BELONGS TO. Carried through so the run loop can PREFER that machine for an
@@ -257,6 +269,7 @@ export async function evaluateCredentialGate(
       kind: 'ready',
       itemId: verdict.itemId,
       storageState: verdict.storageState,
+      origin,
       // ONLY for an adversarial origin. A permissive origin's credential is portable by
       // definition, and attaching a machine preference to one would pin a run to a laptop for no
       // reason - the P4.2 constraint, applied at the one place both facts are in hand.
@@ -410,6 +423,7 @@ async function adhocSessionReuse(
     kind: 'ready',
     itemId: verdict.itemId,
     storageState: verdict.storageState,
+    origin,
     // Adversarial by construction (checked above), so the P4.2 machine preference applies for the
     // same reason it does on the declared path: an adversarial session belongs to the machine whose
     // ceremony established it, and reusing it from a different machine of the same owner shows the

@@ -430,11 +430,25 @@ export const BridgeFrame = z.discriminatedUnion('type', [
      *  the other is `session.deliver`. */
     env: z.record(z.string(), z.string()),
   }),
-  /** Route a ceremony (a card unlock, a relay code) to a machine with a human at it. */
+  /**
+   * Route a ceremony (a card unlock, a relay code, a plain sign-in) to a machine with a human at it.
+   *
+   * `login` is ADDITIVE (Rule 7) and is the ad-hoc adversarial ceremony (docs/decisions.md
+   * 2026-08-24, D-ADHOC-1): a run hit a sign-in wall on an undeclared origin it resolved for itself,
+   * and the human logs in at the machine exactly as they would for a card. The daemon runs all three
+   * kinds through ONE ceremony - `runAttendedCeremony` never branches on `kind`, because "open a
+   * headed browser at this origin and hold it while a person finishes" is the whole of what it does
+   * and a card reader is not a different program. The kind travels so the Registo row can say which
+   * errand it was, and for nothing else.
+   *
+   * A daemon predating this member drops the frame at its zod boundary, which is the pre-existing
+   * behaviour for an unparseable frame: Cortex's ceremony then expires on its own TTL and the run
+   * stays parked, rather than a person being told a window opened that never did.
+   */
   z.object({
     type: z.literal('attended.request'),
     requestId: z.string(),
-    kind: z.enum(['card_login', 'relay_code']),
+    kind: z.enum(['card_login', 'relay_code', 'login']),
     origin: z.string(),
     reason: z.string().max(500),
   }),

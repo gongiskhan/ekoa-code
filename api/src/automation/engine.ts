@@ -41,7 +41,7 @@ import { registerCredentialWaiter } from './credential-waiters.js';
 // PURE (`cofre/relay.ts` composes and returns; it registers nothing), which is what makes it safe
 // to call on a refusal path that must not have side effects of its own.
 import { issueLoginRelayPrompt } from '../cofre/index.js';
-import { classifyOrigin } from './origin-posture.js';
+import { classifyOrigin, type OriginPosture } from './origin-posture.js';
 import {
   resolveLocality,
   narrowLocalityForRun,
@@ -564,6 +564,21 @@ async function runOrRehearse(
   let sessionState = credentials && typeof credentials === 'object'
     ? (credentials as Record<string, unknown>)['storageState']
     : undefined;
+  /**
+   * WHICH PORTAL `sessionState` IS FOR, or null when nothing here can say.
+   *
+   * A RUN IS NOT A PORTAL. `sessionState` is one variable for a whole run, and a run can navigate
+   * from portal A to portal B, so "a session is in hand" is not the same claim as "this step's
+   * origin has a session". Only the second one licenses answering a login wall with "we already did
+   * that" (S-login-step), and conflating them is the run-level `preferredPairingId` defect in
+   * another costume: one portal judged by another's facts.
+   *
+   * NULL FOR A CREDENTIAL PASSED IN BY THE CALLER (`inputs.credentials.storageState`), because
+   * nothing in this loop knows which origin that blob was captured against - the integration that
+   * launched the run does. Null is the closed reading: it withholds the S-login-step answer rather
+   * than guessing, which leaves that path exactly as it behaved before the guard existed.
+   */
+  let sessionOrigin: string | null = null;
   // THE BROWSER LEASE FOR THIS CALL TREE. An outermost pass mints one and owns
   // its end; a sub-automation inherits its parent's through `ctx` and must not
   // end it (see `BrowserLease`). Minted whether or not this run ends up using a
@@ -607,6 +622,21 @@ async function runOrRehearse(
    * for a ceremony" and answers with a plain terminal failure rather than a halt naming nowhere.
    */
   let stepOrigin: string | null = null;
+  /**
+   * THE POSTURE OF `stepOrigin`, kept beside it rather than re-derived where it is read.
+   *
+   * The ad-hoc adversarial halt (D-ADHOC-5) fires only for an ADVERSARIAL origin, and "adversarial"
+   * has to mean the same thing there as it means to locality and to the credential gate - including
+   * the case that makes the fork real, a PERMISSIVE origin whose declaration says so. Re-classifying
+   * at the pause site would mean a second `classifyOrigin` call with a second answer about where its
+   * action declaration comes from, and the closed default would quietly make every origin
+   * adversarial: `classifyOrigin(url)` with no action is CLOSED by design, so a re-derivation that
+   * forgot the declaration would not fail, it would just always say yes.
+   *
+   * So it is assigned exactly where the classification is already computed, from the same resolved
+   * action, and is null for the same reason `stepOrigin` is.
+   */
+  let stepOriginPosture: OriginPosture | null = null;
   /**
    * The org's machines, read ONCE per run rather than per step.
    *
@@ -827,6 +857,7 @@ async function runOrRehearse(
     );
     if (verdict.kind !== 'ready') return;
     sessionState = verdict.storageState;
+    sessionOrigin = verdict.origin;
     // P4.2, learned EARLIER than on the ordinary path and therefore more cheaply: the gate's own
     // call learns the preference after locality has already been resolved and has to re-resolve it.
     // Here locality has not run yet for this step, so recording it now means the first resolution
@@ -867,6 +898,10 @@ async function runOrRehearse(
       resolvedOrigin ? `https://${resolvedOrigin.origin}` : '',
       resolvedOrigin?.action ?? undefined,
     );
+    // Recorded from the SAME classification locality is about to be decided from - see
+    // `stepOriginPosture`. Null when no origin resolved, which is not "permissive": it is "nothing
+    // was resolved", and the ad-hoc halt refuses to fire on it rather than guessing either way.
+    stepOriginPosture = resolvedOrigin ? classification.posture : null;
     // THE PREFERENCE FOR *THIS* ORIGIN, and no other. A run touching two portals holds two
     // independent answers, and a step gets the one belonging to the site it is about - a lookup
     // that MISSES is the honest answer for a portal no session was checked out for, and means
@@ -961,6 +996,10 @@ async function runOrRehearse(
   // an infinite loop when a page keeps re-prompting the user for the
   // same action.
   let pauseForUserCount = 0;
+  // How many LOGIN asks this run has answered with the session it was already given (S-login-step).
+  // Capped, so "we already logged in" can be said once and does not become a way to walk past every
+  // sign-in wall for the rest of the run.
+  let sessionSatisfiedLogins = 0;
   // What STEP_RETRY_BUDGET has already been spent, per step index. One per run: the budget
   // bounds THIS run's recovery, and the rehearsal fixer revisiting an index must not get a
   // fresh allowance each time it comes back.
@@ -976,6 +1015,62 @@ async function runOrRehearse(
           (r): r is StepRecord => r != null && typeof r === 'object' && typeof r.index === 'number' && r.index < resumeFrom,
         )
       : [];
+
+    /**
+     * THE DURABLE CREDENTIAL HALT, as one exit rather than two copies of one.
+     *
+     * Persist `needs_credentials` + the request, finalize, park a waiter, emit, return. It is
+     * DURABLE in the sense the in-process pause is not: everything a resume needs is in the store,
+     * so the run survives an api restart, a deploy, and a human who takes an hour. The waiter is the
+     * fast path and the persisted row is the slow one, and neither is load-bearing alone
+     * (`credential-waiters.ts`).
+     *
+     * It became a function when a SECOND caller appeared. The gate's halt (below) is raised before
+     * its step runs; the ad-hoc adversarial halt is raised after one failed, from inside the
+     * pause-detection block. Two call sites, one exit - because a second copy of this would be a
+     * second place for the waiter registration or the finalize to be forgotten, and forgetting
+     * either produces a run that is parked forever with nothing able to wake it.
+     */
+    const haltForCredentials = async (
+      details: RunCredentialRequest,
+      index: number,
+    ): Promise<ReturnType<typeof finalizeReturn>> => {
+      await automationRunStore.update(automationId, runId, {
+        status: 'needs_credentials',
+        steps: stepRecords,
+        credentialRequest: details,
+      });
+      await finalize(runId, automationId, 'needs_credentials', stepRecords, startedAt);
+      registerCredentialWaiter({
+        runId,
+        orgId: ctx.orgId,
+        userId: ctx.ownerUserId,
+        origin: details.origin,
+      });
+      emit?.runNeedsCredentials?.(runId, details);
+      if (isRehearsal) {
+        await persistRefinedSteps(automation, workingSteps, isRehearsal);
+      }
+      return finalizeReturn({
+        runId,
+        status: 'needs_credentials',
+        startedAt,
+        stepRecords,
+        message: `paused: no usable credential for ${details.origin}`,
+        isRehearsal,
+        refinedSteps: workingSteps,
+        rehearsalSummary: buildRehearsalSummary({
+          isRehearsal,
+          status: 'aborted',
+          fixerCallCount,
+          patchesApplied,
+          startedAt,
+          stuckAtIndex: index,
+          reason: 'awaiting credentials',
+        }),
+        lastStepIndex: index,
+      });
+    };
 
     let i = resumeFrom;
     while (i < workingSteps.length) {
@@ -1088,6 +1183,10 @@ async function runOrRehearse(
       // and only for the step types that can reach a browser - an api_call or integration step has
       // no locality to decide and must not be halted by one.
       stepLocality = null;
+      // Cleared WITH the verdict, never left standing from the previous step: a posture is a fact
+      // about an origin, and holding last step's answer while this step's is unresolved is exactly
+      // how the run-level `preferredPairingId` defect judged one portal by another's facts.
+      stepOriginPosture = null;
       let localityRecord: StepRecord | undefined;
       if (STEP_TYPES_NEEDING_BROWSER.has(step.type)) {
         stepLocality = await resolveLocalityForStep(i, step);
@@ -1144,6 +1243,9 @@ async function runOrRehearse(
           }, step, await knownPairingsNow(), automation.name, { loadActionDeclaration: loadDeclarationOnce });
       if (!gate.record && gate.storageState !== undefined && !browser) {
         sessionState = gate.storageState;
+        // Recorded WITH the session, from the gate that checked it out, so the two can never
+        // describe different portals. `null` when a gate predating the field answers - closed.
+        sessionOrigin = gate.origin ?? null;
       }
       // P4.2: the pairing where this session's ceremony happened, FILED UNDER THE ORIGIN IT BELONGS
       // TO. It is a PREFERENCE, honoured for adversarial origins only, and it is recorded on the
@@ -1287,41 +1389,7 @@ async function runOrRehearse(
         // all. Neither is load-bearing alone.
         const credentialDetails = extractNeedsCredentials(record);
         if (credentialDetails) {
-          await automationRunStore.update(automationId, runId, {
-            status: 'needs_credentials',
-            steps: stepRecords,
-            credentialRequest: credentialDetails,
-          });
-          await finalize(runId, automationId, 'needs_credentials', stepRecords, startedAt);
-          registerCredentialWaiter({
-            runId,
-            orgId: ctx.orgId,
-            userId: ctx.ownerUserId,
-            origin: credentialDetails.origin,
-          });
-          emit?.runNeedsCredentials?.(runId, credentialDetails);
-          if (isRehearsal) {
-            await persistRefinedSteps(automation, workingSteps, isRehearsal);
-          }
-          return finalizeReturn({
-            runId,
-            status: 'needs_credentials',
-            startedAt,
-            stepRecords,
-            message: `paused: no usable credential for ${credentialDetails.origin}`,
-            isRehearsal,
-            refinedSteps: workingSteps,
-            rehearsalSummary: buildRehearsalSummary({
-              isRehearsal,
-              status: 'aborted',
-              fixerCallCount,
-              patchesApplied,
-              startedAt,
-              stuckAtIndex: i,
-              reason: 'awaiting credentials',
-            }),
-            lastStepIndex: i,
-          });
+          return await haltForCredentials(credentialDetails, i);
         }
 
         // Awaiting-integration pause path is shared between modes.
@@ -1503,8 +1571,126 @@ async function runOrRehearse(
             // (findings: `google-sso-refuses-the-automated-ceremony-browser`). Appended rather than
             // asked of the model: the prompt would make it likely, this makes it certain. The
             // regex fast-path carries the same sentence in its own English copy.
-            const detectedKind = verifierHumanAction?.kind ?? classifierKind;
+            //
+            // ALL THREE LAYERS CONTRIBUTE A KIND now (the regex table carries one per rule), because
+            // the kind stopped being decoration the moment it started deciding between an in-process
+            // pause and a durable halt, below. An unclassified detection - a keyword rule matching
+            // several states - leaves this null and therefore takes the pause, which is the closed
+            // direction: a halt asks a human to walk to a machine and log in somewhere.
+            const detectedKind = verifierHumanAction?.kind ?? classifierKind ?? regexDetected?.kind ?? null;
             const failureKindForEvent = classifyFailure(record, step);
+
+            // ── S-LOGIN-STEP: THE RUN ALREADY HAS THE ANSWER ──────────────────────────────────
+            //
+            // A re-dispatched run comes back with the captured session already injected and restarts
+            // at the navigation that put it on the portal - so it re-runs the same sign-in step, now
+            // on an authenticated page. Asked to PERFORM a sign-in there, the resolver finds no such
+            // action and refuses with low confidence, which reads to every layer above as "a human
+            // is needed" all over again. That is the infinite loop this finding measured
+            // (`ad-hoc-adversarial-browser-run-pauses-in-process-not-durably`, gap (b)): the human
+            // logs in, the run asks them to log in, forever, and the ceremony half makes it worse
+            // rather than better because each round now costs a walk to a machine.
+            //
+            // So a LOGIN ask on a run this platform already handed a session for is answered by the
+            // platform: the step is completed as a no-op and the run moves on. The claim being made
+            // is narrow and true - "we already did the thing you are asking for" - and if the session
+            // turns out to be dead the run fails at whatever it was actually trying to read, which is
+            // a bounded, diagnosable failure instead of a loop.
+            //
+            // ONCE PER RUN. A second login wall after we spent our answer is a genuinely new fact
+            // (a session that died mid-run), and it gets the ordinary pause. The cap is what stops
+            // this from becoming a way to ignore every login wall forever.
+            //
+            // AND ONLY FOR THE PORTAL THE SESSION IS ACTUALLY FOR. `sessionState !== undefined` is a
+            // fact about the RUN; the claim being made here is about an ORIGIN, and a run that
+            // checked a session out at portal A and then walked into a sign-in wall at portal B
+            // would otherwise answer B with A's session - marking a genuine login wall "already
+            // signed in", writing that claim onto B's step record, and pre-empting the durable fork
+            // for an origin that qualifies for it. That is the run-level `preferredPairingId` defect
+            // again, so the comparison is against THIS step's origin.
+            //
+            // EXACT EQUALITY, not a covering rule. Both sides are bare hosts produced by the same
+            // `resolveStepOrigin` walk, so equality is exactly "the session we hold was checked out
+            // for the portal this step is on". A looser rule (parent-domain covering) would decide
+            // the question a session's own binding already answers, in a second place, and the two
+            // could disagree. A null on either side means nothing here can say which portal is which
+            // and the guard withholds its answer - the closed direction, and the pre-existing pause.
+            if (
+              detectedKind === 'login' &&
+              sessionState !== undefined &&
+              sessionOrigin !== null &&
+              stepOrigin !== null &&
+              sessionOrigin === stepOrigin &&
+              sessionSatisfiedLogins < MAX_SESSION_SATISFIED_LOGINS
+            ) {
+              sessionSatisfiedLogins += 1;
+              console.warn(
+                `[automation] login step ${i + 1} satisfied by the session this run was given; not pausing`,
+              );
+              const satisfied = satisfiedBySessionRecord(record);
+              const at = stepRecords.findIndex((r) => r.index === i);
+              if (at >= 0) stepRecords[at] = satisfied;
+              await automationRunStore.update(automationId, runId, { steps: stepRecords });
+              emit?.stepUpdate(redactStepRecord(satisfied, ctx.secrets), runId);
+              i += 1;
+              continue;
+            }
+
+            // ── S-DURABLE: THE ONE BEHAVIOURAL FORK ───────────────────────────────────────────
+            //
+            // An adversarial origin's login wall halts DURABLY instead of pausing in process
+            // (docs/decisions.md 2026-08-24, D-ADHOC-5). Four conditions, each doing its own work:
+            //
+            //  - the KIND is one a login ceremony can actually clear. `payment`, `identity`,
+            //    `signature` and `other` are not: nothing about capturing a session answers a 3-D
+            //    Secure screen, and sending someone to a ceremony for one would be a wrong
+            //    instruction rather than a slow one.
+            //  - the run is BRIDGE-ROUTED. The ceremony opens a headed browser on a machine of this
+            //    owner's, and the session that comes back is bound to that machine's residential
+            //    line; a hosted run has no machine to send anyone to.
+            //  - an ORIGIN RESOLVED. It is the ask, and it is also the key the re-dispatch will look
+            //    the captured session up by. With none, the ceremony would name nowhere and the
+            //    capture could never be found again - so the run takes the pause it would have taken.
+            //  - the origin is ADVERSARIAL. A PERMISSIVE origin keeps `paused_for_user`, unchanged
+            //    and deliberately: its credential is portable, its author said it tolerates
+            //    automation, and it has no machine-bound ceremony to be sent to.
+            //
+            // NOT among them, and worth saying because its absence looks like an oversight: whether
+            // the run is ATTENDED. An unattended run has no `resumeSignal` at all, so the pause it
+            // would otherwise take resolves immediately as "not resumed" and CANCELS it. A durable
+            // halt is strictly better for exactly that run, so conditioning on attendedness would
+            // withhold the fix from the runs that need it most.
+            //
+            // AND THE HALT IS A RETURN, which is the whole of S-profile: `pauseRunForUser` blocks
+            // inside the loop holding the browser, the profile lease and its Chromium SingletonLock,
+            // so a second run against the same origin could not acquire the profile and timed out at
+            // the invocation window. Returning runs the outer `finally`, which disposes the session
+            // and releases the lease - and the ceremony opens its own browser rather than contending
+            // for that one, so the two never queue behind each other again.
+            if (
+              CEREMONY_CLEARABLE_HUMAN_ACTIONS.has(detectedKind ?? '') &&
+              stepLocality?.kind === 'bridge' &&
+              stepOrigin &&
+              stepOriginPosture === 'adversarial'
+            ) {
+              console.warn(
+                `[automation] adversarial login wall on step ${i + 1} (${stepOrigin}): ` +
+                'halting durably for a ceremony instead of pausing in process',
+              );
+              return await haltForCredentials(
+                ceremonyCredentialRequest({
+                  step,
+                  index: i,
+                  origin: stepOrigin,
+                  automationName: automation.name,
+                  reason: adhocCeremonyReason(detectedKind, stepOrigin),
+                  // The page is gone the moment this returns, so the resume restarts at the step
+                  // that navigated to it rather than at this one. See `RunCredentialRequest`.
+                  resumeFromStepIndex: lastNavigationIndexAtOrBefore(workingSteps, i),
+                }),
+                i,
+              );
+            }
             const syntheticPatch = {
               kind: 'pause_for_user' as const,
               reasoning: detected.reasoning,
@@ -2688,6 +2874,9 @@ async function credentialGateRecord(
 ): Promise<{
   record?: StepRecord;
   storageState?: unknown;
+  /** The origin `storageState` was checked out for; see `CredentialGateVerdict`'s `ready` member.
+   *  Present exactly when `storageState` is. */
+  origin?: string;
   /** P4.2 - the ceremony machine AND the portal it belongs to; never one without the other. */
   preferredPairing?: { origin: string; pairingId: string };
 }> {
@@ -2711,6 +2900,7 @@ async function credentialGateRecord(
     case 'ready':
       return {
         storageState: verdict.storageState,
+        origin: verdict.origin,
         ...(verdict.preferredPairing ? { preferredPairing: verdict.preferredPairing } : {}),
       };
     case 'needs-machine':
@@ -2810,6 +3000,83 @@ const STEP_TYPES_NEEDING_BROWSER: ReadonlySet<Step['type']> = new Set<Step['type
 ]);
 
 /**
+ * The human-action kinds a LOGIN CEREMONY can actually clear (D-ADHOC-5).
+ *
+ * A ceremony is one thing: a headed browser at an origin, held while a person authenticates, and a
+ * captured session at the end. `login`, `captcha` and `mfa` are all obstacles ON THE WAY TO that
+ * session, and completing the ceremony genuinely gets past them.
+ *
+ * The four kinds NOT here are the point of the set existing. `payment` and `identity` are step-ups
+ * INSIDE an already-authenticated flow - there is no session to capture that answers them, and the
+ * ask would send someone to log in to fix a 3-D Secure screen. `signature` is I8's whole subject and
+ * must never be routed anywhere near a login rail. `other` is the model saying it does not know,
+ * which is not evidence for asking a person to walk to a machine.
+ */
+const CEREMONY_CLEARABLE_HUMAN_ACTIONS: ReadonlySet<string> = new Set<string>(['login', 'captcha', 'mfa']);
+
+/** How many times one run may answer a login ask with the session it was already given. See the
+ *  call site: once is a statement of fact, twice is a habit of ignoring sign-in walls. */
+const MAX_SESSION_SATISFIED_LOGINS = 1;
+
+/**
+ * The step record for a login ask the run's own injected session already answers (S-login-step).
+ *
+ * Built by SUBTRACTION from the failed record rather than from a fresh base, so everything that
+ * describes what actually happened - the timing, the tier, the screenshot, the captured log tail -
+ * survives, and only the two fields that would keep the run stopped are dropped. Rebuilding it from
+ * scratch would silently discard evidence, and a run whose timeline loses a step to a recovery is
+ * exactly the kind of gap that makes a later failure unreadable.
+ */
+function satisfiedBySessionRecord(record: StepRecord): StepRecord {
+  const { error: _refusal, humanAction: _ask, ...rest } = record;
+  return {
+    ...rest,
+    status: 'completed',
+    visionReasoning:
+      'Sign-in was not performed: this run started with a stored session for this origin, so the page was already authenticated.',
+  };
+}
+
+/** The reason text on an ad-hoc ceremony halt. Composed from the KIND and the HOST and nothing else
+ *  - never from a failure body, which is page prose this product does not echo back. */
+function adhocCeremonyReason(kind: string | null, origin: string): string {
+  const wall =
+    kind === 'captcha' ? 'a bot check' : kind === 'mfa' ? 'a second-factor prompt' : 'a sign-in wall';
+  return `${origin} answered with ${wall}, and only a person at your machine can get past it`;
+}
+
+/**
+ * The step that put the run on the page it is on: the nearest `navigate` at or before `index`,
+ * reachable without stepping back over anything that is not a page action.
+ *
+ * WHY IT IS NEEDED AT ALL. The ad-hoc halt RETURNS the run, which disposes the browser and releases
+ * the machine's profile lease, so by the time a human has finished the ceremony the page is gone. A
+ * resume that restarted at the blocked step would drive a blank tab and fail for a reason with
+ * nothing to do with the credential it just waited for.
+ *
+ * WHY THE WALK STOPS AT THE FIRST NON-BROWSER STEP, which is the part that matters. Re-running a
+ * `navigate` is idempotent by construction - it STATES where it goes. Re-running an `integration`,
+ * `api_call`, `local_command`, `sub_automation` or `ekoa_action` step is not: those are effects on
+ * the user's behalf, and repeating one to recover a PAGE would send a second email or write a second
+ * row. So the moment the walk meets one it gives up and answers `index`, the blocked step, which is
+ * where every other credential halt resumes. That resume may then fail on a blank page - honest and
+ * bounded, which a duplicated side effect is not.
+ *
+ * The browser steps BETWEEN the navigate and the halt ARE re-run, and that is the accepted cost of
+ * getting back to a page: replaying how the run got there. They are page actions on a portal the run
+ * could not reach at all without a session, which is the narrowest form this can take while still
+ * working.
+ */
+function lastNavigationIndexAtOrBefore(steps: readonly Step[], index: number): number {
+  for (let i = Math.min(index, steps.length - 1); i >= 0; i--) {
+    const type = steps[i]?.type;
+    if (type === 'navigate') return i;
+    if (type && !STEP_TYPES_NEEDING_BROWSER.has(type)) return index;
+  }
+  return index;
+}
+
+/**
  * A step locality refused. Surfaced as `awaiting_daemon` — the EXISTING "a machine of yours is
  * needed" halt — with the locality's own reason as the message.
  *
@@ -2859,19 +3126,7 @@ function localityNeedsCeremonyRecord(
   automationName: string,
 ): StepRecord {
   const base: StepRecord = { stepId: step.id, index, status: 'running', tier: 'cache', durationMs: 0 };
-  const request: RunCredentialRequest = {
-    stepIndex: index,
-    origin,
-    integrationKey: step.integrationKey ?? 'browser',
-    portalDeepLink: cofrePortalDeepLink(origin),
-    mode: 'ceremony',
-    reason: reason.slice(0, 500),
-    ceremony: issueLoginRelayPrompt({
-      automationName,
-      siteOrigin: origin,
-      reason: reason.slice(0, 500),
-    }),
-  };
+  const request = ceremonyCredentialRequest({ step, index, reason, origin, automationName });
   return finishRecord(base, 'failed', Date.now(), {
     tier: 'cache',
     error: {
@@ -2880,6 +3135,46 @@ function localityNeedsCeremonyRecord(
       details: { kind: 'needs_credentials', request },
     },
   });
+}
+
+/**
+ * THE ASK ITSELF, separated from the failed STEP RECORD that used to be the only way to raise it.
+ *
+ * The locality refusal above needs a record, because it is produced BEFORE its step runs and the
+ * loop's one persist/emit/halt path is driven by a failed record. The ad-hoc adversarial halt
+ * (docs/decisions.md 2026-08-24, D-ADHOC-5) is produced AFTER a step has already failed and already
+ * been recorded - it converts a pause into a durable halt - so wrapping the ask in a second failure
+ * record would overwrite the real one, which is the only description of what the page actually did.
+ * Both callers want the same `RunCredentialRequest`; only one of them wants a record around it.
+ *
+ * `mode: 'ceremony'` in both cases because that is what is being asked for: a person at a headed
+ * browser on a machine they own. `issueLoginRelayPrompt` is PURE - it composes the prompt, it
+ * registers nothing - so building one costs nothing and lets the portal say where to log in.
+ */
+function ceremonyCredentialRequest(args: {
+  step: Step;
+  index: number;
+  reason: string;
+  origin: string;
+  automationName: string;
+  /** Where the re-dispatch picks up, when that is not the blocked step. See `RunCredentialRequest`. */
+  resumeFromStepIndex?: number;
+}): RunCredentialRequest {
+  const reason = args.reason.slice(0, 500);
+  return {
+    stepIndex: args.index,
+    ...(args.resumeFromStepIndex !== undefined ? { resumeFromStepIndex: args.resumeFromStepIndex } : {}),
+    origin: args.origin,
+    integrationKey: args.step.integrationKey ?? 'browser',
+    portalDeepLink: cofrePortalDeepLink(args.origin),
+    mode: 'ceremony',
+    reason,
+    ceremony: issueLoginRelayPrompt({
+      automationName: args.automationName,
+      siteOrigin: args.origin,
+      reason,
+    }),
+  };
 }
 
 /**
