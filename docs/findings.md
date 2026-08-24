@@ -6,6 +6,17 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`delete-pairing-route-has-no-descriptor`** (2026-08-24, OPEN, **MINOR**, contract gap; flagged by
+  the capability-grant slice, out of its scope). `DELETE /api/v1/bridge/pairings/:pairingId`
+  (`api/src/routes/bridge.ts`, the R-9 kill switch) is a mounted route with NO entry in
+  `ekoaLocalEndpoints` (`shared/src/ekoa-local.ts`), so it is invisible to both coverage gates and to
+  the generated typed client. The capability-grant slice extended this same router and added
+  descriptors for its three new routes but left this pre-existing one undescribed, because adding a
+  descriptor moves `EXPECTED_PENDING_COUNT` (schema-coverage) and that re-pin belongs with the route
+  it describes, not a sibling slice. CLOSE BY: a descriptor entry (`auth: 'user'` - it is owner-or-
+  admin, unlike the grant routes) plus the coverage-pin bump and OpenAPI/client regen state check in
+  the same change. Its own small slice.
+
 - **`bridge-device-verification-url-uses-the-api-origin-not-the-dashboard`** (2026-08-24, OPEN,
   **MINOR**, UX/product). `ekoa-bridge pair` printed
   `Para autorizar este dispositivo, abra ... https://<host>:4111/settings/devices` - the API origin
