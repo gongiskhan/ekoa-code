@@ -1,6 +1,9 @@
 export {
   ProfileManager,
   ProfileError,
+  BrowserUnavailableError,
+  BROWSER_INSTALL_COMMAND,
+  isMissingBrowserBinary,
   parseSessionState,
   sanitizeProfileId,
   WEBDRIVER_INIT_SCRIPT,

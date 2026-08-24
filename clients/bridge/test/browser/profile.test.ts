@@ -4,6 +4,9 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   ProfileManager,
+  ProfileError,
+  BrowserUnavailableError,
+  BROWSER_INSTALL_COMMAND,
   parseSessionState,
   sanitizeProfileId,
   WEBDRIVER_INIT_SCRIPT,
@@ -190,6 +193,108 @@ describe('realness is hygiene, not a stealth stack', () => {
     await (await m.acquire('acme')).release();
     expect(contexts[0]!.initScripts).toContain(WEBDRIVER_INIT_SCRIPT);
     expect(WEBDRIVER_INIT_SCRIPT).toContain('webdriver');
+  });
+});
+
+/**
+ * A MISSING BROWSER IS A CONFIGURATION ERROR, NOT A SLOW PAGE.
+ *
+ * Measured live (findings, `ad-hoc-adversarial-browser-run-pauses-in-process-not-durably`): an
+ * acceptance run against a bridge that had no chromium installed spent the whole 120s invocation
+ * window and came back as "the machine did not answer in time" - a timeout naming nothing anybody
+ * could act on, from the side that knew exactly what was wrong.
+ *
+ * The two strings below are Playwright 1.62's own, taken from a real failed launch (a missing
+ * `channel`, and a `PLAYWRIGHT_BROWSERS_PATH` pointing at an empty directory). Only the bundled
+ * message's box-drawing FRAME is dropped, its text is verbatim: a classifier that matches invented
+ * prose proves nothing about the messages it will actually meet.
+ */
+const PW_CHANNEL_MISSING =
+  "browserType.launchPersistentContext: Chromium distribution 'chrome' is not found at " +
+  '/opt/google/chrome/chrome\nRun "npx playwright install chrome"';
+
+const PW_BUNDLED_MISSING =
+  "browserType.launchPersistentContext: Executable doesn't exist at " +
+  '/home/someone/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome\n' +
+  'Looks like Playwright was just installed or updated.\n' +
+  'Please run the following command to download new browsers:\n' +
+  '    npx playwright install';
+
+function managerWithLauncher(launch: (opts: PersistentLaunchOptions) => Promise<ProfileContext>): ProfileManager {
+  return new ProfileManager({
+    home,
+    idleCloseMs: 0,
+    launch: async (dir, opts) => {
+      launches.push({ dir, opts });
+      return launch(opts);
+    },
+  });
+}
+
+describe('a browser that is NOT INSTALLED fails fast and by name', () => {
+  it('names the one command that fixes it, and does not hand the user Playwright prose', async () => {
+    const m = managerWithLauncher(async (opts) => {
+      // Both attempts answer at once, which is what Playwright really does for a missing binary.
+      await new Promise((r) => setTimeout(r, 5));
+      throw new Error(opts.channel ? PW_CHANNEL_MISSING : PW_BUNDLED_MISSING);
+    });
+
+    const startedAt = Date.now();
+    const err = await m.acquire('acme').then(
+      () => null,
+      (e: unknown) => e,
+    );
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(err).toBeInstanceOf(BrowserUnavailableError);
+    expect((err as Error).message).toContain(BROWSER_INSTALL_COMMAND);
+    expect(BROWSER_INSTALL_COMMAND).toBe('npx playwright install chromium');
+    // Playwright's own wording, banner and all, is not what a person should be reading.
+    expect((err as Error).message).not.toContain("Executable doesn't exist");
+    // Fast: nowhere near a launch timeout, let alone Cortex's 120s invocation window.
+    expect(elapsedMs).toBeLessThan(2_000);
+  });
+
+  it('does NOT call a transient launch failure a missing browser', async () => {
+    const m = managerWithLauncher(async (opts) => {
+      throw new Error(
+        opts.channel ? PW_CHANNEL_MISSING : 'browserType.launchPersistentContext: Timeout 60000ms exceeded.',
+      );
+    });
+
+    const err = await m.acquire('acme').then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    // A browser that is installed and would not start is worth retrying, and telling somebody to
+    // reinstall a browser they already have is worse than saying nothing.
+    expect(err).toBeInstanceOf(ProfileError);
+    expect(err).not.toBeInstanceOf(BrowserUnavailableError);
+    expect((err as Error).message).not.toContain(BROWSER_INSTALL_COMMAND);
+    expect((err as Error).message).toContain('Timeout 60000ms exceeded');
+  });
+
+  it('spends ONE launch budget across both attempts, not one each', async () => {
+    const m = managerWithLauncher(async (opts) => {
+      if (opts.channel === 'chrome') {
+        await new Promise((r) => setTimeout(r, 25));
+        throw new Error(PW_CHANNEL_MISSING);
+      }
+      const ctx = fakeContext();
+      contexts.push(ctx);
+      return ctx;
+    });
+    await (await m.acquire('acme')).release();
+
+    const first = launches[0]!.opts.timeout!;
+    const second = launches[1]!.opts.timeout!;
+    expect(second).toBeLessThan(first);
+    expect(second).toBeGreaterThan(0);
+    // The property that matters: the chain cannot reach the api's per-invocation window
+    // (INVOCATION_TIMEOUT_MS = 120_000, api/src/bridge/tool-invocation.ts), so a launch that hangs
+    // rather than throws still comes back as a bridge failure with a cause on it.
+    expect(first + second).toBeLessThan(120_000);
   });
 });
 

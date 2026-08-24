@@ -23,15 +23,28 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   only by an integration action declaring `authProfile.attended` (Citius, run 2). CLOSE BY: route
   the vision `humanAction: 'login'` (and captcha/mfa) on an ADVERSARIAL origin to
   `needs_credentials` with the durable re-dispatch, not only to `paused_for_user`, so an attended
-  browser login survives a restart on the ad-hoc path too. Also worth a smaller companion fix: the
-  bridge should report a MISSING browser binary as a typed, immediate failure ("no chromium - run
-  `npx playwright install chromium`") instead of hanging to the 120s invocation timeout - a missing
-  browser is a config error, not a slow page.
+  browser login survives a restart on the ad-hoc path too.
   The earlier same-day HIGH draft ("neither ceremony trigger engaged; the run reached the login page
   but failed") was measured with no chromium on the bridge and mistook the missing-browser hang for a
   missing ceremony path. It is retracted: with chromium present, the vision `humanAction` detector
-  DOES pause the run at the sign-in wall. The residual is the durability shape above, plus the
-  missing-browser companion fix.
+  DOES pause the run at the sign-in wall. The residual is the durability shape above.
+
+  THE MISSING-BROWSER COMPANION FIX IS SHIPPED (2026-08-24), and measuring it corrected the
+  companion's own premise. Playwright 1.62 does NOT hang on a missing binary: measured against this
+  repo's own playwright, a missing `channel` throws in ~14ms and a missing bundled chromium in
+  ~14ms, so what the user actually got was FAST but useless - Playwright's own prose, box-drawing
+  banner included, wrapped in "não foi possível abrir o navegador", which reads exactly like a site
+  that would not load and invites a retry that cannot work. What genuinely could reach the 120s
+  invocation window is the LAUNCH CHAIN: chrome-then-bundled at `LAUNCH_TIMEOUT_MS` (60s) EACH sums
+  to 120s, which is `INVOCATION_TIMEOUT_MS` exactly, so a launch that hangs rather than throws cost
+  the run its whole budget and surfaced as "the machine did not answer in time" with no cause on it.
+  Both halves are closed in `clients/bridge/src/browser/profile.ts`: `isMissingBrowserBinary` tells
+  Playwright's three missing-executable shapes from a transient failure, a missing binary throws the
+  typed `BrowserUnavailableError` naming `npx playwright install chromium` (a transient one keeps
+  the generic wrap, because retrying that is reasonable), and the two attempts now share ONE
+  `LAUNCH_TIMEOUT_MS` instead of one each, so the chain cannot reach Cortex's window. Pinned by
+  `clients/bridge/test/browser/profile.test.ts` ("a browser that is NOT INSTALLED fails fast and by
+  name", 3 cases, against Playwright's verbatim messages).
 
   TWO FURTHER GAPS CONFIRMED LIVE the same session, which together make an ad-hoc adversarial
   read-after-login impossible to complete end to end today (all real, all logged for the follow-up):

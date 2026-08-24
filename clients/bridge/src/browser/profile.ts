@@ -21,6 +21,11 @@
  * signals THIS tool introduces. It is not a fingerprint-spoofing project, and building one here
  * would be a different product with a different failure mode (a spoof that is itself detectable).
  *
+ * A BROWSER THAT IS NOT INSTALLED IS A CONFIGURATION ERROR, NOT A SLOW PAGE. Both launch attempts
+ * failing for "no such executable" means nobody ran `npx playwright install chromium` on this
+ * machine, and no amount of waiting fixes it. That failure is told apart from a transient one and
+ * reported by name, immediately, with the command that fixes it - see `launchWithFallback`.
+ *
  * LOCKING IS LOAD-BEARING. Chromium refuses a second launch against a live `userDataDir` (the
  * SingletonLock), so two runs on one profile MUST serialize rather than race. A per-`profileId`
  * async mutex does that: a second acquire QUEUES; distinct profileIds are fully concurrent. The
@@ -104,7 +109,21 @@ const SINGLETON_MARKERS = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'
  *  resolved against one viewport replays against the same one. */
 const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
 
+/**
+ * How long OPENING A BROWSER may take, in total, across both attempts.
+ *
+ * TOTAL AND NOT PER-ATTEMPT, which is the whole point. Chrome-then-bundled with 60s each sums to
+ * 120s, and 120s is exactly Cortex's per-invocation window (`INVOCATION_TIMEOUT_MS`,
+ * `api/src/bridge/tool-invocation.ts`). A launch that HANGS rather than throws therefore used to
+ * eat the run's entire budget and surface as "the machine did not answer in time" - a timeout with
+ * no cause attached to it, from the side that knows the cause. Shared, the chain always answers
+ * inside the window, so what reaches the user is this file's failure with a reason on it.
+ */
 const LAUNCH_TIMEOUT_MS = 60_000;
+
+/** The floor the fallback attempt gets even when the first attempt spent the whole budget: a
+ *  fallback given no time at all is not a fallback. */
+const MIN_FALLBACK_LAUNCH_MS = 5_000;
 
 /** How long an idle profile context stays open before it is closed. Long enough that a run every
  *  few minutes keeps a warm profile; short enough that an abandoned daemon is not holding a
@@ -136,6 +155,43 @@ export class ProfileError extends Error {
     super(message);
     this.name = 'ProfileError';
   }
+}
+
+/**
+ * No browser is INSTALLED on this machine. A distinct type because the two failures want opposite
+ * answers: a transient launch failure is worth retrying and this one never is, and the user's next
+ * move is a single command rather than "try again".
+ */
+export class BrowserUnavailableError extends ProfileError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BrowserUnavailableError';
+  }
+}
+
+/** The command that fixes it, quoted verbatim to the user. Language-neutral on purpose. */
+export const BROWSER_INSTALL_COMMAND = 'npx playwright install chromium';
+
+/**
+ * Playwright's three ways of saying "that executable is not there", and only those.
+ *
+ *   - `Executable doesn't exist at <path>` + the "Please run ... npx playwright install" banner,
+ *     for a bundled browser that was never downloaded.
+ *   - `Failed to launch chromium because executable doesn't exist at <path>`, for an explicit
+ *     `executablePath` that points at nothing.
+ *   - `Chromium distribution 'chrome' is not found at <path>`, for a missing CHANNEL (real Chrome).
+ *
+ * Deliberately NOT a catch-all. Everything else - a launch that timed out, a profile still locked
+ * by a crashed browser, a Chrome that died on start - stays "transient" and keeps the generic
+ * failure, because retrying those is reasonable and retrying a missing binary is not.
+ */
+export function isMissingBrowserBinary(err: unknown): boolean {
+  const text = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return (
+    text.includes("executable doesn't exist") ||
+    text.includes('is not found at') ||
+    text.includes('npx playwright install')
+  );
 }
 
 /** The session to wear for ONE run. Cookies land on the context; `origins` seed localStorage on
@@ -710,25 +766,54 @@ export class ProfileManager {
       ...hostLocale(),
     };
 
-    let context: ProfileContext;
+    const context = await this.launchWithFallback(launch, userDataDir, base);
+
+    await context.addInitScript(WEBDRIVER_INIT_SCRIPT).catch(() => undefined);
+    this.held.set(key, { context, userDataDir });
+    return context;
+  }
+
+  /**
+   * Real installed Chrome first, bundled chromium as the honest fallback - and a machine with
+   * NEITHER told that it has neither, immediately.
+   *
+   * WHY THE CLASSIFICATION IS WORTH THE CODE. When both attempts fail for "no such executable",
+   * the generic wrap hands the user Playwright's own prose - box-drawing banner included - inside
+   * a sentence that says only "could not open the browser", and a step that failed for a missing
+   * install then reads exactly like a site that would not load. They retry it, and it fails the
+   * same way. Named, the failure carries the one command that fixes it. A TRANSIENT failure keeps
+   * the generic wrap on purpose: retrying that is reasonable, and telling somebody to reinstall a
+   * browser they already have is worse than saying nothing.
+   *
+   * The two attempts share `LAUNCH_TIMEOUT_MS` rather than each taking a full one; the constant's
+   * doc-comment has the derivation.
+   */
+  private async launchWithFallback(
+    launch: PersistentLauncher,
+    userDataDir: string,
+    base: PersistentLaunchOptions,
+  ): Promise<ProfileContext> {
+    const startedAt = Date.now();
     try {
       // Real installed Chrome first: it carries the real user-agent, the real TLS stack and the
       // real client hints. Bundled chromium is the honest fallback, not the preference.
-      context = await launch(userDataDir, { ...base, channel: 'chrome' });
+      return await launch(userDataDir, { ...base, channel: 'chrome' });
     } catch (err) {
       this.deps.log?.('Chrome não encontrado; a usar o navegador incluído.');
+      const remaining = (base.timeout ?? LAUNCH_TIMEOUT_MS) - (Date.now() - startedAt);
       try {
-        context = await launch(userDataDir, base);
+        return await launch(userDataDir, { ...base, timeout: Math.max(MIN_FALLBACK_LAUNCH_MS, remaining) });
       } catch (second) {
+        if (isMissingBrowserBinary(second)) {
+          throw new BrowserUnavailableError(
+            `não há nenhum navegador instalado nesta máquina - execute \`${BROWSER_INSTALL_COMMAND}\` e volte a tentar`,
+          );
+        }
         throw new ProfileError(
           `não foi possível abrir o navegador: ${second instanceof Error ? second.message : String(second)} (primeira tentativa: ${err instanceof Error ? err.message : String(err)})`,
         );
       }
     }
-
-    await context.addInitScript(WEBDRIVER_INIT_SCRIPT).catch(() => undefined);
-    this.held.set(key, { context, userDataDir });
-    return context;
   }
 
   /**
