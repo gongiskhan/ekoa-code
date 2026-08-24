@@ -1793,6 +1793,8 @@ What would make your day easier?`,
         `Store your ${origin} password in the Cofre and Ekoa signs in for you. The run continues on its own once it is there.`,
       credentialsCeremonyHint: (origin: string) =>
         `${origin} asks for a one-time code or a check only you can pass, so sign in yourself in your local Ekoa window. The run continues on its own once the session is captured.`,
+      credentialsGoogleHint:
+        'If the site offers Google sign-in, use email or phone instead - Google blocks automated browsers.',
       establishCredential: 'Open the Cofre',
       credentialsContinue: 'Already done - Continue',
       stopRun: 'Stop run',

@@ -99,6 +99,7 @@ import {
   applyPatch,
   detectHumanActionable,
 } from './rehearsal.js';
+import { withGoogleSsoGuidance } from './login-guidance.js';
 import {
   REHEARSAL_BUDGET,
   NORMAL_RUN_BUDGET,
@@ -1422,11 +1423,17 @@ async function runOrRehearse(
                 : regexDetected ? 'regex-fast-path'
                 : `classifier(${classifierKind})`}`,
             );
+            // A LOGIN pause is the one moment the user can still choose HOW to sign in, and the
+            // obvious button - "Continue with Google" - is the one that cannot work in this browser
+            // (findings: `google-sso-refuses-the-automated-ceremony-browser`). Appended rather than
+            // asked of the model: the prompt would make it likely, this makes it certain. The
+            // regex fast-path carries the same sentence in its own English copy.
+            const detectedKind = verifierHumanAction?.kind ?? classifierKind;
             const failureKindForEvent = classifyFailure(record, step);
             const syntheticPatch = {
               kind: 'pause_for_user' as const,
               reasoning: detected.reasoning,
-              userInstructions: detected.userInstructions,
+              userInstructions: withGoogleSsoGuidance(detected.userInstructions, detectedKind),
             };
             const { resumed, pausedDeltaMs } = await pauseRunForUser({
               browser: getBrowser(), automation, runId, stepIndex: i, patch: syntheticPatch, record,

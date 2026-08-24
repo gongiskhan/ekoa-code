@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto';
 import { runOneShot, decideForTier } from '../llm/index.js';
 import { integrationFeedbackSections } from './seams.js';
 import { parseFirstJsonObject } from './vision.js';
+import { GOOGLE_SSO_PAUSE_GUIDANCE_EN } from './login-guidance.js';
 import type {
   FailureKind,
   RehearsalPatch,
@@ -400,7 +401,10 @@ export function detectHumanActionable(failureMessage: string): FastPathMatch | n
       pattern: /(enter (your|the) password|password.*required|sign in to continue|you need to sign in|please sign in|please log in)/i,
       out: {
         reasoning: 'Detected a login prompt',
-        userInstructions: 'Sign in in the open browser window, then click Continue.',
+        // The Google-SSO sentence rides on the login rule and on no other: the browser this pause
+        // happens in is refused by Google's automation detection, so the button most people would
+        // reach for is the one that cannot work. See `login-guidance.ts`.
+        userInstructions: `Sign in in the open browser window, then click Continue.\n\n${GOOGLE_SSO_PAUSE_GUIDANCE_EN}`,
       },
     },
   ];

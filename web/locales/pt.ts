@@ -1794,6 +1794,8 @@ O que tornaria o seu dia mais fácil?`,
         `Guarde a sua palavra-passe de ${origin} no Cofre e o Ekoa entra por si. A execução continua sozinha assim que estiver lá.`,
       credentialsCeremonyHint: (origin: string) =>
         `${origin} pede um código de uso único ou uma verificação que só o utilizador consegue passar, por isso entre você mesmo na janela do Ekoa local. A execução continua sozinha assim que a sessão for capturada.`,
+      credentialsGoogleHint:
+        'Se o site oferecer início de sessão com a Google, use o email ou o telemóvel - a Google bloqueia navegadores automatizados.',
       establishCredential: 'Abrir o Cofre',
       credentialsContinue: 'Já está - Continuar',
       stopRun: 'Parar execução',

@@ -617,6 +617,19 @@ function NeedsCredentialsBanner({
           <p className="mt-1 text-sm text-violet-900 leading-relaxed">
             {mode === 'ceremony' ? t.credentialsCeremonyHint(origin) : t.credentialsTypistHint(origin)}
           </p>
+          {/*
+            CEREMONY ONLY, because it is the only mode where the user picks how to sign in. Google
+            refuses OAuth from the browser this ceremony runs in (findings:
+            `google-sso-refuses-the-automated-ceremony-browser`), and the button they would reach
+            for first is the one that cannot work - so this is said BEFORE they go, not diagnosed
+            after they come back. In `typist` mode the platform replays a stored password and no
+            such choice exists.
+          */}
+          {mode === 'ceremony' && (
+            <p className="mt-1 text-sm text-violet-900 leading-relaxed" data-testid="ceremony-google-hint">
+              {t.credentialsGoogleHint}
+            </p>
+          )}
           {reason && <p className="mt-1 text-xs text-violet-800/85 italic">{reason}</p>}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {/*

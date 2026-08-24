@@ -1920,6 +1920,10 @@ export interface Translations {
       credentialsTypistHint: (origin: string) => string;
       /** Mode `ceremony`: the human logs in themselves (OTP / MFA / CAPTCHA origins). */
       credentialsCeremonyHint: (origin: string) => string;
+      /** Mode `ceremony` only: Google refuses OAuth from the browser the ceremony runs in, so the
+       *  user is told to sign in by email/phone BEFORE they go and try the button that cannot work.
+       *  Not shown in `typist` mode, where no such choice exists. */
+      credentialsGoogleHint: string;
       establishCredential: string;
       credentialsContinue: string;
       stopRun: string;

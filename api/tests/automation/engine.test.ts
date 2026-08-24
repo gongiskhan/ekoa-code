@@ -1067,6 +1067,56 @@ describe('rehearseAutomation', () => {
     const pauseEv = events.find((e) => e.kind === 'pause');
     expect(pauseEv).toBeTruthy();
     expect(pauseEv.info.userInstructions).toMatch(/reCAPTCHA/);
+    // A CAPTCHA offers no sign-in choice, so the Google warning has no business here.
+    expect(pauseEv.info.userInstructions).not.toMatch(/bloqueia navegadores automatizados/);
+  });
+
+  it('a LOGIN pause carries the Google-SSO warning the model was never asked to write', async () => {
+    // Google refuses OAuth from the browser this pause is happening in (findings:
+    // `google-sso-refuses-the-automated-ceremony-browser`), so the button the user would reach for
+    // first is the one that cannot work. The engine appends the warning rather than hoping the
+    // vision prompt produced it: what the person reads must not depend on a model's mood.
+    hoisted.automations.set('auto-1', automation([
+      { id: 's1', description: 'verify signed in', type: 'verify', expectedOutcome: 'signed in' },
+    ]));
+
+    hoisted.verifyOutcome.mockResolvedValueOnce({
+      passed: false,
+      reasoning: 'page is in an unexpected state',
+      humanAction: {
+        kind: 'login',
+        userInstructions: 'Inicie sessão na janela aberta e depois clique em Continuar.',
+      },
+    });
+    hoisted.verifyOutcome.mockResolvedValueOnce({ passed: true, reasoning: 'cleared' });
+
+    let shouldResume = false;
+    setTimeout(() => { shouldResume = true; }, 100);
+
+    const events: any[] = [];
+    const emit = {
+      stepUpdate: () => {},
+      runComplete: () => {},
+      runError: () => {},
+      runPaused: () => {},
+      runPatch: () => {},
+      runPauseForUser: (_runId: string, info: unknown) => events.push({ kind: 'pause', info }),
+      runResumed: () => {},
+    };
+
+    const result = await rehearseAutomation('auto-1', ctx({
+      resumeSignal: {
+        shouldResume: () => shouldResume,
+        clear: () => { shouldResume = false; },
+      },
+    }), { goal: 'read the account page', emit });
+
+    expect(result.status).toBe('completed');
+    const pauseEv = events.find((e) => e.kind === 'pause');
+    expect(pauseEv).toBeTruthy();
+    // The model's own instruction survives; the warning is added to it, not instead of it.
+    expect(pauseEv.info.userInstructions).toMatch(/Inicie sessão na janela aberta/);
+    expect(pauseEv.info.userInstructions).toMatch(/a Google bloqueia navegadores automatizados/);
   });
 
   it('fast-path: pauses immediately on a CAPTCHA-shaped verifier failure without calling the fixer', async () => {

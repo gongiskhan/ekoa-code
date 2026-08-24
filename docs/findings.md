@@ -89,8 +89,21 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   should be chosen or logged in with a non-Google method. CLOSE/MITIGATE: for a target that offers
   both, drive the direct-credential login; for a Google-only target, the only paths are a
   pre-established session imported into the profile or a real (non-automated) browser doing the
-  capture - both outside the current executor. Worth surfacing to the user in the ceremony prompt
-  ("if the site offers Google sign-in, use email/phone instead - Google blocks automated browsers").
+  capture - both outside the current executor.
+  THE IN-PRODUCT MITIGATION IS SHIPPED (2026-08-24); the finding STAYS OPEN because the constraint
+  is Google's and nothing here can lift it. What changed is that a user is now told BEFORE they walk
+  into it, at the two places they read a login pause: the ceremony banner
+  (`web/components/automations/run-viewer.tsx`, `credentialsGoogleHint` in en/pt, ceremony mode only
+  - in typist mode the platform replays a stored password and there is no sign-in choice to make),
+  and the `paused_for_user` Post-it, where the engine APPENDS the sentence to a `humanAction`
+  of kind `login` (`api/src/automation/login-guidance.ts`, wired at the pause in
+  `api/src/automation/engine.ts`; the English regex fast path in `rehearsal.ts` carries the same
+  sentence in its own copy). Appended rather than asked of the vision prompt on purpose: a prompt
+  line makes the guidance likely and untestable, the append makes it certain and pinnable. Pinned by
+  `api/tests/automation/login-guidance.test.ts`, one case in `api/tests/automation/engine.test.ts`
+  ("a LOGIN pause carries the Google-SSO warning..."), and
+  `web/__tests__/components/needs-credentials-google-hint.test.tsx`. RESIDUAL, unchanged: a target
+  reachable ONLY through Google SSO still cannot have a session established by this executor.
 
 - **`delete-pairing-route-has-no-descriptor`** (2026-08-24, OPEN, **MINOR**, contract gap; flagged by
   the capability-grant slice, out of its scope). `DELETE /api/v1/bridge/pairings/:pairingId`
