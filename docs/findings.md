@@ -6,6 +6,64 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`publish-floor-redacts-the-authoring-shape-and-silently-demotes-a-published-action`**
+  (2026-08-23, OPEN, **MINOR**, fails closed; found during the S10 evidence run, leg D - not caused
+  by it). The S6 deterministic floor redacts `authoring.shape` out of every published snapshot,
+  because a 32-char md5 content fingerprint is indistinguishable from a leaked token to
+  `LONG_HEX_RE` (`api/src/integrations/publish-scrub.ts`, `looksLikeLiteralSecret`). Observed on the
+  wire, `POST /api/v1/integrations/definitions/:id/publish-preview`:
+
+  ```json
+  { "path": "config.actions[1].authoring.shape", "rule": "literal-secret-token",
+    "source": "floor", "removedChars": 32 }
+  ```
+
+  It is not a secret; it is the fingerprint of the action's own binding, and TWO places compare
+  against it: `authored-action.ts:457` decides an action's effective state with
+  `record.shape === actionShape(integrationKey, action)`, and `:552` refuses verification the same
+  way. With the stored value replaced by `[REDACTED]` the comparison can never hold, so **a TRUSTED
+  authored action arrives in a receiving org reading `provisional`** and has to be re-approved there.
+  It fails CLOSED - nothing is over-trusted by this - which is why it is MINOR rather than serious.
+  What makes it worth a ledger entry is that the demotion is silent at both ends: the publisher is
+  told only that 32 characters were removed from a field called `shape`, and the receiving org sees
+  an action that simply looks ungraduated.
+  CLOSE BY: exempting the authoring fingerprint from the free-text literal scan by POSITION rather
+  than by shape - the same distinction this module's own header draws for credential-named keys
+  ("the publish floor judges POSITION instead of shape") - and pinning it with a publish test that
+  asserts a trusted action survives a round trip still trusted. Do NOT widen `LONG_HEX_RE`: the
+  entropy rule is the floor's whole value on free text.
+
+- **`the-self-extension-loop-has-no-ui-for-its-promotion-step`** (2026-08-23, OPEN, **MINOR**;
+  found during the S10 evidence run, leg B). `trustAction`
+  (`POST /api/v1/integrations/:key/actions/:actionName/trust`, auth `user`) has **no caller anywhere
+  in `web/`** - a grep across `web/app`, `web/components`, `web/stores` and `web/lib` returns
+  nothing. The detail page renders both ends of the state it governs (`t.provisional` -> "Escrita
+  pelo assistente", `t.trusted` -> "Confirmada", `action-detail.tsx:273-274`) and offers no control
+  to move between them. So a user whose `achieve` call minted a provisional action can see that it
+  is provisional, can approve its WRITE through the consent dialog, can run it - and then cannot
+  graduate it without calling the API by hand. The evidence run completed the loop over curl.
+  This is the same dead-binding-adjacent shape the ledger already names three times, with the
+  direction reversed: the route, its guardrails (shape confirmation, validated-run prerequisite) and
+  its tests are all real and reachable; only the affordance is missing.
+  CLOSE BY: a "Confirmar esta ação" control on the provisional badge that posts the shape the card
+  is displaying - the confirm-what-you-saw discipline the route already enforces - plus an e2e leg
+  that mints, trusts and re-runs through the UI alone.
+
+- **`citius-sync-state-probe-404s-twice-on-every-integrations-visit`** (2026-08-23, OPEN, **MINOR**,
+  cosmetic + a duplicate request; found during the S10 evidence run, leg C). Every load of
+  `/integrations` fires `GET /api/v1/sync/citius/notificacoes/state` **twice**, and both answer 404
+  (`{"error":{"code":"NOT_FOUND","message":"Sincronização Citius não está disponível."}}`) on a
+  deployment that does not mount the sync rail. The 404 itself is by design and is documented as
+  such in `web/lib/sync/citius-sync.ts` and in three e2e specs, which distinguish "not for this
+  deployment" from a failure and render nothing. What is not by design is that it lands as **two
+  console errors on a dashboard route**, against a QA bar (`docs/testing.md`) that asks band-1 specs
+  to assert zero console errors where they touch the dashboard - so the bar is now unmeetable on the
+  main integrations page without an allowlist. The duplication (two identical requests, ~2 ms apart)
+  also suggests the probe is fired from two mount points, or twice under React strict-mode effects.
+  CLOSE BY: probing once, and treating the "not for this deployment" answer as a non-error at the
+  fetch layer (or letting the server answer a 200 with an explicit `available: false`) so a designed
+  absence stops being logged as a failure.
+
 - **`screenshot-erasure-path-has-no-production-caller`** (2026-08-20, OPEN, **MEDIUM, raised to
   MEDIUM by slice S1** - dead binding + a GDPR gap that evidence pins make load-bearing; found
   while wiring S1's retention exemption, NOT caused by it). `deleteRunScreenshots`
