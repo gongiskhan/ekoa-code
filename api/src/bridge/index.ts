@@ -89,3 +89,6 @@ export {
 // exporting it here is what makes the composition root able to be one.
 export { createDaemonStepConnection, capabilityForStep, type DaemonStepDeps } from './daemon-step-seam.js';
 export { authoriseDelivery, deliverSecrets, newInvocationId, SecretDeliveryError } from './secret-delivery.js';
+// S-inject - the DOWNWARD session half, exported beside the secret one because the composition root
+// wires both at the same seam and they carry the same class of value.
+export { deliverSession, sessionCookieValues } from './session-delivery.js';

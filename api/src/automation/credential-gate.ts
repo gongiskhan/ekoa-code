@@ -11,14 +11,21 @@
  * in the run loop, and it contains no branch on any integration key.
  *
  * ================================ WHAT TRIGGERS IT ================================
- * A step's own DECLARATION, and nothing else. `resolveStepDeclaration` (`types.ts`) resolves
- * `credentialRefs` - the `cofre:<itemId>` references the step consumes - and a step that names none
- * is not gated at all. That is the only Rule-3-clean trigger available: the alternative is guessing
- * ("this looks like a portal"), which would halt runs that never needed a credential, and the
- * closed-by-default reading of "declared nothing" is "asks for nothing" (`types.ts` on the
- * declaration defaults). It is also what makes this change backward compatible by construction
- * (plan trap T6): every automation authored before declarations existed carries none, so the gate
- * never fires on one.
+ * A step's own DECLARATION, for everything that can HALT. `resolveStepDeclaration` (`types.ts`)
+ * resolves `credentialRefs` - the `cofre:<itemId>` references the step consumes - and a step that
+ * names none reaches no halting path at all. That is the only Rule-3-clean trigger available for a
+ * stop: the alternative is guessing ("this looks like a portal"), which would halt runs that never
+ * needed a credential, and the closed-by-default reading of "declared nothing" is "asks for
+ * nothing" (`types.ts` on the declaration defaults). It is also what makes this backward compatible
+ * by construction (plan trap T6): every automation authored before declarations existed carries
+ * none, so no halt fires on one.
+ *
+ * A step that declares nothing is not ignored, though - it falls to `adhocSessionReuse` (S-inject),
+ * which for an ADVERSARIAL origin the run resolved for itself will INJECT an already-stored session
+ * and can do nothing else. It returns no halting verdict, asks for no person and opens no browser,
+ * so it inherits none of the reasoning above; see its own docblock for why "reuse only" is a
+ * property of the CALL rather than a promise about the mapping. The two paths are deliberately
+ * asymmetric: declaring a credential is what buys a run the right to stop and ask for one.
  *
  * ================================ WHERE THE ORIGIN COMES FROM ================================
  * NOT from a stored allow-list, and not from a per-integration field - the repo deleted
@@ -80,6 +87,18 @@ export interface CredentialGateInput {
    * and BOTH must hold before `ensureSession` is allowed to open anything.
    */
   hostedBrowser?: { egress?: EgressResolution };
+  /**
+   * S-inject - THE RUN HAS NO SESSION YET AND HAS NOT OPENED A BROWSER, so an UNDECLARED-origin
+   * lookup can still change the outcome. It is a fact about the run, not a permission: the run loop
+   * is the only thing that knows it, and the gate cannot ask.
+   *
+   * Absent means false, and false skips the ad-hoc lookup entirely. That default is what keeps this
+   * addition free for every caller that predates it - including every existing gate test - and it
+   * is the honest reading either way: a session is injected when the browser context is CREATED, so
+   * once a browser exists a lookup could only produce a value nothing would ever consume, at the
+   * cost of a Cofre read per step for the rest of the run.
+   */
+  sessionUnresolved?: boolean;
 }
 
 /**
@@ -167,7 +186,7 @@ export async function evaluateCredentialGate(
   if (!step) return { kind: 'not-applicable' };
 
   const declaration = resolveStepDeclaration(step);
-  if (declaration.credentialRefs.length === 0) return { kind: 'not-applicable' };
+  if (declaration.credentialRefs.length === 0) return adhocSessionReuse(input, step, d);
 
   const resolved = await resolveStepOrigin(input.steps, input.index, input.actor, d.loadActionDeclaration);
   if (!resolved) return { kind: 'not-applicable' };
@@ -277,6 +296,151 @@ export async function evaluateCredentialGate(
     }),
   };
 }
+
+/**
+ * THE GENERALIZED SESSION GATE (S-inject): a step that declares NO credential, against an
+ * ADVERSARIAL origin the run resolved for itself, still gets a stored session injected when the
+ * owner has one.
+ *
+ * ================================ WHY THIS EXISTS ================================
+ * The declared path above is driven by `credentialRefs`, which is the only Rule-3-clean trigger for
+ * a gate that can HALT a run or type a password. But an AD-HOC run - an undeclared origin reached
+ * from a free-text goal - declares nothing by definition, so it got nothing: a session captured for
+ * that portal by a ceremony sat in the Cofre, correct and healthy, and the next run against the
+ * same portal opened signed out anyway. That is the same Rule 3 asymmetry by omission the module
+ * docblock describes, one level down (docs/decisions.md 2026-08-24, D-ADHOC-4).
+ *
+ * ================================ WHAT IT WILL NOT DO ================================
+ * REUSE ONLY. Every outcome other than `reused` becomes `not-applicable`, so no verdict this
+ * function can return halts a run, asks for a person, or opens a browser or submits a password:
+ *
+ *  - No `credentialRef` is passed, and `ensureSession` with no reference cannot reach the typist -
+ *    it returns `needs-human` before anything is opened. So "reuse only" is a property of the call,
+ *    not just of the mapping below.
+ *  - No `hostedBrowser` permit is passed either, which is the belt to that braces: an adversarial
+ *    origin has no hosted-typist permit to begin with (`origin-posture.ts` can only ever set
+ *    `cloudEgressAllowed` for a `permissive` declaration), and withholding it here means the
+ *    question is never even asked.
+ *  - `needs-egress` maps to `not-applicable` rather than to the `needs-machine` halt the declared
+ *    path raises. A run that asked for no credential must not acquire a new way to stop; it
+ *    proceeds unauthenticated, exactly as it does today.
+ *
+ * ADVERSARIAL ONLY, which for `classifyOrigin` is also the closed default: an origin nobody
+ * declared classifies adversarial and lands here. A PERMISSIVE origin is skipped deliberately - the
+ * author declared it tolerates automation, its credential is portable, and injecting a stored
+ * session into a run that never asked for one would be spending a credential on a portal that did
+ * not need it.
+ *
+ * TENANCY (D-ADHOC-3/4). `input.actor` is the RUN'S OWN actor and it is the only actor this path
+ * ever names: `ensureSession` looks candidates up through `findSessionItems(actor, host)` -
+ * `cofreItems.listVisible`, owner-scoped - and unwraps through the same actor. There is no origin
+ * index and none is added: nothing here can answer "who holds a session for this host", which is
+ * why a cross-user oracle cannot be built out of it. A run for owner A therefore cannot see, let
+ * alone receive, owner B's session.
+ *
+ * ================================ WHO CALLS IT ================================
+ * TWO callers, and the second is why it is reachable from outside this module.
+ *
+ *  1. `evaluateCredentialGate` above, for a step that declared no `credentialRefs` - the ordinary
+ *     path, evaluated per step in the run loop.
+ *  2. `engine.ts`'s `armNetworkCapture`, through the `resolveAdhocSession` wrapper, BEFORE the
+ *     recorder takes the browser lease. On an `observeNetwork` (discovery / recipe-compile) run the
+ *     recorder is armed ahead of the gate, and arming CREATES the browser session and takes the
+ *     lease - after which a session can no longer be injected, because a jar is built with cookies
+ *     or without them and there is no injecting into a live one. Caller 1 alone therefore left the
+ *     whole feature inert on exactly the runs a free-text goal most often takes to an undeclared
+ *     origin. It is safe to run this early precisely because of everything above: it opens nothing,
+ *     halts nothing, and needs no locality verdict to decide.
+ */
+export async function resolveAdhocSession(
+  input: CredentialGateInput,
+  step: Step,
+  deps: Partial<CredentialGateDeps> = {},
+): Promise<CredentialGateVerdict> {
+  return adhocSessionReuse(input, step, { ...REAL_DEPS, ...deps });
+}
+
+async function adhocSessionReuse(
+  input: CredentialGateInput,
+  step: Step,
+  d: CredentialGateDeps,
+): Promise<CredentialGateVerdict> {
+  // COSTS NOTHING UNLESS IT CAN CHANGE SOMETHING. The gate runs for every step of every run, and
+  // this path performs a Cofre read; both guards below are what keep that read off the overwhelming
+  // majority of steps. `sessionUnresolved` is the run loop saying a session could still be injected
+  // (no browser open, none resolved yet); the step-type set is the same "drives a page" vocabulary
+  // the engine arms network capture with. A `bash` or `integration` step has no jar to inject into.
+  if (!input.sessionUnresolved) return { kind: 'not-applicable' };
+  if (!SESSION_INJECTABLE_STEP_TYPES.has(step.type)) return { kind: 'not-applicable' };
+
+  const resolved = await resolveStepOrigin(input.steps, input.index, input.actor, d.loadActionDeclaration);
+  if (!resolved) return { kind: 'not-applicable' };
+  const { origin, action, integrationKey } = resolved;
+
+  const classification = classifyOrigin(`https://${origin}`, action ?? undefined);
+  if (classification.posture !== 'adversarial') return { kind: 'not-applicable' };
+
+  let verdict: EnsureSessionResult;
+  try {
+    verdict = await d.ensure({
+      actor: input.actor,
+      integrationKey,
+      origin,
+      runId: input.runId,
+      ...(input.residentialAvailable ? { residentialAvailable: input.residentialAvailable } : {}),
+      requiresAttendedAuth: classification.requiresAttendedAuth,
+    });
+  } catch {
+    // EVERY THROW IS SWALLOWED HERE, and it is the one place in this module where that is right.
+    //
+    // On the declared path a `CofreLockedError` or an origin refusal propagates, because the step
+    // NAMED a credential and failing it is the honest answer. This step named none. Turning a
+    // locked item into a failed run would invent a failure for work that never asked for the
+    // credential - and for a lock specifically, "the session is withheld" IS the correct outcome:
+    // the run proceeds unauthenticated, which is precisely what it did before this path existed.
+    return { kind: 'not-applicable' };
+  }
+
+  // REUSE, OR NOTHING. `reestablished` is unreachable without a `credentialRef` and is mapped away
+  // rather than handled, so that a future change to `ensureSession` which made it reachable would
+  // be inert here instead of silently letting an ad-hoc origin be logged into.
+  if (verdict.status !== 'reused') return { kind: 'not-applicable' };
+
+  return {
+    kind: 'ready',
+    itemId: verdict.itemId,
+    storageState: verdict.storageState,
+    // Adversarial by construction (checked above), so the P4.2 machine preference applies for the
+    // same reason it does on the declared path: an adversarial session belongs to the machine whose
+    // ceremony established it, and reusing it from a different machine of the same owner shows the
+    // portal one account arriving from two lines. Carrying it here rather than dropping it is Rule 1
+    // - one implementation, no per-path variant of a control that exists for a real reason.
+    //
+    // THIS IS THE ONE THING THIS FUNCTION RETURNS THAT THE RUN LOOP CAN ACT ON BEYOND INJECTING.
+    // `engine.ts` re-resolves locality when it learns a preference, and re-resolution can only
+    // NARROW - so in principle it could turn into an `awaiting_daemon` halt for a run that declared
+    // nothing. In practice it cannot arrive at one from here: an `establishedByPairingId` belongs to
+    // a ceremony session, which is residential-bound, and `checkoutSession` would have refused it
+    // as `needs-egress` (-> not-applicable, above) unless that very machine were available. The
+    // narrow case where it does halt is the honest one, and it is the same halt the declared path
+    // raises for the same fact.
+    ...(verdict.establishedByPairingId
+      ? { preferredPairing: { origin, pairingId: verdict.establishedByPairingId } }
+      : {}),
+  };
+}
+
+/**
+ * The step types an injected session can still reach: the ones that drive a page, and therefore the
+ * ones for which a browser context has yet to be created. Mirrors the engine's
+ * `BROWSER_DRIVING_STEP_TYPES` rather than its wider `STEP_TYPES_NEEDING_BROWSER`, because `wait`
+ * needs the browser but cannot be the step that establishes which portal the run is on.
+ */
+const SESSION_INJECTABLE_STEP_TYPES: ReadonlySet<Step['type']> = new Set<Step['type']>([
+  'navigate',
+  'browser',
+  'verify',
+]);
 
 /**
  * WHAT THE HUMAN IS ASKED TO DO. One function, because the halt payload, the portal's rendering and

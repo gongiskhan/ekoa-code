@@ -90,6 +90,17 @@ export interface ToolExecutorDeps {
   /** The Cofre session to wear for this run, when Cortex supplied one. */
   sessionStateFor?: (runId: string) => unknown;
   /**
+   * Forget this run's delivered session - called at the `leaseOp:'release'` that ends the run
+   * (S-inject).
+   *
+   * PAIRED WITH THE PROFILE WIPE, one layer up from it. `releaseRun` clears the injected session
+   * out of the shared jar; this clears the daemon's own copy of the material that was injected.
+   * Doing only the first would leave a credential-equivalent `storageState` resident in the
+   * daemon's RAM after the run that needed it had ended - the same defect the jar wipe exists to
+   * prevent, in the process rather than in the profile.
+   */
+  releaseSessionFor?: (runId: string) => void;
+  /**
    * The machine's OUTBOUND redaction leg, applied to every captured body before it can ride a frame
    * (slice P2.2, trap T8). It is the daemon's `OutboundRedactor.redactText`, which knows every
    * credential value delivered TO this machine.
@@ -184,7 +195,9 @@ async function runBrowserStep(
   // the runId is then the honest fallback - one lease per run, which is what that Cortex means.
   const leaseId = parsed.data.leaseId ?? envelope.runId;
 
-  if ('leaseOp' in parsed.data) return await runLeaseOp(parsed.data.leaseOp, leaseId, profileId, ctx, deps);
+  if ('leaseOp' in parsed.data) {
+    return await runLeaseOp(parsed.data.leaseOp, leaseId, envelope.runId, profileId, ctx, deps);
+  }
   if ('captureOp' in parsed.data) return await runCaptureOp(parsed.data.captureOp, leaseId, profileId, ctx, deps);
   if ('injectedCall' in parsed.data) {
     return await runInjectedCallOp(parsed.data.injectedCall, leaseId, profileId, envelope.runId, ctx, deps);
@@ -284,6 +297,7 @@ async function runBrowserStep(
 async function runLeaseOp(
   op: LocalBrowserLeaseOp,
   leaseId: string,
+  runId: string,
   profileId: string,
   ctx: Tier2Context,
   deps: ToolExecutorDeps,
@@ -309,6 +323,12 @@ async function runLeaseOp(
   // for a session that no longer exists. Dropped BEFORE the release is attempted, so even a release
   // that fails cannot leave one behind.
   disposeNetworkRecorder(leaseId);
+  // ...and so must the DELIVERED session itself (S-inject), for the same reason and with the same
+  // ordering: before the release is attempted, so a failed wipe cannot leave the daemon holding
+  // credential material for a run that is over. Keyed by RUN and not by lease, because that is how
+  // Cortex delivered it - a sub-automation shares its parent's lease but has its own runId, and
+  // only the run that was delivered a session has one to forget.
+  deps.releaseSessionFor?.(runId);
   try {
     await deps.profiles.releaseRun(leaseId, { profileId });
   } catch (err) {

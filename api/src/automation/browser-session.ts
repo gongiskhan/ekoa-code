@@ -272,6 +272,19 @@ export class DaemonBrowserSession implements BrowserSession {
    * would read the same exchanges twice, once per step, for the rest of the pass.
    */
   private captured: LocalBrowserCapture[] = [];
+  /**
+   * THE RUN'S COFRE SESSION, held until the first frame carries it down (S-inject), then forgotten.
+   *
+   * Credential-equivalent, so it is `undefined` for the whole rest of this object's life the moment
+   * it has been handed to the seam. The daemon injects a session ONCE, when it takes the run's
+   * lease; a copy kept here afterwards would be a decrypted session resident in the hosted process
+   * for the remainder of a run that no longer has any use for it.
+   *
+   * Forgotten on the first dispatch WHETHER OR NOT that dispatch succeeded. A failed first frame is
+   * not a reason to put a credential on the wire twice: either the daemon took the lease (and holds
+   * the session already) or the step is failing for a reason re-delivery cannot fix.
+   */
+  private pendingSessionState: unknown;
 
   constructor(opts: {
     connection: DaemonConnection;
@@ -280,13 +293,40 @@ export class DaemonBrowserSession implements BrowserSession {
     lease?: BrowserLease;
     /** 0 disables the heartbeat (tests that drive the lifecycle by hand). */
     keepAliveMs?: number;
+    /**
+     * The stored session this run starts from, when the credential gate resolved one. Delivered to
+     * the machine on the lease-taking frame (see `pendingSessionState`). Absent means the run starts
+     * on whatever the machine's own persistent profile holds - the behaviour that predates the
+     * delivery channel, and still the behaviour for every run with no session to inject.
+     */
+    sessionState?: unknown;
   }) {
     this.conn = opts.connection;
     this.runId = opts.runId;
     this.ownerUserId = opts.ownerUserId;
     this.lease = opts.lease ?? { id: opts.runId, used: false };
     this.keepAliveMs = opts.keepAliveMs ?? BROWSER_KEEPALIVE_MS;
+    this.pendingSessionState = opts.sessionState;
     this.startKeepAlive();
+  }
+
+  /**
+   * The session-delivery half of a step request, and the act of forgetting it in the same breath.
+   *
+   * Called from BOTH `dispatch` AND `lifecycle`, because either can be the frame that takes the
+   * lease: a discovery pass arms capture (`captureOp`) before it navigates, and THAT frame is what
+   * makes the daemon open the jar - so it is the last moment a session can still be injected into
+   * the context the rest of the run will use. Delivering only from `dispatch` would leave exactly
+   * those runs signed out, which is the failure this channel exists to end.
+   *
+   * The keepalive timer deliberately does not go through here: it names a lease without taking one,
+   * and a heartbeat is not a step.
+   */
+  private takeSessionDelivery(): { sessionState?: unknown } {
+    if (this.pendingSessionState === undefined) return {};
+    const sessionState = this.pendingSessionState;
+    this.pendingSessionState = undefined;
+    return { sessionState };
   }
 
   async act(action: PlaywrightAction, opts?: BrowserActOptions): Promise<void> {
@@ -452,6 +492,7 @@ export class DaemonBrowserSession implements BrowserSession {
       input: { owner: this.ownerUserId, leaseId: this.lease.id, ...input },
       ...(opts?.stepId !== undefined ? { stepId: opts.stepId } : {}),
       runId: this.runId,
+      ...this.takeSessionDelivery(),
     });
     this.lease.used = true;
     this.ingest(env);
@@ -472,6 +513,7 @@ export class DaemonBrowserSession implements BrowserSession {
         input: this.toDaemonInput(input),
         stepId: opts?.stepId,
         runId: this.runId,
+        ...this.takeSessionDelivery(),
       },
       opts?.onProgress ? { onProgress: opts.onProgress } : undefined,
     );

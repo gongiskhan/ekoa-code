@@ -31,6 +31,16 @@ export interface SecurityRig {
   /** Everything the daemon wrote to its log channel during the run. */
   logs: string[];
   pageText: { value: string };
+  /**
+   * Every cookie the browser context was actually handed (S-inject). This is the ONLY place a
+   * delivered session becomes observable: `addCookies` on the real context is what makes a run
+   * authenticated, so a suite that asserts on the hold rather than on this would be asserting that
+   * the daemon remembered a session, not that it wore one.
+   */
+  cookiesAdded: Array<Record<string, unknown>>;
+  /** How many times the context's cookie jar was wiped - the `clearCookies` at lease release that
+   *  keeps a run's session from outliving it on a shared persistent profile. */
+  cookiesCleared: { count: number };
 }
 
 export function makeRig(): SecurityRig {
@@ -43,6 +53,8 @@ export function makeRig(): SecurityRig {
   const sent: BridgeFrame[] = [];
   const logs: string[] = [];
   const pageText = { value: '' };
+  const cookiesAdded: Array<Record<string, unknown>> = [];
+  const cookiesCleared = { count: 0 };
 
   const enablement = new AutomationEnablement();
   enablement.enable(SESSION);
@@ -63,12 +75,16 @@ export function makeRig(): SecurityRig {
     log: (m) => logs.push(m),
     capabilities: ['local.bash', 'desktop.automation'],
     enablement,
-    profiles: new ProfileManager({ home, idleCloseMs: 0, launch: async () => fakeContext(pageText) }),
+    profiles: new ProfileManager({
+      home,
+      idleCloseMs: 0,
+      launch: async () => fakeContext(pageText, cookiesAdded, cookiesCleared),
+    }),
     toolSession: SESSION,
     profileIdFor: () => 'sec-profile',
   });
 
-  return { home, grantRoot, ledgerDir, ledger, runtime, sent, logs, pageText };
+  return { home, grantRoot, ledgerDir, ledger, runtime, sent, logs, pageText, cookiesAdded, cookiesCleared };
 }
 
 /** Drive one frame and wait for the `tool.result` to leave. */
@@ -190,7 +206,11 @@ function fakePage(pageText: { value: string }): ProfilePage {
   return page;
 }
 
-function fakeContext(pageText: { value: string }): ProfileContext {
+function fakeContext(
+  pageText: { value: string },
+  cookiesAdded: Array<Record<string, unknown>>,
+  cookiesCleared: { count: number },
+): ProfileContext {
   const open: ProfilePage[] = [];
   return {
     newPage: async () => {
@@ -199,8 +219,12 @@ function fakeContext(pageText: { value: string }): ProfileContext {
       return p;
     },
     pages: () => open,
-    addCookies: async () => undefined,
-    clearCookies: async () => undefined,
+    addCookies: async (cookies) => {
+      for (const c of cookies) cookiesAdded.push(c as unknown as Record<string, unknown>);
+    },
+    clearCookies: async () => {
+      cookiesCleared.count += 1;
+    },
     addInitScript: async () => undefined,
     close: async () => undefined,
   };

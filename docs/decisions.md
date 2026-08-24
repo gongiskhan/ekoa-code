@@ -6457,3 +6457,99 @@ origin-resolution path; any subset is individually unshippable). The whole thing
 with a live bridge - the deterministic suites prove wiring and isolation; "human hits a wall, logs in,
 next run is authenticated" is a live-verification acceptance item. Touches shared wire, an auth-class
 halt, and credential capture/delivery -> adversarial cross-model review on every slice that does.
+
+## 2026-08-24 - the downward session-delivery frame: a new `session.deliver`, not a field on the step
+
+S-inject needed a way to carry a stored Cofre session from Cortex DOWN to a bridge run. Two shapes were
+available and the choice is a custody one, so it is recorded rather than left to the diff.
+
+**Chosen: a new `session.deliver { runId, storageState }` frame, mirroring `secret.deliver`.**
+**Rejected: an optional `sessionState` on the lease-taking arm of `LocalBrowserStepInput`.**
+
+- `LocalBrowserStepInput` rides EVERY step of a run. The daemon consumes a session exactly once - it is
+  injected when the lease is taken, and `withRunLease`'s session thunk is never consulted again - so the
+  rejected shape would have put credential material on tens of frames to be read from one. A separate
+  frame keeps the credential-bearing members of the union countable and namable (`secret.deliver` and
+  this one), which is the property the outbound redactor, the secret hold and the session hold are all
+  written against.
+- Keyed by `runId` and not by `invocationId`: its lifetime is the RUN's browser lease, not one step's
+  invocation, and the daemon's executor already resolves a session as `sessionStateFor(runId)`.
+  (`secret.deliver` is invocation-keyed for the mirror-image reason - a child spawn consumes it once
+  and zeroizes it in that spawn's `finally`.)
+- NO nonce, unlike `secret.deliver`. A secret delivery is single-use and REDEEMED, so a replay must be
+  refusable; a session delivery is idempotent for the run it names, is authorised by the capability
+  grant checked immediately before it goes out, and a second copy of the same run's session is not a
+  second disclosure. A nonce here would be a mechanism with nothing to enforce.
+- NO `origin` field. The cookies carry their own domains, so an origin would be a second statement about
+  the same fact that could disagree with the first, and the daemon must never log the delivery anyway.
+- Rule 7 holds in both directions: a daemon predating the frame drops it at its zod boundary and the run
+  starts signed out (the behaviour that predates the channel); an older Cortex sends nothing.
+
+**Both filter legs are armed, exactly as the delivered-secret path arms them.** The daemon registers
+the delivered COOKIE values with its outbound redactor (`runtime/session-hold.ts`) so an echo never
+crosses the network, and Cortex registers the same values with its ingress registry BEFORE the frame
+goes out (`bridge/session-delivery.ts`, the H-4 ordering) so an echo never reaches persistence, the
+SSE stream or the model. Neither is a superset of the other, and for a SESSION the ingress leg is the
+load-bearing half: a portal that reflects its own session cookie into page text produces an
+observation Cortex writes into the run record, which is durable in a way a dropped frame is not, and
+the outbound leg is only as good as the build the machine happens to be running. Both legs skip
+localStorage deliberately - a site's client-side scratch space is full of `"dark"`, `"pt-PT"` and
+`"true"`, and registering those would substitute ordinary words out of every observation the run
+produces. A filter that mangles the page is not a safer filter; it is a broken run plus a false sense
+of coverage.
+
+Two consequences worth naming because they are asymmetries with the secret path, not oversights.
+**A failed delivery does not fail the step**: a missing secret means a child runs with an environment it
+was promised and does not have, which is an unexplainable auth failure on a user's machine; a missing
+session means the run starts SIGNED OUT, which is degraded, visible on the page, and recoverable by the
+ordinary login path. **The daemon zeroizes nothing**: a `storageState`'s strings come from `JSON.parse`
+and are immutable, so `SessionHold.release` drops the reference and says exactly that, rather than
+claiming a wipe it cannot perform the way `SecretHold` genuinely can with its Buffers.
+
+The generalized session gate lands with it: a step declaring no `credentialRefs` now falls through to
+`adhocSessionReuse`, which for an adversarial origin the run resolved for itself injects an
+already-stored session and can do nothing else - no credentialRef and no hosted-typist permit are
+passed, so `ensureSession` cannot reach the typist, and every outcome but `reused` maps to
+not-applicable. A run that declared no credential therefore acquires no new way to halt. Tenancy is
+D-ADHOC-3/4 unchanged: the run's own actor, the owner-scoped listing and unwrap, and no origin index.
+
+S-inject is the DELIVERY half only. The capture/pause half (D-ADHOC-1/2/5) is a separate slice, and
+until it lands this channel only carries sessions some other path already captured.
+
+### REVIEW ROUND (2026-08-24) - two confirmed minors, and the socket-drop backstop becomes testable
+
+Adversarial review of S-inject returned no blockers and no security defects; three of its six findings
+were refuted on inspection (the cross-file `pairingId` invariant, the "stub-reconstructed frame"
+contract claim, and the cross-user mutation-sensitivity claim). Two were real and are fixed here.
+
+**1. The socket-drop custody backstop had no regression test, and could not have had one.** The clear
+lived in an inline lambda inside `serve`, so the only test named for it called
+`runtime.clearSessions()` directly - pinning the METHOD while leaving the WIRING free to be deleted
+with the suite still green. That is the "test that cannot fail" class, and it mattered here more than
+usual because `SessionHold.sweep` is passive (it runs only inside `deliver`/`get`, matching
+`SecretHold`), so an idle daemon parked in `reconnecting` never sweeps: this callback is the whole
+backstop for a credential-equivalent value. The lambda is now `socketStateHandler`, an exported
+factory `serve` wires, and `test/cli/serve-socket-custody.test.ts` hands that same production
+callback to a REAL `BridgeSocket` against a real WebSocket server and kills the server end. The
+extraction is the fix: a behaviour reachable only from inside a 300-line command function cannot be
+defended, and making it addressable is worth more than the indirection costs.
+
+**2. The ad-hoc session was inert on network-observed (discovery) runs.** `armNetworkCapture` runs
+BEFORE the credential gate, and arming CREATES the browser session and TAKES the lease - so the
+lease-taking frame went out with no session, the gate then saw `sessionUnresolved === false`, and the
+lookup never ran. The feature was dead on exactly the discovery / recipe-compile runs a free-text
+goal most often takes to an undeclared origin. It failed safe (a signed-out run; no leak, no
+cross-tenant reach) but it failed. The fix resolves the ad-hoc session immediately BEFORE the arm,
+through the same `adhocSessionReuse` the gate uses, exported as `resolveAdhocSession` - not a second
+implementation and not a relaxed one. It is safe to run that early for the reasons the function
+already had: reuse only, no `credentialRef` and no hosted-typist permit, so it opens nothing, halts
+nothing, and needs no locality verdict. The DECLARED path was never affected (its `sessionState` is
+assigned from `inputs.credentials` before the loop) and is deliberately untouched; the
+`sessionUnresolved` guard is unchanged.
+
+A note on the record rather than a change: the review observed that owner scoping is defended by TWO
+layers - `findSessionItems` -> `listVisible` AND `unwrap` -> `getVisible` - so a lookup-only mutation
+reddens one case rather than the cross-user one. That is defence in depth and is correct. The
+original commit message's mutation claim described a different mutation (substituting the actor at
+the gate, upstream of both layers, which does redden the cross-user case); it is restated precisely
+in the amended message so the two are not confused.

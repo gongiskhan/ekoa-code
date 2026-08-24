@@ -21,6 +21,7 @@ import type { AutomationEnablement } from '../tools/tier2/index.js';
 import { executeToolInvocation, type ToolExecutorDeps } from './tool-executor.js';
 import { OutboundRedactor } from './outbound-redactor.js';
 import { SecretHold } from './secret-hold.js';
+import { SessionHold } from './session-hold.js';
 
 /** The half of the daemon's identity that Cortex OWNS and can rotate: the org the pairing is scoped
  *  to, and the HMAC secret it signs task bindings with. Both arrive on the pre-dial token mint. */
@@ -105,6 +106,22 @@ export class DaemonRuntime {
    *  delivery and clears it on zeroize, so the filter's lifetime is the value's lifetime. */
   private readonly secrets: SecretHold;
 
+  /**
+   * RAM-only custody for `session.deliver` (S-inject) - the run-keyed twin of `secrets`.
+   *
+   * OWNED BY THE RUNTIME rather than by `serve.ts`, and one reason decides it: the delivery frame
+   * lands HERE, and taking custody of a session means arming `this.redactor` with its cookies in
+   * the same breath. A map living in the CLI would have to be fed from this method anyway, and
+   * would leave the arming either forgotten or performed at a second site - which is exactly the
+   * class of failure `wrapSend` exists to make impossible on the outbound side.
+   */
+  private readonly sessions = new SessionHold({
+    // Arm the filter BEFORE the run those cookies authenticate can echo one back. Same ordering
+    // argument as `SecretHold`'s `onRegister`, and the same reason: registering afterwards leaves
+    // a window in which a fast first step's observation crosses back unfiltered.
+    onRegister: (values) => this.redactor.register(values),
+  });
+
   constructor(private readonly deps: DaemonRuntimeDeps) {
     this.binding = { org: deps.org, signingSecret: deps.signingSecret };
     this.send = this.redactor.wrapSend((frame) => this.deps.send(frame));
@@ -138,9 +155,33 @@ export class DaemonRuntime {
     return this.secrets.size;
   }
 
-  /** Zeroize every held credential (daemon shutdown). */
+  /** How many delivered sessions are currently held in RAM (S-inject). Tests assert this returns to
+   *  zero after a release, a socket drop and a shutdown. */
+  heldSessionCount(): number {
+    return this.sessions.size;
+  }
+
+  /**
+   * Drop every delivered session - THE SOCKET WENT AWAY (S-inject).
+   *
+   * Not over-caution: Cortex fails every in-flight invocation for a pairing whose socket closed
+   * (`bridge/tool-invocation.ts` `failInvocationsForPairing`), so no run whose session is held here
+   * can still be running. What is left is an authenticated session belonging to nothing, and the
+   * daemon may sit in `reconnecting` for a long time before anyone asks it for anything again.
+   *
+   * The REDACTOR is deliberately NOT cleared here, for the reason the constructor gives about
+   * `SecretHold`: the filter outlives the value on purpose, because the frames most likely to carry
+   * an echo are built after the thing that produced them is gone. `zeroizeSecrets` clears it at
+   * shutdown, and that is the only place it should be cleared.
+   */
+  clearSessions(): void {
+    this.sessions.clear();
+  }
+
+  /** Zeroize every held credential (daemon shutdown), delivered sessions included. */
   zeroizeSecrets(): void {
     this.secrets.zeroizeAll();
+    this.sessions.clear();
     this.redactor.clear();
   }
 
@@ -202,6 +243,18 @@ export class DaemonRuntime {
         // this tenant holds. The matching `tool.invoke` consumes it and zeroizes it in a `finally`;
         // a delivery whose invoke never arrives is swept and zeroized on TTL.
         this.secrets.deliver(frame.invocationId, frame.nonce, frame.env);
+        break;
+      case 'session.deliver':
+        // The OTHER frame in the union carrying credential material (S-inject). Taken into RAM-only
+        // custody keyed by runId, armed into the outbound filter on the way in, and dropped when
+        // the run's lease is released or the socket goes away. NEVER written to bridge disk, never
+        // ledgered, never logged - not even the fact of it, because "a session arrived for run X"
+        // plus a run listing is a statement about which portals this tenant holds sessions for.
+        //
+        // NOT ACKNOWLEDGED, deliberately. There is no result frame for a delivery and there should
+        // not be one: the observable consequence is that the run's first page is authenticated, and
+        // an ack would be a second channel saying so that could disagree with the page.
+        this.sessions.deliver(frame.runId, frame.storageState);
         break;
       default:
         break; // provider_request/ledger_row/delegation_result/denial/ping/pong are not inbound work
@@ -282,7 +335,16 @@ export class DaemonRuntime {
       secrets: this.secrets,
       ...(this.deps.defaultWorkRoot !== undefined ? { defaultWorkRoot: this.deps.defaultWorkRoot } : {}),
       ...(this.deps.profileIdFor ? { profileIdFor: this.deps.profileIdFor } : {}),
-      ...(this.deps.sessionStateFor ? { sessionStateFor: this.deps.sessionStateFor } : {}),
+      // S-inject. ALWAYS supplied, and the delivered session WINS over any injected dep: the hold
+      // is the production source (fed by `session.deliver` above) and `deps.sessionStateFor` is the
+      // test seam that predates it. A run with no delivery resolves to `undefined` here, which
+      // `parseSessionState` answers `null` to - i.e. exactly the behaviour before this existed.
+      sessionStateFor: (runId: string) => this.sessions.get(runId) ?? this.deps.sessionStateFor?.(runId),
+      // The lease release is the moment the injected session leaves the profile's jar
+      // (`profile.ts` `releaseRun` wipes it), so it is the moment this daemon's copy must go too.
+      // Holding it past the release would be an authenticated session resident in RAM for a run
+      // that has ended, recoverable by nothing and useful to nobody.
+      releaseSessionFor: (runId: string) => this.sessions.release(runId),
       // Bound as a method reference on THIS runtime's redactor, not a snapshot of its state: a
       // credential delivered after capture was armed must be masked by the very next body.
       redactOutbound: (text: string) => this.redactor.redactText(text),

@@ -16,6 +16,7 @@ import {
   __pendingInvocationCount,
 } from '../../src/bridge/tool-invocation.js';
 import { createDaemonStepConnection } from '../../src/bridge/daemon-step-seam.js';
+import { deliverSession } from '../../src/bridge/session-delivery.js';
 import {
   authoriseDelivery,
   deliverSecrets,
@@ -209,7 +210,8 @@ describe('an ungranted machine never receives a DECRYPTED CREDENTIAL either', ()
   const actor: Actor = { userId: OWNER, orgId: ORG, role: 'user' } as Actor;
   const SECRET = 'cofre-value-P1-SEAM-7731';
 
-  /** Exactly the four dependencies `server.ts` supplies at the composition root. */
+  /** Exactly the dependencies `server.ts` supplies at the composition root - the REAL ones, the
+   *  S-inject session channel included, so what these cases observe is what production does. */
   function seam() {
     return createDaemonStepConnection(
       { pairingId: PAIRING, org: ORG },
@@ -219,6 +221,7 @@ describe('an ungranted machine never receives a DECRYPTED CREDENTIAL either', ()
         newInvocationId,
         authoriseDelivery,
         deliverSecrets: (a, i) => deliverSecrets(a, i),
+        deliverSession,
       },
     );
   }

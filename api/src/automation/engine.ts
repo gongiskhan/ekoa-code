@@ -30,6 +30,7 @@ import { loadAutomationConfig } from './config.js';
 import {
   cofrePortalDeepLink,
   evaluateCredentialGate,
+  resolveAdhocSession,
   resolveStepOrigin,
   type CredentialGateDeps,
   type CredentialGateInput,
@@ -717,9 +718,17 @@ async function runOrRehearse(
       // and an `in-process` verdict cannot co-occur. It read as a second opinion about which session
       // to build while providing none - the exact thing the paragraph above rejects.
       if (connection) {
-        // Session injection is LOCAL-SESSION-ONLY today: the daemon owns its
-        // own persistent profile and the bridge protocol has no cookie
-        // channel yet, so `sessionState` is deliberately NOT forwarded here.
+        // SESSION INJECTION, NOW ON BOTH ROUTES (S-inject). This branch used to carry a carve-out
+        // saying the bridge protocol had no cookie channel - which was true, and was the entire
+        // reason a bridge run could never start authenticated: a ceremony pushed a session UP and
+        // nothing ever brought one back DOWN, so every capture was write-only and the daemon's own
+        // persistent profile was the only thing a run could be logged in by. `session.deliver` is
+        // that channel, and the value rides the LEASE-TAKING frame (see
+        // `DaemonBrowserSession.takeSessionDelivery`).
+        //
+        // It is the SAME `sessionState` the in-process branch below injects, resolved by the same
+        // credential gate through the same owner-scoped unwrap. One session per run, whichever
+        // browser ends up running it - there is deliberately no second, bridge-specific resolution.
         browser = new DaemonBrowserSession({
           connection,
           runId,
@@ -728,6 +737,10 @@ async function runOrRehearse(
           // would mark every daemon-connected run, browser step or not: this
           // factory runs for EVERY step (`executeStep({ browser: getBrowser() })`).
           lease: browserLease,
+          // GUARDED, so a run with nothing to inject sends no delivery frame at all rather than one
+          // carrying `undefined`. The daemon's profile is persistent, and "no session resolved"
+          // has to keep meaning "whatever this machine already holds".
+          ...(sessionState !== undefined ? { sessionState } : {}),
         });
       } else if (stepLocality?.kind === 'in-process') {
         inProcessRoute = stepLocality.egress;
@@ -754,9 +767,22 @@ async function runOrRehearse(
   // error; the run carries on uninstrumented and the caller compiles nothing, which is exactly the
   // behaviour before this existed.
   let captureArmed = false;
-  const armNetworkCapture = async (step: Step): Promise<void> => {
+  const armNetworkCapture = async (step: Step, index: number): Promise<void> => {
     if (!options.observeNetwork || captureArmed) return;
     if (!BROWSER_DRIVING_STEP_TYPES.has(step.type)) return;
+    // THE LAST MOMENT A SESSION CAN STILL BE INJECTED (S-inject).
+    //
+    // `getBrowser()` below CREATES the browser session and `startCapture` TAKES the machine's
+    // lease, and a jar is built with cookies or without them - there is no injecting into a live
+    // one. Because arming happens before the credential gate, an ad-hoc run with `observeNetwork`
+    // set reached the gate with the browser already open, `sessionUnresolved` already false, and so
+    // never looked a stored session up at all: the feature was inert on precisely the discovery /
+    // recipe-compile runs a free-text goal most often takes to an undeclared origin.
+    //
+    // The DECLARED path never had this problem - its `sessionState` is assigned from
+    // `inputs.credentials` before the loop, so it is already in hand here - which is why the fix is
+    // to resolve the AD-HOC one at this point rather than to move the arming or relax the gate.
+    await resolveAdhocSessionBeforeLease(step, index);
     const session = getBrowser();
     if (!session || typeof session.startCapture !== 'function') return;
     captureArmed = true;
@@ -764,6 +790,49 @@ async function runOrRehearse(
       await session.startCapture();
     } catch {
       captureArmed = false;
+    }
+  };
+
+  /**
+   * The undeclared-origin session lookup, run BEFORE the recorder takes the lease.
+   *
+   * It is the same `adhocSessionReuse` the credential gate reaches for a step that declares no
+   * `credentialRefs`, called through `resolveAdhocSession` - not a second implementation and not a
+   * relaxed one. Everything that makes it safe there makes it safe here: reuse only, no
+   * `credentialRef` and no hosted-typist permit passed, so it cannot open a browser, submit a
+   * password, halt the run or ask for a person, and it needs no locality verdict to decide. That is
+   * what lets it run this early, before locality has been resolved for the step.
+   *
+   * IT COSTS AT MOST ONE COFRE READ PER RUN. `armNetworkCapture` returns immediately once
+   * `captureArmed`, and the guard below returns once a session is in hand or a browser exists, so
+   * this cannot repeat per step. When it finds nothing, the gate's own per-step call still runs and
+   * behaves exactly as before.
+   */
+  const resolveAdhocSessionBeforeLease = async (step: Step, index: number): Promise<void> => {
+    if (sessionState !== undefined || browser) return;
+    const verdict = await resolveAdhocSession(
+      {
+        actor: actorFromCtx(ctx),
+        runId,
+        automationName: automation.name,
+        steps: workingSteps,
+        index,
+        residentialAvailable: await residentialAvailableNow(),
+        // TRUE BY CONSTRUCTION at this point - the guard above just proved both halves. Passing the
+        // literal rather than recomputing keeps the one definition of "unresolved" at the guard.
+        sessionUnresolved: true,
+      },
+      step,
+      { loadActionDeclaration: loadDeclarationOnce },
+    );
+    if (verdict.kind !== 'ready') return;
+    sessionState = verdict.storageState;
+    // P4.2, learned EARLIER than on the ordinary path and therefore more cheaply: the gate's own
+    // call learns the preference after locality has already been resolved and has to re-resolve it.
+    // Here locality has not run yet for this step, so recording it now means the first resolution
+    // already knows which machine the session belongs to and no second pass is needed.
+    if (verdict.preferredPairing) {
+      preferredPairingByOrigin.set(verdict.preferredPairing.origin, verdict.preferredPairing.pairingId);
     }
   };
 
@@ -999,7 +1068,7 @@ async function runOrRehearse(
 
       // ARM THE RECORDER BEFORE THE FIRST PAGE-DRIVING STEP, never after: an exchange the page
       // made before the listener attached is one the compile never sees.
-      await armNetworkCapture(step);
+      await armNetworkCapture(step, i);
 
       // Hand the most recent successful step over so a verify can
       // short-circuit after a side-effect (integration / sub_automation)
@@ -1063,6 +1132,12 @@ async function runOrRehearse(
             // statement "no machine of yours can carry residential egress", which refuses every
             // attended session there is. See `residentialAvailableNow`.
             residentialAvailable: await residentialAvailableNow(),
+            // S-inject: whether an UNDECLARED-origin session lookup could still change anything.
+            // A session is injected when the browser context is CREATED, so once `browser` exists
+            // or a session is already in hand the lookup could only produce a value nothing would
+            // consume - at the cost of a Cofre read on every remaining step of the run. Exactly the
+            // pair of facts the `sessionState = gate.storageState` assignment below tests for.
+            sessionUnresolved: sessionState === undefined && !browser,
             ...(hostedBrowser ? { hostedBrowser } : {}),
             // The SAME per-run memo locality resolves origins through, so the gate's own
             // `resolveStepOrigin` walk re-reads no definition this run has already read.

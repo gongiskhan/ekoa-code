@@ -111,6 +111,38 @@ describe('attended.request and session.push', () => {
   });
 });
 
+describe('session.deliver - the DOWNWARD half of the session lifecycle (S-inject)', () => {
+  it('carries a stored session to the machine that will run the browser', () => {
+    expect(
+      BridgeFrame.safeParse({
+        type: 'session.deliver',
+        runId: 'run_1',
+        storageState: { cookies: [{ name: 'SESSIONID', value: 'v', domain: 'x.test', path: '/' }], origins: [] },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('accepts the WRAPPED shape the Cofre stores as well as a raw storageState', () => {
+    // `storageState` is `unknown` precisely so both shapes ride the same frame. The daemon's
+    // `parseSessionState` is the ONE place that reconciles them; pinning a shape here would move
+    // that decision onto the wire, where a stored item could no longer be delivered unchanged.
+    expect(
+      BridgeFrame.safeParse({
+        type: 'session.deliver',
+        runId: 'run_1',
+        storageState: { storageState: { cookies: [] }, capturedAt: '2026-08-24T00:00:00.000Z' },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('REQUIRES the runId - a session with nobody to belong to is not deliverable', () => {
+    // The runId IS this frame's tenancy on the daemon: the hold is keyed by it and has no fallback
+    // lookup, so a delivery without one could only be applied by guessing which run meant it.
+    // Refusing it at the schema is what makes "no guessing" a property of the wire itself.
+    expect(BridgeFrame.safeParse({ type: 'session.deliver', storageState: { cookies: [] } }).success).toBe(false);
+  });
+});
+
 describe('the union still rejects the unknown', () => {
   it('drops an unrecognised frame type', () => {
     expect(BridgeFrame.safeParse({ type: 'exfiltrate', payload: 'x' }).success).toBe(false);

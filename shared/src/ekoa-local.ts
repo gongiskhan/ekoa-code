@@ -426,7 +426,8 @@ export const BridgeFrame = z.discriminatedUnion('type', [
     type: z.literal('secret.deliver'),
     invocationId: z.string(),
     nonce: z.string(),
-    /** env-var name -> value. The only frame in the union that carries credential material. */
+    /** env-var name -> value. One of the two frames in the union carrying credential material;
+     *  the other is `session.deliver`. */
     env: z.record(z.string(), z.string()),
   }),
   /** Route a ceremony (a card unlock, a relay code) to a machine with a human at it. */
@@ -442,6 +443,52 @@ export const BridgeFrame = z.discriminatedUnion('type', [
     type: z.literal('session.push'),
     requestId: z.string(),
     origin: z.string(),
+    storageState: z.unknown(),
+  }),
+  /**
+   * THE DOWNWARD HALF OF THE SESSION LIFECYCLE (S-inject): a stored Cofre session, delivered to the
+   * machine that is about to run a browser step, so a bridge run can start ALREADY AUTHENTICATED.
+   *
+   * `session.push` above carries a session UP after a ceremony; until this frame existed there was
+   * nothing carrying one DOWN, so every capture was write-only and a bridge run always opened on a
+   * signed-out page. The hosted path had the other half all along
+   * (`automation/engine.ts` -> `LocalBrowserSession({ sessionState })`), which is exactly the
+   * asymmetry this closes.
+   *
+   * A SEPARATE FRAME RATHER THAN A FIELD ON THE STEP PAYLOAD, and the reason is custody rather than
+   * taste. `LocalBrowserStepInput` rides EVERY step of a run, so a `sessionState` on it would put
+   * credential material on tens of frames when the daemon consumes it exactly once (the session is
+   * injected when the lease is taken, and `withRunLease`'s thunk is not consulted again). Keeping
+   * it here means the credential-bearing frames in this union stay countable and namable - this one
+   * and `secret.deliver` - which is the property every custody rule in `outbound-redactor.ts`,
+   * `secret-hold.ts` and `session-hold.ts` is written against.
+   *
+   * KEYED BY `runId`, not by `invocationId`, because its lifetime is the RUN's browser lease and not
+   * one step's invocation: the daemon's executor already resolves it as `sessionStateFor(runId)`.
+   * (`secret.deliver` is invocation-keyed for the mirror-image reason - a child spawn consumes it
+   * once and it is zeroized in that spawn's `finally`.)
+   *
+   * NO NONCE, deliberately, and the difference from `secret.deliver` is real rather than an
+   * oversight: a secret delivery is single-use and REDEEMED, so a replay of one must be refusable;
+   * a session delivery is idempotent for the run it names, is authorised by the capability grant
+   * checked immediately before it goes out (`bridge/daemon-step-seam.ts`), and a second copy of the
+   * same run's session is not a second disclosure. Adding a nonce would add a mechanism with
+   * nothing to enforce.
+   *
+   * NO `origin` FIELD. The cookies carry their own domains, so an origin here would be a SECOND
+   * statement about the same fact that could disagree with the first; and the daemon must never log
+   * this delivery anyway, so there is nothing an origin label could honestly be used for.
+   *
+   * THE PAYLOAD IS CREDENTIAL-EQUIVALENT and carries the same obligations `secret.deliver` does:
+   * RAM only on the daemon, never on bridge disk, never in a log, a trace, a screenshot or a model
+   * context, and cleared when the run's lease is released or the socket drops.
+   */
+  z.object({
+    type: z.literal('session.deliver'),
+    runId: z.string(),
+    /** A Playwright `storageState` (or the `{ storageState, capturedAt }` wrapper the Cofre stores);
+     *  `parseSessionState` on the daemon accepts both. Opaque on the wire, exactly as
+     *  `session.push.storageState` is. */
     storageState: z.unknown(),
   }),
 ]);

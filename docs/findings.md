@@ -74,6 +74,28 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   headed executor driving a real adversarial site, the vision detector catching the sign-in wall and
   pausing for the human, and a human completing a direct (non-Google) login in the headed window.
 
+  UPDATE 2026-08-24 (S-inject landed - this finding STAYS OPEN, deliberately). The RE-INJECT half of
+  gap (a) now exists. `shared/src/ekoa-local.ts` gains a `session.deliver { runId, storageState }`
+  frame; `bridge/daemon-step-seam.ts` sends it under the same capability grant that authorises the
+  step and before the invoke that consumes it; the daemon holds it RAM-only in
+  `runtime/session-hold.ts`, wears it when it takes the run's lease, and drops it at lease release,
+  socket loss and shutdown; and `credential-gate.ts` will now look a stored session up by an
+  ADVERSARIAL origin the run resolved for ITSELF with nothing declared - reuse only, so it cannot
+  halt a run, ask for a person or reach the typist. Journal: docs/decisions.md 2026-08-24 "the
+  downward session-delivery frame". Diagrams 02 and 11 carry the as-built.
+  WHY IT DOES NOT CLOSE: nothing yet CAPTURES an ad-hoc session, so the new channel currently only
+  carries sessions some other path already stored. Gap (a)'s first half (capture -> durable Cofre
+  store on the undeclared-origin path), gap (b) (the wait-for-human login STEP a resume steps PAST
+  rather than a browser action the model must execute) and gap (c) (profile-lock arbitration) are
+  untouched, as is the `paused_for_user` vs `needs_credentials` durability shape at the head of this
+  entry. Those are the S-durable / S-login-step / S-profile / S-cap slice, which lands as one change
+  on top of this one. `clearCookies` at run end STAYS as designed: the durable copy of a session
+  lives in the Cofre and is never resident on the shared per-owner profile.
+  NOT PROVEN YET, and registered UNVERIFIED: "a real bridge run against a captured origin starts
+  logged in" is a LIVE-VERIFICATION item. The deterministic suites that landed with S-inject prove
+  the wiring, the per-user isolation and the no-leak properties; only a live bridge can prove the
+  page actually comes up authenticated.
+
 - **`google-sso-refuses-the-automated-ceremony-browser`** (2026-08-24, OPEN, **MEDIUM**, external
   constraint; found in acceptance run 1). When the attended-ceremony window (Playwright/CDP-driven
   headed Chrome on the bridge, `channel:'chrome'`, `--disable-blink-features=AutomationControlled`,

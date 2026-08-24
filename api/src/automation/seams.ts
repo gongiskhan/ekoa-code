@@ -46,7 +46,7 @@ export interface DaemonStepRequest {
   /**
    * The step's declared env-var -> `cofre:` REFERENCE mapping (I9). REFERENCES ONLY - the values
    * are resolved at the composition root through the Cofre's `unwrap()` and delivered to the
-   * machine on the one frame in the union that carries credential material, under the SAME
+   * machine on the invocation-keyed frame that carries credential material, under the SAME
    * invocation id as the step that consumes them.
    *
    * It travels on the seam rather than being read from `bridge/` by the executor because
@@ -56,6 +56,21 @@ export interface DaemonStepRequest {
   secretEnv?: Record<string, string>;
   /** The run's actor, required only to resolve `secretEnv` (the unwrap is tenant-scoped). */
   actor?: Actor;
+  /**
+   * THE RUN'S BROWSER SESSION, already unwrapped, on its way DOWN to the machine (S-inject).
+   *
+   * Unlike `secretEnv` this is a VALUE and not a reference, because by the time the step exists the
+   * session has already been through the owner-scoped `unwrap` at the credential gate - resolving a
+   * reference again here would be a second decrypt of the same item for the same run.
+   *
+   * Set on the LEASE-TAKING frame ONLY - `DaemonBrowserSession` sends it on its first dispatch and
+   * never again. The daemon injects it when it takes the run's lease and does not consult it
+   * afterwards, so a copy on every later step would be credential material on the wire for nothing.
+   *
+   * Absent - the overwhelmingly common case - means no delivery happens at all, and the machine
+   * runs on whatever its own persistent profile already holds, exactly as before this existed.
+   */
+  sessionState?: unknown;
 }
 
 /** The live daemon control channel for one owner. `runStep` dispatches a resolved browser action

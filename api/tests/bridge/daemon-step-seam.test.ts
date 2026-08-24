@@ -43,9 +43,11 @@ function deps(
   calls: Array<{ capability: BridgeCapability; invocationId: string; payload: unknown }>;
   order: string[];
   granted: Set<string>;
+  sessions: Array<{ pairingId: string; runId: string; storageState: unknown }>;
 } {
   const calls: Array<{ capability: BridgeCapability; invocationId: string; payload: unknown }> = [];
   const order: string[] = [];
+  const sessions: Array<{ pairingId: string; runId: string; storageState: unknown }> = [];
   const base: DaemonStepDeps = {
     isCapabilityGranted: async (_orgId, _pairingId, capability) => {
       order.push(`grant?:${capability}`);
@@ -70,9 +72,18 @@ function deps(
       order.push(`deliver:${input.invocationId}`);
       return { nonce: 'nonce-1', itemIds: [] };
     },
+    // S-inject. Recorded in `order` for the same reason every other disclosure is: the ORDER is
+    // what these cases assert, and a delivered `storageState` is credential-equivalent - so "the
+    // grant was checked before it left" has to be provable for this frame exactly as it is for
+    // `secret.deliver`.
+    deliverSession: (input) => {
+      order.push(`session:${input.runId}`);
+      sessions.push(input);
+      return true;
+    },
     ...overrides,
   };
-  return { ...base, calls, order, granted };
+  return { ...base, calls, order, granted, sessions };
 }
 
 const conn = { pairingId: 'pair-1', org: 'org-1' };

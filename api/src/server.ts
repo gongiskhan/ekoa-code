@@ -47,7 +47,7 @@ import { sseManager } from './events/sse-manager.js';
 import { startDelivery, stopDelivery } from './events/delivery.js';
 import { attachCanvasServer } from './streaming/index.js';
 import { attachVoiceServer } from './voice/index.js';
-import { attachBridgeServer, bufferLedgerRow, delegateToLocal, rowsForSession, getConnectionByOwner, invokeTool, bridgeConnectionCount, createDaemonStepConnection, authoriseDelivery, deliverSecrets, newInvocationId, isCapabilityGranted } from './bridge/index.js';
+import { attachBridgeServer, bufferLedgerRow, delegateToLocal, rowsForSession, getConnectionByOwner, invokeTool, bridgeConnectionCount, createDaemonStepConnection, authoriseDelivery, deliverSecrets, deliverSession, newInvocationId, isCapabilityGranted } from './bridge/index.js';
 // Deep import, as `routes/integrations.ts` already does for the same registry: the fleet listing
 // selection is allowed to see is not on the bridge module's public face, and adding it there is a
 // change to a module this slice does not own.
@@ -819,6 +819,14 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       newInvocationId,
       authoriseDelivery,
       deliverSecrets: (actor, input) => deliverSecrets(actor, input),
+      // S-inject: the run's stored session, down to the machine that is about to open a browser for
+      // it. The value arrived ALREADY unwrapped under the run's own actor (the credential gate did
+      // that, owner-scoped) and the capability grant authorising this machine was checked by the
+      // seam immediately before this is called - so `deliverSession` arms the ingress filter and
+      // writes the frame, and does nothing else. It is a module rather than a lambda here for the
+      // same reason `deliverSecrets` is: the arm-before-send ordering is an obligation, and an
+      // obligation written inline at the root is one the next edit can silently drop.
+      deliverSession,
     }) as never;
   });
 

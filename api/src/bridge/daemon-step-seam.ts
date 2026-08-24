@@ -66,6 +66,23 @@ export interface DaemonStepDeps {
     actor: Actor,
     input: { invocationId: string; pairingId: string; mapping: Record<string, string>; processLabel?: string },
   ): Promise<unknown>;
+  /**
+   * Put the run's ALREADY-UNWRAPPED browser session on the machine's socket (S-inject), keyed by the
+   * run whose browser lease will wear it. Returns whether the frame went out.
+   *
+   * SYNCHRONOUS, unlike `deliverSecrets`, and the difference is real rather than stylistic: there is
+   * nothing to unwrap, no nonce to redeem and no Registo "use" row to write, because the value was
+   * already unwrapped under the RUN'S OWN actor by the credential gate. This is a socket write.
+   *
+   * A `false` RETURN IS NOT FATAL TO THE STEP, and that asymmetry with the secret path is chosen.
+   * A missing secret means a child runs with an environment it was promised and does not have,
+   * which surfaces as an unexplainable authentication failure on a user's machine - so that stops
+   * the step. A missing session means the run starts SIGNED OUT, which is exactly the state every
+   * bridge run was in before this channel existed: degraded, visible on the page, and recoverable
+   * by the ordinary login path. Failing the step would turn a soft degradation into a hard stop -
+   * and on the ad-hoc path, for a run that never asked for a session at all.
+   */
+  deliverSession(input: { pairingId: string; runId: string; storageState: unknown }): boolean;
 }
 
 export interface DaemonStepRequest {
@@ -76,12 +93,18 @@ export interface DaemonStepRequest {
   /**
    * The step's declared env-var -> `cofre:` REFERENCE mapping (I9). Never values: the values are
    * resolved by `deliverSecrets` through the Cofre's `unwrap()`, so the grant, the tenancy and the
-   * lock all apply, and they reach the machine on the single frame in the union that carries
+   * lock all apply, and they reach the machine on the invocation-keyed frame that carries
    * credential material. Absent (the overwhelmingly common case) means no delivery happens at all.
    */
   secretEnv?: Record<string, string>;
   /** The run's actor - required to resolve a `secretEnv`, unused otherwise. */
   actor?: Actor;
+  /**
+   * The run's browser session, already unwrapped, for delivery on the run-keyed frame (S-inject).
+   * A VALUE and not a reference - see `automation/seams.ts`, which is the interface this one is
+   * structurally matched against at the composition root. Present only on the LEASE-TAKING frame.
+   */
+  sessionState?: unknown;
 }
 
 export interface DaemonStepResultEnvelope {
@@ -131,6 +154,23 @@ export function createDaemonStepConnection(
       }
 
       const invocationId = deps.newInvocationId();
+
+      // THE SESSION, DOWN THE SAME CHANNEL AND UNDER THE SAME GRANT (S-inject).
+      //
+      // AFTER the grant check for the identical reason the secret delivery is: a `storageState` is
+      // credential-equivalent, so putting it on a machine the org has not authorised is disclosure,
+      // not dispatch, and no later refusal takes it back.
+      //
+      // BEFORE the invoke because the daemon must already HOLD the session when the step that takes
+      // the lease arrives - the browser context is created with the cookies or it is not created
+      // with them at all, and there is no way to inject into a jar after the fact. The frames are
+      // ordered by the socket, so "sent first" is "received first".
+      //
+      // Not awaited and not fatal: see `deliverSession` on why a session that does not arrive
+      // degrades the run to signed-out rather than failing the step.
+      if (req.sessionState !== undefined) {
+        deps.deliverSession({ pairingId: conn.pairingId, runId: req.runId, storageState: req.sessionState });
+      }
 
       // Authorise before delivering because it is the single-use check: a replay is refused before
       // any credential is unwrapped, so a replayed step cannot even cause a decrypt. Deliver before

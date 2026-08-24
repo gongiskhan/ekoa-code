@@ -376,8 +376,14 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
       case 'pong':
         markAlive(pairingId);
         break;
-      // delegate / provider_response / cancel are hosted->daemon (outbound); inbound copies are the
-      // wrong direction and are ignored.
+      // delegate / provider_response / cancel / secret.deliver / session.deliver are hosted->daemon
+      // (outbound); inbound copies are the wrong direction and are ignored.
+      //
+      // `session.deliver` MUST stay unhandled here specifically. It is the DOWNWARD half of the
+      // session lifecycle (S-inject); the upward half already exists and is `session.push` above,
+      // which is bound to the socket it arrived on and goes through `acceptSessionPush`. Handling
+      // a `session.deliver` from a daemon would be Cortex accepting a session on a frame carrying
+      // none of that binding - a second way into the Cofre with none of the first one's checks.
       default:
         break;
     }

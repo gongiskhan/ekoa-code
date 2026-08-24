@@ -19,7 +19,7 @@ import {
   saveConfig,
   type PlatformCredentials,
 } from '../../auth/index.js';
-import { BridgeSocket } from '../../transport/index.js';
+import { BridgeSocket, type BridgeSocketState } from '../../transport/index.js';
 import { DaemonRuntime } from '../../runtime/index.js';
 import { ProfileManager } from '../../browser/index.js';
 import { AutomationEnablement } from '../../tools/tier2/index.js';
@@ -85,6 +85,49 @@ const SHUTDOWN_TEARDOWN_MS = 10_000;
  */
 export function tier2Advertised(capabilities: readonly BridgeCapability[]): boolean {
   return capabilities.some((c) => TIER2_CAPABILITIES.includes(c));
+}
+
+/**
+ * The socket's state callback, as `serve` wires it - EXTRACTED SO IT CAN BE DRIVEN BY A TEST.
+ *
+ * It was an inline lambda, and that made one of its three jobs untestable in the way that matters.
+ * The custody backstop below is the only thing that drops a delivered, credential-equivalent
+ * session when the channel goes away, and a test that called `runtime.clearSessions()` directly
+ * would pin the METHOD while leaving the WIRING free to be deleted - a test that cannot fail for
+ * the defect it is named after. As a function it can be handed to a real `BridgeSocket` in a test,
+ * so dropping a real socket is what proves the session is dropped with it
+ * (`test/cli/serve-socket-custody.test.ts`).
+ *
+ * `advertise` is a thunk rather than the socket, because `serve` assigns its socket on the same
+ * statement that builds this handler; see the call site.
+ */
+export function socketStateHandler(deps: {
+  io: CliContext['io'];
+  runtime: { clearSessions(): void };
+  advertise: () => void;
+}): (state: BridgeSocketState) => void {
+  return (state: BridgeSocketState): void => {
+    deps.io.out(pt.serveState(state));
+    if (state === 'revoked') deps.io.err(`${pt.errPrefix} ${pt.serveRevoked}`);
+    // THE SOCKET IS NO LONGER OPEN: drop every delivered browser session (S-inject).
+    //
+    // Cortex fails every in-flight invocation for a pairing whose socket closed, so no run whose
+    // session this daemon holds can still be running - and a daemon can sit in `reconnecting` for
+    // a long time. What would otherwise stay resident is credential-equivalent material belonging
+    // to nothing, and `SessionHold.sweep` cannot be relied on to collect it: the sweep is passive,
+    // running only inside `deliver`/`get`, so an idle reconnecting daemon never reaches it. This
+    // callback is the whole backstop.
+    //
+    // `open` and `idle` are excluded because neither is a loss of the channel: `open` is the
+    // channel ARRIVING, and clearing on it would wipe a delivery that raced the callback.
+    if (state === 'reconnecting' || state === 'revoked' || state === 'closed') {
+      deps.runtime.clearSessions();
+    }
+    // Advertise on EVERY open, not once at startup: Cortex holds the advertised list on the
+    // pairing row and a reconnect after a server restart would otherwise leave the machine
+    // listed as capable of nothing, silently un-selecting it for every capability it has.
+    if (state === 'open') deps.advertise();
+  };
 }
 
 export async function serve(args: string[], ctx: CliContext): Promise<number> {
@@ -234,13 +277,13 @@ export async function serve(args: string[], ctx: CliContext): Promise<number> {
       ctx.io.out(pt.serveFrame(frame.type));
       runtime.onFrame(frame);
     },
-    onStateChange: (state) => {
-      ctx.io.out(pt.serveState(state));
-      if (state === 'revoked') ctx.io.err(`${pt.errPrefix} ${pt.serveRevoked}`);
-      // Advertise on EVERY open, not once at startup: Cortex holds the advertised list on the
-      // pairing row and a reconnect after a server restart would otherwise leave the machine
-      // listed as capable of nothing, silently un-selecting it for every capability it has.
-      if (state === 'open') {
+    onStateChange: socketStateHandler({
+      io: ctx.io,
+      runtime,
+      // A THUNK, because `socket` is assigned by the very statement this object is an argument to.
+      // The handler only ever runs after construction, so the binding is there by then; passing the
+      // socket itself would capture `undefined`.
+      advertise: () => {
         socket.send(
           DaemonRuntime.helloFrame({
             machineName,
@@ -250,8 +293,8 @@ export async function serve(args: string[], ctx: CliContext): Promise<number> {
           }),
         );
         ctx.io.out(pt.serveAdvertised(capabilities));
-      }
-    },
+      },
+    }),
   });
 
   writeDaemonPid(home, process.pid);
