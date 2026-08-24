@@ -6,33 +6,32 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
-- **`ad-hoc-adversarial-browser-run-never-engages-the-attended-ceremony`** (2026-08-24, OPEN,
-  **HIGH**; found running acceptance matrix run 1 - Uber Eats - live on a real bridge). An automation
-  authored from a free-text goal ("list my recent Uber Eats orders") against an undeclared
-  adversarial origin reached the REAL Uber Eats login page in the headed profile on the granted
-  bridge (proving the capability grant, P4 locality routing to the preferred pairing, and the P1
-  headed executor all work end to end), but the run FAILED instead of pausing `needs_credentials`
-  for the human to log in. Neither ceremony trigger engaged:
-  (1) the DECLARATIVE halt is `requiresAttendedAuth`, which `origin-posture.ts` derives ONLY from
-  `action.authProfile?.attended === true` - an ad-hoc automation goal has no action and no
-  authProfile, so it defaults to `adversarial` (correctly bridge-only) but `attended:false`, and the
-  run never knows a login is expected;
-  (2) the RUNTIME detector is the vision model populating `humanAction` on a `verify` step
-  (`vision.ts`), which halts the run - but the run died on step 0 (the `navigate`) with the bridge
-  invocation timing out at `INVOCATION_TIMEOUT_MS = 120_000` (`bridge/tool-invocation.ts`) before any
-  `verify` step ran, so vision never saw the login wall. The bridge navigate itself is fast
-  (`waitUntil:'domcontentloaded'`, 15s), so the 120s consumed before the failure is not yet fully
-  explained - the observation capture or a later await on a heavy real-world page is the next thing
-  to instrument. Net: the attended-ceremony auto-pause + auto-resume that run 1 is specified around
-  is unreachable for an ad-hoc adversarial browser goal. The Citius path (run 2) declares attended
-  auth so it exercises trigger (1) and is the proper test of the ceremony; this finding is about the
-  UNDECLARED-origin case. CLOSE BY: a login-wall detection on the automation browser path that halts
-  `needs_credentials(ceremony)` with auto-resume regardless of declaration (a run reaching a sign-in
-  page on an adversarial origin is a credential gate whether or not an action declared it), AND an
-  invocation/step model on the browser path that does not time out the whole step while a human is
-  expected to act - the halt must survive a human taking minutes, exactly as the plan's
-  needs_credentials "mirrors awaiting_daemon (halt + re-dispatch)" intent requires. Blocks acceptance
-  run 1 as specified; runs 2 (typist/declared-attended), 3 (OAuth), 4 (pure API) do not depend on it.
+- **`ad-hoc-adversarial-browser-run-pauses-in-process-not-durably`** (2026-08-24, OPEN, **MEDIUM**;
+  found running acceptance matrix run 1 - Uber Eats - live on a real bridge. CORRECTED from an
+  earlier same-day HIGH draft that read "never engages the attended ceremony" - that draft was WRONG
+  and is retracted here: the first run failed because Playwright's chromium was not installed on the
+  bridge, so the navigate/launch hung to the 120s invocation timeout before any verify step. With
+  chromium present the run navigates cleanly - open -> verify -> orders -> sign-in in ~15s - the
+  VISION detector catches the sign-in wall on the sign-in step, and the run PAUSES for the human,
+  exactly as designed. What remains, at MEDIUM: it pauses via `paused_for_user` (the in-process
+  250ms-poll path, resumed by an explicit `POST /runs/:id/resume` that sets an in-process
+  `signals.get(runId).resumeFlag`), NOT via `needs_credentials` (the durable halt + re-dispatch that
+  survives an api restart, which the plan's P3.1 specified as the credential-pause shape). For an
+  ad-hoc automation goal the vision `humanAction` path lands on `paused_for_user`, so a pause that
+  outlives the api process (a deploy, a crash, a long human delay past the run budget) is lost and
+  the run must be re-fired rather than resumed. The declarative `needs_credentials` path is reached
+  only by an integration action declaring `authProfile.attended` (Citius, run 2). CLOSE BY: route
+  the vision `humanAction: 'login'` (and captcha/mfa) on an ADVERSARIAL origin to
+  `needs_credentials` with the durable re-dispatch, not only to `paused_for_user`, so an attended
+  browser login survives a restart on the ad-hoc path too. Also worth a smaller companion fix: the
+  bridge should report a MISSING browser binary as a typed, immediate failure ("no chromium - run
+  `npx playwright install chromium`") instead of hanging to the 120s invocation timeout - a missing
+  browser is a config error, not a slow page.
+  The earlier same-day HIGH draft ("neither ceremony trigger engaged; the run reached the login page
+  but failed") was measured with no chromium on the bridge and mistook the missing-browser hang for a
+  missing ceremony path. It is retracted: with chromium present, the vision `humanAction` detector
+  DOES pause the run at the sign-in wall. The residual is the durability shape above, plus the
+  missing-browser companion fix.
 
 - **`delete-pairing-route-has-no-descriptor`** (2026-08-24, OPEN, **MINOR**, contract gap; flagged by
   the capability-grant slice, out of its scope). `DELETE /api/v1/bridge/pairings/:pairingId`
