@@ -6413,3 +6413,47 @@ Both are pinned by cases in `web/__tests__/components/paired-machines-section.te
 own mutations. Four other findings in the same round were REFUTED and no change was made: the
 post-write 404 race, the egress 400 message, the tombstone-through-route case, and the
 `grantedByUserId` tautology.
+
+## 2026-08-24 - the ad-hoc adversarial browser session lifecycle, and the five custody decisions behind it
+
+Acceptance run 1 (Uber Eats) proved the execution plane live but exposed that the ad-hoc
+(undeclared-origin, free-text goal) browser path has none of the session LIFECYCLE the declared
+integration path has (capture -> durable Cofre store -> re-inject). The declared path already carries
+it via `session-establishment.ts` `ensureSession` / `cofre/sessions.ts` `captureSessionWithGrant`; the
+build generalizes THAT path to an adversarial origin resolved from a run's live URL rather than
+inventing a parallel one. Findings: `ad-hoc-adversarial-browser-run-pauses-in-process-not-durably`,
+`google-sso-refuses-the-automated-ceremony-browser`.
+
+Five custody decisions, fixed before build (a captured `storageState` is credential-equivalent):
+
+- **D-ADHOC-1 (capture source): Design A - reuse the attended-ceremony rail.** The adversarial
+  `needs_credentials(ceremony)` is completed by the existing `bridge/attended.ts` ceremony (a separate
+  headed browser at the resolved origin, `session.push` -> `acceptSessionPush`), NOT by reading
+  storageState out of the live run profile. Least new secret-bearing wire surface, makes the ad-hoc
+  path structurally identical to the declared one, and profile-lock arbitration falls out for free.
+- **D-ADHOC-2 (session lifetime): bounded TTL, 14 days (operator decision).** An ad-hoc captured
+  adversarial session is minted with a `ttl` grant, NOT `until_locked` (which the declared path uses).
+  An un-curated origin the user reached ad-hoc gets a bounded session that auto-expires into a fresh
+  ceremony, rather than a standing one. `this_run` is out - it would expire before re-dispatch and
+  re-open the pause loop.
+- **D-ADHOC-3 (tenancy): per-user.** The captured item is minted under the pausing run's own actor and
+  read through the owner-scoped `unwrap`, exactly as `captureSessionToCofre` does. Pinned by a Rule 5
+  isolation suite (memvault class): a run for owner A never receives owner B's session.
+- **D-ADHOC-4 (origin keying): owner-scoped lookup, no global origin index.** The generalized session
+  gate looks a session up by the run's resolved origin INSIDE the owner-scoped repo path `unwrap`
+  already uses. No queryable "origins this user holds sessions for" index is added - that would be a
+  cross-user oracle. boundOrigins stay per-item, derived from cookies.
+- **D-ADHOC-5 (who gets a ceremony): adversarial AND bridge-routed AND vision-detected login only.** An
+  undeclared origin has `requiresAttendedAuth=false`; the vision detector, not posture, says a human is
+  needed here. The ad-hoc `needs_credentials(ceremony)` opens the attended rail only when the origin
+  classifies adversarial, the run is bridge-routed, and vision flagged `humanAction: login|captcha|mfa`.
+
+BUILD ORDER (from the design pass): ship S-browser-err (typed missing-chromium error) and S-ux
+(Google-SSO guidance in the ceremony copy) now as independent throwaways; land S-inject (the missing
+Cortex->bridge session-delivery wire channel + generalized session gate + bridge `sessionStateFor`
+wiring + Rule 5 store isolation) as the load-bearing seam; then S-durable + S-login-step + S-profile +
+S-cap as ONE cohesive change on top of it (they share the `engine.ts` pause-detection site and the
+origin-resolution path; any subset is individually unshippable). The whole thing is only meaningful
+with a live bridge - the deterministic suites prove wiring and isolation; "human hits a wall, logs in,
+next run is authenticated" is a live-verification acceptance item. Touches shared wire, an auth-class
+halt, and credential capture/delivery -> adversarial cross-model review on every slice that does.
