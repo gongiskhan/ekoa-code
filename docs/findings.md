@@ -6,6 +6,38 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`capability-grants-have-no-route-or-ui-so-the-whole-browser-execution-path-is-unreachable`**
+  (2026-08-24, OPEN, **HIGH** - found while staging acceptance run 1; a ground-truth divergence from
+  the brief's "locality wired for real in every environment"). `grantCapability` /
+  `revokeCapability` (`api/src/bridge/capability-grants.ts`) have NO HTTP route
+  (`api/src/routes/bridge.ts` mounts only `/token`, `DELETE /pairings/:id`, `/status`) and NO web
+  caller (grep across `web/app`, `web/components`, `web/stores`, `web/lib` returns nothing). Only the
+  security suites call `grantCapability()`, directly. The enforcement half is real and correct:
+  `daemon-step-seam.ts:130` refuses a browser step from a machine the org has not granted
+  (`esta máquina não está autorizada para desktop.automation nesta organização`), default-deny, and
+  a live acceptance run confirmed it refuses rather than falling back to the datacenter. But because
+  nothing in the product can WRITE a grant, `desktop.automation` and `local.bash` can never be turned
+  on for any machine through the running system - so every adversarial browser run and every bash-cli
+  run refuses forever, and the entire P1-P4 execution plane is dead in production. The module's own
+  docblock says "only the tenant can answer" the grant question; there is no tenant-facing surface
+  that asks it. Same class as `the-self-extension-loop-has-no-ui-for-its-promotion-step` (a built,
+  tested, unreachable capability) but HIGH not MINOR, because it gates the headline feature of the
+  whole convergence rather than one promotion step. CLOSE BY: a `user`-class (admin-gated within the
+  tenant) grant/revoke route pair over `capability-grants.ts`, mounted, contract-tested, with the
+  `egress.residential` endpoint requirement surfaced; and a Settings/Devices UI that lists a paired
+  machine's advertised capabilities and lets an admin grant each (the `egress.residential` one taking
+  its endpoint). Blocks acceptance runs 1-3.
+
+- **`bridge-device-verification-url-uses-the-api-origin-not-the-dashboard`** (2026-08-24, OPEN,
+  **MINOR**, UX/product). `ekoa-bridge pair` printed
+  `Para autorizar este dispositivo, abra ... https://<host>:4111/settings/devices` - the API origin
+  (`:4111`), which serves no such page (`Cannot GET /settings/devices`); the real page is on the
+  dashboard (`:3000`). The device-login `verification_uri` the API returns names its own origin
+  rather than the configured web origin, so a human following the printed instruction lands on a
+  blank error. Observed live during acceptance run 1 pairing. CLOSE BY: derive the device-flow
+  `verification_uri` from the dashboard origin (the same `EKOA_PUBLIC_WEB_HOST` / configured web
+  base the CSP and frame-ancestors plumbing already resolves), not from the API request's own host.
+
 - **`publish-floor-redacts-the-authoring-shape-and-silently-demotes-a-published-action`**
   (2026-08-23, OPEN, **MINOR**, fails closed; found during the S10 evidence run, leg D - not caused
   by it). The S6 deterministic floor redacts `authoring.shape` out of every published snapshot,
