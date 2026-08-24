@@ -6,6 +6,34 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`ad-hoc-adversarial-browser-run-never-engages-the-attended-ceremony`** (2026-08-24, OPEN,
+  **HIGH**; found running acceptance matrix run 1 - Uber Eats - live on a real bridge). An automation
+  authored from a free-text goal ("list my recent Uber Eats orders") against an undeclared
+  adversarial origin reached the REAL Uber Eats login page in the headed profile on the granted
+  bridge (proving the capability grant, P4 locality routing to the preferred pairing, and the P1
+  headed executor all work end to end), but the run FAILED instead of pausing `needs_credentials`
+  for the human to log in. Neither ceremony trigger engaged:
+  (1) the DECLARATIVE halt is `requiresAttendedAuth`, which `origin-posture.ts` derives ONLY from
+  `action.authProfile?.attended === true` - an ad-hoc automation goal has no action and no
+  authProfile, so it defaults to `adversarial` (correctly bridge-only) but `attended:false`, and the
+  run never knows a login is expected;
+  (2) the RUNTIME detector is the vision model populating `humanAction` on a `verify` step
+  (`vision.ts`), which halts the run - but the run died on step 0 (the `navigate`) with the bridge
+  invocation timing out at `INVOCATION_TIMEOUT_MS = 120_000` (`bridge/tool-invocation.ts`) before any
+  `verify` step ran, so vision never saw the login wall. The bridge navigate itself is fast
+  (`waitUntil:'domcontentloaded'`, 15s), so the 120s consumed before the failure is not yet fully
+  explained - the observation capture or a later await on a heavy real-world page is the next thing
+  to instrument. Net: the attended-ceremony auto-pause + auto-resume that run 1 is specified around
+  is unreachable for an ad-hoc adversarial browser goal. The Citius path (run 2) declares attended
+  auth so it exercises trigger (1) and is the proper test of the ceremony; this finding is about the
+  UNDECLARED-origin case. CLOSE BY: a login-wall detection on the automation browser path that halts
+  `needs_credentials(ceremony)` with auto-resume regardless of declaration (a run reaching a sign-in
+  page on an adversarial origin is a credential gate whether or not an action declared it), AND an
+  invocation/step model on the browser path that does not time out the whole step while a human is
+  expected to act - the halt must survive a human taking minutes, exactly as the plan's
+  needs_credentials "mirrors awaiting_daemon (halt + re-dispatch)" intent requires. Blocks acceptance
+  run 1 as specified; runs 2 (typist/declared-attended), 3 (OAuth), 4 (pure API) do not depend on it.
+
 - **`delete-pairing-route-has-no-descriptor`** (2026-08-24, OPEN, **MINOR**, contract gap; flagged by
   the capability-grant slice, out of its scope). `DELETE /api/v1/bridge/pairings/:pairingId`
   (`api/src/routes/bridge.ts`, the R-9 kill switch) is a mounted route with NO entry in
