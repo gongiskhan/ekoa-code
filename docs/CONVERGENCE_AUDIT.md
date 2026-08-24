@@ -172,8 +172,9 @@ delete; the one reverse-flow assertion, `garrison:fittings/seed/automations/lib/
 F6", is a duplicated-vocabulary risk to watch, not a shared module). **No composer fitting exists** (the composer
 server was retired into Muster's policy panel - `garrison:src/lib/orchestrator-policy.ts`). **No Cortex-bridge code exists
 in garrison** (zero hits for delegate_to_local or the Cortex bridge endpoints - rule 9 verified; the bridge lives
-Cortex-side under `api/src/bridge/`; garrison's outpost Mac-relay has an unrelated bridge-token concept of its own,
-`garrison:tests/outpost-host-broker.test.ts`). → the Garrison view over Cortex automations is a NEW minimal connector fitting (slice G5),
+Cortex-side under `api/src/bridge/`; garrison's outpost Mac-relay was retired 2026-08-24 - "the proxy is the
+boundary" - and its own way of reaching a remote Cortex is now a credentialed proxy route with a closed endpoint
+allowlist, an unrelated concept, `garrison:tests/cortex-proxy.test.ts`). → the Garrison view over Cortex automations is a NEW minimal connector fitting (slice G5),
 not a backend switch on the local engine (different lifecycle semantics; OSS default must keep working).
 
 ### 2.5 Stale docs (reconciled in slice G6)
