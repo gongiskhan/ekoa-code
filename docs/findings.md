@@ -33,6 +33,24 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   DOES pause the run at the sign-in wall. The residual is the durability shape above, plus the
   missing-browser companion fix.
 
+- **`google-sso-refuses-the-automated-ceremony-browser`** (2026-08-24, OPEN, **MEDIUM**, external
+  constraint; found in acceptance run 1). When the attended-ceremony window (Playwright/CDP-driven
+  headed Chrome on the bridge, `channel:'chrome'`, `--disable-blink-features=AutomationControlled`,
+  `navigator.webdriver` deleted) reaches a "Continue with Google" OAuth leg, Google's server-side
+  automation detection refuses with "Couldn't sign you in - This browser or app may not be secure"
+  (`accounts.google.com/v3/signin/rejected`). The profile hardening defeats client-side
+  `navigator.webdriver` checks but not Google's detection, which is a known industry-wide block on
+  automated browsers. CONSEQUENCE: an adversarial target reachable ONLY via Google SSO cannot have
+  its session established through the attended ceremony - the human is present and willing but Google
+  refuses the automated browser itself. Direct login forms (email/phone + password/OTP) on the same
+  target are unaffected and complete the ceremony normally. NOT a defect in this codebase; recorded
+  because it bounds what the attended ceremony can capture and because the acceptance-matrix targets
+  should be chosen or logged in with a non-Google method. CLOSE/MITIGATE: for a target that offers
+  both, drive the direct-credential login; for a Google-only target, the only paths are a
+  pre-established session imported into the profile or a real (non-automated) browser doing the
+  capture - both outside the current executor. Worth surfacing to the user in the ceremony prompt
+  ("if the site offers Google sign-in, use email/phone instead - Google blocks automated browsers").
+
 - **`delete-pairing-route-has-no-descriptor`** (2026-08-24, OPEN, **MINOR**, contract gap; flagged by
   the capability-grant slice, out of its scope). `DELETE /api/v1/bridge/pairings/:pairingId`
   (`api/src/routes/bridge.ts`, the R-9 kill switch) is a mounted route with NO entry in
