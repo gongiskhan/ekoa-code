@@ -7,7 +7,7 @@
 
 // Run classes.
 export { createChatRun, executeChatRun, type StartChatRunInput } from './chat.js';
-export { handleBuildCreate, executeBuildJob, type BuildCreateInput, type BuildCreateResult } from './build.js';
+export { handleBuildCreate, executeBuildJob, redispatchQueuedBuilds, finalizeQueuedCancel, type BuildCreateInput, type BuildCreateResult } from './build.js';
 export { runBrandResearch, type BrandResearchInput } from './brand-research.js';
 
 // Registry (cancel + introspection consumed by routes/).

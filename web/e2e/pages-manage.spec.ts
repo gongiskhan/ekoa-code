@@ -54,7 +54,10 @@ test.describe('pages-manage (S5)', () => {
     await expect(tabs.first()).toBeVisible();
     const todas = page.getByRole('tab', { name: /Todas/i });
     await expect(todas).toBeVisible();
-    await tabs.nth(1).click();
+    // Click a status pill INSIDE the Plataforma panel (the page now has three top-level
+    // URL tabs; tabs.nth(1) would switch to "Minhas" and unmount the search below).
+    const platformSection = page.getByTestId('platform-integrations-section');
+    await platformSection.getByRole('tab').nth(1).click();
     await expect(page.getByTestId('integrations-page')).toBeVisible();
 
     // Localized search placeholder (no hardcoded English).

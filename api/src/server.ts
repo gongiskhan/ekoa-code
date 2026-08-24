@@ -93,6 +93,7 @@ import {
   setIntegrationPrefetch,
   setCatalog,
   sweepOrphans,
+  redispatchQueuedBuilds,
 } from './agents/index.js';
 import { assembleAgentContext, bootContentLoader, composeContext, configureContentLoader } from './content/index.js';
 import { backfillKnowledgeIndex, buildGroundingBlock, ingestDocument, searchKnowledgeIndex, readDocWithShared } from './knowledge/index.js';
@@ -716,6 +717,9 @@ export async function bootState(deps: RuntimeDeps = defaultDeps): Promise<void> 
   await bootContentLoader();
   await backfillKnowledgeIndex();
   await sweepOrphans(deps.now);
+  // s1 (run 20260719): the sweep leaves 'queued' builds untouched; re-dispatch them under the
+  // per-user FIFO cap now (a vanished owner fails ORPHANED). Ordered AFTER the sweep by design.
+  await redispatchQueuedBuilds(deps);
 
   const seedUser = process.env.EKOA_ADMIN_USERNAME;
   const seedPass = process.env.EKOA_ADMIN_PASSWORD;

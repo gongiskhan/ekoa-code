@@ -11,10 +11,13 @@
 import { jobs, artifacts, automationRuns } from '../data/stores.js';
 import type { Doc } from '../data/store.js';
 
-export type JobStatus = 'created' | 'running' | 'completed' | 'failed' | 'cancelled';
+// 'queued' (s1, run 20260719): a build admitted past the reservation/artifact guards but held
+// back because its owner is already at the per-user concurrency cap. It is non-terminal (blocks
+// same-artifact follow-ups, survives a restart) and carries no execution slot until dispatched.
+export type JobStatus = 'created' | 'running' | 'completed' | 'failed' | 'cancelled' | 'queued';
 export type JobKind = 'build' | 'brand-research';
 
-/** Automation-run pause states are non-terminal too (§5.2). */
+/** Automation-run pause states are non-terminal too (§5.2). 'queued' is deliberately NOT here. */
 const TERMINAL: ReadonlySet<string> = new Set(['completed', 'failed', 'cancelled']);
 
 export interface JobRecord extends Doc {
@@ -31,6 +34,10 @@ export interface JobRecord extends Doc {
     attachments?: unknown[];
     fieldValues?: Record<string, unknown>;
     configValues?: Record<string, unknown>;
+    // s1 boot re-dispatch reconstruction: the execution inputs a live entry would otherwise hold,
+    // persisted ONLY when a job is created 'queued' (a normally-dispatched build never reads them
+    // back). knowledgeDocs is bounded at the contract (20 x 256 KiB), acceptable per-doc.
+    knowledgeDocs?: Array<{ title: string; text: string; collection?: string }>;
   };
   routing?: { tier: string; reason: string };
   result?: {
@@ -134,6 +141,10 @@ export async function sweepOrphans(now: () => number): Promise<{ jobs: number; r
   for (const raw of await jobs.find({})) {
     const j = raw as JobRecord;
     if (TERMINAL.has(j.status)) continue;
+    // s1: a 'queued' build never started, so a restart must not fail it — redispatchQueuedBuilds
+    // (called right after this sweep in server.ts) re-runs it. Skipping keeps the sweep the sole
+    // owner of RUNNING orphans and leaves queued admission intact across a restart.
+    if (j.status === 'queued') continue;
     await jobs.update(j._id, (cur) => ({
       ...cur,
       status: 'failed',
@@ -164,6 +175,12 @@ export async function sweepOrphans(now: () => number): Promise<{ jobs: number; r
   }
 
   return { jobs: sweptJobs, runs: sweptRuns, artifacts: artifactsReset };
+}
+
+/** s1: the persisted 'queued' build jobs in FIFO (createdAt) order — the boot re-dispatch input
+ *  (redispatchQueuedBuilds). The sweep leaves these untouched; this loads them back for dispatch. */
+export async function listQueuedJobs(): Promise<JobRecord[]> {
+  return (await jobs.find({ status: 'queued' }, { createdAt: 1 })) as JobRecord[];
 }
 
 /** Reset an artifact to `draft` (zombie net + build error path). */

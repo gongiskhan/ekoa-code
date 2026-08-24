@@ -193,9 +193,12 @@ test('"Criar nova instância" creates a separate copy instead of touching the or
   writeFileSync(v2Path, JSON.stringify(makeBundle(2, NAME_V2, baseId)));
   await importViaUi(page, v2Path);
 
-  // Escape dismisses the choice without importing anything…
+  // Cancelar dismisses the choice without importing anything (deterministic close - a bare
+  // global Escape occasionally races the dialog's document-level listener)…
   await expect(page.getByTestId('update-or-create-dialog')).toBeVisible();
-  await page.keyboard.press('Escape');
+  // The Cancelar button lives in the Dialog FOOTER, outside the testid content div - target it
+  // page-wide while the dialog is the only surface offering it.
+  await page.getByRole('button', { name: /^cancelar$/i }).last().click();
   await expect(page.getByTestId('update-or-create-dialog')).not.toBeVisible();
 
   // …then the same bundle re-offers the choice and create-new proceeds.

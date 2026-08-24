@@ -57,7 +57,7 @@ export async function mergedSettings(userId: string, orgId: string) {
     _id: undefined,
     build: { verifyBuilds: perUser.build?.verifyBuilds ?? true },
     memory: { autoExtract: perUser.memory?.autoExtract ?? true },
-    integration: { pipedreamEnabled: orgInteg?.pipedreamEnabled ?? false },
+    integration: { pipedreamEnabled: orgInteg?.pipedreamEnabled ?? true }, // default ON, matching the service posture (undefined/true = ON)
   };
 }
 export async function patchOrgSettings(orgId: string, patch: Record<string, unknown>) {

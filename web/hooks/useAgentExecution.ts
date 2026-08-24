@@ -3,21 +3,27 @@
 /**
  * Agent Execution Hook
  *
- * Manages the full lifecycle: execute -> stream -> complete
- * Uses WS actions for execution and WS stream events for output.
+ * Manages the build job lifecycle: execute -> stream -> complete. Job START/CANCEL and the
+ * transcript side effects (messages, retry context, refusal feed) live here; the SSE stream
+ * itself is owned by the liveness-based job-stream manager (lib/job-stream-manager.ts), so a
+ * backgrounded build keeps ingesting events instead of being torn down on session switch.
+ *
+ * This hook is bound to the ACTIVE session. It keeps the global `isExecuting` flag in sync
+ * with that session's per-session build status (running|queued) - a compatibility bridge; the
+ * flag itself is removed in a later slice once the UI reads sessionBusy() directly.
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { api, tryCall } from '@/lib/api';
 import type { Job } from '@ekoa/shared';
-import { useOrchestrationStore } from '@/stores/orchestration';
+import { useOrchestrationStore, type SessionJobState } from '@/stores/orchestration';
 import { useI18nStore } from '@/stores/i18n';
-import { useJobStream } from './useJobStream';
+import { trackJob, untrackJob, ensureTracked } from '@/lib/job-stream-manager';
 import { sanitizeUserFacingError } from '@/lib/sanitize-error';
 
 /** Resolve the user's language preference, preferring an explicit per-call value.
  *  Falls back to the i18n store (the header/agent language), NOT the settings
- *  store — settings.general.language defaults to 'en' and is not kept in sync. */
+ *  store - settings.general.language defaults to 'en' and is not kept in sync. */
 function resolveLanguage(explicit?: string): 'en' | 'pt' {
   if (explicit === 'pt' || explicit === 'en') return explicit;
   return useI18nStore.getState().language === 'pt' ? 'pt' : 'en';
@@ -65,49 +71,51 @@ export function useAgentExecution(sessionId: string | null) {
     error: null,
   });
 
-  const jobIdRef = useRef<string | null>(null);
-  const previewStartedRef = useRef(false);
-
-  const [streamState, streamActions] = useJobStream(execState.jobId, sessionId);
-
   const store = useOrchestrationStore;
 
-  // Monitor stream state for completion / preview triggers
+  // The active session's per-session build status (manager-written). Drives the global
+  // isExecuting flag below without a stream hook of its own.
+  const buildStatus = useOrchestrationStore((s) =>
+    sessionId ? s.sessionJobs[sessionId]?.status : undefined,
+  );
+
+  // Edge-trigger the global isExecuting flag off the active session's build liveness. Only
+  // reacts to a build's running<->terminal transition, so it never fights the chat runtime's
+  // own isExecuting writes (a pure chat turn leaves the build status idle). Tracks the last
+  // (session,status) pair so a session switch starts the new session fresh instead of comparing
+  // across sessions.
+  const lastSeenRef = useRef<{ sessionId: string | null; status: SessionJobState['status'] | undefined }>(
+    { sessionId: null, status: undefined },
+  );
+  useEffect(() => {
+    const last = lastSeenRef.current;
+    const prev = last.sessionId === sessionId ? last.status : undefined;
+    lastSeenRef.current = { sessionId, status: buildStatus };
+    if (!sessionId) return;
+    const isLive = buildStatus === 'running' || buildStatus === 'queued';
+    const wasLive = prev === 'running' || prev === 'queued';
+    if (isLive && !wasLive) {
+      store.getState().setIsExecuting(true);
+      setExecState((s) => ({ ...s, isExecuting: true }));
+    } else if (!isLive && wasLive) {
+      store.getState().setIsExecuting(false);
+      setExecState((s) => ({ ...s, isExecuting: false }));
+    }
+  }, [sessionId, buildStatus, store]);
+
+  // Revisit reconcile (review #3): whenever this session becomes active with a non-terminal
+  // build on record, make sure its stream is actually attached - the liveness-owned manager
+  // has no per-mount lifecycle, so a stream lost to a failed cancel, a logout, or a transient
+  // rehydrate error is recovered here (ensureTracked no-ops when the stream is healthy).
   useEffect(() => {
     if (!sessionId) return;
+    const job = store.getState().sessionJobs[sessionId];
+    if (!job?.jobId) return;
+    if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') return;
+    void ensureTracked(job.jobId, sessionId);
+  }, [sessionId, store]);
 
-    if (streamState.isComplete || streamState.result) {
-      setExecState((prev) => ({ ...prev, isExecuting: false }));
-      store.getState().setIsExecuting(false);
-
-      // Note: retryContext is intentionally NOT cleared on success — it stays set so the
-      // Resend button on the latest user message can re-run the same prompt with the same
-      // options. It's overwritten by the next execute() call.
-
-      // Set app URL on completion (static serving, no process to start) -- prefer slug
-      const sessionJob = store.getState().sessionJobs[sessionId];
-      if (sessionJob?.artifactInstanceId && !previewStartedRef.current) {
-        previewStartedRef.current = true;
-        const appIdentifier = sessionJob.slug || sessionJob.artifactInstanceId;
-        store.getState().setSessionPreview(sessionId, {
-          previewId: appIdentifier,
-          appUrl: api.appUrl(appIdentifier),
-          status: 'running',
-        });
-      }
-    }
-
-    if (streamState.error) {
-      setExecState((prev) => ({
-        ...prev,
-        isExecuting: false,
-        error: streamState.error,
-      }));
-      store.getState().setIsExecuting(false);
-    }
-  }, [sessionId, streamState.isComplete, streamState.result, streamState.error, store]);
-
-  // Execute agent via WS action
+  // Execute agent via the jobs REST surface.
   const execute = useCallback(
     async (message: string, options: ExecuteOptions = {}) => {
       if (!sessionId) return;
@@ -119,15 +127,13 @@ export function useAgentExecution(sessionId: string | null) {
         error: null,
       });
       store.getState().setIsExecuting(true);
-      previewStartedRef.current = false;
 
-      // Capture retry context BEFORE clearing — kept on failure so a Retry
+      // Capture retry context BEFORE clearing - kept on failure so a Retry
       // button can re-fire the exact same call.
       store.getState().setRetryContext(sessionId, { message, options });
 
       // Clear previous outputs
       store.getState().clearSessionJobOutput(sessionId);
-      streamActions.clearOutputs();
 
       // Build the job-create request (FC-045). URL-type attachments don't go to the
       // backend (they're prepended to the message text by the caller); file/folder
@@ -207,7 +213,6 @@ export function useAgentExecution(sessionId: string | null) {
 
         const job = result.data.job;
         const jobId = job.id;
-        jobIdRef.current = jobId;
 
         setExecState((prev) => ({
           ...prev,
@@ -216,15 +221,17 @@ export function useAgentExecution(sessionId: string | null) {
         }));
 
         // Update store with job info. The server resolves the project dir from the
-        // artifact id, so no client-side path is tracked (FC-045).
+        // artifact id, so no client-side path is tracked (FC-045). A capped build comes
+        // back queued (job.status:'queued') - its stream opens and sits silent until
+        // dispatch; anything else is executing, so mark it running.
         store.getState().setSessionJob(sessionId, {
           jobId,
-          status: 'queued',
+          status: job.status === 'queued' ? 'queued' : 'running',
           phase: 'preparing',
           artifactInstanceId: job.artifactId || null,
         });
 
-        // Add build started message (localized — must match the user's language
+        // Add build started message (localized - must match the user's language
         // so it doesn't sit in English next to PT status text).
         store.getState().addMessage(sessionId, {
           role: 'assistant',
@@ -235,7 +242,7 @@ export function useAgentExecution(sessionId: string | null) {
         // Set up app URL (static serving).
         // - Follow-up builds: the app from the previous build is still served at the
         //   same /apps/{id}/ URL; esbuild hot-reload refreshes it as files change.
-        //   Do NOT flip back to 'building' — that would hide the running iframe.
+        //   Do NOT flip back to 'building' - that would hide the running iframe.
         // - First builds: fall through to 'building' until the stream reports ready.
         if (job.artifactId) {
           const previewReady = isFollowUp;
@@ -249,14 +256,10 @@ export function useAgentExecution(sessionId: string | null) {
           }
         }
 
-        // Guard: if the user switched sessions while the API call was in-flight,
-        // abort here so we don't subscribe the wrong session's handler.
-        if (store.getState().activeSessionId !== sessionId) {
-          return;
-        }
-
-        // Subscribe to the scoped job event stream.
-        streamActions.connect(jobId);
+        // Track the job's stream by its OWNING session regardless of focus - the manager
+        // routes every event to this sessionId's buckets even if the user has since
+        // switched away (or the build is queued and silent until dispatch).
+        trackJob(jobId, sessionId);
       } catch (err) {
         const error = {
           code: 'NETWORK_ERROR',
@@ -275,21 +278,22 @@ export function useAgentExecution(sessionId: string | null) {
         });
       }
     },
-    [sessionId, store, streamActions]
+    [sessionId, store]
   );
 
-  // Cancel running job via WS action.
-  // `silent` skips the "Build cancelled." + flushed-text messages — used when the
+  // Cancel running job via the jobs REST surface.
+  // `silent` skips the "Build cancelled." + flushed-text messages - used when the
   // caller is about to remove the last turn anyway (Stop → edit-and-resend), so
   // we don't add messages that would immediately be trimmed.
   const cancel = useCallback(async (opts?: { silent?: boolean }) => {
-    const currentJobId = jobIdRef.current || execState.jobId;
+    const currentJobId =
+      (sessionId ? store.getState().sessionJobs[sessionId]?.jobId : null) || execState.jobId;
     if (!currentJobId) return;
     const silent = opts?.silent === true;
 
     try {
       await api.jobs.cancel({ id: currentJobId });
-      streamActions.disconnect();
+      untrackJob(currentJobId);
 
       setExecState((prev) => ({
         ...prev,
@@ -322,26 +326,26 @@ export function useAgentExecution(sessionId: string | null) {
         }
       }
     } catch {
-      streamActions.disconnect();
+      // Cancel FAILED (transient network/5xx): the build is still running server-side, so the
+      // stream must stay attached and the session status stays 'running' - untracking here
+      // permanently froze the session (review #3). The user can hit Stop again.
       setExecState((prev) => ({ ...prev, isExecuting: false }));
       store.getState().setIsExecuting(false);
       if (silent && sessionId) store.getState().clearStreamingChat(sessionId);
     }
-  }, [execState.jobId, sessionId, store, streamActions]);
+  }, [execState.jobId, sessionId, store]);
 
   // Reset state
   const reset = useCallback(() => {
-    streamActions.disconnect();
-    streamActions.clearOutputs();
+    const currentJobId = sessionId ? store.getState().sessionJobs[sessionId]?.jobId : null;
+    if (currentJobId) untrackJob(currentJobId);
     setExecState({
       isExecuting: false,
       jobId: null,
       jobInfo: null,
       error: null,
     });
-    jobIdRef.current = null;
-    previewStartedRef.current = false;
-  }, [streamActions]);
+  }, [sessionId, store]);
 
   // Reset execution state when session changes
   useEffect(() => {
@@ -351,43 +355,6 @@ export function useAgentExecution(sessionId: string | null) {
       jobInfo: null,
       error: null,
     });
-    jobIdRef.current = null;
-    previewStartedRef.current = false;
-  }, [sessionId]);
-
-  // Auto-reconnect on mount if session has an active job
-  useEffect(() => {
-    if (!sessionId) return;
-
-    const sessionJob = store.getState().sessionJobs[sessionId];
-    if (!sessionJob?.jobId || sessionJob.status === 'idle') return;
-
-    if (sessionJob.status === 'running' || sessionJob.status === 'queued') {
-      void tryCall(() => api.jobs.get({ id: sessionJob.jobId! })).then((res) => {
-        if (res.ok) {
-          const job = res.data;
-          if (job.status === 'running' || job.status === 'queued') {
-            setExecState({
-              isExecuting: true,
-              jobId: sessionJob.jobId,
-              jobInfo: job,
-              error: null,
-            });
-            jobIdRef.current = sessionJob.jobId;
-            store.getState().setIsExecuting(true);
-            streamActions.connect(sessionJob.jobId!);
-          } else {
-            store.getState().setSessionJob(sessionId, {
-              status: job.status as 'completed' | 'failed' | 'cancelled',
-            });
-          }
-        } else {
-          // Job not found (server restarted / expired) or unreachable -- mark failed.
-          store.getState().setSessionJob(sessionId, { status: 'failed' });
-        }
-      });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   // Resend the latest user message. Trims trailing non-user messages so the new
@@ -398,7 +365,7 @@ export function useAgentExecution(sessionId: string | null) {
 
     const messages = store.getState().messages[sessionId] || [];
 
-    // Find latest user message — that's what we're resending
+    // Find latest user message - that's what we're resending
     let lastUserIdx = -1;
     for (let i = messages.length - 1; i >= 0; i--) {
       if (messages[i].role === 'user') {
@@ -410,7 +377,7 @@ export function useAgentExecution(sessionId: string | null) {
 
     // Prefer the captured retryContext (has full attachment paths/IDs). If it's
     // gone (older session or cross-tab edit), fall back to the user message text
-    // alone — works for plain prompts without attachments.
+    // alone - works for plain prompts without attachments.
     const ctx = store.getState().getRetryContext(sessionId);
     const message = ctx?.message ?? messages[lastUserIdx].content;
     const baseOptions = ctx?.options ?? {};
@@ -437,10 +404,7 @@ export function useAgentExecution(sessionId: string | null) {
   }, [sessionId, store, execute]);
 
   return {
-    state: {
-      ...execState,
-      streamState,
-    },
+    state: execState,
     execute,
     cancel,
     reset,

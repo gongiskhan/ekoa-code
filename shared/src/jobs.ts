@@ -7,6 +7,13 @@ import type { DomainDescriptorMap } from './descriptor.js';
 export const Job = z
   .object({
     id: z.string(),
+    // Server-side status enum (api/src/agents/jobs.ts JobStatus): created | running | completed |
+    // failed | cancelled | 'queued'. 'queued' (s1, run 20260719) is a build held past the
+    // reservation/artifact guards but over its owner's per-user concurrency cap — non-terminal,
+    // dispatched FIFO as the owner's running builds settle. Stays z.string() on the wire (no
+    // contract change): the 202 create body and GET /jobs/:id already carry whatever status applies,
+    // and the client flips 'queued' -> 'running' on the first execution event, so no new SSE union
+    // member or parity-fixture churn is needed to represent it.
     status: z.string(),
     artifactId: z.string().optional(),
     slug: z.string().optional(),

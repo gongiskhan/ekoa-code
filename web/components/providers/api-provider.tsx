@@ -30,6 +30,8 @@ import {
 } from '@/lib/api';
 import type { NotificationEvent } from '@ekoa/shared';
 import { useI18nStore } from '@/stores/i18n';
+import { rehydrateJobs } from '@/lib/job-stream-manager';
+import { useOrchestrationStore } from '@/stores/orchestration';
 
 interface ApiContextValue {
   api: Api;
@@ -73,6 +75,21 @@ export function ApiProvider({ children }: { children: React.ReactNode }) {
         const stream = openNotificationsStream();
         notificationsRef.current = stream;
         setNotifications(stream);
+        // Re-derive live-build truth from the server and reattach every running/queued job's
+        // SSE stream (S4). Owns the reconnection role the per-session mount scatter used to
+        // hold; a refresh mid-build (or two) reconnects every session's stream. Fire-and-forget.
+        // The scan reads the PERSISTED sessionJobs, so it must wait for zustand's async store
+        // hydration - auth-ready can beat it on a reload, and scanning the pre-hydration empty
+        // store would reattach nothing (caught by parallel-sessions.spec.ts's reload leg).
+        const persistApi = useOrchestrationStore.persist;
+        if (persistApi && !persistApi.hasHydrated()) {
+          const unsub = persistApi.onFinishHydration(() => {
+            unsub();
+            void rehydrateJobs();
+          });
+        } else {
+          void rehydrateJobs();
+        }
       } else if (!authed && notificationsRef.current) {
         notificationsRef.current.close();
         notificationsRef.current = null;

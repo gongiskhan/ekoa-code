@@ -3,7 +3,7 @@ import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 // @ts-expect-error - JS mock helper, no d.ts
 import { startMockPipedream } from '../helpers/mock-pipedream-server.mjs';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
-import { integrationConfigs, settings, billingAccounts, tokenEvents } from '../../src/data/stores.js';
+import { integrationConfigs, settings, billingAccounts, tokenEvents, orgs } from '../../src/data/stores.js';
 import { loadConfig, __resetConfigForTests } from '../../src/config.js';
 import {
   savePipedreamConfig,
@@ -58,7 +58,7 @@ afterAll(async () => {
 beforeEach(async () => {
   resetPipedreamCaches();
   mock.reset();
-  for (const s of [integrationConfigs, settings, billingAccounts, tokenEvents]) await s.deleteMany({});
+  for (const s of [integrationConfigs, settings, billingAccounts, tokenEvents, orgs]) await s.deleteMany({});
 });
 
 describe('Pipedream config + status (ch03 §3.8.16)', () => {
@@ -89,7 +89,7 @@ describe('Pipedream config + status (ch03 §3.8.16)', () => {
 
   it('reports enabled:false when the master toggle is off', async () => {
     await configure();
-    await settings.put({ _id: 'default', integration: { pipedreamEnabled: false } } as never);
+    await orgs.put({ _id: 'orgA', name: 'Org A', settings: { integration: { pipedreamEnabled: false } } } as never);
     expect((await getPipedreamStatus(user, mockDeps())).enabled).toBe(false);
   });
 });
@@ -135,7 +135,7 @@ describe('Pipedream action run — gating + metering', () => {
 
   it('refuses (disabled) when the master toggle is off — no external call', async () => {
     await configure();
-    await settings.put({ _id: 'default', integration: { pipedreamEnabled: false } } as never);
+    await orgs.put({ _id: 'orgA', name: 'Org A', settings: { integration: { pipedreamEnabled: false } } } as never);
     const res = await runPipedreamAction({ actor: user, app: 'slack', actionKey: 'send', args: {} }, mockDeps());
     expect(res).toMatchObject({ success: false, code: 'disabled' });
     expect(mock.stats.runCalls).toBe(0);

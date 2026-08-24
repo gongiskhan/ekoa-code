@@ -180,6 +180,15 @@ Env names the API reads, with dev defaults:
 - `LLM_GATEWAY_ENABLED` - gateway mount toggle, default on (set `false` to disable).
 - `LLM_OAUTH_REFRESH_URL` - OAuth token-refresh endpoint; unset means oauth refresh fails closed
   (latches the `claudeAuth` alert), the correct posture until configured.
+- `MAX_CONCURRENT_BUILDS_PER_USER` - per-user parallel build cap, default `2`, clamped to `>=1`
+  (`loadAgentsConfig`). A beyond-cap build persists as `queued` (202, same contract) and dispatches
+  FIFO when one of that user's builds reaches a terminal state. Operator note before raising it:
+  all of one user's parallel builds share the per-user in-memory rate/spend-cap window
+  (`billing/rate-caps.ts`, 60 s), so a higher cap raises the odds of transient
+  `LlmRateCapError`/ADAPTER_ERROR bursts mid-build, and each running build is one Agent SDK
+  subprocess (memory/CPU). The pre-run allowance gate is read-only (no reservation), so N
+  concurrent dispatches can each pass with budget for one - overage is reconciled by the CAS fold,
+  which is the pre-existing pre-run-only design, just amplified by parallelism.
 - `LLM_MODEL_FAST` / `LLM_MODEL_WORKHORSE` / `LLM_MODEL_EXPERT` - per-tier model id overrides.
 - `GITHUB_PUSH_ENABLED` - auto-commit/push kill switch, default off (`true` to enable).
 - `GITHUB_DEV_TOKEN` - dev PAT; refused in a production-like environment.

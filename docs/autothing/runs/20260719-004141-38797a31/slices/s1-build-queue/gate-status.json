@@ -1,0 +1,68 @@
+{
+  "slice": "s1-build-queue",
+  "title": "Per-user build cap + queued FIFO dispatch (server)",
+  "updatedAt": "2026-07-19T07:30:00Z",
+  "phase": "gate",
+  "status": "in_progress",
+  "kind": "mixed",
+  "retries": {
+    "limit": 5,
+    "used": 1
+  },
+  "gates": {
+    "tests": {
+      "cmd": "npx vitest run api/tests/agents/build-queue.test.ts api/tests/contract/jobs-queue.test.ts",
+      "exit": 0,
+      "at": "2026-07-19T06:52:00Z",
+      "summary": "unit races 13/13 + contract 2/2 (incl. review-round regressions); regression api/tests/{agents,contract} 456/456 pre-fix"
+    },
+    "typecheck": {
+      "cmd": "npm run typecheck",
+      "exit": 0,
+      "at": "2026-07-19T06:50:00Z",
+      "summary": "0 errors (api + web)"
+    },
+    "lint": {
+      "cmd": "npm run lint",
+      "exit": 0,
+      "at": "2026-07-19T06:51:00Z",
+      "summary": "0 errors, pre-existing warnings only"
+    },
+    "build": {
+      "cmd": "npm run build",
+      "exit": 0,
+      "at": "2026-07-19T06:54:30Z",
+      "summary": "shared + api + web build clean"
+    },
+    "e2e": {
+      "exit": null,
+      "summary": "wire behavior covered by the contract test; live multi-session e2e lands in s8-live-proof"
+    },
+    "adversarialReview": {
+      "verdict": null
+    },
+    "adversarialTest": {
+      "result": null
+    },
+    "designAudit": {
+      "verdict": "clean",
+      "by": [
+        "n/a"
+      ],
+      "at": "2026-07-19T06:56:00Z",
+      "notes": "server-side slice, no UI surface; per FLOW_PLAN the design gate applies to ui slices"
+    },
+    "video": {
+      "status": null
+    },
+    "review": {
+      "verdict": "findings-fixed",
+      "by": "code-review workflow (30 agents, high)",
+      "at": "2026-07-19T07:20:00Z",
+      "findings": 10,
+      "notes": "G1-wide review: 10 verified correctness findings (5 on s1: persist-window dispatch, reservation TTL vs queue wait, cancelled-queued audit row, bound-POST status, unhandled cancel rejection). All fixed same round; 4 new regression tests green (13/13 unit + 2/2 contract)."
+    }
+  },
+  "blockers": [],
+  "notes": "Implementation by s4-parallel teammate s1-impl (code + unit tests); contract test, diagrams 04/05, runbook and decisions.md entries completed by the lead after host-sleep stalls. Docs/diagrams updated same unit of work (FIXED-12)."
+}

@@ -967,3 +967,26 @@ placeholder, and sorting falls back via `artifactSortTime`. At the 2026-07-19 me
 ported into `web/components/artifacts/artifacts-surface.tsx` (the artifacts page's new home after
 the surface-contract conversion). Deterministically closed by `web/e2e/artifact-cards-dates.spec.ts`
 (ledger band4_gap_plan).
+
+## F-2026-07-19-queued-stream-sockets (dismissed 2026-07-19, run 20260719-004141)
+Review finding (PLAUSIBLE, code-review of the s1/s4 parallel-sessions slices): one always-open
+EventSource per running/queued job plus the notifications stream can approach the browser's
+~6-connections-per-origin HTTP/1.1 ceiling, since a queued job's stream sits silent for its whole
+queue wait. DISMISSED for v1 with reasons: (a) the per-user cap defaults to 2 executing builds, so
+the realistic concurrent set is 2 running + notifications + at most a couple of queued streams,
+inside the ceiling; (b) the production edge serves HTTP/2, where the per-origin socket limit does
+not apply (noted in operations-runbook.md alongside the cap env); (c) the queued stream being open
+is what guarantees the queued->running transition and ring replay are never missed. Revisit with a
+poll-until-running design if the cap is raised materially or an HTTP/1.1-only deployment appears.
+
+## F-2026-07-19-web-lane-red-baseline (open, discovered by run 20260719-004141)
+First `npm run e2e:full` execution in a while (the lane runs only manually - the documented CI gap
+in testing.md) found 8 baseline dashboard specs red on a CLEAN tree (verified by a stash-and-rerun
+discriminator, so NOT caused by the parallel-sessions slices): artifact-backend-panel (enable
+toggle), integrations-pipedream (master toggle persist), integrations-sections (webhooks tab
+create/delete), onboarding x2 (welcome chips count 2 vs 3), pages-core (usage at 375px),
+pages-manage (integrations PageHeader filter), update-from-bundle ("Criar nova instância" - this
+one alternates with artifacts-apps-section ignoredVersion between runs, a flaky pair). Full logs:
+the run's scratchpad e2e-baseline.log. Each is product/spec drift needing triage (stale spec vs
+real regression) per the QA rule "a red baseline spec is fixed before any new work merges"; being
+worked in-run after the G1 delta check.

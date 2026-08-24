@@ -5,7 +5,7 @@
  * so the chat bubble can offer "Pedir ao administrador" (change-requests
  * fileFromRefusal). Any other failure stays a plain error with NO refusal payload.
  *
- * useJobStream + api.jobs.create are mocked so the hook runs without a backend;
+ * The job-stream manager + api.jobs.create are mocked so the hook runs without a backend;
  * everything else on '@/lib/api' is the real module (partial mock via importOriginal).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -29,11 +29,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
 });
 
 // Keep the SSE/stream machinery inert - we only care about message side effects.
-vi.mock('@/hooks/useJobStream', () => ({
-  useJobStream: () => [
-    { isComplete: false, result: null, error: null, output: [] },
-    { connect: vi.fn(), disconnect: vi.fn(), clearOutputs: vi.fn() },
-  ],
+vi.mock('@/lib/job-stream-manager', () => ({
+  trackJob: vi.fn(),
+  untrackJob: vi.fn(),
+  rehydrateJobs: vi.fn(),
+  isTracked: () => false,
 }));
 
 import { ApiError } from '@/lib/api';

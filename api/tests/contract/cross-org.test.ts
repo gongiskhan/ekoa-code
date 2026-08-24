@@ -148,14 +148,16 @@ describe('settings org-scoping (Codex-review regression)', () => {
     await mkUser('sb', 'sb', 'orgB', 'org-admin');
     const tA = await tokenFor('sa');
     const tB = await tokenFor('sb');
-    const patch = await api('/api/v1/settings', tA, { method: 'PATCH', body: JSON.stringify({ integration: { pipedreamEnabled: true } }) });
+    // Default is ON (run 20260719: merge default aligned with the service posture), so org A
+    // flips it OFF - isolation means org B keeps its own ON default.
+    const patch = await api('/api/v1/settings', tA, { method: 'PATCH', body: JSON.stringify({ integration: { pipedreamEnabled: false } }) });
     expect(patch.status).toBe(200);
     // org B sees its OWN (default) settings, not org A's change
     const bView = (await (await api('/api/v1/settings', tB)).json()) as { integration: { pipedreamEnabled: boolean } };
-    expect(bView.integration.pipedreamEnabled).toBe(false);
+    expect(bView.integration.pipedreamEnabled).toBe(true);
     // org A sees its change
     const aView = (await (await api('/api/v1/settings', tA)).json()) as { integration: { pipedreamEnabled: boolean } };
-    expect(aView.integration.pipedreamEnabled).toBe(true);
+    expect(aView.integration.pipedreamEnabled).toBe(false);
   });
 });
 

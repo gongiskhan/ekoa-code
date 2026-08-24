@@ -13,7 +13,7 @@ import { checkAllowance } from '../billing/index.js';
 import { BILLING_PAGE_URL } from '../billing/constants.js';
 import { runAgent, decideForTask, LlmAbortedError } from '../llm/index.js';
 import { runPostRunExtraction } from '../memory/index.js';
-import { userSettings } from '../data/stores.js';
+import { userSettings, users, type UserDoc } from '../data/stores.js';
 import {
   registerRun,
   getRun,
@@ -23,6 +23,9 @@ import {
   reserveFirstBuild,
   bindReservation,
   releaseReservation,
+  liveBuildCountForUser,
+  tryDispatchUser,
+  type LiveRunEntry,
 } from './registry.js';
 import { JobStreamSink, emitIntegrationBuildIntent, emitChatAnswer } from './streaming.js';
 import { MarkerProcessor, scanProviderError } from './markers.js';
@@ -37,6 +40,7 @@ import {
   jobView,
   nonTerminalJobForArtifact,
   resetArtifactToDraft,
+  listQueuedJobs,
   type JobRecord,
 } from './jobs.js';
 import { assembleAgentContext, getBuildMechanics, knowledgeGrounding, ingestBuildKnowledge, verifyRunner } from './seams.js';
@@ -98,11 +102,13 @@ async function handleFirstBuild(input: BuildCreateInput): Promise<BuildCreateRes
   // POST to the running job and returns it (the build_intent broadcast reaches every open tab).
   const reservation = reserveFirstBuild(input.sessionId, input.deps.now());
   if (!reservation.ok) {
-    // Bound to the existing job — return it as `created` pointing at the running job.
+    // Bound to the existing job — return it as `created` pointing at the live job. The bound job
+    // may still be waiting for a slot, so report its real state (review #8).
     const existingId = reservation.jobId;
+    const boundStatus = getRun(existingId)?.state === 'queued' ? 'queued' : 'running';
     return {
       status: 'created',
-      job: { id: existingId, status: 'running', createdAt: new Date(input.deps.now()).toISOString() },
+      job: { id: existingId, status: boundStatus, createdAt: new Date(input.deps.now()).toISOString() },
       fire: () => {},
     };
   }
@@ -110,7 +116,7 @@ async function handleFirstBuild(input: BuildCreateInput): Promise<BuildCreateRes
   const jobId = input.deps.genId();
   bindReservation(input.sessionId, jobId);
   const abort = new AbortController();
-  registerRun({
+  const entry = registerRun({
     id: jobId,
     ownerUserId: input.actor.userId,
     orgId: input.actor.orgId,
@@ -119,13 +125,39 @@ async function handleFirstBuild(input: BuildCreateInput): Promise<BuildCreateRes
     startedAt: input.deps.now(),
     sessionId: input.sessionId,
   });
+  // s1: the per-user cap commit + queued-dispatch wiring (§B1) — for a first build, run right here
+  // (there is no classifier to gate it, unlike a follow-up).
+  return commitBuildJob(jobId, input, abort, entry, { firstBuild: true });
+}
+
+/**
+ * s1 commit protocol (§B1): the ONE synchronous cap decision, shared by first-build and follow-up.
+ * Run AFTER the reservation/artifact-guard/classifier so a follow-up classified 'question' is still
+ * answered immediately and never queued. There is ZERO await between the count and the state commit,
+ * so two concurrent creates for one user cannot both pass the cap by interleaving at a microtask
+ * boundary (§C1). A create over the cap is persisted 'queued' with its execution inputs, wired to a
+ * post-persist dispatch thunk + a cancel listener, and left for the FIFO dispatcher.
+ */
+async function commitBuildJob(
+  jobId: string,
+  input: BuildCreateInput,
+  abort: AbortController,
+  entry: LiveRunEntry,
+  opts: ExecOpts,
+): Promise<BuildCreateResult> {
+  const cap = Math.max(1, loadAgentsConfig().maxConcurrentBuildsPerUser);
+  // --- synchronous: no await between the count and the state assignment (§C1) ---
+  const queued = liveBuildCountForUser(input.actor.userId) >= cap;
+  entry.state = queued ? 'queued' : 'executing';
+  // -----------------------------------------------------------------------------
 
   const record: JobRecord = {
     _id: jobId,
     kind: 'build',
-    status: 'created',
+    status: queued ? 'queued' : 'created',
     userId: input.actor.userId,
     sessionId: input.sessionId,
+    ...(opts.artifactId ? { artifactId: opts.artifactId } : {}),
     request: {
       description: input.description,
       language: input.language,
@@ -133,19 +165,70 @@ async function handleFirstBuild(input: BuildCreateInput): Promise<BuildCreateRes
       ...(input.integrationKeys ? { integrationKeys: input.integrationKeys } : {}),
       ...(input.fieldValues ? { fieldValues: input.fieldValues } : {}),
       ...(input.configValues ? { configValues: input.configValues } : {}),
+      // Persist the boot-reconstruction inputs ONLY when queued: a queued build may outlive the
+      // process, so redispatchQueuedBuilds needs what the live entry would otherwise have held.
+      ...(queued && input.attachments ? { attachments: input.attachments } : {}),
+      ...(queued && input.knowledgeDocs ? { knowledgeDocs: input.knowledgeDocs } : {}),
     },
     createdAt: new Date(input.deps.now()).toISOString(),
   };
   // Persist BEFORE responding so `GET /jobs/:id` finds the record as soon as the 202 returns
-  // ("respond early once the record exists", §5.2 step 2).
-  await persistJob(record);
-  auditBuild(input, 'created', { jobId }); // Registo (F3)
+  // ("respond early once the record exists", §5.2 step 2). On failure, release the committed slot
+  // (and a first build's reservation) so a persist error never leaks a permanent slot (§C3).
+  try {
+    await persistJob(record);
+  } catch (err) {
+    removeRun(jobId);
+    if (opts.firstBuild) releaseReservation(input.sessionId, jobId);
+    // A build queued during the persist await must be able to take the freed slot now - no other
+    // terminal transition for this user may ever come (review #1).
+    tryDispatchUser(input.actor.userId);
+    throw err;
+  }
+  auditBuild(input, 'created', { jobId, ...(opts.artifactId ? { artifactId: opts.artifactId } : {}) }); // Registo (F3)
+
+  if (queued) {
+    // Post-persist dispatch thunk (§B1): tryDispatchUser flips state->'executing' and invokes it.
+    entry.dispatch = () => void executeBuildJob(jobId, input, abort, opts);
+    // A cancel finalizes the queued job. The listener self-checks state, so once the build is
+    // dispatched (state!=='queued') a later cancel falls through to the normal running-cancel path.
+    // A cancel that landed WHILE we awaited persist has already aborted the signal (addEventListener
+    // would not fire), so finalize it explicitly here.
+    if (abort.signal.aborted) finalizeQueuedCancel(jobId, input).catch(() => undefined);
+    else
+      abort.signal.addEventListener('abort', () => { if (getRun(jobId)?.state === 'queued') finalizeQueuedCancel(jobId, input).catch(() => undefined); }, { once: true });
+    // Close the slot-freed-during-persist window: a build that finished while we awaited persist may
+    // have opened a slot this queued job should take now.
+    tryDispatchUser(input.actor.userId);
+  }
 
   return {
     status: 'created',
     job: jobView(record),
-    fire: () => void executeBuildJob(jobId, input, abort, { firstBuild: true }),
+    fire: queued ? () => {} : () => void executeBuildJob(jobId, input, abort, opts),
   };
+}
+
+/**
+ * s1: terminal for a CANCELLED queued build (§B1). No SSE emit — consistent with cancelling a
+ * running build (bail() patches without a terminal event); the cancelling client gets
+ * {cancelled:true} and other tabs learn on rehydration. First builds release their session
+ * reservation. finalizeOnce makes it a no-op if the build was dispatched or finished meanwhile.
+ */
+export async function finalizeQueuedCancel(jobId: string, input: BuildCreateInput): Promise<void> {
+  const entry = getRun(jobId);
+  if (!finalizeOnce(jobId)) return;
+  try {
+    await patchJob(jobId, { status: 'cancelled', endedAt: new Date(input.deps.now()).toISOString() });
+    // Terminal Registo row - a cancelled-while-queued build never reaches executeBuildJob's
+    // finally, so the ledger would otherwise record 'created' with no terminal (review #7).
+    auditBuild(input, 'cancelled', { jobId, queued: true });
+  } finally {
+    // Release the entry + reservation even when patchJob rejects - a claimed finalize must never
+    // leak the slot or the session reservation (review #9).
+    if (entry?.sessionId && !entry.artifactId) releaseReservation(entry.sessionId, jobId);
+    removeRun(jobId);
+  }
 }
 
 // --- Follow-up ---------------------------------------------------------------------------
@@ -159,7 +242,7 @@ async function handleFollowUp(input: BuildCreateInput, artifactId: string): Prom
 
   const jobId = input.deps.genId();
   const abort = new AbortController();
-  registerRun({
+  const entry = registerRun({
     id: jobId,
     ownerUserId: input.actor.userId,
     orgId: input.actor.orgId,
@@ -198,24 +281,10 @@ async function handleFollowUp(input: BuildCreateInput, artifactId: string): Prom
     return { status: 'answered', reason: 'question' };
   }
 
-  // modification → proceed with the build. projectDir resolved server-side from the artifact.
-  const record: JobRecord = {
-    _id: jobId,
-    kind: 'build',
-    status: 'created',
-    userId: input.actor.userId,
-    sessionId: input.sessionId,
-    artifactId,
-    request: { description: input.description, language: input.language },
-    createdAt: new Date(input.deps.now()).toISOString(),
-  };
-  await persistJob(record);
-  auditBuild(input, 'created', { jobId, artifactId }); // Registo (F3)
-  return {
-    status: 'created',
-    job: jobView(record),
-    fire: () => void executeBuildJob(jobId, input, abort, { firstBuild: false, artifactId }),
-  };
+  // modification → proceed with the build. projectDir resolved server-side from the artifact. The
+  // per-user cap commit runs HERE (§B1), after the classifier, so a 'question'/'integration-build'
+  // follow-up is answered immediately above and only a real modification can queue.
+  return commitBuildJob(jobId, input, abort, entry, { firstBuild: false, artifactId });
 }
 
 // --- Execution ---------------------------------------------------------------------------
@@ -644,6 +713,10 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     }
     if (input.sessionId) releaseReservation(input.sessionId, jobId); // guarded by job id (§5.3.3)
     removeRun(jobId);
+    // s1 queued dispatch (§B1 call site 1): the ONE funnel EVERY terminal path passes (complete,
+    // every error code, cancel, timeout, the PIPELINE_STUCK zombie net). Freeing this build's slot
+    // lets the user's oldest queued build start — synchronous FIFO, so no double-dispatch.
+    tryDispatchUser(input.actor.userId);
     // Registo (F3): ONE terminal row per build, from the record's final status (guaranteed-once
     // here — every terminal transition has already patched the store). Metadata is ids/codes only.
     // Best-effort: a store read that fails (e.g. the DB went away as the process exits) must NOT
@@ -684,6 +757,78 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     if (entry?.timedOut && !entry.cancelled) await finishError('TIMEOUT');
     else await bail();
   }
+}
+
+/**
+ * s1 boot re-dispatch (§Adjustment 1-2, §B1 boot): called from server.ts AFTER sweepOrphans, which
+ * leaves 'queued' jobs untouched. Rebuild each queued job into a live queued registry entry and let
+ * the per-user FIFO dispatcher start it under the cap. Execution inputs are reconstructed from
+ * record.request (attachments + knowledgeDocs were persisted at queue time) plus the users store
+ * (actor + username). record.artifactId presence distinguishes follow-up from first build: a queued
+ * first build never got an artifactId (it is patched in only once running starts), so a first build
+ * re-reserves its session slot. A job whose owner vanished fails ORPHANED — it can never be
+ * attributed or billed. FIFO by createdAt (listQueuedJobs returns them sorted).
+ */
+export async function redispatchQueuedBuilds(deps: { now: () => number; genId: () => string }): Promise<{ redispatched: number; orphaned: number }> {
+  const queuedJobs = await listQueuedJobs();
+  const affectedUsers = new Set<string>();
+  let redispatched = 0;
+  let orphaned = 0;
+
+  for (const record of queuedJobs) {
+    const user = (await users.get(record.userId)) as UserDoc | null;
+    if (!user) {
+      await patchJob(record._id, {
+        status: 'failed',
+        error: { code: 'ORPHANED', message: 'Queued build orphaned by a process restart: owner no longer exists (ch05 §5.2.1).' },
+        endedAt: new Date(deps.now()).toISOString(),
+      });
+      orphaned++;
+      continue;
+    }
+    const firstBuild = !record.artifactId;
+    const input: BuildCreateInput = {
+      actor: { userId: record.userId, orgId: user.orgId, role: user.role },
+      username: user.username,
+      sessionId: record.sessionId ?? '',
+      description: record.request.description,
+      language: record.request.language,
+      ...(record.request.templateId ? { templateId: record.request.templateId } : {}),
+      ...(record.request.integrationKeys ? { integrationKeys: record.request.integrationKeys } : {}),
+      ...(record.artifactId ? { artifactId: record.artifactId } : {}),
+      ...(record.request.attachments ? { attachments: record.request.attachments } : {}),
+      ...(record.request.knowledgeDocs ? { knowledgeDocs: record.request.knowledgeDocs } : {}),
+      ...(record.request.fieldValues ? { fieldValues: record.request.fieldValues } : {}),
+      ...(record.request.configValues ? { configValues: record.request.configValues } : {}),
+      deps,
+    };
+    const abort = new AbortController();
+    // Re-reserve the first-build session slot (§B1 boot): a duplicate POST after restart binds to
+    // this re-registered job rather than starting a rival first build in the same session.
+    if (firstBuild && record.sessionId) {
+      reserveFirstBuild(record.sessionId, deps.now());
+      bindReservation(record.sessionId, record._id);
+    }
+    const opts: ExecOpts = { firstBuild, ...(record.artifactId ? { artifactId: record.artifactId } : {}) };
+    const entry = registerRun({
+      id: record._id,
+      ownerUserId: record.userId,
+      orgId: user.orgId,
+      kind: 'build',
+      abort,
+      startedAt: Date.parse(record.createdAt) || deps.now(),
+      ...(record.artifactId ? { artifactId: record.artifactId } : {}),
+      ...(record.sessionId ? { sessionId: record.sessionId } : {}),
+    });
+    entry.state = 'queued';
+    entry.dispatch = () => void executeBuildJob(record._id, input, abort, opts);
+    abort.signal.addEventListener('abort', () => { if (getRun(record._id)?.state === 'queued') finalizeQueuedCancel(record._id, input).catch(() => undefined); }, { once: true });
+    affectedUsers.add(record.userId);
+    redispatched++;
+  }
+
+  for (const userId of affectedUsers) tryDispatchUser(userId);
+  return { redispatched, orphaned };
 }
 
 export { getJob };

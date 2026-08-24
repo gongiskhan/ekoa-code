@@ -7,7 +7,7 @@
  * user messages, while a normal `execute()` adds exactly one. (The duplicate in
  * Image #2 was execute() re-adding "sim" after handleChatSend already added it.)
  *
- * useJobStream + the API client are mocked so the hook runs without a backend.
+ * The job-stream manager + the API client are mocked so the hook runs without a backend.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
@@ -39,11 +39,11 @@ vi.mock('@/lib/api/client', () => {
 });
 
 // Keep the SSE/stream machinery inert — we only care about message side effects.
-vi.mock('@/hooks/useJobStream', () => ({
-  useJobStream: () => [
-    { isComplete: false, result: null, error: null, output: [] },
-    { connect: vi.fn(), disconnect: vi.fn(), clearOutputs: vi.fn() },
-  ],
+vi.mock('@/lib/job-stream-manager', () => ({
+  trackJob: vi.fn(),
+  untrackJob: vi.fn(),
+  rehydrateJobs: vi.fn(),
+  isTracked: () => false,
 }));
 
 import { useAgentExecution } from '@/hooks/useAgentExecution';

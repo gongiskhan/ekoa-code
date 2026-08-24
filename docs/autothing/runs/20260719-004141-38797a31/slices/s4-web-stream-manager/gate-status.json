@@ -1,0 +1,63 @@
+{
+  "slice": "s4-web-stream-manager",
+  "title": "Multi-job stream manager + per-session ingestion (web)",
+  "updatedAt": "2026-07-19T07:30:00Z",
+  "phase": "gate",
+  "status": "in_progress",
+  "kind": "ui",
+  "retries": {
+    "limit": 5,
+    "used": 1
+  },
+  "gates": {
+    "tests": {
+      "cmd": "npx vitest run web/__tests__/ (web workspace)",
+      "exit": 0,
+      "at": "2026-07-19T07:28:00Z",
+      "summary": "34 files / 204 tests green (incl. 4 review-round regressions + misattribution regression); ledger census exact"
+    },
+    "typecheck": {
+      "cmd": "npm run typecheck",
+      "exit": 0,
+      "at": "2026-07-19T07:29:00Z",
+      "summary": "0 errors"
+    },
+    "lint": {
+      "cmd": "npm run lint",
+      "exit": 0,
+      "at": "2026-07-19T07:29:30Z",
+      "summary": "0 errors"
+    },
+    "build": {
+      "cmd": "npm run build",
+      "exit": 0,
+      "at": "2026-07-19T06:54:30Z",
+      "summary": "clean"
+    },
+    "e2e": {
+      "exit": null,
+      "summary": "parallel-sessions.spec.ts stub schema bug fixed (ArtifactFilesResponse.projectDir); full-lane rerun pending after baseline discrimination of 8 red baseline specs"
+    },
+    "review": {
+      "verdict": "findings-fixed",
+      "by": "code-review workflow (30 agents, high)",
+      "at": "2026-07-19T07:20:00Z",
+      "findings": 10,
+      "notes": "5 on s4: lost revisit-reconnect (ensureTracked added), logout dead entries, created-status window, phantom failed on transient errors, queued-stream sockets (dismissed in findings.md F-2026-07-19-queued-stream-sockets)."
+    },
+    "adversarialReview": {
+      "verdict": null
+    },
+    "adversarialTest": {
+      "result": null
+    },
+    "designAudit": {
+      "verdict": null
+    },
+    "video": {
+      "status": null
+    }
+  },
+  "blockers": [],
+  "notes": "Implementation by teammate s4-impl; review-round fixes + e2e stub fix by the lead."
+}

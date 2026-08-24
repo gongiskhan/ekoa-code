@@ -224,6 +224,13 @@ interface OrchestrationState {
   // run executes and flushed into the assistant message metadata on complete.
   streamingThinking: Record<string, string>;
 
+  // Per-session chat-run liveness (S4, session parallelism). Set while a chat run is in
+  // flight for a session, cleared on settle. Feeds sessionBusy() so per-session UI derives
+  // busy state instead of the global isExecuting flag (whose removal is a later slice). The
+  // writer is the chat control plane (later slice); this slice adds the map + selector only.
+  // Not persisted - liveness is re-derived from the server on load.
+  sessionChatRuns: Record<string, { runId: string; startedAt: number }>;
+
   // Per-session messages queued while a run is executing (not persisted).
   // Sent (FIFO) when the active run finishes, instead of being rejected.
   queuedMessages: Record<string, string[]>;
@@ -297,6 +304,12 @@ interface OrchestrationState {
   // Streaming thinking buffer
   appendStreamingThinking: (sessionId: string, delta: string) => void;
   flushStreamingThinking: (sessionId: string) => string;
+
+  // Per-session chat-run liveness + derived busy selector (S4)
+  setSessionChatRun: (sessionId: string, run: { runId: string; startedAt: number } | null) => void;
+  /** True when the session has a live build (running|queued) OR a live chat run - the
+   *  per-session replacement for the global isExecuting flag (removed in a later slice). */
+  sessionBusy: (sessionId: string) => boolean;
 
   // Message queue (queue-while-building instead of rejecting)
   enqueueMessage: (sessionId: string, text: string) => void;
@@ -556,6 +569,7 @@ export const useOrchestrationStore = create<OrchestrationState>()(
       activityMessages: {},
       streamingChat: {},
       streamingThinking: {},
+      sessionChatRuns: {},
       queuedMessages: {},
       composerDraft: {},
       retryContexts: {},
@@ -1058,6 +1072,21 @@ export const useOrchestrationStore = create<OrchestrationState>()(
         return text;
       },
 
+      setSessionChatRun: (sessionId: string, run: { runId: string; startedAt: number } | null) => {
+        set((state) => {
+          const next = { ...state.sessionChatRuns };
+          if (run) next[sessionId] = run;
+          else delete next[sessionId];
+          return { sessionChatRuns: next };
+        });
+      },
+
+      sessionBusy: (sessionId: string): boolean => {
+        const state = get();
+        const status = state.sessionJobs[sessionId]?.status;
+        return status === 'running' || status === 'queued' || !!state.sessionChatRuns[sessionId];
+      },
+
       // ========================================
       // MESSAGE QUEUE (queue-while-building)
       // ========================================
@@ -1219,9 +1248,14 @@ export const useOrchestrationStore = create<OrchestrationState>()(
               artifactBySessionId.get(session.id);
             if (!a) continue;
             // Don't touch a build that's mid-flight (its live state wins until
-            // it completes). Persist sanitizes running/queued -> idle on reload,
-            // so this only matters for an in-tab init re-run.
-            const building = existingJob.status === 'running' || existingJob.status === 'queued';
+            // it completes). Persist sanitizes running/queued -> idle on reload, so a mid-build
+            // refresh lands here as idle + jobId - treat that as mid-flight too so this artifact
+            // rehydrate never marks it 'completed' before rehydrateJobs() re-derives the real
+            // status from the server (S4 refresh path).
+            const building =
+              existingJob.status === 'running' ||
+              existingJob.status === 'queued' ||
+              (existingJob.status === 'idle' && !!existingJob.jobId);
             if (!building) {
               // Reconcile identity to the artifact's CURRENT values — id, slug,
               // shareable, projectDir — regardless of whether a (possibly stale)
@@ -1506,11 +1540,13 @@ export const useOrchestrationStore = create<OrchestrationState>()(
         }
 
         // Don't clobber a build that is actively running/queued for this session:
-        // its live job + preview state is authoritative until it completes. Just
-        // refresh files + panel.
+        // its live job + preview state is authoritative until it completes. A persist-
+        // sanitized mid-build refresh (idle + jobId) counts too - rehydrateJobs() re-derives
+        // its real status from the server, so this artifact rehydrate must not mark it done.
         const building =
           existing?.status === 'running' ||
-          existing?.status === 'queued';
+          existing?.status === 'queued' ||
+          (existing?.status === 'idle' && !!existing?.jobId);
         if (building) {
           hydrateFiles(match.id);
           openBuildPanel();

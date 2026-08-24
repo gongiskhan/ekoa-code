@@ -32,6 +32,14 @@ export interface LiveRunEntry {
   /** Build jobs: the artifact this run targets (follow-up 409 query, §5.3.5). */
   artifactId?: string;
   sessionId?: string;
+  /** s1 queued-build lifecycle (run 20260719): build runs only. 'executing' HOLDS a per-user
+   *  concurrency slot (counted by liveBuildCountForUser); 'queued' holds none until dispatched.
+   *  Undefined for chat/brand-research/agent-face runs, which the cap never governs. */
+  state?: 'queued' | 'executing';
+  /** s1: a queued build's post-persist dispatch thunk (fires executeBuildJob). tryDispatchUser
+   *  flips state -> 'executing', takes-and-clears this, and invokes it — synchronously, so
+   *  concurrent dispatchers cannot double-fire it. */
+  dispatch?: () => void;
   /** Terminal snapshot for chat runs (kept readable until process exit, §5.2.1/§5.6.8). */
   status?: 'running' | 'complete' | 'cancelled' | 'error';
   result?: unknown;
@@ -120,12 +128,53 @@ export function finalizeOnce(id: string): boolean {
   return true;
 }
 
-/** True when a run targeting `artifactId` is still live (the follow-up 409 query, §5.3.5). */
+/** True when a run targeting `artifactId` is still live (the follow-up 409 query, §5.3.5). Keys on
+ *  `!finalized` regardless of state, so a QUEUED follow-up keeps blocking same-artifact POSTs. */
 export function hasLiveJobForArtifact(artifactId: string): boolean {
   for (const e of runs.values()) {
     if (e.kind === 'build' && e.artifactId === artifactId && !e.finalized) return true;
   }
   return false;
+}
+
+/**
+ * s1: count a user's build runs currently HOLDING an execution slot (state==='executing'). Queued
+ * builds and every non-build run kind (chat, brand-research, agent-face) are excluded. This is the
+ * per-user cap counter read inside build.ts's synchronous commit protocol — the count and the
+ * state assignment happen with zero awaits between them, so two creates cannot both pass the cap.
+ */
+export function liveBuildCountForUser(userId: string): number {
+  let n = 0;
+  for (const e of runs.values()) {
+    if (e.kind === 'build' && e.state === 'executing' && e.ownerUserId === userId) n++;
+  }
+  return n;
+}
+
+/**
+ * s1: dispatch a user's oldest QUEUED builds while they are under the per-user cap (FIFO by
+ * creation order). Each iteration is fully synchronous — flip the oldest queued entry to
+ * 'executing', take-and-clear its dispatch thunk, invoke it — so concurrent callers (two builds
+ * finishing at once, the enqueue self-check, boot) can never double-dispatch: the just-flipped
+ * entry counts as executing on the next liveBuildCountForUser read. Entries still mid-persist
+ * (queued but no dispatch thunk yet) are skipped; their own enqueue path self-checks after persist.
+ */
+export function tryDispatchUser(userId: string): void {
+  const cap = Math.max(1, loadAgentsConfig().maxConcurrentBuildsPerUser);
+  for (;;) {
+    if (liveBuildCountForUser(userId) >= cap) return;
+    let oldest: LiveRunEntry | undefined;
+    for (const e of runs.values()) {
+      if (e.kind === 'build' && e.state === 'queued' && !e.finalized && e.dispatch && e.ownerUserId === userId) {
+        if (!oldest || e.startedAt < oldest.startedAt) oldest = e;
+      }
+    }
+    if (!oldest) return;
+    oldest.state = 'executing';
+    const thunk = oldest.dispatch!;
+    oldest.dispatch = undefined;
+    thunk();
+  }
 }
 
 /**
@@ -169,6 +218,16 @@ export function reserveFirstBuild(sessionId: string, now: number): { ok: true } 
   const existing = reservations.get(sessionId);
   if (existing && existing.expiresAt > now) {
     return { ok: false, jobId: existing.jobId };
+  }
+  // s1 (review #2): a queued build can outlive the reservation TTL - the queue wait alone can
+  // exceed it (cap x buildWallClockMs). While a live un-finalized build entry exists for this
+  // session, the session stays bound to that job regardless of reservation expiry: re-arm the
+  // reservation instead of admitting a rival first build.
+  for (const e of runs.values()) {
+    if (e.kind === 'build' && e.sessionId === sessionId && !e.finalized) {
+      reservations.set(sessionId, { jobId: e.id, expiresAt: now + loadAgentsConfig().firstBuildReservationTtlMs });
+      return { ok: false, jobId: e.id };
+    }
   }
   reservations.set(sessionId, { jobId: '', expiresAt: now + loadAgentsConfig().firstBuildReservationTtlMs });
   return { ok: true };

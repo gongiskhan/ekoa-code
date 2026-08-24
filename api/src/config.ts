@@ -63,6 +63,10 @@ export interface AgentsConfig {
   memoryAutoExtractEnabled: boolean;
   /** 5.7.1 tool_event result/args truncation length. */
   toolResultTruncateChars: number;
+  /** s1 (run 20260719): per-user cap on CONCURRENTLY EXECUTING build jobs. A create that would
+   *  exceed it is QUEUED (FIFO, dispatched as the user's running builds settle) rather than
+   *  rejected. Clamped >=1 at read: envInt admits 0, which would queue a user's builds forever. */
+  maxConcurrentBuildsPerUser: number;
 }
 
 export interface Config {
@@ -142,6 +146,7 @@ export function defaultAgentsConfig(): AgentsConfig {
     agentFaceStreamCloseTimeoutMs: envInt('AGENT_FACE_STREAM_CLOSE_TIMEOUT_MS', 180_000),
     memoryAutoExtractEnabled: process.env.MEMORY_AUTO_EXTRACT_ENABLED !== 'false',
     toolResultTruncateChars: envInt('TOOL_RESULT_TRUNCATE_CHARS', 200),
+    maxConcurrentBuildsPerUser: Math.max(1, envInt('MAX_CONCURRENT_BUILDS_PER_USER', 2)),
   };
 }
 

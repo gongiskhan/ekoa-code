@@ -140,7 +140,8 @@
         "reference-attach",
         "live-bridge",
         "branding-colors",
-        "os-mode"
+        "os-mode",
+        "parallel-sessions"
       ]
     }
   },
@@ -209,7 +210,9 @@
       "device-code",
       "bridge-local",
       "refusal-file-request",
-      "os-tiling"
+      "os-tiling",
+      "job-stream-manager",
+      "orchestration-session-busy"
     ],
     "census_note": "2026-07-10: registered 5 files that had accrued on disk unledgered (orchestration-persist-optout, sanitize-error, components/memory-page, components/usage-page, components/users-page — added by post-rc fix batches) plus the thinking-channel pair (orchestration-thinking, components/thinking-block); the count census was failing before this reconciliation. 2026-07-14: registered refusal-file-request (landed by the BRIEF-9a commit 8996048, whose message said 'ledgered' but never touched this list — the census was red again).",
     "mock_update_needed": [

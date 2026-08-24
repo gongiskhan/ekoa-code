@@ -71,7 +71,7 @@ test.describe('pages-core (S4)', () => {
     await page.setViewportSize(DESKTOP);
     await page.goto('/usage');
     await expect(page.getByTestId('usage-page')).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator('h1').first()).toHaveText(/Usage/i);
+    await expect(page.locator('h1').first()).toHaveText(/Utilização/i);
 
     await page.setViewportSize(MOBILE);
     await expect(page.getByTestId('usage-page')).toBeVisible();

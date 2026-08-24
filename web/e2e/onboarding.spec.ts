@@ -30,7 +30,7 @@ const BE = cortexBase();
 // both the legal and generic ("conta própria") chip sets so the structural
 // assertions survive copy tweaks and match whichever vertical is active.
 const CARD_ANCHOR = /Novo por aqui\?|Retomar a orienta/i; // fresh OR resume card title
-const CHIP_ANCHOR = /advogad|conta própria|palavras minhas/i; // the 3 welcome chips (2 send + freeform)
+const CHIP_ANCHOR = /advogad|pequeno neg|conta própria|palavras minhas/i; // the 3 welcome chips (2 send + freeform), legal OR generic vertical
 const FIRST_CHIP = 'Sou advogado(a) num escritório'; // legal vertical's first send chip
 
 // -------------------------------------------------------------------------
@@ -195,14 +195,16 @@ test('a quick-reply chip stages the user message through the normal send path (n
   await card.click();
   await page.waitForURL(/\/chat\/[^/?#]+$/, { timeout: 20_000 });
 
-  // Click a non-freeform chip → it sends through handleSendMessage.
-  const chip = page.getByRole('button', { name: FIRST_CHIP });
+  // Click the first non-freeform chip - vertical-agnostic: read its text from the DOM so the
+  // spec holds for both the legal and generic chip sets.
+  const chip = page.getByRole('button').filter({ hasText: CHIP_ANCHOR }).first();
   await expect(chip).toBeVisible({ timeout: 20_000 });
+  const chipText = (await chip.innerText()).trim();
   await chip.click();
 
   // The chip text now appears as a user message bubble (the welcome unmounts
   // once the conversation has a message, so this text can only be the bubble).
-  await expect(page.locator('.bg-neutral-900', { hasText: FIRST_CHIP })).toBeVisible({ timeout: 20_000 });
+  await expect(page.locator('.bg-neutral-900', { hasText: chipText })).toBeVisible({ timeout: 20_000 });
   // URL stays param-free through the send.
   expect(page.url()).not.toContain('?');
 });

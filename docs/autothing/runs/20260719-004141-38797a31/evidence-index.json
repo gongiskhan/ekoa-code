@@ -1,0 +1,29 @@
+{
+  "project": "ekoa-code",
+  "runId": "20260719-004141-38797a31",
+  "updatedAt": "2026-07-19T00:08:30Z",
+  "galleryUrl": null,
+  "gatesConfig": { "test": true, "review": true, "adversarialReview": true, "adversarialTest": true, "design": true, "walkthrough": true, "report": true, "foundation": true, "codexCheckpoint": true },
+  "slices": [
+    { "slice": "s1-build-queue", "title": "Per-user build cap + queued FIFO dispatch (server)", "kind": "mixed", "status": "pending", "gateStatus": "docs/autothing/runs/20260719-004141-38797a31/slices/s1-build-queue/gate-status.json" },
+    { "slice": "s4-web-stream-manager", "title": "Multi-job stream manager + per-session ingestion (web)", "kind": "ui", "status": "pending", "gateStatus": "docs/autothing/runs/20260719-004141-38797a31/slices/s4-web-stream-manager/gate-status.json" },
+    { "slice": "s2-chat-run-guard", "title": "One live chat run per session, 409 (server)", "kind": "mixed", "status": "pending", "gateStatus": "docs/autothing/runs/20260719-004141-38797a31/slices/s2-chat-run-guard/gate-status.json" },
+    { "slice": "s5-web-session-control", "title": "Per-session chat control plane; kill global isExecuting (web)", "kind": "ui", "status": "pending", "gateStatus": "docs/autothing/runs/20260719-004141-38797a31/slices/s5-web-session-control/gate-status.json" },
+    { "slice": "s3-side-question-api", "title": "Run-transcript accumulator + side-question endpoint (server)", "kind": "mixed", "status": "pending", "gateStatus": "docs/autothing/runs/20260719-004141-38797a31/slices/s3-side-question-api/gate-status.json" },
+    { "slice": "s6-awareness-ux", "title": "Session-list live badges + background toasts, PT-PT (web)", "kind": "ui", "status": "pending", "gateStatus": "docs/autothing/runs/20260719-004141-38797a31/slices/s6-awareness-ux/gate-status.json" },
+    { "slice": "s7-side-question-ui", "title": "Side-question btw thread UI, PT-PT (web)", "kind": "ui", "status": "pending", "gateStatus": "docs/autothing/runs/20260719-004141-38797a31/slices/s7-side-question-ui/gate-status.json" },
+    { "slice": "s8-live-proof", "title": "Live proof journey + coherence pass", "kind": "mixed", "status": "pending", "gateStatus": "docs/autothing/runs/20260719-004141-38797a31/slices/s8-live-proof/gate-status.json" }
+  ],
+  "globalGate": {
+    "status": "in_progress",
+    "e2eAll": { "cmd": "npm run e2e:full", "exit": null },
+    "verifyApp": { "via": "/verify", "verdict": null },
+    "build": { "cmd": "npm run ci:lane (build step)", "exit": null },
+    "typecheck": { "cmd": "npm run ci:lane (typecheck step)", "exit": null },
+    "lint": { "cmd": "npm run ci:lane (lint step)", "exit": null },
+    "decorrelatedVerification": { "reviewAllApproved": false, "pwTestAllPassed": false },
+    "designAudit": { "verdict": null },
+    "everySliceVideoVerified": false,
+    "codexCheckpoint": { "status": null, "scopes": [], "overrides": [], "at": null }
+  }
+}
