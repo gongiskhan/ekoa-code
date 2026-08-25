@@ -6,6 +6,20 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`bridge-pair-drops-extracapabilities-across-a-repair`** (2026-08-25, OPEN, **MINOR**, product;
+  found re-pairing during the live acceptance retry). `ekoa-bridge pair` deliberately carries the
+  `org` and per-pairing `signingSecret` forward across a re-pair (`clients/bridge/src/cli/commands/pair.ts`
+  docblock: "Existing org/signingSecret, if a prior config held them, are carried forward"), but it
+  DROPS `extraCapabilities` - so a machine the operator had opted in to `desktop.automation` silently
+  reverts to advertising only the defaults after any re-pair, and every `serve` afterward is missing
+  the capability until the operator re-edits config.json by hand. Measured live: three re-pairs this
+  session, each requiring the `extraCapabilities` one-liner re-run before the bridge would advertise
+  `desktop.automation`. CLOSE BY: carry `extraCapabilities` forward across a re-pair exactly as `org`
+  and `signingSecret` are (it is a deliberate operator opt-in, not pairing-scoped state), OR surface a
+  first-class `pair`/`serve` flag for it so it is not a hand-edit at all. Compounds the dev-stack churn
+  because an ephemeral-Mongo restart also drops the server-side grant, so the operator re-does BOTH the
+  bridge opt-in and the org grant on every restart.
+
 - **`establish-endpoint-reports-started-true-for-a-bridge-that-cannot-run-the-login-ceremony`**
   (2026-08-25, OPEN, **MEDIUM**; found running the acceptance-run durable ceremony live). `POST
   /api/v1/cofre/sessions/establish` (`api/src/routes/cofre.ts`) gates on the machine advertising
