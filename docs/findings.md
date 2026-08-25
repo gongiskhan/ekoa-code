@@ -6,6 +6,48 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`ad-hoc-captured-session-does-not-authenticate-a-multi-domain-login`** (2026-08-25, OPEN,
+  **HIGH**; found completing the live acceptance run - the capture + auto-wake worked but the run did
+  not finish). The Uber Eats ceremony captured a session, the credential-waiter fired, and the halted
+  run AUTO-WOKE and re-dispatched (measured: resumeFromStepIndex moved 0 -> 2, the steps re-ran) - the
+  whole durable lifecycle worked. But the re-navigation to the orders page HIT THE LOGIN WALL AGAIN
+  and re-halted: the injected session did not authenticate. Most likely cause, and it interacts
+  directly with THIS session's security fix: a real consumer login spans MULTIPLE domains - Uber Eats
+  authenticates across `ubereats.com` AND `uber.com` / `auth.uber.com` - and the
+  `boundOriginsForEstablishedHost(storageState, ceremony.origin)` narrowing (the ceremony-capture
+  review's MAJOR fix, correct against the confused/compromised-daemon over-binding threat) narrows the
+  captured session to the SINGLE ceremony origin `www.ubereats.com`, dropping the cross-domain
+  `uber.com` auth cookies the login actually depends on. So the item is bound correctly and is NOT
+  functional. GENUINE TENSION to resolve, not a one-liner: the narrowest-binding security property vs
+  a real multi-domain session. Options to weigh: bind to the registrable-domain FAMILY the login
+  actually set cookies on (derive the bound set from the cookie domains present, but capped to the
+  same registrable domain and its subdomains, NOT arbitrary third-party/analytics domains - the middle
+  ground between whole-jar and single-host); or let the human/authoring declare the auth domain family
+  for an origin; or detect at inject time that the run is still unauthenticated and surface it rather
+  than looping. NEEDS DIAGNOSIS FIRST: confirm the stored storageState's cookie domains (is uber.com
+  filtered out at capture, or present-but-unbound) before choosing. Blocks a functional ad-hoc
+  acceptance run for any multi-domain (SSO-heavy, consumer) target; a single-domain portal would work.
+
+- **`attended-ceremony-headed-browser-is-not-viable-for-a-normal-user`** (2026-08-25, OPEN, **HIGH**,
+  design; operator-flagged emphatically after completing the live ceremony: "the experience is still
+  very bad ... a normal user would not be able to cope with this"). Even WITH the "Concluir e capturar"
+  fix (which worked - it decoupled capture from window-close and the session was captured), driving a
+  HEADED automation browser the human must type their real login into remains hostile: the window is
+  raised by the OS on every navigation (inherent, see
+  `attended-ceremony-browser-steals-focus-and-hides-its-capture-signal`), a real login flow opens and
+  closes tabs/popups (OAuth, "verifying", redirects) that flap while the human is mid-type, and the
+  human cannot reach another app for an OTP without the window snatching focus back. The Done-button
+  fix solved the CAPTURE SIGNAL; it did not and cannot solve driving-a-login-in-an-automation-window.
+  This is the deepest limitation of the attended-ceremony design and it is a PRODUCT-VIABILITY issue,
+  not a polish item - the primary consumer use case (log into a site that gates on 2FA) is the one it
+  serves worst. CLOSE BY (design direction, needs a real decision, not a patch): capture the session
+  from the user's OWN everyday browser instead of a driven one - a browser extension that reads the
+  session for a declared origin from the browser the human already lives in (no focus war, no tab
+  flap, no re-typing, MFA handled by the site as normal); or a "paste your session" / import path; or
+  a mobile-first capture. The headed-automation-browser ceremony should be the fallback for the
+  bridge/CLI case, not the primary human path. Worth its own design pass before any more ceremony
+  polish.
+
 - **`bridge-pair-drops-extracapabilities-across-a-repair`** (2026-08-25, OPEN, **MINOR**, product;
   found re-pairing during the live acceptance retry). `ekoa-bridge pair` deliberately carries the
   `org` and per-pairing `signingSecret` forward across a re-pair (`clients/bridge/src/cli/commands/pair.ts`
