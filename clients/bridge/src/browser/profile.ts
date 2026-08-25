@@ -102,12 +102,15 @@ import type {
   ProfilePage,
 } from './types.js';
 
-/** Chromium's singleton markers. A crashed run leaves these behind and blocks the next launch. */
-const SINGLETON_MARKERS = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
+/** Chromium's singleton markers. A crashed run leaves these behind and blocks the next launch.
+ *  Exported so the attended-ceremony launch (`attended/ceremony.ts`), which opens its OWN persistent
+ *  real-Chrome window rather than a run lease, sweeps the same markers this manager does. */
+export const SINGLETON_MARKERS = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
 
 /** A window a human would not look twice at. Matches the hosted default so a cached action
- *  resolved against one viewport replays against the same one. */
-const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
+ *  resolved against one viewport replays against the same one. Exported for the ceremony launch,
+ *  so a session captured at one viewport replays against the same one. */
+export const DEFAULT_VIEWPORT = { width: 1280, height: 800 };
 
 /**
  * How long OPENING A BROWSER may take, in total, across both attempts.
@@ -940,7 +943,7 @@ function safePages(context: ProfileContext): ProfilePage[] {
   }
 }
 
-function hostLocale(): { locale?: string; timezoneId?: string } {
+export function hostLocale(): { locale?: string; timezoneId?: string } {
   try {
     const resolved = Intl.DateTimeFormat().resolvedOptions();
     return {

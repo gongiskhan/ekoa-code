@@ -12,6 +12,13 @@ export {
   type ProfileSession,
 } from './profile.js';
 export {
+  launchHeadedRealChrome,
+  sweepSingletonMarkers,
+  type HeadedChromeContext,
+  type HeadedChromePage,
+  type PersistentContextLauncher,
+} from './chrome-launch.js';
+export {
   runBrowserAction,
   observePage,
   resolveLocator,

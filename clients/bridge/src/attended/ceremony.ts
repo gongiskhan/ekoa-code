@@ -24,11 +24,13 @@
  * this daemon must not carry. So the human SAYS SO, and there are two ways to say it:
  *
  *   - `finishSignal` - "done, capture now", pressed in the dashboard (D-CEREMONY-DONE, 2026-08-25).
- *     THE PRIMARY ONE, because the other cannot be used for the flow this rail exists for: a headed
- *     automation Chromium is raised by the OS on every top-level navigation and a real login
- *     redirects repeatedly, so a human reading an OTP out of another app is fighting this window for
- *     focus - and nothing in the window says that closing it is what captures. Measured live: the
- *     operator logged in, the close never happened cleanly, the ceremony expired holding nothing.
+ *     THE PRIMARY ONE. The window is now a NORMAL, persistent Chrome window (D-CEREMONY-REALCHROME,
+ *     2026-08-26): real installed Chrome on a dedicated profile, the automation infobar suppressed,
+ *     navigated ONCE and then left alone — no re-goto, no second tab. That removes the tab-flap and
+ *     the "controlled by automated software" banner, but it does NOT remove the OS raising the window
+ *     on each redirect of the login itself (inherent to a headed browser on macOS). So a human
+ *     reaching another app for an OTP can still be interrupted, and the dashboard Done button is what
+ *     lets them finish on their own terms rather than racing the window closed.
  *   - the window CLOSING - the original signal, kept as the fallback that needs no dashboard and no
  *     live socket, and still the natural end of a card ceremony someone runs at their own desk.
  *
@@ -38,7 +40,11 @@
  * tick. The Done path does not pay it - the window is still open when it fires, so it snapshots
  * fresh state at the moment the human says they are finished.
  */
+import { join } from 'node:path';
 import type { BridgeFrame } from '../wire/index.js';
+import { ekoaBridgeHome } from '../auth/home.js';
+import { sanitizeProfileId } from '../browser/profile.js';
+import { launchHeadedRealChrome, type HeadedChromeContext } from '../browser/chrome-launch.js';
 
 /** Matches Cortex's CEREMONY_TTL_MS: a human is walking to a card reader, not making a round trip.
  *  Held slightly SHORTER so the window closes before the server-side ceremony expires — pushing
@@ -48,8 +54,6 @@ const CEREMONY_TTL_MS = 9 * 60_000;
 /** How often the live storageState is snapshotted. Cheap (a CDP round trip), and it bounds how much
  *  of the final moment can be lost when the human closes the window. */
 const SNAPSHOT_INTERVAL_MS = 2_000;
-
-const LAUNCH_TIMEOUT_MS = 60_000;
 
 export interface CeremonyRequest {
   requestId: string;
@@ -81,8 +85,17 @@ export interface CeremonyDeps {
    * can act on, when the window is still open and the human can still close it.
    */
   finishSignal?: Promise<void>;
-  /** Injected for tests; defaults to Playwright chromium. */
+  /** Injected for tests; defaults to a HEADED, persistent real-Chrome window (`launchHeadedRealChrome`)
+   *  opened on a dedicated per-origin profile under `profilesRoot`. */
   launchBrowser?: (opts: { headless: boolean }) => Promise<CeremonyBrowser>;
+  /**
+   * Where the ceremony's persistent per-origin profiles live. Defaults to
+   * `<EKOA_BRIDGE_HOME>/ceremony-profiles`. A SIBLING of the run-lease profiles (`ProfileManager`),
+   * never the same dir: a ceremony and a run lease share nothing, so neither Chrome SingletonLock nor
+   * a wipe-on-release can collide. Persistent so a human who logged in once stays logged in for the
+   * next ceremony on the same origin.
+   */
+  profilesRoot?: string;
   /** Re-fetch the browser after a repairable launch failure; defaults to `playwright install --force`. */
   repairBrowser?: () => Promise<void>;
   now?: () => number;
@@ -123,9 +136,17 @@ export class CeremonyError extends Error {
  */
 export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDeps): Promise<boolean> {
   const now = deps.now ?? Date.now;
-  const launch = deps.launchBrowser ?? ((o: { headless: boolean }) => defaultLaunch(o));
-  const repair = deps.repairBrowser ?? installChromium;
   const target = normaliseOrigin(req.origin);
+  // A dedicated, persistent profile PER ORIGIN. Persistent so the login is remembered for next time;
+  // per-origin so two adversarial targets never share a cookie jar (the same rule the run executor
+  // follows). It is a normal Chrome profile the daemon owns — never the user's own Chrome directory.
+  const profilesRoot = deps.profilesRoot ?? join(ekoaBridgeHome(), 'ceremony-profiles');
+  const userDataDir = join(profilesRoot, sanitizeProfileId(hostKeyOf(target)));
+  const launch =
+    deps.launchBrowser ??
+    (async (_o: { headless: boolean }): Promise<CeremonyBrowser> =>
+      ceremonyBrowserOverContext(await launchHeadedRealChrome(userDataDir, { log: deps.log })));
+  const repair = deps.repairBrowser ?? installChromium;
 
   deps.log('');
   deps.log('==============================================================');
@@ -134,13 +155,15 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
   deps.log(`  ${req.reason}`);
   deps.log(`  Endereço: ${target}`);
   deps.log('');
-  deps.log('  Vai abrir-se uma janela do navegador.');
-  deps.log('  1) Complete a autenticação (cartão, PIN, credenciais).');
-  // Said HERE as well as on the card, because this is the text in front of the person at the moment
-  // it matters. The old line ("FECHE a janela quando terminar") was the only statement anywhere that
-  // closing is what captures, and it was invisible under a window that keeps taking focus.
-  deps.log('  2) Volte à Ekoa e clique em "Concluir e capturar".');
-  deps.log('     Não precisa de fechar esta janela (fechá-la também captura).');
+  deps.log('  Abre-se uma janela normal do Chrome (a sua sessão fica guardada,');
+  deps.log('  por isso só precisa de fazer isto uma vez por site).');
+  deps.log('  1) Inicie sessão como faria normalmente (palavra-passe, 2FA, cartão).');
+  //   Said HERE as well as on the card, because this is the text in front of the person at the moment
+  //   it matters. Closing the window still captures, and is named as the fallback — but "Concluir e
+  //   capturar" in the dashboard is the primary signal, so the human can take their time (fetch an
+  //   OTP from another app) without racing a window that will close on them.
+  deps.log('  2) Quando terminar, volte à Ekoa e clique em "Concluir e capturar".');
+  deps.log('     (Fechar a janela também captura a sessão.)');
   deps.log('');
 
   // Launch, and give a repairable failure exactly one re-fetch. This policy lives HERE rather than
@@ -327,24 +350,35 @@ function originOf(value: string): string | null {
   }
 }
 
+/** The host of an origin, folded for use as a profile-directory name. `orders.ubereats.com`, not the
+ *  whole URL — so every ceremony for a portal reuses the one persistent profile. */
+export function hostKeyOf(target: string): string {
+  return sanitizeProfileId(originOf(target)?.replace(/^https?:\/\//, '') ?? target);
+}
+
 /**
- * Playwright chromium, HEADED — a human has to see it. The installer skips the browser download to
- * keep the base install light, so the binary is usually absent on first use; rather than fail with
- * Playwright's raw "Executable doesn't exist" (which reads as a broken install), fetch it once here
- * and retry. This is the only place the daemon downloads anything at run time.
- *
- * A HALF-DOWNLOADED BROWSER IS NOT A MISSING ONE, and the difference is not academic: a laptop that
- * sleeps mid-download leaves a directory that exists, so `Executable doesn't exist` never fires,
- * while the binary inside is truncated and dies on launch (observed on a MacBook Air: 153 MB where
- * a healthy build is 344 MB, SIGABRT, surfaced as "Target page, context or browser has been
- * closed"). The trap underneath is that `playwright install chromium` SKIPS a version whose
- * directory is already present — so the obvious remediation, and the one this code used to print
- * for the user to run by hand, silently does nothing for exactly the case that needs it. Hence
- * `--force`, and hence treating a launch crash as a reason to re-fetch rather than only an absence.
+ * Present a persistent real-Chrome context (from `launchHeadedRealChrome`) as the `CeremonyBrowser`
+ * seam the loop above drives. A persistent context IS its own browser — there is no separate
+ * `newContext` — so `newContext()` hands back an adapter over the same context, and `newPage()`
+ * reuses the window's DEFAULT page rather than opening a second tab (opening one would be the very
+ * tab-flap this rebuild removes). The context's own `close` event stands in for a browser
+ * `disconnected`: for a persistent context, the window going away IS the disconnect.
  */
-async function defaultLaunch(opts: { headless: boolean }): Promise<CeremonyBrowser> {
-  const { chromium } = await import('playwright');
-  return (await chromium.launch({ headless: opts.headless, timeout: LAUNCH_TIMEOUT_MS })) as unknown as CeremonyBrowser;
+export function ceremonyBrowserOverContext(ctx: HeadedChromeContext): CeremonyBrowser {
+  const context: CeremonyContext = {
+    async newPage(): Promise<CeremonyPage> {
+      const existing = ctx.pages();
+      return (existing[0] ?? (await ctx.newPage())) as unknown as CeremonyPage;
+    },
+    storageState: () => ctx.storageState(),
+    close: () => ctx.close(),
+    on: (_event: 'close', handler: () => void) => ctx.on('close', handler),
+  };
+  return {
+    newContext: async () => context,
+    close: () => ctx.close(),
+    on: (_event: 'disconnected', handler: () => void) => ctx.on('close', handler),
+  };
 }
 
 /**

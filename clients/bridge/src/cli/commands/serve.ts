@@ -249,6 +249,8 @@ export async function serve(args: string[], ctx: CliContext): Promise<number> {
     // browser - the exact opposite of what a persistent profile is for.
     profileIdFor: ({ owner }) => owner ?? cfg.pairingId,
     defaultWorkRoot: workRoot,
+    // The attended ceremony opens its persistent per-origin profiles under `<home>/ceremony-profiles`.
+    home,
   });
 
   socket = new BridgeSocket({

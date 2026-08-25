@@ -5,6 +5,8 @@
  */
 export {
   runAttendedCeremony,
+  ceremonyBrowserOverContext,
+  hostKeyOf,
   CeremonyError,
   type CeremonyRequest,
   type CeremonyDeps,

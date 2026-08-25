@@ -251,7 +251,8 @@ describe('attended ceremony — the machine half of J-5', () => {
 
     const printed = h.logs.join('\n');
     expect(printed).toContain('Concluir e capturar');
-    expect(printed).toContain('Não precisa de fechar esta janela');
+    // Closing still captures and is named as the fallback, but the primary signal is the button.
+    expect(printed).toContain('Fechar a janela também captura');
   });
 
   it('normalises a bare host into an https origin before navigating', async () => {

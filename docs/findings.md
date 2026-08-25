@@ -6,34 +6,25 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
-- **`attended-ceremony-headed-browser-is-not-viable-for-a-normal-user`** (2026-08-25, OPEN, **HIGH**,
-  design; operator-flagged emphatically after completing the live ceremony: "the experience is still
-  very bad ... a normal user would not be able to cope with this"). Even WITH the "Concluir e capturar"
-  fix (which worked - it decoupled capture from window-close and the session was captured), driving a
-  HEADED automation browser the human must type their real login into remains hostile: the window is
-  raised by the OS on every navigation (inherent, see
-  `attended-ceremony-browser-steals-focus-and-hides-its-capture-signal`), a real login flow opens and
-  closes tabs/popups (OAuth, "verifying", redirects) that flap while the human is mid-type, and the
-  human cannot reach another app for an OTP without the window snatching focus back. The Done-button
-  fix solved the CAPTURE SIGNAL; it did not and cannot solve driving-a-login-in-an-automation-window.
-  This is the deepest limitation of the attended-ceremony design and it is a PRODUCT-VIABILITY issue,
-  not a polish item - the primary consumer use case (log into a site that gates on 2FA) is the one it
-  serves worst. **DIRECTION CHOSEN (2026-08-26, operator): NOT an extension.** Every other agent
-  (Claude, ChatGPT, OpenClaw) reached for a browser extension precisely because the frictionless
-  "reach into the user's EVERYDAY browser" path is a security boundary Chrome closed in Chrome 136
-  (May 2025): `--remote-debugging-port`/`--remote-debugging-pipe` are IGNORED on the default
-  `--user-data-dir`, so CDP-attaching to the real profile - the cookie-theft vector - no longer works
-  (developer.chrome.com/blog/remote-debugging-port). The floor without an extension is therefore ONE
-  login per site into a DEDICATED persistent real-Chrome profile. That is being built: the ceremony is
-  moving off throwaway bundled Chromium onto the same `ProfileManager` persistent real-Chrome profile
-  replay already uses (`clients/bridge/src/browser/profile.ts`, `channel:'chrome'`, non-default
-  `--user-data-dir`) - a NORMAL Chrome window, navigated ONCE and then left alone (no re-goto, no
-  automation infobar, no forced foreground), captured on the "Concluir" press the human controls at
-  their own pace. The persistent profile means logins persist (login-once-per-site), and capturing in
-  the SAME environment replay runs in fixes the adversarial-SSO continuity too. RESIDUAL still open
-  after that lands: the ceremony window opens on the BRIDGE machine, which may not be where the human
-  is sitting - a fully frictionless flow wants the window on the human's own machine (its own design
-  pass). See the `Recently fixed - 2026-08-26` sections below as the parts land.
+- **`attended-ceremony-headed-browser-is-not-viable-for-a-normal-user`** (2026-08-25, **MOSTLY FIXED
+  2026-08-26; residual downgraded to MEDIUM**, design; operator-flagged emphatically after the live
+  ceremony: "the experience is still very bad ... a normal user would not be able to cope with this").
+  The BIG causes are fixed by the ceremony rebuild (`Recently fixed - 2026-08-26`, D-CEREMONY-REALCHROME):
+  the window is now a NORMAL persistent real-Chrome window, not throwaway bundled automation Chromium -
+  no "controlled by automated software" banner, navigated ONCE so no tab-flap/re-goto, the login
+  persists (login-once-per-site), and capture happens in the SAME real-Chrome environment replay runs
+  in. **NOT an extension, by operator decision** - every other agent reached for one because the
+  frictionless "attach to the user's EVERYDAY browser" path is the security boundary Chrome closed in
+  Chrome 136 (May 2025): `--remote-debugging-port`/`--remote-debugging-pipe` are ignored on the default
+  `--user-data-dir`, so CDP-attaching to the real profile (the cookie-theft vector) no longer works
+  (developer.chrome.com/blog/remote-debugging-port); a dedicated profile is the floor, one login per
+  site. TWO RESIDUALS remain, together MEDIUM not HIGH: (1) the OS still raises the window on each
+  redirect of the login itself (inherent to a headed browser on macOS, see
+  `attended-ceremony-browser-steals-focus-and-hides-its-capture-signal`) - the Done button lets the
+  human finish on their own terms but a mid-login OTP grab from another app can still be interrupted;
+  (2) the window opens on the BRIDGE machine, which may not be where the human sits - a fully
+  frictionless flow wants the window on the human's own machine. Both want their own design pass;
+  neither blocks the acceptance matrix now that the window is a normal browser.
 
 - **`bridge-pair-drops-extracapabilities-across-a-repair`** (2026-08-25, OPEN, **MINOR**, product;
   found re-pairing during the live acceptance retry). `ekoa-bridge pair` deliberately carries the
@@ -4054,6 +4045,47 @@ silently absorbed into a ledger note):
   the analytics domain is still excluded. RESIDUAL: capture/replay environment continuity (the ceremony
   ran in throwaway bundled Chromium, replay in real Chrome) is the SECOND half, closed by the ceremony
   rebuild onto the persistent real-Chrome profile - see `attended-ceremony-headed-browser-is-not-viable-for-a-normal-user`.
+
+## Recently fixed - 2026-08-26 the attended ceremony is a normal Chrome window, not a robot's
+
+- **`attended-ceremony-headed-browser-is-not-viable-for-a-normal-user`** (**MOSTLY FIXED 2026-08-26**,
+  was HIGH; operator flagged the live ceremony "very bad ... a normal user would not be able to cope").
+  ROOT CAUSE. The ceremony (`clients/bridge/src/attended/ceremony.ts`) launched Playwright's BUNDLED
+  chromium via `chromium.launch()` into a THROWAWAY context - a different and worse path than the run
+  executor, which already launches the user's real installed Chrome on a dedicated persistent profile
+  (`browser/profile.ts`). So the human typed a real password into an automation window with the
+  "controlled by automated test software" banner, that flapped tabs and re-navigated, and whose
+  session neither persisted nor matched the environment replay would run in.
+
+  THE FIX (docs/decisions.md, D-CEREMONY-REALCHROME). A shared launch primitive,
+  `clients/bridge/src/browser/chrome-launch.ts` (`launchHeadedRealChrome`), opens the SAME kind of
+  window the run executor does: real Chrome first (`channel:'chrome'`, bundled fallback), a dedicated
+  per-origin `--user-data-dir` under `<EKOA_BRIDGE_HOME>/ceremony-profiles`, the automation infobar
+  suppressed (`ignoreDefaultArgs:['--enable-automation']`), the webdriver tell removed, navigated ONCE
+  and then left alone - the window reuses its DEFAULT tab (no second tab, no re-goto). The lifecycles
+  stay separate (a ceremony is human-paced; the run lease wipes-on-release and idle-reaps, which would
+  wipe a login mid-ceremony), but the launch is shared. Wins: no banner, a real Chrome window, the
+  login persists (login-once-per-site), and capture in the same real-Chrome environment replay uses -
+  the other half of the multi-domain-auth failure above.
+
+  WHY NOT AN EXTENSION (operator asked explicitly). Chrome 136 (May 2025) ignores
+  `--remote-debugging-port`/`--remote-debugging-pipe` on the DEFAULT `--user-data-dir` to stop the
+  infostealer pattern of attaching to the everyday profile and lifting cookies
+  (developer.chrome.com/blog/remote-debugging-port). A dedicated profile is the only supported way to
+  drive real Chrome; the floor without an extension is one login per site, which this delivers.
+
+  TESTS: `clients/bridge/test/browser/chrome-launch.test.ts` (real Chrome first; bundled fallback with
+  no channel; the infobar-suppression arg present; the webdriver init script applied; a machine with
+  no browser named with the install command; the dangling-symlink SingletonLock sweep; the ceremony
+  adapter reuses the persistent context's DEFAULT page - never a second tab - and maps window-close to
+  the completion signal; `hostKeyOf` reduces an origin to one stable per-portal profile key).
+  `clients/bridge/test/attended/ceremony.test.ts` (the window copy now names the Done button as
+  primary and closing as fallback). Diagram `docs/diagrams/11-delegation-security.excalidraw` updated
+  (the binding-narrowing note refined + a dated D-BIND-FAMILY/D-CEREMONY-REALCHROME addendum).
+
+  TWO RESIDUALS, together MEDIUM, tracked on the OPEN entry: the OS still raises the window on each
+  login redirect (inherent to headed Chrome on macOS), and the window opens on the BRIDGE machine,
+  which may not be where the human sits. Each wants its own design pass; neither blocks the matrix.
 
 ## Recently fixed - 2026-08-25 the ceremony's capture signal leaves the focus-stealing window
 

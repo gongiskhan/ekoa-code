@@ -10,6 +10,7 @@
  * No local reasoning loop lives here (ADR-001): the runtime dispatches frames and runs a bounded
  * program; the only model call is the engine's single provider round trip, brokered back to Cortex.
  */
+import { join } from 'node:path';
 import type { BridgeCapability, BridgeFrame, DelegatedTask, EgressLedgerRow } from '../wire/index.js';
 import { verifyDelegatedTask, type VerifyContext } from '../verify/index.js';
 import { runDelegatedTask, type EngineDeps } from '../engine/index.js';
@@ -69,6 +70,10 @@ export interface DaemonRuntimeDeps {
   profileIdFor?: ToolExecutorDeps['profileIdFor'];
   /** Where a bash step runs when its own step names no grant. See `ToolExecutorDeps`. */
   defaultWorkRoot?: string;
+  /** `EKOA_BRIDGE_HOME`. The attended ceremony opens its persistent per-origin profiles under
+   *  `<home>/ceremony-profiles`; passed explicitly so a custom home flag cannot diverge from what
+   *  the ceremony resolves on its own. */
+  home?: string;
 }
 
 export class DaemonRuntime {
@@ -391,6 +396,7 @@ export class DaemonRuntime {
           log,
           finishSignal,
           ...(this.deps.launchBrowser ? { launchBrowser: this.deps.launchBrowser } : {}),
+          ...(this.deps.home ? { profilesRoot: join(this.deps.home, 'ceremony-profiles') } : {}),
           ...(this.deps.now ? { now: this.deps.now } : {}),
         },
       );
