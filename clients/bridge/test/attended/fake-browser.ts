@@ -1,0 +1,105 @@
+/**
+ * The Playwright stand-in every attended-ceremony test drives.
+ *
+ * Extracted from `ceremony.test.ts` when the Done-capture signal (D-CEREMONY-DONE) gained a second
+ * suite: the daemon's frame routing has to be exercised against a REAL `runAttendedCeremony`, not a
+ * mock of it, because the whole property under test is that the frame reaches the ceremony's own
+ * loop and produces the ordinary push. Two copies of these fakes would let one drift into agreeing
+ * with a ceremony the other no longer describes.
+ */
+import type { CeremonyBrowser, CeremonyContext, CeremonyPage } from '../../src/attended/index.js';
+import type { BridgeFrame } from '../../src/wire/index.js';
+
+type Handlers = Record<string, Array<() => void>>;
+
+export class FakeBrowser implements CeremonyBrowser {
+  readonly handlers: Handlers = {};
+  closed = false;
+  constructor(readonly context: FakeContext) {}
+  newContext(): Promise<CeremonyContext> {
+    return Promise.resolve(this.context);
+  }
+  close(): Promise<void> {
+    this.closed = true;
+    return Promise.resolve();
+  }
+  on(event: 'disconnected', handler: () => void): void {
+    (this.handlers[event] ??= []).push(handler);
+  }
+}
+
+export class FakeContext implements CeremonyContext {
+  readonly handlers: Handlers = {};
+  constructor(
+    readonly page: FakePage,
+    private state: unknown,
+  ) {}
+  setState(next: unknown): void {
+    this.state = next;
+  }
+  newPage(): Promise<CeremonyPage> {
+    return Promise.resolve(this.page);
+  }
+  storageState(): Promise<unknown> {
+    return Promise.resolve(this.state);
+  }
+  close(): Promise<void> {
+    return Promise.resolve();
+  }
+  on(event: 'close', handler: () => void): void {
+    (this.handlers[event] ??= []).push(handler);
+  }
+}
+
+export class FakePage implements CeremonyPage {
+  readonly handlers: Handlers = {};
+  gotoCalls: string[] = [];
+  constructor(private current: string) {}
+  setUrl(next: string): void {
+    this.current = next;
+  }
+  goto(url: string): Promise<unknown> {
+    this.gotoCalls.push(url);
+    return Promise.resolve(null);
+  }
+  url(): string {
+    return this.current;
+  }
+  on(event: 'close', handler: () => void): void {
+    (this.handlers[event] ??= []).push(handler);
+  }
+  fire(event: string): void {
+    for (const h of this.handlers[event] ?? []) h();
+  }
+}
+
+export const LOGGED_IN = { cookies: [{ name: 'SESSION', value: 'x', domain: 'portal.tribunais.org.pt' }], origins: [] };
+export const EMPTY = { cookies: [], origins: [] };
+
+export function harness(opts: { url?: string; state?: unknown } = {}) {
+  const page = new FakePage(opts.url ?? 'https://portal.tribunais.org.pt/inicio');
+  const context = new FakeContext(page, opts.state ?? LOGGED_IN);
+  const browser = new FakeBrowser(context);
+  const sent: BridgeFrame[] = [];
+  const logs: string[] = [];
+  return {
+    page,
+    context,
+    browser,
+    sent,
+    logs,
+    deps: {
+      send: (f: BridgeFrame) => {
+        sent.push(f);
+        return true;
+      },
+      log: (m: string) => logs.push(m),
+      launchBrowser: () => Promise.resolve(browser as CeremonyBrowser),
+    },
+  };
+}
+
+/** Close the window on the next tick so the snapshot loop runs at least once first. */
+export function closeSoon(h: ReturnType<typeof harness>, afterMs = 5): void {
+  setTimeout(() => h.page.fire('close'), afterMs);
+}

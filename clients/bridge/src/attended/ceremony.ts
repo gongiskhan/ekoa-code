@@ -21,10 +21,22 @@
  *
  * HOW "DONE" IS DETECTED. There is no portal-independent signal for "the human finished logging
  * in": every portal lands somewhere different, and sniffing for one would be per-portal knowledge
- * this daemon must not carry. So the human closes the window, and that is the signal. Because
- * `storageState()` cannot be read from a context that is already gone, the state is snapshotted on
- * a short interval while the window lives and the LAST snapshot is what gets pushed. The cost is
- * bounded and stated: cookies set in the final instant before the close may miss the last tick.
+ * this daemon must not carry. So the human SAYS SO, and there are two ways to say it:
+ *
+ *   - `finishSignal` - "done, capture now", pressed in the dashboard (D-CEREMONY-DONE, 2026-08-25).
+ *     THE PRIMARY ONE, because the other cannot be used for the flow this rail exists for: a headed
+ *     automation Chromium is raised by the OS on every top-level navigation and a real login
+ *     redirects repeatedly, so a human reading an OTP out of another app is fighting this window for
+ *     focus - and nothing in the window says that closing it is what captures. Measured live: the
+ *     operator logged in, the close never happened cleanly, the ceremony expired holding nothing.
+ *   - the window CLOSING - the original signal, kept as the fallback that needs no dashboard and no
+ *     live socket, and still the natural end of a card ceremony someone runs at their own desk.
+ *
+ * Because `storageState()` cannot be read from a context that is already gone, the state is
+ * snapshotted on a short interval while the window lives and the LAST snapshot is what gets pushed.
+ * The cost is bounded and stated: cookies set in the final instant before a CLOSE may miss the last
+ * tick. The Done path does not pay it - the window is still open when it fires, so it snapshots
+ * fresh state at the moment the human says they are finished.
  */
 import type { BridgeFrame } from '../wire/index.js';
 
@@ -57,6 +69,18 @@ export interface CeremonyDeps {
   send: (frame: BridgeFrame) => boolean;
   /** User-visible progress, in Portuguese — this runs where the human is sitting. */
   log: (message: string) => void;
+  /**
+   * "THE HUMAN PRESSED DONE" - resolves when Cortex relays the dashboard's capture request for THIS
+   * ceremony (`ceremony.capture`, matched on requestId by the runtime that owns this promise).
+   *
+   * A PROMISE RATHER THAN A CALLBACK because that is what the loop below already races: the ceremony
+   * ends on whichever of close / done / TTL happens first, and a third arm is the whole change.
+   * Optional, so a daemon or a test that supplies none keeps the close-only behaviour exactly.
+   *
+   * It never rejects. A signal that could reject would mean a ceremony ending on an error nobody
+   * can act on, when the window is still open and the human can still close it.
+   */
+  finishSignal?: Promise<void>;
   /** Injected for tests; defaults to Playwright chromium. */
   launchBrowser?: (opts: { headless: boolean }) => Promise<CeremonyBrowser>;
   /** Re-fetch the browser after a repairable launch failure; defaults to `playwright install --force`. */
@@ -112,7 +136,11 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
   deps.log('');
   deps.log('  Vai abrir-se uma janela do navegador.');
   deps.log('  1) Complete a autenticação (cartão, PIN, credenciais).');
-  deps.log('  2) FECHE a janela quando terminar.');
+  // Said HERE as well as on the card, because this is the text in front of the person at the moment
+  // it matters. The old line ("FECHE a janela quando terminar") was the only statement anywhere that
+  // closing is what captures, and it was invisible under a window that keeps taking focus.
+  deps.log('  2) Volte à Ekoa e clique em "Concluir e capturar".');
+  deps.log('     Não precisa de fechar esta janela (fechá-la também captura).');
   deps.log('');
 
   // Launch, and give a repairable failure exactly one re-fetch. This policy lives HERE rather than
@@ -169,22 +197,35 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
     // all three of: open, every navigation, and the tick. The navigation hook is the one that
     // matters — a completed login always ends in a redirect, so the state is captured at the moment
     // it becomes real rather than up to a tick later.
-    let capturing = false;
-    const snapshot = async (): Promise<void> => {
-      if (capturing) return; // overlapping storageState() reads would race for the same CDP session
-      capturing = true;
-      try {
-        const state = await context.storageState();
-        lastSnapshot = state;
-        landedOn = page.url() || target;
-      } catch {
-        /* the context is gone; whatever we already hold is what we push */
-      } finally {
-        capturing = false;
-      }
+    let inFlight: Promise<void> | null = null;
+    const snapshot = (): Promise<void> => {
+      // Overlapping `storageState()` reads would race for the same CDP session, so a caller arriving
+      // mid-read JOINS that read rather than skipping it. Skipping was harmless while every caller
+      // was a tick that would come round again; the Done path gets no second chance, and its whole
+      // value is that what it pushes is the state as of the moment the human said "finished".
+      if (inFlight) return inFlight;
+      const read = (async (): Promise<void> => {
+        try {
+          const state = await context.storageState();
+          lastSnapshot = state;
+          landedOn = page.url() || target;
+        } catch {
+          /* the context is gone; whatever we already hold is what we push */
+        }
+      })();
+      inFlight = read.finally(() => {
+        inFlight = null;
+      });
+      return inFlight;
     };
     page.on?.('framenavigated', () => void snapshot());
     await snapshot();
+
+    // Both non-TTL arms are built ONCE, outside the loop. Re-deriving them per iteration would hang
+    // a fresh `.then` off the same promises on every tick - 270 of them over a full ceremony - for
+    // no gain, since a settled promise stays settled.
+    const closedArm = closed.promise.then(() => 'closed' as const);
+    const doneArm = deps.finishSignal?.then(() => 'done' as const);
 
     for (;;) {
       const remaining = deadline - now();
@@ -197,9 +238,19 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
         break;
       }
       const finished = await Promise.race([
-        closed.promise.then(() => 'closed' as const),
+        closedArm,
+        ...(doneArm ? [doneArm] : []),
         sleep(Math.min(SNAPSHOT_INTERVAL_MS, remaining)).then(() => 'tick' as const),
       ]);
+      if (finished === 'done') {
+        // THE ONE COMPLETION SIGNAL THAT ARRIVES WITH THE CONTEXT STILL ALIVE, so it takes a fresh
+        // snapshot instead of pushing whatever the last tick happened to hold. That is not an
+        // optimisation: the human presses Done at the instant the login completes, which is exactly
+        // when the state that matters is newest.
+        await snapshot();
+        deps.log('Recebido: a concluir e a capturar a sessão...');
+        break;
+      }
       if (finished === 'closed') break;
       await snapshot();
     }

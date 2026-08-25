@@ -6688,3 +6688,154 @@ reintroduced one layer lower. The validator now accepts it; downstream was alrea
 the ordinary human pause carrying its true kind - and the I8 exclusion is now a branch a test can
 enter. Both halves are mutation-proven: re-adding `signature` to the clearable set, and re-dropping
 it from the validator, each redden the case.
+
+## 2026-08-25 - D-CEREMONY-DONE: the ceremony's capture signal leaves the window
+
+Acceptance-run finding `attended-ceremony-browser-steals-focus-and-hides-its-capture-signal` (HIGH,
+found by the operator running the live ceremony). The attended ceremony captured the session ONLY
+when the human CLOSED the headed Chromium it opened. Two facts about that window make the rule
+unusable for the flow the rail exists for, and both were measured on a Mac rather than reasoned
+about:
+
+1. **It takes focus on every top-level navigation.** A real login redirects repeatedly (portal ->
+   SSO -> back), and each redirect raises the window. During an OTP/2FA login the human must switch
+   to their SMS app, mail client or authenticator to read a code - and the window pulls focus back
+   mid-copy. The operator's words: "can't do anything with the computer".
+2. **Nothing said that closing it was the capture.** The only statement anywhere was one line in the
+   `/cofre` card's response message, easily gone by the time the window has focus.
+
+Net, live: the operator logged in, the close never happened cleanly, the ceremony expired on its TTL
+and 0 items were captured. The run stayed `needs_credentials`.
+
+**THE DECISION: decouple "the human finished" from "the window closed".** The dashboard gets a
+"Concluir e capturar" affordance that pulls the current `storageState` over the EXISTING session-push
+rail, so completion is signalled from the surface the person already has focus in. Option (c) from
+the finding (an in-window banner) was rejected as a partial fix - it makes the signal visible without
+making it reachable, and the human is still fighting for focus. Option (b) (suppress the raising) is
+addressed below and is not available.
+
+**THE CLOSE PATH STAYS, as the fallback rather than as a leftover.** It needs no dashboard, no live
+socket and no correlation, and it is still the natural end of a card ceremony run at one's own desk;
+it is also the recovery when the Done signal cannot reach the right ceremony (below). Removing it
+would trade one single point of failure for another.
+
+- **D-CEREMONY-DONE-1 (mechanism): a third completion signal in the ceremony loop, not a second
+  capture.** `runAttendedCeremony` already raced {window closed, TTL tick}; it now races
+  {closed, DONE, tick}. On Done it snapshots and breaks into the SAME push the close path takes. Not
+  a new credential surface - a new trigger for the existing one. Custody is unchanged and unchangeable
+  from here: the same `session.push`, bound by `boundOriginsForEstablishedHost` to the ceremony's own
+  origin, minted under the ceremony's own actor, armed with the grant the REQUESTER named
+  (`ADHOC_SESSION_GRANT` for the ad-hoc errand). The Done path is in fact strictly FRESHER than the
+  close path: the context is still alive when it fires, so it reads state at the moment the human says
+  they are finished rather than pushing the last tick's copy.
+- **D-CEREMONY-DONE-2 (wire): a downward `ceremony.capture` frame carrying `{ requestId }`.** Additive
+  (Rule 7): an old daemon drops it at its zod boundary and keeps its close-to-capture behaviour; an old
+  Cortex never sends it. No `pairingId` field, for the reason no other downward frame has one - the
+  socket IS the pairing, and a pairing named in the body would be a second statement that could
+  disagree with the first. The daemon finishes the ceremony it is holding or nothing: a requestId that
+  does not match is a no-op, SAID at the machine (there is no reply frame on this rail, so the human in
+  front of the window is the only one who can be told).
+- **D-CEREMONY-DONE-3 (correlation): the ceremony is resolved from the CALLER, never named by them.**
+  `POST /api/v1/cofre/sessions/capture` takes an origin, resolves the caller's own open ceremony on the
+  caller's own machine, and sends that ceremony's requestId. The alternative - returning the requestId
+  from `establish` and having the client hand it back - was rejected twice over: a client-supplied
+  requestId would have to be checked against the ceremony's actor anyway (or one user could finish
+  another user's ceremony and bank the capture under their actor), so keying the lookup on the actor
+  REMOVES the check rather than passing it; and a handle held in the browser does not survive a page
+  reload, while a server-resolved one does. It also keeps `establish`'s deliberately handle-free
+  response as it was.
+- **D-CEREMONY-DONE-4 (honesty): the endpoint answers `requested`, not `captured`.** What it does is
+  deliver a frame. The capture travels machine -> Cortex -> Cofre seconds later on its own rail, and
+  an endpoint claiming the outcome it has not seen would be the same shape of lie as "a window opened
+  on your machine" for a window that never did. The DASHBOARD closes the loop by watching for the item
+  itself (a NEW session item bound to this origin), so the person is told a fact; "not yet" is reported
+  as not-yet rather than as failure, because the window is still open and both other ways out still
+  work. The halted run continues to be woken server-side by the ordinary credential-waiter path.
+- **D-CEREMONY-DONE-5 (the divergence, stated rather than hidden).** Cortex holds one pending ceremony
+  per request while the daemon holds at most one at a time, so they can disagree - the human reloads
+  the dashboard mid-ceremony and opens a second one, which the daemon refuses. The lookup takes the
+  NEWEST open ceremony for that actor + machine + origin (the one the person just asked for); if the
+  daemon is in fact still holding an older one, the requestId will not match and it says so at the
+  machine rather than ending a window it was not asked about. The recovery is the close path, which is
+  precisely why it stays.
+
+**THE FOCUS THEFT ITSELF IS NOT FIXED, and is recorded as inherent.** Chromium on macOS activates its
+application and raises the window on navigation through AppKit; no Playwright launch option and no
+Chromium switch suppresses it (the ones that sound relevant -
+`--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`, `--no-startup-window` -
+govern background throttling and startup windows, not activation). The measures that WOULD stop it
+(launching minimised or off-screen) are hostile to a window the human has to type in. Adding
+speculative flags that cannot be verified from this repo's CI would be worse than saying so. What the
+Done button changes is that the focus fight is now confined to the login itself and no longer decides
+whether the session is captured: the human can lose focus a dozen times, finish the login, and press a
+button in a surface that is theirs.
+
+**WHAT ONLY A LIVE BRIDGE CAN PROVE**, registered UNVERIFIED against the finding: a human opens the
+ceremony, completes a real OTP login while the window fights for focus, presses "Concluir e capturar",
+and the halted run wakes up authenticated. Deterministic suites prove the signal path end to end (the
+frame reaching the ceremony's loop, the push, the tenancy of the lookup, the refusals, the UI states);
+none of them proves a real portal's jar survives the round trip.
+
+### REVIEW ROUND (2026-08-25) - the tiebreak was oriented away from the flow it serves
+
+Scoped review of the Done-capture slice returned three confirmed minors that are one defect seen from
+three sides, and a cluster of three reports on premature-Done that resolve to a written dismissal.
+
+**1. THE "NEWEST WINS" TIEBREAK WAS A GUARANTEED NO-OP IN THE DIVERGENCE D-CEREMONY-DONE-5 ITSELF
+(confirmed; F3/F5).** Cortex keeps one pending ceremony per REQUEST, the daemon holds one at a TIME
+and refuses every later `attended.request` while a window is up. So when a person clicks "Abrir
+janela" twice over a live window, the daemon is still holding the FIRST while `requestCeremonyCapture`
+resolved and sent the SECOND - the requestId could never match, Done did nothing, and the endpoint had
+already answered `requested: true`. That is precisely the "told something happened when nothing did"
+shape this slice exists to remove, reintroduced one layer down.
+
+The review's recommended fix was a one-line flip to oldest-wins. **It is not taken, and the reason is
+that oldest-wins fails a MORE common flow than the one it fixes.** A ceremony that ends without a
+capture - the human closed the window, abandoned the login, or Google refused the automation browser
+outright (findings, `google-sso-refuses-the-automated-ceremony-browser`) - frees the daemon while
+leaving Cortex's entry in the map, unswept, for the rest of its 10-minute TTL. The person then clicks
+"Abrir janela" again, the daemon accepts and holds the SECOND, and oldest-wins sends the dead first
+one: a silent no-op for up to ten minutes on the "that did not work, try again" path, which is the
+path a focus-stealing OTP ceremony produces most. The reviewer scoped the counter-case to the ~1
+minute between the daemon's 9-minute TTL and Cortex's 10, but the abandoned-ceremony case is much
+wider than that and needs no TTL at all. Each tiebreak therefore trades one silent no-op for another.
+
+**THE FIX IS TO STOP CHOOSING.** The capture is relayed for EVERY ceremony this caller has open, on
+this machine, for this origin, oldest first. The daemon finishes the one it is actually holding and
+no-ops the rest - a property that was already enforced and mutation-proven there, so the fan-out
+widens a signal without widening what any single frame can do. It is not a broadcast: every requestId
+named belongs to the caller, for the origin they asked about, on the machine resolved from their own
+actor, and a suite pins that the candidate list never crosses an owner or an origin. This is cheaper
+than the two reconciliations the review floated - it needs neither a prune of Cortex's map (which
+would delete the live ceremony in exactly the double-open case) nor an ack frame on a rail that
+deliberately has no reply channel.
+
+**2. THE CARD'S COPY STEERED AWAY FROM THE ONLY WORKING RECOVERY (confirmed; F2).** In the state above
+the capture times out and the card said "...e tente novamente" while the standing hint says "nao
+precisa de fechar a janela" - so both sentences pointed away from closing the window, which was the
+one action that still captured. The not-captured branch now names it ("...ou feche a janela, que
+tambem captura") while staying a "not yet" rather than a failure, and the standing hint is unchanged
+because it is the instruction for the flow that works. The daemon's mismatch line stopped prescribing
+a recovery for the same reason in reverse: under the fan-out a mismatch is the ORDINARY case for
+someone who opened a window twice, and a sibling frame is very likely finishing the real ceremony, so
+"feche a janela para capturar" at the machine would be advice against an outcome that already
+happened. The surface where the human is looking reports the outcome; the machine states facts.
+
+**3. THE TIEBREAK WAS PINNED BY NOTHING (confirmed; F6).** Every Done test opened exactly one ceremony,
+so the selection line was uncovered and flipping it reddened nothing - the slice's own mutation
+criterion, unmet on the one line where a real behavioural choice lived. There is now a two-ceremony
+case, and collapsing the fan-out to EITHER tiebreak reddens it.
+
+**DISMISSED WITH REASONS: a premature Done can push a half-finished login (F1/F4/F7).** Three reports
+converge on this and the last two answer the first. `hasCookies` is a presence check, so a human who
+presses Done after the portal set a pre-auth cookie but before the second factor completes can push a
+jar that is not really authenticated; `boundOriginsForEstablishedHost` will accept it, because that
+cookie does cover the ceremony host. This is real, and it is ACCEPTED AS INHERENT AND HUMAN-OWNED:
+the whole rail exists because there is no portal-independent "login complete" signal, the human is the
+only oracle, and the pre-existing close path carries the identical exposure through the identical two
+guards. The Done path is in fact strictly fresher (it snapshots a live context rather than the last
+tick before teardown) and the TTL path still discards. What changed is ergonomic rather than
+custodial: the trigger now lives in a surface away from the window, so pressing it early is easier,
+and the card reports a captured item cheerfully. Recorded here rather than guarded, because a
+heuristic completion check would be exactly the per-portal knowledge this daemon refuses to carry, and
+a wrong one would discard good sessions. The residual is stated in the finding.

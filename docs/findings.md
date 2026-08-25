@@ -6,34 +6,6 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
-- **`attended-ceremony-browser-steals-focus-and-hides-its-capture-signal`** (2026-08-25, OPEN,
-  **HIGH**, UX/design; found running the live acceptance ceremony, operator hit it directly). The
-  attended-ceremony capture (`clients/bridge/src/attended/ceremony.ts`) opens a HEADED Playwright
-  Chromium the human must drive on the machine, and the SIGNAL that login is done is the human
-  CLOSING the window (`waitForClose`; `storageState()` is snapshotted on open, every `framenavigated`,
-  and each tick, and the last snapshot before close is pushed). Two real problems, measured live on a
-  Mac: (1) FOCUS THEFT - a headed automation Chromium is raised/focused by macOS on every top-level
-  navigation, and a real login flow redirects repeatedly (ubereats.com -> auth.uber.com -> back), so
-  the window keeps pulling focus. This defeats the ONE thing the ceremony exists for: an OTP/2FA flow
-  where the human must switch to Gmail / an authenticator / the Claude app to read a code and paste
-  it back - the ceremony window yanks focus away mid-copy, so the human "can't do anything with the
-  computer" (operator's words). (2) THE CAPTURE SIGNAL IS INVISIBLE - closing the window is what
-  captures, but nothing in the window says so at the moment it matters; the only hint is one line on
-  the /cofre card ("feche a janela quando terminar"), easily lost once the ceremony window has focus.
-  Net: the operator logged in but no session was captured (0 Cofre items, run still needs_credentials)
-  because the close-to-capture step never happened cleanly under the focus thrash. This is largely
-  INHERENT to "a headed browser the human babysits on the machine" and is the sharpest limitation of
-  the attended-ceremony design for its primary use case. CLOSE BY (design, not a one-liner): options
-  to weigh - (a) capture WITHOUT requiring a window close (a "Done - capture now" affordance in the
-  dashboard that pulls the current storageState over the existing session-push rail, so the human
-  signals completion from the dashboard they already have focus in, not by closing a focus-stealing
-  window); (b) suppress the automation browser's focus-raising where the OS allows it, and/or open it
-  minimized/background with a clear dashboard-side "your login window is open" indicator; (c) an
-  explicit in-window banner stating "log in, then click Done here" pointing back to the dashboard.
-  Any of these decouples "the human finished" from "the window closed" and stops the focus war. This
-  gates the ad-hoc acceptance run's final capture; everything upstream (durable halt, establish, the
-  ceremony rail, the new bridge opening the window, login itself) was proven live.
-
 - **`establish-endpoint-reports-started-true-for-a-bridge-that-cannot-run-the-login-ceremony`**
   (2026-08-25, OPEN, **MEDIUM**; found running the acceptance-run durable ceremony live). `POST
   /api/v1/cofre/sessions/establish` (`api/src/routes/cofre.ts`) gates on the machine advertising
@@ -4001,6 +3973,91 @@ silently absorbed into a ledger note):
   `m365proxy-manifest-flag-stripped`, `P4.2-was-dead-code-in-production`) was code that LOOKED like
   coverage: a correct, tested function kept plausible by a docblock describing a caller it never got.
   Nothing here claims to be reachable, and this entry is the record that it is not.
+
+## Recently fixed - 2026-08-25 the ceremony's capture signal leaves the focus-stealing window
+
+- **`attended-ceremony-browser-steals-focus-and-hides-its-capture-signal`** (**CAPTURE SIGNAL
+  FIXED 2026-08-25; FOCUS THEFT ACCEPTED AS INHERENT**, was HIGH, UX/design; found running the live
+  acceptance ceremony, operator hit it directly). The capture no longer depends on the window
+  closing. A "Concluir e capturar" button on the `/cofre` ceremony card calls
+  `POST /api/v1/cofre/sessions/capture`, which resolves the CALLER'S OWN open ceremony (by actor +
+  machine + origin, never by a requestId the client names) and relays a new downward
+  `ceremony.capture` frame; the daemon's ceremony loop takes it as a third completion signal beside
+  {window closed, TTL}, snapshots the live `storageState` and pushes it on the UNCHANGED
+  `session.push` rail - same origin binding, same actor, same grant (docs/decisions.md 2026-08-25,
+  D-CEREMONY-DONE). So the human signals completion from the surface they already have focus in, and
+  the window says so too ("Volte à Ekoa e clique em Concluir e capturar. Não precisa de fechar esta
+  janela"). Closing still captures, and is kept as the fallback.
+
+  THE FOCUS THEFT ITSELF IS NOT FIXED, and is accepted rather than deferred: Chromium on macOS
+  activates its application and raises the window on navigation through AppKit, and no Playwright
+  launch option or Chromium switch suppresses that (the ones that sound relevant -
+  `--disable-backgrounding-occluded-windows`, `--disable-renderer-backgrounding`,
+  `--no-startup-window` - govern background throttling and startup windows, not activation), while
+  the measures that would work - launching minimised or off-screen - are hostile to a window the
+  human has to type into. What the Done button changes is that the focus fight is confined to the
+  login itself and no longer decides whether the session is captured.
+
+  TESTS: `clients/bridge/test/attended/ceremony.test.ts` (the Done arm; the fresh snapshot it takes
+  because the context is still alive; the close path still working; the in-window copy),
+  `clients/bridge/test/attended/done-capture.test.ts` (frame -> push with no close anywhere;
+  requestId mismatch and no-ceremony are no-ops that are SAID at the machine),
+  `api/tests/security/adhoc-ceremony-capture.test.ts` (a caller can finish only their OWN ceremony,
+  on their own machine, for that origin; a dead socket is a refusal; the ceremony stays open),
+  `api/tests/contract/cofre.test.ts` (response shape, in-band refusal with no machine, origin
+  validation, auth wall), `web/__tests__/components/cofre-capture-now.test.tsx` and
+  `web/__tests__/cofre-capture-session.test.ts` (the affordance's in-flight gate, its copy, and the
+  three honest outcomes). Each control is mutation-proven.
+
+  REVIEW ROUND 2026-08-25, folded into this same fix. The capture's "newest wins" tiebreak was a
+  guaranteed no-op in the very multi-ceremony divergence it was written for (the daemon refuses a
+  second ceremony, so it can only be holding the FIRST), and the card's timeout copy steered away
+  from closing the window - the one recovery that still captures. The tiebreak is gone rather than
+  flipped: oldest-wins would have failed the commoner "that did not work, try again" flow, where the
+  daemon holds the NEWEST and Cortex's abandoned entry lingers for the rest of its 10-minute TTL. The
+  capture is now relayed to EVERY ceremony the caller has open for that origin on that machine and the
+  daemon finishes the one it holds; the timeout copy names the close. Details in docs/decisions.md.
+
+  A SECOND RESIDUAL, accepted rather than deferred (the first is the focus theft above). A human who
+  presses Done after the portal has set a pre-auth cookie but BEFORE the second factor completes
+  pushes a jar that is not really authenticated: `hasCookies` is a presence check, and
+  `boundOriginsForEstablishedHost` accepts that cookie because it does cover the ceremony host. The
+  exposure is IDENTICAL to the pre-existing close path - same two guards, same human-as-only-oracle,
+  since the rail exists precisely because no portal-independent "login complete" signal exists and a
+  heuristic one would be the per-portal knowledge the daemon refuses to carry. What changed is
+  ergonomic: the trigger now lives away from the window, so pressing it early is easier, and the card
+  then reports the item cheerfully. Accepted as human-owned, reasoning in docs/decisions.md (review
+  round 2026-08-25, dismissing F1/F4/F7).
+
+  UNVERIFIED (live-only, registered against this finding): a human completing a real OTP login while
+  the window fights for focus, pressing "Concluir e capturar", and the halted run waking up
+  authenticated. THE ORIGINAL REPORT, unchanged:
+
+  The attended-ceremony capture (`clients/bridge/src/attended/ceremony.ts`) opens a HEADED Playwright
+  Chromium the human must drive on the machine, and the SIGNAL that login is done is the human
+  CLOSING the window (`waitForClose`; `storageState()` is snapshotted on open, every `framenavigated`,
+  and each tick, and the last snapshot before close is pushed). Two real problems, measured live on a
+  Mac: (1) FOCUS THEFT - a headed automation Chromium is raised/focused by macOS on every top-level
+  navigation, and a real login flow redirects repeatedly (ubereats.com -> auth.uber.com -> back), so
+  the window keeps pulling focus. This defeats the ONE thing the ceremony exists for: an OTP/2FA flow
+  where the human must switch to Gmail / an authenticator / the Claude app to read a code and paste
+  it back - the ceremony window yanks focus away mid-copy, so the human "can't do anything with the
+  computer" (operator's words). (2) THE CAPTURE SIGNAL IS INVISIBLE - closing the window is what
+  captures, but nothing in the window says so at the moment it matters; the only hint is one line on
+  the /cofre card ("feche a janela quando terminar"), easily lost once the ceremony window has focus.
+  Net: the operator logged in but no session was captured (0 Cofre items, run still needs_credentials)
+  because the close-to-capture step never happened cleanly under the focus thrash. This is largely
+  INHERENT to "a headed browser the human babysits on the machine" and is the sharpest limitation of
+  the attended-ceremony design for its primary use case. CLOSE BY (design, not a one-liner): options
+  to weigh - (a) capture WITHOUT requiring a window close (a "Done - capture now" affordance in the
+  dashboard that pulls the current storageState over the existing session-push rail, so the human
+  signals completion from the dashboard they already have focus in, not by closing a focus-stealing
+  window); (b) suppress the automation browser's focus-raising where the OS allows it, and/or open it
+  minimized/background with a clear dashboard-side "your login window is open" indicator; (c) an
+  explicit in-window banner stating "log in, then click Done here" pointing back to the dashboard.
+  Any of these decouples "the human finished" from "the window closed" and stops the focus war. This
+  gates the ad-hoc acceptance run's final capture; everything upstream (durable halt, establish, the
+  ceremony rail, the new bridge opening the window, login itself) was proven live.
 
 ## Recently fixed - 2026-08-24 the ad-hoc adversarial session lifecycle closes
 

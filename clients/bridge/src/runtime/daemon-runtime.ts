@@ -76,9 +76,19 @@ export class DaemonRuntime {
   private readonly pendingProviders = new Map<string, (body: unknown) => void>();
   /** taskId → abort controller, so a `cancel` frame stops a running program. */
   private readonly running = new Map<string, AbortController>();
-  /** One ceremony at a time: they are HEADED browser windows a human must sit at, so two at once
-   *  would race for the same pair of eyes and the second would be answered by nobody. */
-  private ceremonyInFlight = false;
+  /**
+   * The ceremony this machine is currently holding, or null.
+   *
+   * ONE AT A TIME: they are HEADED browser windows a human must sit at, so two at once would race
+   * for the same pair of eyes and the second would be answered by nobody.
+   *
+   * It carries the requestId and the ceremony's "done, capture now" resolver rather than a bare
+   * boolean, because the dashboard's Done button (D-CEREMONY-DONE) arrives here as a
+   * `ceremony.capture` frame and has to reach THAT ceremony's loop. The requestId is what makes it
+   * that ceremony's: a capture naming a different one is a no-op, so a stale or misrouted frame can
+   * never end a window this daemon is holding for a different errand.
+   */
+  private ceremonyInFlight: { requestId: string; finishNow: () => void } | null = null;
   /**
    * The rebindable half of this daemon's identity (org + signing secret).
    *
@@ -226,6 +236,13 @@ export class DaemonRuntime {
       case 'attended.request':
         void this.handleAttended(frame);
         break;
+      case 'ceremony.capture':
+        // The dashboard's "done - capture now" (D-CEREMONY-DONE). Synchronous and tiny on purpose:
+        // it resolves the running ceremony's own signal and returns. Everything that follows -
+        // snapshot, push, close the window - is the ceremony's, unchanged, so this is a new TRIGGER
+        // for the existing capture rather than a second path a session can travel.
+        this.handleCeremonyCapture(frame.requestId);
+        break;
       case 'tool.invoke':
         // J-1's frame pair, now EXECUTED (P1.2). The refusal this replaces was deliberate rather
         // than a stub - running a step on someone's machine on remote instruction needed the
@@ -359,20 +376,58 @@ export class DaemonRuntime {
       log('Já está uma autenticação a decorrer nesta máquina; conclua-a primeiro.');
       return;
     }
-    this.ceremonyInFlight = true;
+    // The ceremony's second completion signal, armed BEFORE the ceremony can start, so a Done
+    // pressed the instant the window appears cannot arrive at a handle that does not exist yet.
+    let finishNow!: () => void;
+    const finishSignal = new Promise<void>((resolve) => {
+      finishNow = resolve;
+    });
+    this.ceremonyInFlight = { requestId: frame.requestId, finishNow };
     try {
       await runAttendedCeremony(
         { requestId: frame.requestId, kind: frame.kind, origin: frame.origin, reason: frame.reason },
         {
           send: (f) => this.send(f),
           log,
+          finishSignal,
           ...(this.deps.launchBrowser ? { launchBrowser: this.deps.launchBrowser } : {}),
           ...(this.deps.now ? { now: this.deps.now } : {}),
         },
       );
     } finally {
-      this.ceremonyInFlight = false;
+      this.ceremonyInFlight = null;
     }
+  }
+
+  /**
+   * "The human pressed Done in the dashboard" - end the ceremony this machine is holding and let it
+   * capture, without the human having to close a window that keeps stealing their focus.
+   *
+   * BOTH REFUSALS ARE NO-OPS, and both are STATED rather than swallowed. There is no reply frame on
+   * the ceremony rail (`attended/ceremony.ts`: a ceremony that fails simply never pushes), so this
+   * machine's own output is the only channel this side has.
+   *
+   * NEITHER LINE PRESCRIBES A RECOVERY, and that is a correction rather than an omission (review
+   * round 2026-08-25, F2/F3). Cortex relays the capture for EVERY ceremony it holds open for that
+   * caller, origin and machine, precisely because it cannot know which one this daemon is holding -
+   * so a requestId mismatch is the ORDINARY case for a person who opened a window twice, and a
+   * sibling frame in the same fan-out is very likely finishing the ceremony that is really up. A line
+   * here telling them to close the window would be advice against an outcome that already happened.
+   * The dashboard card - where the human is actually looking - reports what did or did not arrive,
+   * and names closing the window only when nothing did.
+   */
+  private handleCeremonyCapture(requestId: string): void {
+    const log = this.deps.log ?? ((): void => undefined);
+    const ceremony = this.ceremonyInFlight;
+    if (!ceremony) {
+      log('Pedido de captura recebido, mas não há nenhuma autenticação a decorrer nesta máquina.');
+      return;
+    }
+    if (ceremony.requestId !== requestId) {
+      log('Pedido de captura para outra autenticação; ignorado.');
+      return;
+    }
+    ceremony.finishNow();
   }
 
   private async handleDelegate(task: DelegatedTask): Promise<void> {

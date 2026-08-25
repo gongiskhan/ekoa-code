@@ -5,6 +5,7 @@ import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import * as registry from '../../src/bridge/registry.js';
 import {
   requestAttendedCeremony,
+  requestCeremonyCapture,
   acceptSessionPush,
   AttendedError,
   __resetCeremoniesForTests,
@@ -353,5 +354,153 @@ describe('the capture belongs to the actor whose ceremony it was (Rule 5, D-ADHO
     // waking it would assert a relationship the Cofre does not have and could only halt again.
     expect(woken).toContain('run_alice');
     expect(woken).not.toContain('run_bob');
+  });
+});
+
+/**
+ * "DONE - CAPTURE NOW" (D-CEREMONY-DONE, 2026-08-25): a SECOND TRIGGER for the same capture, and the
+ * tenancy question it raises.
+ *
+ * WHY IT EXISTS. Until now the capture could be triggered only by the human CLOSING the headed
+ * ceremony window, and that window is raised by the OS on every top-level navigation - so an OTP
+ * login, the flow this rail exists for, is a focus fight the person loses, with nothing on screen
+ * saying that closing is what captures. Live, the operator logged in and the ceremony expired
+ * holding nothing.
+ *
+ * WHY IT BELONGS IN THIS SUITE. The new trigger is reachable from an HTTP endpoint, and the ceremony
+ * it ends mints a credential-equivalent artefact under SOMEBODY'S actor. The question is therefore
+ * not "does the frame go out" (the contract test covers that) but "whose ceremony can a caller
+ * finish". The answer must be: their own, on their own machine, or none - and it is structural
+ * rather than checked, because the lookup is keyed on the caller's own actor and there is no
+ * requestId on the request to name anyone else's with.
+ */
+describe('the Done signal can only finish the CALLER OWN ceremony (D-CEREMONY-DONE)', () => {
+  it('relays a capture naming the ceremony this caller opened on this machine', async () => {
+    const sent = captureWire();
+    const requestId = await openAdhoc(alice);
+
+    const outcome = await requestCeremonyCapture(alice, { pairingId: PAIRING, origin: ORIGIN });
+
+    expect(outcome).toEqual({ requested: true, origin: ORIGIN });
+    expect(sent.filter((f) => f.type === 'ceremony.capture')).toEqual([{ type: 'ceremony.capture', requestId }]);
+  });
+
+  /**
+   * TWO CEREMONIES, ONE MACHINE - the case no tiebreak can get right (review round 2026-08-25,
+   * F3/F5/F6, and the reason there is no tiebreak here any more).
+   *
+   * Cortex keeps one pending ceremony per REQUEST; the daemon holds one at a TIME. Which one it is
+   * holding depends on how the pair came to exist, and BOTH orders are ordinary:
+   *
+   *   DOUBLE OPEN over a live window - the daemon refused the second and is still holding the FIRST,
+   *   so sending the newest is a guaranteed no-op.
+   *   RETRY after a dead window - the daemon finished with the first and is holding the SECOND,
+   *   while the first sits in the map unswept for the rest of its 10-minute TTL, so sending the
+   *   oldest is a guaranteed no-op for up to ten minutes on the "that did not work, try again" path.
+   *
+   * Either tiebreak breaks one of them. Relaying to every candidate breaks neither: the daemon
+   * finishes the one it is holding and no-ops the rest, which is enforced there and pinned by
+   * `clients/bridge/test/attended/done-capture.test.ts`.
+   */
+  it('relays the capture to EVERY ceremony this caller has open for the origin, oldest first', async () => {
+    const sent = captureWire();
+    const first = await openAdhoc(alice);
+    const second = await openAdhoc(alice);
+    expect(first).not.toBe(second);
+
+    const outcome = await requestCeremonyCapture(alice, { pairingId: PAIRING, origin: ORIGIN });
+
+    expect(outcome).toEqual({ requested: true, origin: ORIGIN });
+    // Both ids travel, so whichever the daemon is really holding is reached. Oldest-first only so
+    // the machine's own log reads in the order the person's attempts happened.
+    expect(sent.filter((f) => f.type === 'ceremony.capture')).toEqual([
+      { type: 'ceremony.capture', requestId: first },
+      { type: 'ceremony.capture', requestId: second },
+    ]);
+  });
+
+  it('fans out only across the CALLER OWN ceremonies, never across owners or origins', async () => {
+    // The fan-out widens WHICH of the caller's own ceremonies are signalled and nothing else. Each
+    // frame is an instruction to end a ceremony, so a candidate list that reached past the caller
+    // would be exactly the confused deputy this rail's owner scoping exists to prevent.
+    const sent = captureWire();
+    const mine = await openAdhoc(alice, ORIGIN);
+    const otherOrigin = await openAdhoc(alice, OTHER);
+    const bobs = await openAdhoc(bob, ORIGIN);
+
+    await requestCeremonyCapture(alice, { pairingId: PAIRING, origin: ORIGIN });
+
+    const ids = sent
+      .filter((f) => f.type === 'ceremony.capture')
+      .map((f) => (f as { requestId: string }).requestId);
+    expect(ids).toEqual([mine]);
+    expect(ids).not.toContain(otherOrigin);
+    expect(ids).not.toContain(bobs);
+  });
+
+  it("REFUSES to finish another user's ceremony on that user's machine", async () => {
+    // The case that would matter. Bob is in Alice's org and names her machine and her origin; if the
+    // ceremony were resolved by anything but the caller's own actor, his Done would end her window
+    // and mint HER session - under her actor, which is exactly what would make it invisible to her.
+    const sent = captureWire();
+    await openAdhoc(alice);
+
+    const outcome = await requestCeremonyCapture(bob, { pairingId: PAIRING, origin: ORIGIN });
+
+    expect(outcome).toEqual({ requested: false, reason: 'no_open_ceremony' });
+    expect(sent.filter((f) => f.type === 'ceremony.capture')).toHaveLength(0);
+  });
+
+  it('refuses when the caller has no ceremony open for THAT origin', async () => {
+    const sent = captureWire();
+    await openAdhoc(alice, ORIGIN);
+
+    const outcome = await requestCeremonyCapture(alice, { pairingId: PAIRING, origin: OTHER });
+
+    expect(outcome).toEqual({ requested: false, reason: 'no_open_ceremony' });
+    expect(sent.filter((f) => f.type === 'ceremony.capture')).toHaveLength(0);
+  });
+
+  it('refuses for a machine that is not the one the ceremony was opened on', async () => {
+    // The pairing is resolved server-side from the actor, so this is the state after a re-pair: the
+    // ceremony is held against the OLD machine, and finishing it from the new one would ask a daemon
+    // that never opened a window to end one.
+    const sent = captureWire();
+    await openAdhoc(alice);
+
+    const outcome = await requestCeremonyCapture(alice, { pairingId: 'another-machine', origin: ORIGIN });
+
+    expect(outcome).toEqual({ requested: false, reason: 'no_open_ceremony' });
+    expect(sent.filter((f) => f.type === 'ceremony.capture')).toHaveLength(0);
+  });
+
+  it('reports a dead socket as a refusal rather than a capture nobody was asked to make', async () => {
+    captureWire();
+    await openAdhoc(alice);
+    // The socket dies AFTER the window was opened - the machine went to sleep while the human was
+    // logging in - which is the only interesting ordering here.
+    vi.spyOn(registry, 'sendToPairing').mockImplementation(() => false);
+
+    expect(await requestCeremonyCapture(alice, { pairingId: PAIRING, origin: ORIGIN })).toEqual({
+      requested: false,
+      reason: 'unreachable',
+    });
+  });
+
+  it('leaves the ceremony OPEN, so the window close still captures and Done can be pressed again', async () => {
+    // The Done request is not the capture. A daemon that answers it with nothing - an empty jar, a
+    // login the human had not actually finished - must leave every other way out intact.
+    const sent = captureWire();
+    const requestId = await openAdhoc(alice);
+
+    await requestCeremonyCapture(alice, { pairingId: PAIRING, origin: ORIGIN });
+    await requestCeremonyCapture(alice, { pairingId: PAIRING, origin: ORIGIN });
+    expect(sent.filter((f) => f.type === 'ceremony.capture')).toHaveLength(2);
+
+    // ...and the push, whenever it arrives, is the ordinary one: same requestId, same custody, same
+    // narrow binding, minted under the ceremony's own actor.
+    const item = await acceptSessionPush({ requestId, pairingId: PAIRING, origin: ORIGIN, storageState: storageState() });
+    expect(item.userId).toBe('alice');
+    expect(item.boundOrigins).toEqual([ORIGIN]);
   });
 });

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { runAttendedCeremony, type CeremonyBrowser, type CeremonyContext, type CeremonyPage } from '../../src/attended/index.js';
+import { runAttendedCeremony, type CeremonyBrowser } from '../../src/attended/index.js';
 import type { BridgeFrame } from '../../src/wire/index.js';
+import { harness, closeSoon, LOGGED_IN, EMPTY } from './fake-browser.js';
 
 /**
  * The machine half of the attended ceremony (J-5). Playwright is substituted by a fake browser so
@@ -8,106 +9,12 @@ import type { BridgeFrame } from '../../src/wire/index.js';
  * reported — rather than that chromium launches.
  */
 
-type Handlers = Record<string, Array<() => void>>;
-
-class FakeBrowser implements CeremonyBrowser {
-  readonly handlers: Handlers = {};
-  closed = false;
-  constructor(readonly context: FakeContext) {}
-  newContext(): Promise<CeremonyContext> {
-    return Promise.resolve(this.context);
-  }
-  close(): Promise<void> {
-    this.closed = true;
-    return Promise.resolve();
-  }
-  on(event: 'disconnected', handler: () => void): void {
-    (this.handlers[event] ??= []).push(handler);
-  }
-}
-
-class FakeContext implements CeremonyContext {
-  readonly handlers: Handlers = {};
-  constructor(
-    readonly page: FakePage,
-    private state: unknown,
-  ) {}
-  setState(next: unknown): void {
-    this.state = next;
-  }
-  newPage(): Promise<CeremonyPage> {
-    return Promise.resolve(this.page);
-  }
-  storageState(): Promise<unknown> {
-    return Promise.resolve(this.state);
-  }
-  close(): Promise<void> {
-    return Promise.resolve();
-  }
-  on(event: 'close', handler: () => void): void {
-    (this.handlers[event] ??= []).push(handler);
-  }
-}
-
-class FakePage implements CeremonyPage {
-  readonly handlers: Handlers = {};
-  gotoCalls: string[] = [];
-  constructor(private current: string) {}
-  setUrl(next: string): void {
-    this.current = next;
-  }
-  goto(url: string): Promise<unknown> {
-    this.gotoCalls.push(url);
-    return Promise.resolve(null);
-  }
-  url(): string {
-    return this.current;
-  }
-  on(event: 'close', handler: () => void): void {
-    (this.handlers[event] ??= []).push(handler);
-  }
-  fire(event: string): void {
-    for (const h of this.handlers[event] ?? []) h();
-  }
-}
-
-const LOGGED_IN = { cookies: [{ name: 'SESSION', value: 'x', domain: 'portal.tribunais.org.pt' }], origins: [] };
-const EMPTY = { cookies: [], origins: [] };
-
-function harness(opts: { url?: string; state?: unknown } = {}) {
-  const page = new FakePage(opts.url ?? 'https://portal.tribunais.org.pt/inicio');
-  const context = new FakeContext(page, opts.state ?? LOGGED_IN);
-  const browser = new FakeBrowser(context);
-  const sent: BridgeFrame[] = [];
-  const logs: string[] = [];
-  return {
-    page,
-    context,
-    browser,
-    sent,
-    logs,
-    deps: {
-      send: (f: BridgeFrame) => {
-        sent.push(f);
-        return true;
-      },
-      log: (m: string) => logs.push(m),
-      launchBrowser: () => Promise.resolve(browser as CeremonyBrowser),
-    },
-  };
-}
-
 const REQ = {
   requestId: 'r-1',
   kind: 'card_login' as const,
   origin: 'https://portal.tribunais.org.pt',
   reason: 'Autenticação para Citius',
 };
-
-/** Close the window on the next tick so the snapshot loop runs at least once first. */
-function closeSoon(h: ReturnType<typeof harness>, afterMs = 5): void {
-  setTimeout(() => h.page.fire('close'), afterMs);
-}
 
 describe('attended ceremony — the machine half of J-5', () => {
   it('opens the origin CORTEX declared and pushes the captured session when the human closes the window', async () => {
@@ -246,6 +153,105 @@ describe('attended ceremony — the machine half of J-5', () => {
       card.sent.find((f) => f.type === 'session.push'),
     );
     expect(login.logs).toEqual(card.logs);
+  });
+
+  /**
+   * THE DONE SIGNAL (D-CEREMONY-DONE, 2026-08-25) - the case the live acceptance run could not
+   * complete.
+   *
+   * Closing the window was the ONLY way to say "I have finished", and the window is raised by the OS
+   * on every top-level navigation: a real login redirects repeatedly, so a human trying to read an
+   * OTP out of another app never gets to keep focus, and nothing on screen said that the close is
+   * what captures. The operator logged in and the ceremony expired holding nothing.
+   *
+   * These pin the decoupling: the ceremony ends and pushes on an EXTERNAL signal, with the window
+   * still open, and it pushes the state as of THAT moment rather than the last tick.
+   */
+  it('finishes and pushes on the Done signal, with the window never closed', async () => {
+    const h = harness();
+    let finishNow!: () => void;
+    const finishSignal = new Promise<void>((resolve) => {
+      finishNow = resolve;
+    });
+    setTimeout(() => finishNow(), 5);
+
+    const ok = await runAttendedCeremony(REQ, { ...h.deps, finishSignal });
+
+    expect(ok).toBe(true);
+    expect(h.sent.find((f) => f.type === 'session.push')).toMatchObject({
+      type: 'session.push',
+      requestId: 'r-1',
+      storageState: LOGGED_IN,
+    });
+    // Nobody closed anything: no close/disconnected event was ever fired. The ceremony still ended,
+    // and it is the ceremony that closes the browser afterwards.
+    expect(h.page.handlers['close']?.length ?? 0).toBeGreaterThan(0); // the fallback is still wired
+    expect(h.browser.closed).toBe(true);
+  });
+
+  it('snapshots at the moment Done is pressed, not the last tick', async () => {
+    // The close path can only push what it already holds, because `storageState()` is unreadable
+    // once the context is gone - so a login finishing inside the last tick is lost. Done arrives
+    // while the context is ALIVE, so it reads fresh state. Here the login lands with no navigation
+    // to trigger a re-snapshot and no tick to spare.
+    const h = harness({ state: EMPTY });
+    let finishNow!: () => void;
+    const finishSignal = new Promise<void>((resolve) => {
+      finishNow = resolve;
+    });
+    setTimeout(() => {
+      h.context.setState(LOGGED_IN);
+      finishNow();
+    }, 5);
+
+    const ok = await runAttendedCeremony(REQ, { ...h.deps, finishSignal });
+
+    expect(ok).toBe(true);
+    expect(h.sent.find((f) => f.type === 'session.push')).toMatchObject({ storageState: LOGGED_IN });
+  });
+
+  it('pushes nothing on a Done pressed before any login happened', async () => {
+    // Same refusal as the close path, and for the same reason: an empty jar would mint a valid,
+    // correctly-encrypted, USELESS item that only fails later, when an automation runs on it.
+    const h = harness({ state: EMPTY });
+    let finishNow!: () => void;
+    const finishSignal = new Promise<void>((resolve) => {
+      finishNow = resolve;
+    });
+    setTimeout(() => finishNow(), 5);
+
+    const ok = await runAttendedCeremony(REQ, { ...h.deps, finishSignal });
+
+    expect(ok).toBe(false);
+    expect(h.sent.filter((f) => f.type === 'session.push')).toHaveLength(0);
+    expect(h.logs.join('\n')).toContain('Nenhuma sessão foi capturada');
+  });
+
+  it('still ends on the window close when a Done signal exists but is never pressed', async () => {
+    // The close path is the FALLBACK, not a leftover: it needs no dashboard and no live socket, and
+    // it is still the natural end of a card ceremony run at one's own desk.
+    const h = harness();
+    const finishSignal = new Promise<void>(() => {
+      /* never resolved */
+    });
+    closeSoon(h);
+
+    const ok = await runAttendedCeremony(REQ, { ...h.deps, finishSignal });
+
+    expect(ok).toBe(true);
+    expect(h.sent.find((f) => f.type === 'session.push')).toMatchObject({ storageState: LOGGED_IN });
+  });
+
+  it('tells the human, in the window, that the dashboard button is what finishes it', async () => {
+    // The finding's second half: the capture signal was invisible at the moment it mattered. The
+    // instructions the ceremony prints are the text in front of the person while they log in.
+    const h = harness();
+    closeSoon(h);
+    await runAttendedCeremony(REQ, h.deps);
+
+    const printed = h.logs.join('\n');
+    expect(printed).toContain('Concluir e capturar');
+    expect(printed).toContain('Não precisa de fechar esta janela');
   });
 
   it('normalises a bare host into an https origin before navigating', async () => {

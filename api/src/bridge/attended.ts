@@ -143,6 +143,113 @@ export async function requestAttendedCeremony(
 }
 
 /**
+ * The outcome of asking a machine to finish its open ceremony NOW. A discriminated result rather
+ * than a thrown error, because both refusals are ordinary states a person can act on, and the words
+ * they are told belong to the route rather than here.
+ */
+export type CeremonyCaptureOutcome =
+  | { requested: true; origin: string }
+  | { requested: false; reason: 'no_open_ceremony' | 'unreachable' };
+
+/**
+ * "THE HUMAN PRESSED DONE" - relay a capture request to the machine holding an open ceremony
+ * (docs/decisions.md 2026-08-25, D-CEREMONY-DONE).
+ *
+ * WHY THIS EXISTS. The ceremony's only completion signal was the human CLOSING the headed window,
+ * and that window is raised by the OS on every top-level navigation - so during an OTP login the
+ * person cannot hold focus on the app showing the code, and nothing on screen says that closing is
+ * what captures. Measured live: the operator logged in, and the ceremony expired holding nothing
+ * (findings, `attended-ceremony-browser-steals-focus-and-hides-its-capture-signal`).
+ *
+ * IT ADDS NO CUSTODY SURFACE, and that is the whole of the design. The capture that follows is the
+ * unchanged one: the daemon snapshots the same `storageState` and pushes it on the same
+ * `session.push` rail, and `acceptSessionPush` below binds it to the ceremony's own origin, mints it
+ * under the ceremony's own actor and arms it with the grant the REQUESTER named when the ceremony
+ * was opened. This function decides none of that - it delivers a frame naming a requestId.
+ *
+ * THE CEREMONY IS RESOLVED FROM THE CALLER AND NEVER NAMED BY THEM, and the second half follows from
+ * the first: a client-supplied requestId would have to be checked against the ceremony's actor
+ * anyway - or one user could finish another user's ceremony and bank the capture - so keying the
+ * lookup on the actor REMOVES that check rather than passing it. It also means the Done button
+ * survives a page reload, which a handle held in the browser would not.
+ *
+ * EVERY CANDIDATE IS SIGNALLED, AND THERE IS NO TIEBREAK - because both tiebreaks are wrong, each in
+ * a different reachable flow (review round 2026-08-25, F3/F5).
+ *
+ * Cortex keeps one pending ceremony per REQUEST; the daemon holds at most one at a TIME and refuses
+ * every later `attended.request` while a window is up. So this map can hold two ceremonies for one
+ * actor + machine + origin, and which one the daemon is actually holding depends on how they came to
+ * exist:
+ *
+ *   A DOUBLE OPEN over a LIVE window (the person alt-tabs back from the focus-stealing window and
+ *   clicks "Abrir janela" again): the daemon refuses the second and keeps holding the FIRST, so
+ *   newest-wins sends a requestId the daemon can never match.
+ *
+ *   A RETRY after a DEAD window (the first login was abandoned, closed, or refused - Google blocks
+ *   this browser outright, see findings `google-sso-refuses-the-automated-ceremony-browser`): the
+ *   daemon finished with the first and accepts the second, so it holds the NEWEST - while the first
+ *   sits in this map, unswept, for the remainder of its 10-minute TTL. Oldest-wins sends that dead
+ *   requestId, and does so for up to ten minutes on the "it did not work, try again" path.
+ *
+ * So a tiebreak trades one silent no-op for another. Instead the capture is relayed for EVERY open
+ * ceremony of this caller, on this machine, for this origin, oldest first. The daemon finishes the
+ * one it is actually holding and no-ops the rest - a property that is already enforced and
+ * mutation-proven there (`handleCeremonyCapture` matches on requestId), so this fans out a signal
+ * without widening what any single frame can do. It is not a broadcast: every requestId named is one
+ * of this caller's own, for the origin they asked about, on the machine resolved from their actor.
+ *
+ * IT IS BOUNDED BY WHAT THE CALLER THEMSELVES OPENED inside one ceremony TTL, and it lands on their
+ * own socket - each candidate already cost an `attended.request` to that same daemon when it was
+ * created, so there is no amplification here the caller had not already produced. Hence no cap: a cap
+ * would have to choose which candidates to drop, which is the tiebreak this stopped making.
+ */
+export async function requestCeremonyCapture(
+  actor: Actor,
+  input: { pairingId: string; origin: string },
+  now = Date.now(),
+): Promise<CeremonyCaptureOutcome> {
+  sweep(now);
+  const host = hostOf(input.origin);
+  const candidates: PendingCeremony[] = [];
+  for (const c of ceremonies.values()) {
+    if (c.pairingId !== input.pairingId) continue;
+    // OWNER SCOPE, both halves. `userId` is the authorization; `orgId` travels with it because every
+    // other read on this rail is scoped to the pair (D-ADHOC-3), and a ceremony opened under a
+    // different org membership is not this caller's to finish.
+    if (c.actor.userId !== actor.userId || c.actor.orgId !== actor.orgId) continue;
+    if (hostOf(c.origin) !== host) continue;
+    candidates.push(c);
+  }
+  if (candidates.length === 0) return { requested: false, reason: 'no_open_ceremony' };
+  // Oldest first, so the frame the daemon is most likely to be holding arrives before the ones it
+  // will ignore. Ordering changes no outcome - the daemon matches on requestId, not on arrival - it
+  // only keeps the machine's own log reading in the order the human's attempts happened.
+  candidates.sort((a, b) => a.createdAt - b.createdAt);
+
+  let sent = 0;
+  for (const c of candidates) {
+    if (sendToPairing(input.pairingId, { type: 'ceremony.capture', requestId: c.requestId })) sent += 1;
+  }
+  // A dead socket is a REFUSAL, exactly as it is when the ceremony is opened: the window is on a
+  // machine this process can no longer speak to, and saying otherwise would leave the person waiting
+  // for a capture nobody was asked to make.
+  if (sent === 0) return { requested: false, reason: 'unreachable' };
+
+  // THE CEREMONIES STAY OPEN. One is consumed by `acceptSessionPush` when the capture actually
+  // arrives, so a Done that reaches a daemon which cannot complete it (an empty jar, a login the
+  // human had not finished) leaves everything as it was: closing the window still captures, and
+  // pressing Done again still works.
+  const [oldest] = candidates as [PendingCeremony, ...PendingCeremony[]];
+  await recordBridgeEvent(
+    { userId: actor.userId, orgId: actor.orgId, username: '' },
+    'bridge_ceremony_capture_requested',
+    { pairingId: input.pairingId, attendedKind: oldest.kind, targetOrigin: oldest.origin },
+    { now: () => now },
+  ).catch(() => undefined);
+  return { requested: true, origin: oldest.origin };
+}
+
+/**
  * Accept a `session.push` and store the result as a Cofre session item.
  *
  * Four refusals, each closing a different way this could go wrong:

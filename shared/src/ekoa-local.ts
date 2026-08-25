@@ -452,6 +452,38 @@ export const BridgeFrame = z.discriminatedUnion('type', [
     origin: z.string(),
     reason: z.string().max(500),
   }),
+  /**
+   * "THE HUMAN SAYS THEY ARE DONE" - the second completion signal for a ceremony already open on
+   * that machine (docs/decisions.md 2026-08-25, D-CEREMONY-DONE).
+   *
+   * The first signal was the human CLOSING the ceremony window, and it is unusable for the case the
+   * rail exists for. A headed automation Chromium is raised by the OS on every top-level navigation
+   * and a real login redirects repeatedly, so during an OTP/2FA flow the window keeps yanking focus
+   * away from the app holding the code - while nothing in the window says that closing it is what
+   * captures. Measured live (findings, `attended-ceremony-browser-steals-focus-and-hides-its-capture-signal`):
+   * the operator logged in, the close never happened cleanly, the ceremony hit its TTL and captured
+   * nothing.
+   *
+   * So the completion signal moves to the surface the human already has focus in. This frame is the
+   * dashboard's Done button arriving at the machine: the daemon snapshots the live `storageState`
+   * and pushes it on the EXISTING `session.push` rail, with the same custody, the same
+   * ceremony-scoped origin binding and the same per-user grant. It adds a TRIGGER for a capture that
+   * already existed, never a second way for a session to travel.
+   *
+   * KEYED BY `requestId` AND NOTHING ELSE. The daemon finishes the ceremony it is actually holding
+   * or nothing at all: a capture that named no ceremony would let any inbound frame end whatever
+   * window happened to be open. No `pairingId` field, for the reason no other downward frame has one
+   * - the socket IS the pairing, and a pairing named in the body would be a second statement about
+   * the same fact that could disagree with the first.
+   *
+   * ADDITIVE (Rule 7). An old daemon drops it at its zod boundary, which is the pre-existing
+   * behaviour for an unparseable frame, and the close-to-capture path it already has still works; an
+   * old Cortex never sends it.
+   */
+  z.object({
+    type: z.literal('ceremony.capture'),
+    requestId: z.string(),
+  }),
   /** The daemon returns a captured session for storage as a Cofre item (WS-G). */
   z.object({
     type: z.literal('session.push'),

@@ -15,7 +15,7 @@
  * credential — the Cofre is storing it, not generating it.
  */
 import { Router, type Response } from 'express';
-import { CofreItemCreateRequest, CofreSessionEstablishRequest, GrantRequest } from '@ekoa/shared';
+import { CofreItemCreateRequest, CofreSessionCaptureRequest, CofreSessionEstablishRequest, GrantRequest } from '@ekoa/shared';
 import { requireAuth, type AuthedRequest } from '../auth/middleware.js';
 import {
   mintCofreItem,
@@ -27,7 +27,7 @@ import {
   recordCofreEvent,
 } from '../cofre/index.js';
 import { ADHOC_SESSION_GRANT } from '../cofre/sessions.js';
-import { requestAttendedCeremony } from '../bridge/attended.js';
+import { requestAttendedCeremony, requestCeremonyCapture } from '../bridge/attended.js';
 import { advertisesCapability, getConnectionByOwner } from '../bridge/registry.js';
 import { notFound, parseBody, sendError } from './helpers.js';
 import type { Actor } from '@ekoa/shared';
@@ -171,9 +171,77 @@ export function cofreRouter(deps: { now: () => number; genId: () => string }): R
     // NO requestId on the wire, and no run id echoed back. The client learns the outcome by watching
     // the run it was blocking: the capture wakes it through the ordinary credential-waiter path, so
     // a ceremony handle here would be a second thing to correlate that nothing reads.
+    //
+    // THE FACT, AND NOT THE INSTRUCTION. This message used to end "...e feche a janela quando
+    // terminar" - the only statement anywhere that closing is what captures, a load-bearing
+    // instruction hidden in a status line, and by the time it mattered the person was looking at a
+    // window that had taken their focus. What to do next is now the card's own copy, said beside the
+    // button that does it (D-CEREMONY-DONE); this sentence reports what happened and stops.
     return res.json({
       started: true,
-      message: 'Abriu-se uma janela na sua máquina. Inicie sessão e feche a janela quando terminar.',
+      message: 'Abriu-se uma janela na sua máquina para iniciar sessão.',
+    });
+  });
+
+  /**
+   * "CONCLUIR E CAPTURAR" - the human says the login is finished (D-CEREMONY-DONE, 2026-08-25).
+   *
+   * THE PROBLEM IT ANSWERS is not a missing feature but a broken signal. The ceremony captured only
+   * when the human CLOSED the headed window, and that window is raised by the OS on every top-level
+   * navigation: during an OTP/2FA login the person cannot stay in the app holding the code, and
+   * nothing anywhere said that closing is what captures. Measured live: the operator logged in and
+   * the ceremony expired having captured nothing (findings,
+   * `attended-ceremony-browser-steals-focus-and-hides-its-capture-signal`).
+   *
+   * THE SAME GATES AS `establish`, FOR THE SAME REASONS: the machine is resolved from the ACTOR and
+   * never from the body (a caller-supplied pairing would let one user reach into another's screen),
+   * and the daemon must advertise the ceremony capability, because one that cannot hold a window
+   * cannot be holding the window this would finish. What is deliberately NOT here is an
+   * authorization decision about the origin - there is none on `establish` either; the origin only
+   * names WHICH of the caller's own open ceremonies to finish.
+   *
+   * IT IS A TRIGGER, NOT A CAPTURE. Nothing about custody changes: the session travels up the same
+   * `session.push` rail, bound to the ceremony's own origin, minted under the ceremony's own actor,
+   * armed with the grant the ceremony was opened with. This endpoint never sees a session.
+   */
+  r.post('/sessions/capture', async (req: AuthedRequest, res: Response) => {
+    const body = parseBody(res, CofreSessionCaptureRequest, req.body);
+    if (!body) return;
+    const actor = actorOf(req);
+
+    const machine = getConnectionByOwner(actor.userId, actor.orgId);
+    if (!machine) {
+      return res.json({
+        requested: false,
+        message: 'Nenhuma máquina ligada. Abra a Ponte Ekoa na máquina onde iniciou sessão.',
+      });
+    }
+    if (!(await advertisesCapability(machine.pairingId, 'attended.card_login'))) {
+      return res.json({
+        requested: false,
+        message: 'A Ponte Ekoa ligada é demasiado antiga para capturar sessões. Atualize-a nessa máquina e volte a ligá-la.',
+      });
+    }
+
+    const outcome = await requestCeremonyCapture(actor, { pairingId: machine.pairingId, origin: body.origin });
+    if (!outcome.requested) {
+      // Both refusals are 200s with words rather than errors: nothing went wrong, the capture simply
+      // cannot happen right now, and each sentence is one the person can act on.
+      return res.json({
+        requested: false,
+        message:
+          outcome.reason === 'no_open_ceremony'
+            ? `Não há nenhuma janela de autenticação aberta para ${body.origin}. Abra uma e inicie sessão antes de concluir.`
+            : 'A ligação à sua máquina caiu. Verifique a Ponte Ekoa e tente novamente.',
+      });
+    }
+
+    // TRUTHFUL AND NO FURTHER. What happened is that a frame reached the machine; whether a session
+    // comes back is decided there, seconds from now, and is observable in the Cofre itself. Claiming
+    // "captured" here would be the same shape of lie as a window that never opened.
+    return res.json({
+      requested: true,
+      message: 'A capturar a sessão na sua máquina. A janela fecha-se sozinha e a execução continua.',
     });
   });
 

@@ -16,6 +16,7 @@ import {
   CofreLockResponse,
   CofreDeleteResponse,
   CofreSessionEstablishResponse,
+  CofreSessionCaptureResponse,
   cofreEndpoints,
   ErrorEnvelope,
 } from '@ekoa/shared';
@@ -252,12 +253,49 @@ describe('cofre contract', () => {
     }
   });
 
+  /**
+   * The ceremony's OTHER completion signal (D-CEREMONY-DONE): "I have finished logging in, capture
+   * it now", pressed in the dashboard instead of by closing a window that steals focus.
+   *
+   * NO MACHINE IS CONNECTED in this suite, and that is again the case worth having here: the
+   * endpoint answers `requested: false` WITH A MESSAGE and a 200. The word is `requested` rather
+   * than `captured` on purpose - what this endpoint does is deliver a frame, and claiming the
+   * capture here would be the same shape of lie as a window that never opened.
+   */
+  it('session capture -> CofreSessionCaptureResponse, and refuses in-band with no machine', async () => {
+    const t = await tokenFor('usr');
+    const res = await authed('/api/v1/cofre/sessions/capture', t, {
+      method: 'POST',
+      body: JSON.stringify({ origin: 'orders.adhoc.example' }),
+    });
+    expect(res.status).toBe(200);
+    const body: unknown = await res.json();
+    expect(CofreSessionCaptureResponse.safeParse(body), JSON.stringify(body)).toMatchObject({ success: true });
+    expect((body as { requested: boolean }).requested).toBe(false);
+    expect((body as { message: string }).message.length).toBeGreaterThan(0);
+  });
+
+  it('session capture: the origin is validated exactly as the ceremony that opened it was', async () => {
+    // It names WHICH open ceremony to finish, and a ceremony is only ever opened at a bare host. A
+    // looser contract here would let the two halves of one flow disagree about what an origin is.
+    const t = await tokenFor('usr');
+    for (const origin of ['', 'https://orders.example/login?token=abc', 'orders.example/login', 'orders.example:8443', 'localhost']) {
+      const res = await authed('/api/v1/cofre/sessions/capture', t, {
+        method: 'POST',
+        body: JSON.stringify({ origin }),
+      });
+      expect(res.status, origin).toBeGreaterThanOrEqual(400);
+      expect(ErrorEnvelope.safeParse(await res.json()).success, origin).toBe(true);
+    }
+  });
+
   it('every endpoint requires auth', async () => {
     for (const [p, method] of [
       ['/api/v1/cofre/items', 'GET'],
       ['/api/v1/cofre/items', 'POST'],
       ['/api/v1/cofre/lock-all', 'POST'],
       ['/api/v1/cofre/sessions/establish', 'POST'],
+      ['/api/v1/cofre/sessions/capture', 'POST'],
     ] as const) {
       const res = await fetch(`http://127.0.0.1:${port}${p}`, { method, headers: { 'content-type': 'application/json' }, body: method === 'POST' ? '{}' : undefined });
       expect(res.status, `${method} ${p}`).toBe(401);

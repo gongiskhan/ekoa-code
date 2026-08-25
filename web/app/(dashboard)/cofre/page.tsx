@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Lock, LockOpen, ShieldCheck, Loader2, KeyRound } from 'lucide-react';
+import { Lock, LockOpen, ShieldCheck, Loader2, KeyRound, Check } from 'lucide-react';
 import { PageShell } from '@/components/ui/page-shell';
 import { PageHeader } from '@/components/ui/page-header';
 import { Card } from '@/components/ui/card';
@@ -156,14 +156,28 @@ function ItemRow({ item }: { item: CofreItem }) {
  * ever ASKS, and the outcome shows up as the run continuing, minutes later, on its own page.
  */
 function EstablishSessionCard({ origin }: { origin: string }) {
-  const { establishSession } = useCofreStore();
+  const { establishSession, captureSession } = useCofreStore();
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<{ started: boolean; message: string } | null>(null);
+  const [capturing, setCapturing] = useState(false);
+  const [capture, setCapture] = useState<{ requested: boolean; captured: boolean; message: string } | null>(null);
+  /** The Done button exists only once a window has actually been opened FROM HERE. Offering it
+   *  before that would ask someone to finish something that was never started, and the server would
+   *  have to answer with a refusal that reads like a fault. */
+  const windowOpen = outcome?.started === true;
 
   async function doEstablish() {
     setBusy(true);
+    setCapture(null);
     setOutcome(await establishSession(origin));
     setBusy(false);
+  }
+
+  async function doCapture() {
+    setCapturing(true);
+    setCapture(null);
+    setCapture(await captureSession(origin));
+    setCapturing(false);
   }
 
   return (
@@ -189,12 +203,31 @@ function EstablishSessionCard({ origin }: { origin: string }) {
             Se o site oferecer início de sessão com a Google, use o email ou o telemóvel - a Google bloqueia
             navegadores automatizados.
           </p>
-          <div className="flex items-center gap-3">
-            <Button size="sm" onClick={doEstablish} disabled={busy}>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button size="sm" onClick={doEstablish} disabled={busy || capturing}>
               {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <KeyRound className="h-3 w-3" />}
               Abrir janela de autenticação
             </Button>
-            {outcome ? (
+            {/*
+              THE CAPTURE SIGNAL, MOVED OFF THE WINDOW (D-CEREMONY-DONE). It used to be the window
+              CLOSING, and that is unusable for the flow this rail exists for: the headed browser is
+              raised by the OS on every navigation, so a person reading an OTP out of another app
+              fights it for focus, and nothing on screen said that closing is what captures. Live,
+              the operator logged in and the ceremony expired having captured nothing.
+            */}
+            {windowOpen ? (
+              <Button size="sm" variant="primary" onClick={doCapture} disabled={capturing} data-testid="cofre-capture-now">
+                {capturing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                Concluir e capturar
+              </Button>
+            ) : null}
+            {/*
+              The server states the FACT ("a window opened", or the refusal); the hint under this row
+              states what to DO with it. Split that way on purpose - said in both places, it is the
+              card explaining itself twice, and the half that matters (you do not have to close the
+              window) is the half a reader skips.
+            */}
+            {outcome && !capture && !capturing ? (
               <span
                 className={`text-xs ${outcome.started ? 'text-muted-foreground' : 'text-destructive'}`}
                 data-testid="cofre-establish-outcome"
@@ -202,11 +235,51 @@ function EstablishSessionCard({ origin }: { origin: string }) {
                 {outcome.message}
               </span>
             ) : null}
+            {capturing ? (
+              <span className="text-xs text-muted-foreground" data-testid="cofre-capture-progress">
+                A capturar a sessão...
+              </span>
+            ) : null}
+            {capture && !capturing ? (
+              <span
+                className={`text-xs ${capture.captured ? 'text-muted-foreground' : 'text-destructive'}`}
+                data-testid="cofre-capture-outcome"
+              >
+                {captureMessage(capture)}
+              </span>
+            ) : null}
           </div>
+          {windowOpen ? (
+            <p className="text-sm text-muted-foreground" data-testid="cofre-capture-hint">
+              Inicie sessão na janela, depois clique aqui - não precisa de fechar a janela.
+            </p>
+          ) : null}
         </div>
       </div>
     </Card>
   );
+}
+
+/**
+ * What the person is told after pressing Done, and each branch says only what is known.
+ *
+ * "Ainda não recebemos" is NOT reported as a failure, because it is not one: the window is still
+ * open and the login may simply not be finished. Saying "failed" here would send someone to start
+ * over on a ceremony that is alive.
+ *
+ * IT NAMES CLOSING THE WINDOW, which is the review round's correction (2026-08-25, F2). The rest of
+ * this card exists to say that closing is no longer necessary - true of the happy path, and the
+ * whole point of the feature - but this branch is reached exactly when the Done signal did NOT
+ * produce a session, and in every remaining cause of that (a Ponte too old to understand the frame,
+ * a login that is not finished, a daemon holding a ceremony this request could not reach) closing is
+ * the one route that still captures. Copy that only ever said "try again" would leave the person
+ * pressing a button in the single state where pressing it may never work.
+ */
+function captureMessage(capture: { requested: boolean; captured: boolean; message: string }): string {
+  if (!capture.requested) return capture.message;
+  return capture.captured
+    ? 'Sessão capturada e guardada no cofre. A execução continua sozinha.'
+    : 'Ainda não recebemos a sessão. Confirme que a autenticação ficou concluída na janela e tente novamente - ou feche a janela, que também captura.';
 }
 
 export default function CofrePage() {

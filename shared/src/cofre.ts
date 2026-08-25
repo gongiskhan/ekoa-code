@@ -393,6 +393,10 @@ export const BridgeRegistoEvent = z.enum([
   'bridge_delegation_settled',
   'bridge_secret_delivered',
   'bridge_attended_requested',
+  /** The human pressed "done - capture now" on an open ceremony (D-CEREMONY-DONE). Recorded even
+   *  though the resulting capture writes its own row: when the capture does NOT arrive, this is the
+   *  only durable trace that a person tried, which is exactly the case someone will be asked about. */
+  'bridge_ceremony_capture_requested',
   'bridge_session_pushed',
 ]);
 export type BridgeRegistoEvent = z.infer<typeof BridgeRegistoEvent>;
@@ -524,6 +528,14 @@ export type CofreLockResponse = z.infer<typeof CofreLockResponse>;
 export const CofreDeleteResponse = z.object({ ok: z.literal(true) });
 export type CofreDeleteResponse = z.infer<typeof CofreDeleteResponse>;
 
+/** A bare hostname and nothing else, shared by the two ceremony requests so the flow's two halves
+ *  cannot disagree about what an origin is. See `CofreSessionEstablishRequest` for why it is this
+ *  narrow: the value becomes the address a headed browser opens on the caller's own machine. */
+const BareHostname = BoundOrigin.regex(
+  /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/i,
+  'origin must be a bare hostname (no scheme, no port, no path, no query)',
+);
+
 /**
  * Open an attended ceremony for an origin the user reached AD-HOC (D-ADHOC-1/5).
  *
@@ -549,10 +561,7 @@ export type CofreDeleteResponse = z.infer<typeof CofreDeleteResponse>;
  * reader to believe the resume depends on the client naming the right run.
  */
 export const CofreSessionEstablishRequest = z.object({
-  origin: BoundOrigin.regex(
-    /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/i,
-    'origin must be a bare hostname (no scheme, no port, no path, no query)',
-  ),
+  origin: BareHostname,
 });
 export type CofreSessionEstablishRequest = z.infer<typeof CofreSessionEstablishRequest>;
 
@@ -569,6 +578,45 @@ export const CofreSessionEstablishResponse = z.object({
   message: z.string().max(500),
 });
 export type CofreSessionEstablishResponse = z.infer<typeof CofreSessionEstablishResponse>;
+
+/**
+ * "I have finished logging in - capture it now" (D-CEREMONY-DONE, 2026-08-25).
+ *
+ * THE SIGNAL MOVES OFF THE WINDOW. Until this existed, the only way to tell the ceremony that a
+ * login was finished was to CLOSE the headed browser it opened, and that window is raised by the OS
+ * on every navigation - so the human who has to read an OTP out of another app fights it for focus,
+ * and nothing on screen says that closing is what captures. This is the same completion, signalled
+ * from the dashboard the person already has focus in.
+ *
+ * THE ORIGIN NAMES WHICH CEREMONY, and is the only field for the same reason `establish` has only
+ * one: the caller says which portal they finished with, and the server resolves the open ceremony
+ * for THAT origin, on THAT caller's own machine. It cannot name a ceremony belonging to anyone else
+ * - there is no requestId on the wire to name one with, and the lookup is keyed by the caller's own
+ * actor (D-ADHOC-3).
+ */
+export const CofreSessionCaptureRequest = z.object({
+  origin: BareHostname,
+});
+export type CofreSessionCaptureRequest = z.infer<typeof CofreSessionCaptureRequest>;
+
+/**
+ * `requested`, NOT `captured`, and the word is the honesty.
+ *
+ * What this endpoint does is deliver a frame to a machine. What the user asked ("is my session
+ * safe?") is answered by the capture arriving back up the `session.push` rail seconds later, which
+ * this response cannot wait for without inventing a second, disagreeable statement about the same
+ * fact. `requested: false` with a message is a REFUSAL the person can act on - no machine connected,
+ * no ceremony open on it - and a 200, exactly as `establish` answers one.
+ *
+ * The dashboard confirms the OUTCOME by watching the Cofre for the item, and the halted run wakes
+ * itself through the ordinary credential-waiter path. Both read the real thing rather than a promise
+ * made here.
+ */
+export const CofreSessionCaptureResponse = z.object({
+  requested: z.boolean(),
+  message: z.string().max(500),
+});
+export type CofreSessionCaptureResponse = z.infer<typeof CofreSessionCaptureResponse>;
 
 export const cofreEndpoints = {
   cofreItemsList: {
@@ -620,5 +668,14 @@ export const cofreEndpoints = {
     auth: 'user',
     request: CofreSessionEstablishRequest,
     response: CofreSessionEstablishResponse,
+  },
+  /** `auth: 'user'` for the same reason `establish` is: the caller of this one is a human saying
+   *  they have just finished a login at a machine, which is the caller a gateway key never is. */
+  cofreSessionCapture: {
+    method: 'POST',
+    path: '/api/v1/cofre/sessions/capture',
+    auth: 'user',
+    request: CofreSessionCaptureRequest,
+    response: CofreSessionCaptureResponse,
   },
 } as const satisfies DomainDescriptorMap;

@@ -33,6 +33,11 @@ const COVERED = new Set<string>([
   // the in-band refusal when no machine is connected, the 4xx on a malformed origin, and the auth
   // wall. Additive on an already-covered domain, so EXPECTED_PENDING_COUNT is unchanged.
   'cofre.cofreSessionEstablish',
+  // The ceremony's OTHER completion signal (D-CEREMONY-DONE): "done - capture now", pressed in the
+  // dashboard rather than by closing a window that steals focus. Covered by the same suite in the
+  // same four ways - response shape, in-band refusal with no machine, 4xx on a malformed origin,
+  // auth wall - so EXPECTED_PENDING_COUNT is unchanged.
+  'cofre.cofreSessionCapture',
 
   // batch1 F1 — auth lifecycle (auth.test.ts)
   'auth.refresh', 'auth.logout', 'auth.changePassword', 'auth.deviceStart', 'auth.devicePoll', 'auth.deviceApprove',

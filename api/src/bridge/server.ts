@@ -376,8 +376,13 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
       case 'pong':
         markAlive(pairingId);
         break;
-      // delegate / provider_response / cancel / secret.deliver / session.deliver are hosted->daemon
-      // (outbound); inbound copies are the wrong direction and are ignored.
+      // delegate / provider_response / cancel / secret.deliver / session.deliver / ceremony.capture
+      // are hosted->daemon (outbound); inbound copies are the wrong direction and are ignored.
+      //
+      // `ceremony.capture` (D-CEREMONY-DONE) is in that list for the same reason as the two below
+      // it: it is an instruction Cortex ISSUES to a machine holding a ceremony, so an inbound copy
+      // would be a daemon telling this process to end a ceremony - which it has no standing to do,
+      // and no code here to do it with.
       //
       // `session.deliver` MUST stay unhandled here specifically. It is the DOWNWARD half of the
       // session lifecycle (S-inject); the upward half already exists and is `session.push` above,
