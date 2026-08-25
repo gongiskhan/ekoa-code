@@ -4,6 +4,7 @@ import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
 import {
   captureSessionToCofre,
+  boundOriginsForEstablishedHost,
   originsFromStorageState,
   sessionIsExpired,
   issueGrant,
@@ -114,6 +115,76 @@ describe('origins are DERIVED from the cookies, not guessed by the caller', () =
     await expect(
       captureSessionToCofre(actor, { label: 'x', boundOrigins: [], storageState: {}, metadata }),
     ).rejects.toThrow(/origins it may be replayed against/);
+  });
+});
+
+describe('binding covers the login\'s OWN auth family, not the whole jar (multi-domain logins)', () => {
+  // Uber Eats authenticates across two registrable domains: the app session on `.ubereats.com` and
+  // the SSO session on `.uber.com`. A real jar also carries analytics cookies (`_ga`), JS-set and so
+  // never httpOnly. This is the shape that broke: a session bound to `www.ubereats.com` alone re-hit
+  // the login wall the moment a step resolved to `auth.uber.com`.
+  const UBER_JAR = {
+    cookies: [
+      { name: 'sid', value: 'app-session', domain: '.ubereats.com', path: '/', httpOnly: true },
+      { name: 'sso', value: 'idp-session', domain: '.uber.com', path: '/', httpOnly: true },
+      { name: '_ga', value: 'GA1.2.tracking', domain: '.google-analytics.com', path: '/', httpOnly: false },
+    ],
+    origins: [],
+  };
+
+  it('binds to every domain the SERVER set an httpOnly session cookie on', () => {
+    expect(boundOriginsForEstablishedHost(UBER_JAR, 'www.ubereats.com').sort()).toEqual(
+      ['uber.com', 'ubereats.com'].sort(),
+    );
+  });
+
+  it('never binds to an analytics domain — its cookie is not httpOnly', () => {
+    expect(boundOriginsForEstablishedHost(UBER_JAR, 'www.ubereats.com')).not.toContain('google-analytics.com');
+  });
+
+  it('makes the session discoverable across the family it was bound to', async () => {
+    const { findSessionItemsForOrigin } = await import('../../src/cofre/index.js');
+    const item = await captureSessionToCofre(actor, {
+      label: 'Uber Eats',
+      boundOrigins: boundOriginsForEstablishedHost(UBER_JAR, 'www.ubereats.com'),
+      storageState: UBER_JAR,
+      metadata,
+    });
+    // The SSO redirect host, a different registrable domain than the one established against.
+    const found = await findSessionItemsForOrigin(actor, 'auth.uber.com');
+    expect(found.map((i) => i._id)).toContain(item._id);
+    await issueGrant(actor, item._id, '1_day');
+    await expect(unwrap(item._id, actor, { kind: 'browser', origin: 'https://auth.uber.com' })).resolves.toBeDefined();
+    // ...but still NOT under the analytics domain the login merely touched.
+    expect((await findSessionItemsForOrigin(actor, 'www.google-analytics.com')).map((i) => i._id)).not.toContain(
+      item._id,
+    );
+  });
+
+  it('collapses a specific established host into the parent domain that covers it', () => {
+    // Established against `auth.uber.com`, cookie scoped to `.uber.com`: the broad binding subsumes
+    // the specific host, so the result is the single `uber.com`.
+    expect(
+      boundOriginsForEstablishedHost(
+        { cookies: [{ name: 'sso', value: 'x', domain: '.uber.com', path: '/', httpOnly: true }], origins: [] },
+        'auth.uber.com',
+      ),
+    ).toEqual(['uber.com']);
+  });
+
+  it('falls back to the established host when the login left no httpOnly cookie', () => {
+    // A jar whose only cookie is JS-set (no httpOnly) still binds to the host it covers, so a
+    // single-domain SPA login is not left unbindable — it just does not widen.
+    expect(
+      boundOriginsForEstablishedHost(
+        { cookies: [{ name: 'token', value: 'x', domain: 'app.example', path: '/', httpOnly: false }], origins: [] },
+        'app.example',
+      ),
+    ).toEqual(['app.example']);
+  });
+
+  it('still refuses when the jar covers no cookie for the host at all', () => {
+    expect(boundOriginsForEstablishedHost(UBER_JAR, 'unrelated.example')).toEqual([]);
   });
 });
 

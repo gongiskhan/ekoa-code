@@ -6,28 +6,6 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
-- **`ad-hoc-captured-session-does-not-authenticate-a-multi-domain-login`** (2026-08-25, OPEN,
-  **HIGH**; found completing the live acceptance run - the capture + auto-wake worked but the run did
-  not finish). The Uber Eats ceremony captured a session, the credential-waiter fired, and the halted
-  run AUTO-WOKE and re-dispatched (measured: resumeFromStepIndex moved 0 -> 2, the steps re-ran) - the
-  whole durable lifecycle worked. But the re-navigation to the orders page HIT THE LOGIN WALL AGAIN
-  and re-halted: the injected session did not authenticate. Most likely cause, and it interacts
-  directly with THIS session's security fix: a real consumer login spans MULTIPLE domains - Uber Eats
-  authenticates across `ubereats.com` AND `uber.com` / `auth.uber.com` - and the
-  `boundOriginsForEstablishedHost(storageState, ceremony.origin)` narrowing (the ceremony-capture
-  review's MAJOR fix, correct against the confused/compromised-daemon over-binding threat) narrows the
-  captured session to the SINGLE ceremony origin `www.ubereats.com`, dropping the cross-domain
-  `uber.com` auth cookies the login actually depends on. So the item is bound correctly and is NOT
-  functional. GENUINE TENSION to resolve, not a one-liner: the narrowest-binding security property vs
-  a real multi-domain session. Options to weigh: bind to the registrable-domain FAMILY the login
-  actually set cookies on (derive the bound set from the cookie domains present, but capped to the
-  same registrable domain and its subdomains, NOT arbitrary third-party/analytics domains - the middle
-  ground between whole-jar and single-host); or let the human/authoring declare the auth domain family
-  for an origin; or detect at inject time that the run is still unauthenticated and surface it rather
-  than looping. NEEDS DIAGNOSIS FIRST: confirm the stored storageState's cookie domains (is uber.com
-  filtered out at capture, or present-but-unbound) before choosing. Blocks a functional ad-hoc
-  acceptance run for any multi-domain (SSO-heavy, consumer) target; a single-domain portal would work.
-
 - **`attended-ceremony-headed-browser-is-not-viable-for-a-normal-user`** (2026-08-25, OPEN, **HIGH**,
   design; operator-flagged emphatically after completing the live ceremony: "the experience is still
   very bad ... a normal user would not be able to cope with this"). Even WITH the "Concluir e capturar"
@@ -40,13 +18,22 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   fix solved the CAPTURE SIGNAL; it did not and cannot solve driving-a-login-in-an-automation-window.
   This is the deepest limitation of the attended-ceremony design and it is a PRODUCT-VIABILITY issue,
   not a polish item - the primary consumer use case (log into a site that gates on 2FA) is the one it
-  serves worst. CLOSE BY (design direction, needs a real decision, not a patch): capture the session
-  from the user's OWN everyday browser instead of a driven one - a browser extension that reads the
-  session for a declared origin from the browser the human already lives in (no focus war, no tab
-  flap, no re-typing, MFA handled by the site as normal); or a "paste your session" / import path; or
-  a mobile-first capture. The headed-automation-browser ceremony should be the fallback for the
-  bridge/CLI case, not the primary human path. Worth its own design pass before any more ceremony
-  polish.
+  serves worst. **DIRECTION CHOSEN (2026-08-26, operator): NOT an extension.** Every other agent
+  (Claude, ChatGPT, OpenClaw) reached for a browser extension precisely because the frictionless
+  "reach into the user's EVERYDAY browser" path is a security boundary Chrome closed in Chrome 136
+  (May 2025): `--remote-debugging-port`/`--remote-debugging-pipe` are IGNORED on the default
+  `--user-data-dir`, so CDP-attaching to the real profile - the cookie-theft vector - no longer works
+  (developer.chrome.com/blog/remote-debugging-port). The floor without an extension is therefore ONE
+  login per site into a DEDICATED persistent real-Chrome profile. That is being built: the ceremony is
+  moving off throwaway bundled Chromium onto the same `ProfileManager` persistent real-Chrome profile
+  replay already uses (`clients/bridge/src/browser/profile.ts`, `channel:'chrome'`, non-default
+  `--user-data-dir`) - a NORMAL Chrome window, navigated ONCE and then left alone (no re-goto, no
+  automation infobar, no forced foreground), captured on the "Concluir" press the human controls at
+  their own pace. The persistent profile means logins persist (login-once-per-site), and capturing in
+  the SAME environment replay runs in fixes the adversarial-SSO continuity too. RESIDUAL still open
+  after that lands: the ceremony window opens on the BRIDGE machine, which may not be where the human
+  is sitting - a fully frictionless flow wants the window on the human's own machine (its own design
+  pass). See the `Recently fixed - 2026-08-26` sections below as the parts land.
 
 - **`bridge-pair-drops-extracapabilities-across-a-repair`** (2026-08-25, OPEN, **MINOR**, product;
   found re-pairing during the live acceptance retry). `ekoa-bridge pair` deliberately carries the
@@ -4029,6 +4016,44 @@ silently absorbed into a ledger note):
   `m365proxy-manifest-flag-stripped`, `P4.2-was-dead-code-in-production`) was code that LOOKED like
   coverage: a correct, tested function kept plausible by a docblock describing a caller it never got.
   Nothing here claims to be reachable, and this entry is the record that it is not.
+
+## Recently fixed - 2026-08-26 a captured session now covers the login's whole auth-domain family
+
+- **`ad-hoc-captured-session-does-not-authenticate-a-multi-domain-login`** (**FIXED 2026-08-26**, was
+  HIGH; found completing the live Uber Eats acceptance run). DIAGNOSIS CORRECTED. The original report's
+  "most likely cause" - that the narrowing DROPPED the `uber.com` cookies at capture - was wrong. The
+  whole `storageState` jar IS stored (`captureSessionToCofre` persists `input.storageState` verbatim)
+  and the whole jar IS injected at replay (`profile.ts:531` `addCookies(session.cookies)` - all
+  domains). `boundOrigins` never gated which cookies reach the browser; it gates which item
+  `findSessionItemsForOrigin` DISCOVERS for a given origin. So the real failure was discovery: a
+  session bound to the single host `www.ubereats.com` was invisible when a later step's origin resolved
+  to `auth.uber.com`/`uber.com`, and the run re-halted `needs_credentials` looking for a session that
+  existed but could not be found there.
+
+  THE FIX (docs/decisions.md, D-BIND-FAMILY). `boundOriginsForEstablishedHost` now binds to the
+  domains the SERVER itself scoped a session cookie to - every `httpOnly` cookie in the jar, at its
+  declared domain, plus the established host, collapsed to the broadest binding per family. For Uber
+  that is `ubereats.com` AND `uber.com`; for the analytics cookies a real login also leaves (`_ga`,
+  JS-set, never httpOnly) it is nothing, so the item stays UN-discoverable under `google-analytics.com`
+  exactly as the narrow fix intended. The evidence check is unchanged (at least one jar domain must
+  cover the host, or there is no session for this portal and the capture is refused). ONE function
+  serves both the typist path (`session-establishment.ts:830`) and the ceremony/`session.push` path
+  (`bridge/attended.ts:306`), so the two ways a session enters the Cofre bind identically.
+
+  THE TRADEOFF, stated not hidden: a login federated through a shared third-party IdP binds the item to
+  that IdP's domain too (the server set an httpOnly cookie there). Bounded - items are owner-scoped,
+  grant-gated, and only DISCOVERED for an origin a run actually navigates to. An IdP denylist is a
+  later refinement, not a correctness gap.
+
+  TESTS: `api/tests/security/cofre-sessions.test.ts` (new `describe`: binds to every httpOnly-cookie
+  domain; never to an analytics domain; discoverable across the family AND unwrappable at
+  `auth.uber.com`, but not under `google-analytics.com`; collapses a specific host into its parent;
+  falls back to the established host with no httpOnly cookie; still refuses a jar covering no cookie
+  for the host). The pre-existing narrow-binding pin (`adhoc-ceremony-capture.test.ts:232`,
+  `boundOrigins === [ORIGIN]`) stays GREEN unchanged - its `_ga`-on-`OTHER` fixture is not httpOnly, so
+  the analytics domain is still excluded. RESIDUAL: capture/replay environment continuity (the ceremony
+  ran in throwaway bundled Chromium, replay in real Chrome) is the SECOND half, closed by the ceremony
+  rebuild onto the persistent real-Chrome profile - see `attended-ceremony-headed-browser-is-not-viable-for-a-normal-user`.
 
 ## Recently fixed - 2026-08-25 the ceremony's capture signal leaves the focus-stealing window
 
