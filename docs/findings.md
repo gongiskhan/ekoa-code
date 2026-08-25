@@ -6,6 +6,38 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`establish-endpoint-reports-started-true-for-a-bridge-that-cannot-run-the-login-ceremony`**
+  (2026-08-25, OPEN, **MEDIUM**; found running the acceptance-run durable ceremony live). `POST
+  /api/v1/cofre/sessions/establish` (`api/src/routes/cofre.ts`) gates on the machine advertising
+  `attended.card_login` and then reports `{started:true, message:"Abriu-se uma janela na sua
+  maquina"}`. But the ad-hoc `login` ceremony kind is NEW (landed 2026-08-25 in the session-capture
+  slice); a bridge built before it advertises `attended.card_login` yet its `runAttendedCeremony`
+  has no `login`-kind branch, so it silently drops the `attended.request` and opens NO window - while
+  the user is told one opened. Measured live: a Mini running the 2026-08-24 08:20 bridge tgz, server
+  sends the ceremony (`started:true`), no window appears. The handler's own comment
+  ("`attended.card_login` is the capability for BOTH kinds: the daemon runs one ceremony and does not
+  branch on the kind") is the false assumption - a daemon that predates the kind DOES need the code,
+  and does not have it. CLOSE BY: either advertise a distinct capability/version signal for the
+  login-ceremony kind (so the establish check fails closed for an old daemon with a "update the
+  bridge" message, exactly like the too-old branch already there for the card path), OR have the
+  daemon ACK/NACK a ceremony request by kind so Cortex reports `started:false` truthfully when the
+  bridge cannot run it. A "a window is opening on your machine" that is a lie is the worst shape of
+  this - fail closed with the update prompt instead. (Operationally: the bridge is versioned client
+  software, so any feature touching the ceremony rail requires the user to update their installed
+  bridge; the acceptance run needs the freshly packed tgz.)
+
+- **`dashboard-login-redirect-drops-the-intended-deep-link`** (2026-08-25, OPEN, **MEDIUM**, UX;
+  operator-flagged as broadly important). Navigating to a dashboard deep link while unauthenticated
+  (e.g. `/cofre?origin=www.ubereats.com`, or any `/settings/*`, `/integrations/[key]`, a run link)
+  bounces to `/login` and, after a successful login, lands on the default route (`/chat`) rather than
+  RETURNING to the deep link the user asked for - so the query string and the destination are lost
+  and the user has to paste the URL again. Every deep-linked flow the platform sends a human to (the
+  ceremony `/cofre?origin=` link the needs_credentials halt writes, a shared run link, a settings
+  link) is degraded by this. CLOSE BY: the login flow must capture the intended destination
+  (the pre-redirect path+query, via a `returnTo`/`next` param or stored location) and navigate there
+  after auth instead of to the default route - the standard post-login return-to pattern. This is a
+  general dashboard auth-flow fix, not specific to the ceremony, and worth its own small slice.
+
 - **`google-sso-refuses-the-automated-ceremony-browser`** (2026-08-24, OPEN, **MEDIUM**, external
   constraint; found in acceptance run 1). When the attended-ceremony window (Playwright/CDP-driven
   headed Chrome on the bridge, `channel:'chrome'`, `--disable-blink-features=AutomationControlled`,
