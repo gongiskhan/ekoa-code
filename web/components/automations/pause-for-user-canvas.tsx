@@ -34,7 +34,7 @@ export default function PauseForUserCanvas({ session, onStatusChange }: Props) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasSessionRef = useRef<CanvasSession | null>(null);
   const rafRef = useRef<number | null>(null);
-  const pendingBitmapRef = useRef<ImageBitmap | null>(null);
+  const pendingFrameRef = useRef<string | null>(null);
   const viewportRef = useRef<{ width: number; height: number }>(session.viewport);
   const isMobile = useIsMobile();
   const setStreamingStatus = useAutomationsStore((s) => s.setStreamingStatus);
@@ -60,50 +60,28 @@ export default function PauseForUserCanvas({ session, onStatusChange }: Props) {
     ctx.drawImage(img, 0, 0);
   };
 
+  // Frame paint pump driven by rAF - only the LATEST pending frame is painted, so a slow decode or a
+  // busy tab drops intermediate frames rather than queueing behind them.
   const scheduleRepaint = () => {
     if (rafRef.current != null) return;
     rafRef.current = requestAnimationFrame(() => {
       rafRef.current = null;
-      const canvas = canvasRef.current;
-      const bitmap = pendingBitmapRef.current;
-      if (!canvas || !bitmap) return;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-      if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
-        canvas.width = bitmap.width;
-        canvas.height = bitmap.height;
-      }
-      ctx.drawImage(bitmap, 0, 0);
-      try { bitmap.close(); } catch { /* noop */ }
-      pendingBitmapRef.current = null;
+      const dataUrl = pendingFrameRef.current;
+      pendingFrameRef.current = null;
+      if (!dataUrl) return;
+      const img = new Image();
+      img.decoding = 'async';
+      img.onload = () => paintImageDirect(img);
+      img.onerror = () => { /* drop a frame that failed to decode */ };
+      img.src = dataUrl;
     });
   };
 
-  // Frame paint pump driven by rAF - drops late frames so we never block.
-  const handleIncomingFrame = (frame: Blob) => {
-    if (typeof window !== 'undefined' && 'createImageBitmap' in window) {
-      void createImageBitmap(frame)
-        .then((bitmap) => {
-          const previous = pendingBitmapRef.current;
-          if (previous) {
-            try { previous.close(); } catch { /* noop */ }
-          }
-          pendingBitmapRef.current = bitmap;
-          scheduleRepaint();
-        })
-        .catch(() => { /* drop frame */ });
-      return;
-    }
-    // Fallback: paint via an object URL when ImageBitmap is unavailable.
-    const url = URL.createObjectURL(frame);
-    const img = new Image();
-    img.decoding = 'async';
-    img.onload = () => {
-      paintImageDirect(img);
-      URL.revokeObjectURL(url);
-    };
-    img.onerror = () => URL.revokeObjectURL(url);
-    img.src = url;
+  // A frame is a ready-to-paint `data:image/jpeg;base64,...` URL (the media channel is text JSON —
+  // see web/lib/api/canvas.ts). Stash the latest and let the rAF pump paint it.
+  const handleIncomingFrame = (frameDataUrl: string) => {
+    pendingFrameRef.current = frameDataUrl;
+    scheduleRepaint();
   };
 
   // Canvas lifecycle. The single WebSocket transport lives in `web/lib/api/canvas.ts`
@@ -122,6 +100,9 @@ export default function PauseForUserCanvas({ session, onStatusChange }: Props) {
     const offStatus = canvas.onStatusChange((status) => {
       updateStatus(canvasStatusToConnection(status));
     });
+    const offViewport = canvas.onViewport((viewport) => {
+      viewportRef.current = viewport;
+    });
     const offClose = canvas.onClose((_code, resumed) => {
       // 1000 (resumed hand-back): the run resumes and the overlay unmounts as the
       // store clears the streaming session. 4000 / errors: surface as offline.
@@ -131,6 +112,7 @@ export default function PauseForUserCanvas({ session, onStatusChange }: Props) {
     return () => {
       offFrame();
       offStatus();
+      offViewport();
       offClose();
       canvasSessionRef.current = null;
       canvas.close(CANVAS_CLOSE_NORMAL);
@@ -138,11 +120,7 @@ export default function PauseForUserCanvas({ session, onStatusChange }: Props) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;
       }
-      const pending = pendingBitmapRef.current;
-      if (pending) {
-        try { pending.close(); } catch { /* noop */ }
-        pendingBitmapRef.current = null;
-      }
+      pendingFrameRef.current = null;
     };
     // session token / wsUrl identify the connection target; reopen if either changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
