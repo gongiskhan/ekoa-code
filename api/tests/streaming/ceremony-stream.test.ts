@@ -79,7 +79,7 @@ beforeEach(() => {
 describe('openCeremonyStream mints the viewer triple', () => {
   it('returns a token, the requestId-scoped wsUrl and the viewport', () => {
     const { hooks } = makeHooks();
-    const out = openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', hooks });
+    const out = openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', pairingId: 'pair-1', hooks });
     expect(out.token).toBeTruthy();
     expect(out.wsUrl).toBe(`${CEREMONY_WS_PATH_PREFIX}req-1`);
     expect(out.viewport).toEqual({ width: 1280, height: 800 });
@@ -90,29 +90,44 @@ describe('openCeremonyStream mints the viewer triple', () => {
 describe('frames relay down, input relays up, and NEITHER is ever logged', () => {
   it('forwards a pushed frame to the attached viewer as a `frame` message', () => {
     const { hooks, viewer } = makeHooks();
-    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', hooks });
+    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', pairingId: 'pair-1', hooks });
     const ws = new MockWs();
     getCeremonyStreamSession('req-1')!.attachSocket(ws as never);
     expect(viewer).toEqual([true]); // attaching a viewer starts the bridge screencast
 
-    pushCeremonyFrame('req-1', 5, 'QUJD');
+    pushCeremonyFrame('req-1', 'pair-1', 5, 'QUJD');
     const frame = ws.sent.find((s) => s.parsed.type === 'frame');
     expect(frame?.parsed).toEqual({ type: 'frame', seq: 5, jpegBase64: 'QUJD' });
   });
 
+  it('DROPS a frame delivered by a pairing that is not the one holding the ceremony', () => {
+    // Cross-tenant frame injection (adversarial review, 2026-08-26): a compromised daemon on another
+    // pairing that learned this requestId must not paint this owner's dashboard. The frame path is
+    // bound to the delivering pairing, exactly as the input path is.
+    const { hooks } = makeHooks();
+    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', pairingId: 'pair-1', hooks });
+    const ws = new MockWs();
+    getCeremonyStreamSession('req-1')!.attachSocket(ws as never);
+    pushCeremonyFrame('req-1', 'pair-ATTACKER', 9, 'attacker-image');
+    expect(ws.sent.find((s) => s.parsed.type === 'frame')).toBeUndefined();
+    // ...but the legitimate pairing still paints.
+    pushCeremonyFrame('req-1', 'pair-1', 9, 'QUJD');
+    expect(ws.sent.find((s) => s.parsed.type === 'frame')?.parsed).toMatchObject({ seq: 9 });
+  });
+
   it('drops a frame when the viewer socket is backpressured', () => {
     const { hooks } = makeHooks();
-    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', hooks });
+    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', pairingId: 'pair-1', hooks });
     const ws = new MockWs();
     ws.bufferedAmount = 2_000_000; // over the 1MB cap
     getCeremonyStreamSession('req-1')!.attachSocket(ws as never);
-    pushCeremonyFrame('req-1', 1, 'QUJD');
+    pushCeremonyFrame('req-1', 'pair-1', 1, 'QUJD');
     expect(ws.sent.find((s) => s.parsed.type === 'frame')).toBeUndefined();
   });
 
   it('relays a mouse and a key input to the bridge hook', () => {
     const { hooks, inputs } = makeHooks();
-    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', hooks });
+    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', pairingId: 'pair-1', hooks });
     const ws = new MockWs();
     getCeremonyStreamSession('req-1')!.attachSocket(ws as never);
 
@@ -128,10 +143,10 @@ describe('frames relay down, input relays up, and NEITHER is ever logged', () =>
 
   it('NEVER logs a frame or an input payload - a keystroke may be a password character', () => {
     const { hooks, logs } = makeHooks();
-    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', hooks });
+    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', pairingId: 'pair-1', hooks });
     const ws = new MockWs();
     getCeremonyStreamSession('req-1')!.attachSocket(ws as never);
-    pushCeremonyFrame('req-1', 1, 'SECRET-JPEG-DATA');
+    pushCeremonyFrame('req-1', 'pair-1', 1, 'SECRET-JPEG-DATA');
     ws.fireMessage({ type: 'key', code: 'KeyS', key: 's', action: 'down' });
     ws.fireMessage({ type: 'key', code: 'KeyecretChar', key: 'x-secret-char', action: 'down' });
 
@@ -147,7 +162,7 @@ describe('frames relay down, input relays up, and NEITHER is ever logged', () =>
 
   it('a message that fails the client schema is dropped, never relayed or logged', () => {
     const { hooks, inputs, logs } = makeHooks();
-    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', hooks });
+    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', pairingId: 'pair-1', hooks });
     const ws = new MockWs();
     getCeremonyStreamSession('req-1')!.attachSocket(ws as never);
     ws.fireMessage({ type: 'bogus', secret: 'x-secret-char' });
@@ -159,13 +174,13 @@ describe('frames relay down, input relays up, and NEITHER is ever logged', () =>
 describe('ownership + lifecycle', () => {
   it('records the owner so the upgrade gate can scope the socket', () => {
     const { hooks } = makeHooks();
-    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', hooks });
+    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', pairingId: 'pair-1', hooks });
     expect(getCeremonyStreamSession('req-1')!.ownerUserId).toBe('alice');
   });
 
   it('a second viewer takes over: the displaced socket is closed 4000', () => {
     const { hooks } = makeHooks();
-    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', hooks });
+    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', pairingId: 'pair-1', hooks });
     const first = new MockWs();
     const closeSpy = vi.spyOn(first, 'close');
     getCeremonyStreamSession('req-1')!.attachSocket(first as never);
@@ -176,7 +191,7 @@ describe('ownership + lifecycle', () => {
 
   it('a dropped viewer socket tells the bridge to stop the screencast', () => {
     const { hooks, viewer } = makeHooks();
-    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', hooks });
+    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', pairingId: 'pair-1', hooks });
     const ws = new MockWs();
     getCeremonyStreamSession('req-1')!.attachSocket(ws as never);
     ws.fireClose();
@@ -185,7 +200,7 @@ describe('ownership + lifecycle', () => {
 
   it('closeCeremonyStream tears down and unregisters', () => {
     const { hooks, viewer } = makeHooks();
-    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', hooks });
+    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', pairingId: 'pair-1', hooks });
     const ws = new MockWs();
     getCeremonyStreamSession('req-1')!.attachSocket(ws as never);
     closeCeremonyStream('req-1');

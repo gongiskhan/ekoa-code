@@ -4049,9 +4049,20 @@ silently absorbed into a ledger note):
   `api/tests/streaming/ceremony-stream.test.ts` (frame relays down; input relays up; a frame/keystroke
   is never logged; backpressure drops; takeover 4000; viewer-drop stops the screencast; owner recorded;
   TTL/close teardown), `web/__tests__/lib/canvas.test.ts` (the wire both directions), and the daemon
-  producer's own suite. RESIDUAL, accepted: the Cortex bridge WSS has no per-frame `maxPayload` (ws's
-  100MiB default bounds a hostile daemon's oversized frame); a tighter cap needs a size analysis of
-  every bridge frame and is deferred.
+  producer's own suite.
+
+  ADVERSARIAL REVIEW (2026-08-26, before merge). The stream is a new credential-transit path, so it got
+  a focused adversarial pass; it cleared keystroke/frame privacy, the token/upgrade, and remote-input,
+  and found TWO defense-in-depth gaps, both FIXED. (1) `pushCeremonyFrame` bound the viewer session by
+  requestId ALONE, so a compromised daemon on another pairing that learned the (unguessable) requestId
+  could paint a spoofed frame onto the owner's dashboard - the frame path is now bound to the delivering
+  pairing, mirroring the input path and `acceptSessionPush` (pinned by "DROPS a frame delivered by a
+  pairing that is not the one holding the ceremony"). (2) The daemon-facing bridge WSS had no
+  `maxPayload` (ws's 100MiB default), which `ceremony.frame` turned into a sustained high-rate vector -
+  now capped at 32MiB (`MAX_BRIDGE_FRAME_BYTES`), far above any legitimate frame. RESIDUAL (LOW,
+  accepted): the stream token rides the URL `?token=` like the canvas channel it reuses - single-use +
+  600s TTL mean a logged token is already spent; moving it off the URL would diverge from the canvas
+  client and is deferred.
 
 ## Recently fixed - 2026-08-26 a multi-domain login authenticates (via real-Chrome continuity, NOT a wider binding)
 

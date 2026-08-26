@@ -181,6 +181,9 @@ export function cofreRouter(deps: { now: () => number; genId: () => string }): R
       streaming = openCeremonyStream({
         requestId,
         ownerUserId: actor.userId,
+        // Only this machine's frames may paint this stream (defence-in-depth against a frame from a
+        // daemon that guessed the requestId).
+        pairingId: machine.pairingId,
         hooks: {
           // Each event is relayed to the exact machine holding THIS ceremony. Never logged - a
           // keystroke may be a password character (D-CEREMONY-STREAM).

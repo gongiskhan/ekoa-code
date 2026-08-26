@@ -56,15 +56,21 @@ export interface CeremonyStreamHooks {
 export class CeremonyStreamSession {
   readonly requestId: string;
   readonly ownerUserId: string;
+  /** The pairing that may deliver frames for this ceremony — the machine holding the window. A
+   *  `ceremony.frame` arriving from any OTHER pairing is dropped (see `pushFrame`), so a compromised
+   *  daemon cannot inject a spoofed frame onto this owner's dashboard even if it learns the requestId.
+   *  This is the binding the input direction already had; the frame direction now matches it. */
+  readonly pairingId: string;
   private socket: WebSocket | null = null;
   private readonly hooks: CeremonyStreamHooks;
   private readonly log: (event: string, fields: Record<string, unknown>) => void;
   private closed = false;
   private ttlTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(opts: { requestId: string; ownerUserId: string; hooks: CeremonyStreamHooks }) {
+  constructor(opts: { requestId: string; ownerUserId: string; pairingId: string; hooks: CeremonyStreamHooks }) {
     this.requestId = opts.requestId;
     this.ownerUserId = opts.ownerUserId;
+    this.pairingId = opts.pairingId;
     this.hooks = opts.hooks;
     this.log = opts.hooks.log ?? (() => {});
   }
@@ -164,6 +170,9 @@ const sessions = new Map<string, CeremonyStreamSession>();
 export interface OpenCeremonyStreamInput {
   requestId: string;
   ownerUserId: string;
+  /** The machine holding the ceremony window — the only pairing whose `ceremony.frame` frames are
+   *  accepted for this stream. */
+  pairingId: string;
   hooks: CeremonyStreamHooks;
 }
 
@@ -182,6 +191,7 @@ export function openCeremonyStream(input: OpenCeremonyStreamInput): OpenCeremony
   const session = new CeremonyStreamSession({
     requestId: input.requestId,
     ownerUserId: input.ownerUserId,
+    pairingId: input.pairingId,
     hooks: input.hooks,
   });
   sessions.set(input.requestId, session);
@@ -199,9 +209,16 @@ export function openCeremonyStream(input: OpenCeremonyStreamInput): OpenCeremony
   };
 }
 
-/** A `ceremony.frame` arrived from the bridge — push it to the viewer (if any). */
-export function pushCeremonyFrame(requestId: string, seq: number, jpegBase64: string): void {
-  sessions.get(requestId)?.pushFrame(seq, jpegBase64);
+/**
+ * A `ceremony.frame` arrived from the bridge — push it to the viewer (if any). `pairingId` is the
+ * socket the frame DELIVERED ON, and it must match the pairing that opened this stream, or the frame
+ * is dropped: a compromised daemon on another pairing that guessed the requestId must not be able to
+ * paint this owner's dashboard. This mirrors the binding the input path already enforces.
+ */
+export function pushCeremonyFrame(requestId: string, pairingId: string, seq: number, jpegBase64: string): void {
+  const session = sessions.get(requestId);
+  if (!session || session.pairingId !== pairingId) return;
+  session.pushFrame(seq, jpegBase64);
 }
 
 /** Tear the stream down (ceremony ended/expired). Idempotent. */

@@ -50,6 +50,12 @@ import { createProviderHandler, type ProviderHandler } from './provider.js';
 const CONNECT_PATH = /^\/api\/v1\/bridge\/connect\/([^/?]+)$/;
 const DEFAULT_HEARTBEAT_MS = 30_000;
 
+/** The largest inbound daemon frame Cortex will buffer before parse (ws's default is 100 MiB). Sized
+ *  well above any legitimate frame — a screencast JPEG is ~150 KB, a viewport screenshot low single-
+ *  digit MB, a login `storageState` smaller still — and a 3× cut from the DoS ceiling. See the WSS
+ *  construction for why this matters now that `ceremony.frame` streams at 15 fps (D-CEREMONY-STREAM). */
+const MAX_BRIDGE_FRAME_BYTES = 32 * 1024 * 1024;
+
 export interface BridgeServerDeps {
   now?: () => number;
   /** userId -> org for the registry row. Default: the users store. */
@@ -64,10 +70,12 @@ export interface BridgeServerDeps {
   /** Trust-chip ledger rows streamed up during a delegation (§18.3.8). Default: dropped hosted
    *  (not persisted by default, §18.6). */
   onLedgerRow?: (taskId: string, row: EgressLedgerRow) => void;
-  /** A live ceremony frame arrived from the daemon (D-CEREMONY-STREAM). Injected at the composition
-   *  root to the streaming module's `pushCeremonyFrame`, so `bridge/` does not import `streaming/`
-   *  across the seam. Default: dropped (no live-view wired). The jpeg is an image — never logged. */
-  onCeremonyFrame?: (requestId: string, seq: number, jpegBase64: string) => void;
+  /** A live ceremony frame arrived from the daemon (D-CEREMONY-STREAM). `pairingId` is the socket it
+   *  arrived on — the streaming side drops a frame whose delivering pairing is not the one holding the
+   *  ceremony. Injected at the composition root to the streaming module's `pushCeremonyFrame`, so
+   *  `bridge/` does not import `streaming/` across the seam. Default: dropped (no live-view wired).
+   *  The jpeg is an image — never logged. */
+  onCeremonyFrame?: (requestId: string, pairingId: string, seq: number, jpegBase64: string) => void;
   /** A ceremony finished (its session was pushed). Injected to `closeCeremonyStream` so the live view
    *  tears down when the login completes rather than lingering to its token TTL. */
   onCeremonyEnded?: (requestId: string) => void;
@@ -141,7 +149,13 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
   const provider = deps.provider ?? createProviderHandler();
   const heartbeatMs = deps.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_MS;
 
-  const wss = new WebSocketServer({ noServer: true });
+  // maxPayload bounds every inbound daemon frame. Without it `ws` allows 100 MiB, and this channel
+  // now carries a high-rate `ceremony.frame` JPEG stream (D-CEREMONY-STREAM) as well as
+  // `tool.result.screenshotB64` and `session.push` state - so an oversized frame from a hostile or
+  // wedged daemon would be buffered, JSON-parsed and zod-validated in this shared process. The cap is
+  // sized well above any legitimate frame (a screencast JPEG or a full-page screenshot is low single-
+  // digit MB; a storageState is smaller) and far below the 100 MiB DoS ceiling.
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_BRIDGE_FRAME_BYTES });
   // Sockets THIS server manages (ws -> pairingId), for the heartbeat sweep and teardown.
   const managed = new Map<WebSocket, string>();
 
@@ -385,7 +399,9 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
         // dashboard. Pushed to the ceremony's live viewer keyed by requestId, or dropped if no one is
         // watching. NEVER logged - it is a picture of a login page (the frame rode through
         // `redactInboundFrame`'s default case untouched, deliberately: it is an image, not text).
-        deps.onCeremonyFrame?.(frame.requestId, frame.seq, frame.jpegBase64);
+        // The delivering `pairingId` is passed so the streaming side can refuse a frame from a machine
+        // that is not the one holding this ceremony.
+        deps.onCeremonyFrame?.(frame.requestId, pairingId, frame.seq, frame.jpegBase64);
         break;
       case 'ping':
         sendToPairing(pairingId, { type: 'pong' });
