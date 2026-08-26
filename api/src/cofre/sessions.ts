@@ -137,71 +137,39 @@ export async function captureSessionWithGrant(
 }
 
 /**
- * The origins a session captured while establishing `host` may be bound to: the login's OWN auth
- * domain family, or nothing.
+ * The origins a session captured while establishing `host` may be bound to: `[host]`, or nothing.
  *
- * WHY NOT THE WHOLE JAR. `originsFromStorageState` reports every domain in the jar, which after a
- * real login includes the analytics and CDN domains the page happened to touch. Binding the session
- * to all of them makes it findable — and unwrappable — under `google-analytics.com`. A session is
- * credential-equivalent, so its binding must be the narrowest one that still WORKS, not the widest
- * the jar can justify.
+ * WHY THE SINGLE HOST, AND ONLY THE ONE CORTEX ASSERTED. `host` is the origin CORTEX declared for
+ * this capture — the ceremony's origin, or the integration host the typist established against. It is
+ * the one statement in the transaction that Cortex made rather than received. On the ceremony
+ * `session.push` path the DAEMON declares the entire `storageState` (`z.unknown()`), so ANY property
+ * derived from the jar's cookies is attacker-controlled: a compromised daemon can set `httpOnly: true`
+ * on a cookie it invents for an arbitrary victim domain, and binding to jar-derived domains would let
+ * it plant an attacker-chosen session for `bank.example` into the OWNER's automations (session
+ * fixation — the owner's run targeting `bank.example` would discover this item and inject the
+ * attacker's jar). A `{domain: '.com'}` cookie would bind to every `.com`. Both were live regressions
+ * caught by adversarial review (docs/decisions.md, D-BIND-NARROW-2026-08-26). So the binding is
+ * derived from `host` and the jar is used ONLY as EVIDENCE — at least one cookie must cover `host`,
+ * or the login left nothing for this portal and the empty list makes `captureSessionToCofre` refuse.
  *
- * WHY NOT A SINGLE HOST EITHER (the defect this replaces). Binding to `[host]` alone breaks every
- * real multi-domain login. Uber Eats authenticates across `ubereats.com` AND `uber.com`: the login
- * sets the app session on `.ubereats.com` and the SSO session on `.uber.com`. A run that reused a
- * session bound only to `www.ubereats.com` re-hit the login wall the moment a step's origin resolved
- * to `auth.uber.com`, because `findSessionItemsForOrigin` could not find the item there — a durable
- * `needs_credentials` loop that never converged (findings.md, 2026-08-25).
- *
- * THE RULE. Bind to the domains the SERVER itself scoped a session cookie to — every cookie the
- * login set `httpOnly` (the signature of a server-managed session/auth cookie, which analytics and
- * marketing cookies, being JS-set, are not), taken at the domain the server declared, plus the host
- * we established against. That is `ubereats.com` and `uber.com` for Uber, and nothing for
- * `google-analytics.com`. The jar is still used as EVIDENCE first — at least one domain must cover
- * `host`, or the login left nothing for this portal and there is no session to store.
- *
- * THE TRADEOFF, STATED (docs/decisions.md, D-BIND-FAMILY). A login FEDERATED through a shared
- * third-party IdP (a portal whose sign-in bounces through `accounts.google.com`) will bind the item
- * to that IdP's domain too, because the server set an httpOnly cookie there. This is acceptable and
- * bounded: items are owner-scoped, grant-gated, and only ever DISCOVERED for an origin a run
- * actually navigates to — so a Citius session bound to `google.com` is reachable only by that user's
- * own run, and only if a step of it targets `google.com`. An IdP denylist is a later refinement, not
- * a correctness gap. Lives beside `originsFromStorageState` and uses the same matcher `unwrap` uses,
- * so the derivation and the check can never drift apart.
+ * HOW MULTI-DOMAIN LOGINS STILL WORK (they do, without widening the binding). Uber Eats authenticates
+ * across `ubereats.com` AND `uber.com`; Citius bounces through a gov SSO. None of that needs the item
+ * bound to the second domain, because (1) the whole `storageState` jar is INJECTED at reuse regardless
+ * of `boundOrigins` (`automation/local-browser-session.ts` `addCookies` takes every cookie), so the
+ * cross-domain auth cookies ride along and a redirect to `auth.uber.com` is already authenticated;
+ * and (2) a run halts at the SPECIFIC origin it needs, so Cortex opens the ceremony for exactly that
+ * origin and the narrow binding matches what the run asks for. If a later step targets a second
+ * registrable domain DIRECTLY (not via redirect), it re-ceremonies — and because the ceremony profile
+ * is persistent real Chrome (D-CEREMONY-REALCHROME) the human is already logged in, so it captures at
+ * once. The real fix for the live Uber failure was that capture/replay now share one real-Chrome
+ * environment, not a wider binding. Lives beside `originsFromStorageState` and uses the same matcher
+ * `unwrap` uses, so the derivation and the check can never drift apart.
  */
 export function boundOriginsForEstablishedHost(storageState: unknown, host: string): string[] {
   const h = hostOf(host);
   if (!h) return [];
   const covered = originsFromStorageState(storageState).some((origin) => hostMatchesOrigin(h, origin));
-  if (!covered) return [];
-  // The established host, plus every domain the server set an httpOnly session cookie on. Collapse
-  // to the broadest binding per family (a parent covers its subdomains under `hostMatchesOrigin`),
-  // so `www.ubereats.com` established against `.ubereats.com`'s cookie yields just `ubereats.com`.
-  const family = new Set<string>([h, ...httpOnlyCookieDomains(storageState)]);
-  return collapseToBroadest([...family]);
-}
-
-/** The domains carrying at least one `httpOnly` cookie — the server-managed session/auth cookies,
- *  as distinct from the JS-set analytics/marketing cookies a real login also leaves behind. Domains
- *  are dot-stripped and lowercased to match `originsFromStorageState` and the binding matcher. */
-function httpOnlyCookieDomains(storageState: unknown): string[] {
-  const out = new Set<string>();
-  const cookies = (storageState as { cookies?: unknown })?.cookies;
-  if (!Array.isArray(cookies)) return [];
-  for (const c of cookies) {
-    const cookie = c as { domain?: unknown; httpOnly?: unknown };
-    if (cookie?.httpOnly !== true) continue;
-    const domain = cookie.domain;
-    if (typeof domain === 'string' && domain) out.add(domain.replace(/^\./, '').toLowerCase());
-  }
-  return [...out];
-}
-
-/** Drop any entry that is already covered by a broader one in the list (`www.uber.com` when
- *  `uber.com` is present), so the binding is the fewest, broadest hosts that cover the same set —
- *  the same coverage `hostMatchesOrigin` would compute, written once. */
-function collapseToBroadest(hosts: string[]): string[] {
-  return hosts.filter((h) => !hosts.some((other) => other !== h && hostMatchesOrigin(h, other)));
+  return covered ? [h] : [];
 }
 
 /**

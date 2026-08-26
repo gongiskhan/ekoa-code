@@ -118,73 +118,78 @@ describe('origins are DERIVED from the cookies, not guessed by the caller', () =
   });
 });
 
-describe('binding covers the login\'s OWN auth family, not the whole jar (multi-domain logins)', () => {
-  // Uber Eats authenticates across two registrable domains: the app session on `.ubereats.com` and
-  // the SSO session on `.uber.com`. A real jar also carries analytics cookies (`_ga`), JS-set and so
-  // never httpOnly. This is the shape that broke: a session bound to `www.ubereats.com` alone re-hit
-  // the login wall the moment a step resolved to `auth.uber.com`.
-  const UBER_JAR = {
-    cookies: [
-      { name: 'sid', value: 'app-session', domain: '.ubereats.com', path: '/', httpOnly: true },
-      { name: 'sso', value: 'idp-session', domain: '.uber.com', path: '/', httpOnly: true },
-      { name: '_ga', value: 'GA1.2.tracking', domain: '.google-analytics.com', path: '/', httpOnly: false },
-    ],
-    origins: [],
-  };
-
-  it('binds to every domain the SERVER set an httpOnly session cookie on', () => {
-    expect(boundOriginsForEstablishedHost(UBER_JAR, 'www.ubereats.com').sort()).toEqual(
-      ['uber.com', 'ubereats.com'].sort(),
-    );
+describe('binding is DERIVED FROM THE HOST CORTEX ASSERTED, never from the daemon-declared jar', () => {
+  // The security property: `host` is the one thing Cortex states in the capture transaction. On the
+  // ceremony push path the DAEMON declares the whole storageState, so binding must never widen to a
+  // domain the jar merely names — an attacker-controlled jar could otherwise plant a session for an
+  // arbitrary victim domain into the owner's automations (session fixation, caught by adversarial
+  // review; docs/decisions.md D-BIND-NARROW-2026-08-26).
+  it('binds to exactly the established host, ignoring the other domains the jar carries', () => {
+    const jar = {
+      cookies: [
+        { name: 'sid', value: 'app-session', domain: '.ubereats.com', path: '/', httpOnly: true },
+        { name: 'sso', value: 'idp-session', domain: '.uber.com', path: '/', httpOnly: true },
+        { name: '_ga', value: 'GA1.2.tracking', domain: '.google-analytics.com', path: '/', httpOnly: false },
+      ],
+      origins: [],
+    };
+    expect(boundOriginsForEstablishedHost(jar, 'www.ubereats.com')).toEqual(['www.ubereats.com']);
   });
 
-  it('never binds to an analytics domain — its cookie is not httpOnly', () => {
-    expect(boundOriginsForEstablishedHost(UBER_JAR, 'www.ubereats.com')).not.toContain('google-analytics.com');
+  it('IGNORES a crafted httpOnly cookie for an unrelated victim domain (the session-fixation exploit)', () => {
+    // A malicious daemon sets httpOnly on a cookie it invents for a domain it has no ceremony for.
+    // The binding must NOT include it — otherwise the owner's own run targeting bank.example would
+    // discover this item and inject the attacker's jar.
+    const maliciousJar = {
+      cookies: [
+        { name: 'sid', value: 'legit', domain: 'portal.example', path: '/', httpOnly: true },
+        { name: 'evil', value: 'attacker-session', domain: 'bank.example', path: '/', httpOnly: true },
+      ],
+      origins: [],
+    };
+    expect(boundOriginsForEstablishedHost(maliciousJar, 'portal.example')).toEqual(['portal.example']);
   });
 
-  it('makes the session discoverable across the family it was bound to', async () => {
-    const { findSessionItemsForOrigin } = await import('../../src/cofre/index.js');
+  it('NEVER binds to a bare public suffix, however the jar is crafted', () => {
+    // A `{domain: '.com'}` httpOnly cookie must not widen the binding to every `.com` host. Since the
+    // binding is the asserted host and never a jar domain, this holds by construction.
+    const tldJar = {
+      cookies: [
+        { name: 'sid', value: 'legit', domain: 'portal.example', path: '/', httpOnly: true },
+        { name: 'wide', value: 'x', domain: '.com', path: '/', httpOnly: true },
+      ],
+      origins: [],
+    };
+    const bound = boundOriginsForEstablishedHost(tldJar, 'portal.example');
+    expect(bound).toEqual(['portal.example']);
+    expect(bound).not.toContain('com');
+  });
+
+  it('the whole jar is still STORED, so cross-domain cookies ride along at reuse', async () => {
+    // The multi-domain login works not by widening the binding but by injecting the whole jar: the
+    // stored session still carries the uber.com SSO cookie even though the item binds only to the
+    // ubereats.com host. (Injection itself is covered in the local-browser-session suite.)
+    const jar = {
+      cookies: [
+        { name: 'sid', value: 'app-session', domain: '.ubereats.com', path: '/', httpOnly: true },
+        { name: 'sso', value: 'SSO-SECRET', domain: '.uber.com', path: '/', httpOnly: true },
+      ],
+      origins: [],
+    };
     const item = await captureSessionToCofre(actor, {
       label: 'Uber Eats',
-      boundOrigins: boundOriginsForEstablishedHost(UBER_JAR, 'www.ubereats.com'),
-      storageState: UBER_JAR,
+      boundOrigins: boundOriginsForEstablishedHost(jar, 'www.ubereats.com'),
+      storageState: jar,
       metadata,
     });
-    // The SSO redirect host, a different registrable domain than the one established against.
-    const found = await findSessionItemsForOrigin(actor, 'auth.uber.com');
-    expect(found.map((i) => i._id)).toContain(item._id);
     await issueGrant(actor, item._id, '1_day');
-    await expect(unwrap(item._id, actor, { kind: 'browser', origin: 'https://auth.uber.com' })).resolves.toBeDefined();
-    // ...but still NOT under the analytics domain the login merely touched.
-    expect((await findSessionItemsForOrigin(actor, 'www.google-analytics.com')).map((i) => i._id)).not.toContain(
-      item._id,
-    );
-  });
-
-  it('collapses a specific established host into the parent domain that covers it', () => {
-    // Established against `auth.uber.com`, cookie scoped to `.uber.com`: the broad binding subsumes
-    // the specific host, so the result is the single `uber.com`.
-    expect(
-      boundOriginsForEstablishedHost(
-        { cookies: [{ name: 'sso', value: 'x', domain: '.uber.com', path: '/', httpOnly: true }], origins: [] },
-        'auth.uber.com',
-      ),
-    ).toEqual(['uber.com']);
-  });
-
-  it('falls back to the established host when the login left no httpOnly cookie', () => {
-    // A jar whose only cookie is JS-set (no httpOnly) still binds to the host it covers, so a
-    // single-domain SPA login is not left unbindable — it just does not widen.
-    expect(
-      boundOriginsForEstablishedHost(
-        { cookies: [{ name: 'token', value: 'x', domain: 'app.example', path: '/', httpOnly: false }], origins: [] },
-        'app.example',
-      ),
-    ).toEqual(['app.example']);
+    const out = await unwrap(item._id, actor, { kind: 'browser', origin: 'https://www.ubereats.com' });
+    expect(out.value).toContain('SSO-SECRET'); // the uber.com cookie survives in the stored jar
   });
 
   it('still refuses when the jar covers no cookie for the host at all', () => {
-    expect(boundOriginsForEstablishedHost(UBER_JAR, 'unrelated.example')).toEqual([]);
+    const jar = { cookies: [{ name: 'x', value: 'y', domain: 'elsewhere.example', path: '/', httpOnly: true }], origins: [] };
+    expect(boundOriginsForEstablishedHost(jar, 'unrelated.example')).toEqual([]);
   });
 });
 

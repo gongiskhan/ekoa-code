@@ -4008,43 +4008,54 @@ silently absorbed into a ledger note):
   coverage: a correct, tested function kept plausible by a docblock describing a caller it never got.
   Nothing here claims to be reachable, and this entry is the record that it is not.
 
-## Recently fixed - 2026-08-26 a captured session now covers the login's whole auth-domain family
+## Recently fixed - 2026-08-26 a multi-domain login authenticates (via real-Chrome continuity, NOT a wider binding)
 
 - **`ad-hoc-captured-session-does-not-authenticate-a-multi-domain-login`** (**FIXED 2026-08-26**, was
-  HIGH; found completing the live Uber Eats acceptance run). DIAGNOSIS CORRECTED. The original report's
-  "most likely cause" - that the narrowing DROPPED the `uber.com` cookies at capture - was wrong. The
-  whole `storageState` jar IS stored (`captureSessionToCofre` persists `input.storageState` verbatim)
-  and the whole jar IS injected at replay (`profile.ts:531` `addCookies(session.cookies)` - all
-  domains). `boundOrigins` never gated which cookies reach the browser; it gates which item
-  `findSessionItemsForOrigin` DISCOVERS for a given origin. So the real failure was discovery: a
-  session bound to the single host `www.ubereats.com` was invisible when a later step's origin resolved
-  to `auth.uber.com`/`uber.com`, and the run re-halted `needs_credentials` looking for a session that
-  existed but could not be found there.
+  HIGH; found completing the live Uber Eats acceptance run). DIAGNOSIS CORRECTED TWICE. The original
+  report guessed the narrowing DROPPED the `uber.com` cookies at capture - wrong: the whole
+  `storageState` jar is stored AND injected at reuse regardless of `boundOrigins`
+  (`automation/local-browser-session.ts` `addCookies` takes every cookie), so cross-domain auth
+  cookies ride along and a redirect to `auth.uber.com` is already authenticated. An interim fix then
+  WIDENED the binding to the login's httpOnly-cookie domain family (D-BIND-FAMILY) - but adversarial
+  cross-model review caught that as a **security regression** (see the next section), because on the
+  ceremony push path the daemon declares the whole jar and could bind the owner's item to an arbitrary
+  victim domain. Reverted.
 
-  THE FIX (docs/decisions.md, D-BIND-FAMILY). `boundOriginsForEstablishedHost` now binds to the
-  domains the SERVER itself scoped a session cookie to - every `httpOnly` cookie in the jar, at its
-  declared domain, plus the established host, collapsed to the broadest binding per family. For Uber
-  that is `ubereats.com` AND `uber.com`; for the analytics cookies a real login also leaves (`_ga`,
-  JS-set, never httpOnly) it is nothing, so the item stays UN-discoverable under `google-analytics.com`
-  exactly as the narrow fix intended. The evidence check is unchanged (at least one jar domain must
-  cover the host, or there is no session for this portal and the capture is refused). ONE function
-  serves both the typist path (`session-establishment.ts:830`) and the ceremony/`session.push` path
-  (`bridge/attended.ts:306`), so the two ways a session enters the Cofre bind identically.
+  THE ACTUAL FIX (docs/decisions.md, D-BIND-NARROW-2026-08-26 + D-CEREMONY-REALCHROME). Two things,
+  neither of them a wider binding. (1) The binding stays NARROW - `[host]`, the single origin Cortex
+  asserted for the capture - and multi-domain logins work anyway because the full jar is injected
+  (cross-domain cookies carry through redirects) and a run halts at the SPECIFIC origin it needs, so
+  the ceremony is opened for exactly that origin and the narrow binding matches. (2) The real reason
+  the LIVE Uber run failed was environment discontinuity: capture ran in throwaway bundled Chromium,
+  replay in real Chrome. The ceremony rebuild onto the persistent real-Chrome profile
+  (`attended-ceremony-headed-browser-is-not-viable-for-a-normal-user`) makes capture and replay share
+  one real-Chrome environment, which is what a hard adversarial SSO needs. A later step that targets a
+  second registrable domain directly re-ceremonies, instant on the persistent profile.
 
-  THE TRADEOFF, stated not hidden: a login federated through a shared third-party IdP binds the item to
-  that IdP's domain too (the server set an httpOnly cookie there). Bounded - items are owner-scoped,
-  grant-gated, and only DISCOVERED for an origin a run actually navigates to. An IdP denylist is a
-  later refinement, not a correctness gap.
+  TESTS: `api/tests/security/cofre-sessions.test.ts` (binds to exactly the asserted host, ignoring
+  other jar domains; ignores a crafted httpOnly rider for an unrelated domain; never binds to a bare
+  public suffix; the whole jar is still stored so a cross-domain cookie survives at reuse) and
+  `api/tests/security/adhoc-ceremony-capture.test.ts` (the httpOnly session-fixation rider is ignored
+  on the push path).
 
-  TESTS: `api/tests/security/cofre-sessions.test.ts` (new `describe`: binds to every httpOnly-cookie
-  domain; never to an analytics domain; discoverable across the family AND unwrappable at
-  `auth.uber.com`, but not under `google-analytics.com`; collapses a specific host into its parent;
-  falls back to the established host with no httpOnly cookie; still refuses a jar covering no cookie
-  for the host). The pre-existing narrow-binding pin (`adhoc-ceremony-capture.test.ts:232`,
-  `boundOrigins === [ORIGIN]`) stays GREEN unchanged - its `_ga`-on-`OTHER` fixture is not httpOnly, so
-  the analytics domain is still excluded. RESIDUAL: capture/replay environment continuity (the ceremony
-  ran in throwaway bundled Chromium, replay in real Chrome) is the SECOND half, closed by the ceremony
-  rebuild onto the persistent real-Chrome profile - see `attended-ceremony-headed-browser-is-not-viable-for-a-normal-user`.
+## Recently fixed - 2026-08-26 adversarial review caught a session-fixation over-binding before merge
+
+- **`captured-session-binding-widened-to-daemon-declared-jar-domains`** (**CAUGHT PRE-MERGE + FIXED
+  2026-08-26**, would have been **HIGH/security**; found by the adversarial cross-model review the
+  binding change triggered, never shipped). An interim binding (D-BIND-FAMILY) derived `boundOrigins`
+  from the jar's own cookies - every domain carrying an `httpOnly` cookie. On the ceremony
+  `session.push` path (`api/src/bridge/attended.ts`) the DAEMON declares the whole `storageState`
+  (`z.unknown()`), so the flag is attacker-controlled: a compromised daemon pushes
+  `{domain:'bank.example', value:<attacker session>, httpOnly:true}` beside the legit ceremony cookie,
+  the item binds to `bank.example` and is armed with a grant, and the OWNER's own later run targeting
+  `bank.example` discovers it (`findSessionItemsForOrigin`) and injects the attacker's jar - session
+  fixation into the owner's automations. A `{domain:'.com', httpOnly:true}` cookie bound to every
+  `.com` (no public-suffix guard). This re-opened the confused-deputy hole the prior narrow fix had
+  closed (`attended.ts` docblock, review round F1). FIX: revert to `boundOriginsForEstablishedHost`
+  binding `[host]` only - the origin Cortex asserted, never a jar-derived domain (D-BIND-NARROW-2026-08-26).
+  This is the five-layer QA working as designed: the security-surface change earned an adversarial
+  review, the review refuted it with a concrete exploit, and the regression was fixed before the slice
+  merged. Tests: the adversarial rider cases named above.
 
 ## Recently fixed - 2026-08-26 the attended ceremony is a normal Chrome window, not a robot's
 

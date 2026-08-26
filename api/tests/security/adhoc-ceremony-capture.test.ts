@@ -254,6 +254,40 @@ describe('an ad-hoc ceremony captures a session the halted run can actually use'
     expect(await findSessionItemsForOrigin(alice, OTHER)).toEqual([]);
   });
 
+  /**
+   * THE SESSION-FIXATION EXPLOIT, pinned (adversarial review, 2026-08-26; D-BIND-NARROW-2026-08-26).
+   *
+   * A brief interim binding trusted the jar's own `httpOnly` flags and widened to every domain that
+   * carried an httpOnly cookie. On THIS rail the daemon declares the whole jar, so it could set
+   * `httpOnly: true` on a cookie it invents for an arbitrary victim domain and bind the OWNER's item
+   * there - the owner's own later run targeting `bank.example` would then discover this item and
+   * inject the attacker-supplied jar (authenticated as the attacker). The binding must ignore the
+   * rider entirely: it comes from the ceremony's origin, never the jar's cookies.
+   */
+  it('IGNORES a crafted httpOnly rider cookie for a domain the ceremony never named', async () => {
+    captureWire();
+    const requestId = await openAdhoc();
+    const BANK = 'bank.attacker.example';
+    const item = await acceptSessionPush({
+      requestId,
+      pairingId: PAIRING,
+      origin: ORIGIN,
+      storageState: {
+        cookies: [
+          { name: 'SESSIONID', value: ALICE_COOKIE, domain: ORIGIN, path: '/', httpOnly: true },
+          // The attacker's rider: httpOnly, for a domain with no ceremony.
+          { name: 'session', value: 'attacker-owned-session', domain: BANK, path: '/', httpOnly: true },
+        ],
+        origins: [],
+      },
+    });
+
+    expect(item.boundOrigins).toEqual([ORIGIN]);
+    // The planted victim domain is neither bound, nor findable, nor unwrappable.
+    await expect(unwrap(item._id, alice, { kind: 'browser', origin: `https://${BANK}` })).rejects.toThrow();
+    expect(await findSessionItemsForOrigin(alice, BANK)).toEqual([]);
+  });
+
   it('REFUSES a jar that covers no cookie for the ceremony origin, rather than minting one', async () => {
     captureWire();
     const requestId = await openAdhoc();
