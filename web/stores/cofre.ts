@@ -33,7 +33,13 @@ interface CofreState {
    * credential-waiter path the moment the session lands, and the ceremony happens minutes later in
    * another window - so a resume fired from here would fire before there was anything to resume.
    */
-  establishSession: (origin: string) => Promise<{ started: boolean; message: string }>;
+  establishSession: (origin: string) => Promise<{
+    started: boolean;
+    message: string;
+    /** Present when the machine can live-stream its ceremony window (D-CEREMONY-STREAM): the login
+     *  can then happen right in the dashboard rather than only at the bridge machine. */
+    streaming?: { token: string; wsUrl: string; viewport: { width: number; height: number } };
+  }>;
   /**
    * "I have finished logging in - capture it now" (D-CEREMONY-DONE).
    *
@@ -188,7 +194,11 @@ export const useCofreStore = create<CofreState>()((set, get) => ({
       set({ error: message });
       return { started: false, message };
     }
-    return { started: response.data.started, message: response.data.message };
+    return {
+      started: response.data.started,
+      message: response.data.message,
+      ...(response.data.streaming ? { streaming: response.data.streaming } : {}),
+    };
   },
 
   captureSession: async (origin) => {

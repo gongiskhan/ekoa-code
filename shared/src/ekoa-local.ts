@@ -356,6 +356,40 @@ export const EgressLedgerRow = z.object({
 });
 export type EgressLedgerRow = z.infer<typeof EgressLedgerRow>;
 
+/**
+ * ONE INPUT EVENT relayed to a live ceremony window (the attended-ceremony live stream). The human
+ * drives the bridge's login window from their dashboard on whatever device they are on, so a mouse
+ * or key event captured there travels DOWN to the daemon and is dispatched with CDP `Input.dispatch`.
+ *
+ * Structurally the canvas media channel's own `mouse`/`key` messages (`api/src/streaming/protocol.ts`)
+ * — the Cortex relay parses those off the dashboard socket and re-emits them here verbatim, so the
+ * daemon dispatches exactly what the human did with no re-mapping. Coordinates are viewport pixels.
+ *
+ * CREDENTIAL-BEARING. A key event during a login carries a character of the human's password, so a
+ * `ceremony.input` frame has the same obligation `secret.deliver` does: RAM only, dispatched once,
+ * and NEVER written to a log, a trace or the ledger on either side.
+ */
+export const CeremonyInputEvent = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('mouse'),
+    x: z.number(),
+    y: z.number(),
+    action: z.enum(['down', 'up', 'move', 'wheel']),
+    button: z.enum(['left', 'middle', 'right', 'none']).optional(),
+    deltaX: z.number().optional(),
+    deltaY: z.number().optional(),
+    modifiers: z.object({ alt: z.boolean().optional(), ctrl: z.boolean().optional(), meta: z.boolean().optional(), shift: z.boolean().optional() }).optional(),
+  }),
+  z.object({
+    type: z.literal('key'),
+    code: z.string(),
+    key: z.string(),
+    action: z.enum(['down', 'up']),
+    modifiers: z.object({ alt: z.boolean().optional(), ctrl: z.boolean().optional(), meta: z.boolean().optional(), shift: z.boolean().optional() }).optional(),
+  }),
+]);
+export type CeremonyInputEvent = z.infer<typeof CeremonyInputEvent>;
+
 /** The bridge WS frames added for delegation (§18.3.8). Discriminated on `type`. Cortex validates
  *  every inbound frame at the boundary and drops unparseable/invalid frames (§18.3.1). */
 export const BridgeFrame = z.discriminatedUnion('type', [
@@ -536,6 +570,47 @@ export const BridgeFrame = z.discriminatedUnion('type', [
      *  `parseSessionState` on the daemon accepts both. Opaque on the wire, exactly as
      *  `session.push.storageState` is. */
     storageState: z.unknown(),
+  }),
+  /**
+   * THE LIVE CEREMONY STREAM (D-CEREMONY-STREAM): a JPEG frame of the ceremony's browser window,
+   * daemon -> hosted, relayed on to the human's dashboard so they can log in on whatever device they
+   * are on rather than at the bridge machine. Mirrors the canvas media channel's `frame`
+   * (`api/src/streaming/protocol.ts`), keyed by the ceremony's `requestId` instead of a run traceId.
+   *
+   * A FRAME OF A LOGIN PAGE, not a credential: the password field is masked by the site. It rides the
+   * same no-log path `tool.result.screenshotB64` does and MUST bypass the text redactor (it is an
+   * image). ADDITIVE (Rule 7): an old Cortex never sends `ceremony.stream`, so no daemon emits this
+   * unbidden; an old daemon never emits it at all.
+   */
+  z.object({
+    type: z.literal('ceremony.frame'),
+    requestId: z.string(),
+    seq: z.number(),
+    /** Base64 JPEG. Opaque on the wire, exactly as `tool.result.screenshotB64`. */
+    jpegBase64: z.string(),
+  }),
+  /**
+   * START/STOP the ceremony stream, hosted -> daemon. The daemon holds the window regardless; it only
+   * attaches the CDP screencast when a viewer is actually connected, so a ceremony nobody is watching
+   * costs no frames. Sent `on:true` when the dashboard canvas connects, `on:false` when it drops.
+   */
+  z.object({
+    type: z.literal('ceremony.stream'),
+    requestId: z.string(),
+    on: z.boolean(),
+  }),
+  /**
+   * ONE INPUT EVENT for the live ceremony window, hosted -> daemon. The dashboard canvas captured it,
+   * the Cortex relay re-emitted it here, the daemon dispatches it with CDP `Input.dispatch`. Keyed by
+   * `requestId` so it can only reach the window the caller's own ceremony is holding.
+   *
+   * CREDENTIAL-BEARING (a keystroke may be a password character): RAM only, dispatched once, never
+   * logged on either side (see `CeremonyInputEvent`).
+   */
+  z.object({
+    type: z.literal('ceremony.input'),
+    requestId: z.string(),
+    event: CeremonyInputEvent,
   }),
 ]);
 export type BridgeFrame = z.infer<typeof BridgeFrame>;

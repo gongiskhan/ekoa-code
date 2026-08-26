@@ -36,7 +36,14 @@ import { isProcessAlive, readDaemonPid, removeDaemonPid, writeDaemonPid } from '
  * The capabilities advertised in `hello`.
  *
  * ALWAYS: `local.filesystem` (the daemon's validated core — read/glob/grep/stat/list under the
- * containment resolver) and `attended.card_login` (the ceremony implemented in src/attended).
+ * containment resolver), `attended.card_login` (the ceremony implemented in src/attended), and
+ * `attended.livestream` (that same ceremony's window streamed live to the dashboard, D-CEREMONY-
+ * STREAM). The live stream is a UX capability, not an exfiltration surface like the tier-2 pair
+ * below: it shows a human their OWN login window and takes their OWN mouse/keyboard back, gated on a
+ * ceremony this machine is already holding, so advertising it whenever the build supports it is safe
+ * and needs no operator opt-in. A daemon whose window cannot produce CDP still advertises it and
+ * simply never sends a frame — the wire is additive (Rule 7) and Cortex never sends `ceremony.stream`
+ * to a stream that will not answer without cost.
  *
  * NEVER by default: `local.bash` and `desktop.automation`. Both are exfiltration-capable tier-2
  * surfaces - a shell can curl, a browser can POST - and this daemon CAN now execute both over the
@@ -50,7 +57,7 @@ import { isProcessAlive, readDaemonPid, removeDaemonPid, writeDaemonPid } from '
  * machine advertising nothing at all.
  */
 export function resolveCapabilities(extra: string[] | undefined, egressEndpoint: string | undefined): BridgeCapability[] {
-  const set = new Set<BridgeCapability>(['local.filesystem', 'attended.card_login']);
+  const set = new Set<BridgeCapability>(['local.filesystem', 'attended.card_login', 'attended.livestream']);
   for (const raw of extra ?? []) {
     const parsed = BridgeCapability.safeParse(raw);
     if (parsed.success) set.add(parsed.data);

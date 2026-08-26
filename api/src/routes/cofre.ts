@@ -28,7 +28,8 @@ import {
 } from '../cofre/index.js';
 import { ADHOC_SESSION_GRANT } from '../cofre/sessions.js';
 import { requestAttendedCeremony, requestCeremonyCapture } from '../bridge/attended.js';
-import { advertisesCapability, getConnectionByOwner } from '../bridge/registry.js';
+import { advertisesCapability, getConnectionByOwner, sendToPairing } from '../bridge/registry.js';
+import { openCeremonyStream, type OpenCeremonyStreamResult } from '../streaming/ceremony-stream.js';
 import { notFound, parseBody, sendError } from './helpers.js';
 import type { Actor } from '@ekoa/shared';
 
@@ -148,8 +149,9 @@ export function cofreRouter(deps: { now: () => number; genId: () => string }): R
       });
     }
 
+    let requestId: string;
     try {
-      await requestAttendedCeremony(actor, {
+      requestId = await requestAttendedCeremony(actor, {
         pairingId: machine.pairingId,
         kind: 'login',
         origin: body.origin,
@@ -168,6 +170,31 @@ export function cofreRouter(deps: { now: () => number; genId: () => string }): R
       });
     }
 
+    // LIVE STREAM (D-CEREMONY-STREAM): if the machine can stream its ceremony window, register a
+    // viewer session keyed by this ceremony's requestId and hand the client the media-channel triple.
+    // The window opens on the BRIDGE, which may not be where the human is - streaming lets them log in
+    // from their own device. Input goes back to that machine as `ceremony.input`; the start/stop of
+    // the screencast follows whether a viewer is actually attached. A daemon too old to stream simply
+    // returns no `streaming` field and the ceremony stays a local-window flow.
+    let streaming: OpenCeremonyStreamResult | undefined;
+    if (await advertisesCapability(machine.pairingId, 'attended.livestream')) {
+      streaming = openCeremonyStream({
+        requestId,
+        ownerUserId: actor.userId,
+        hooks: {
+          // Each event is relayed to the exact machine holding THIS ceremony. Never logged - a
+          // keystroke may be a password character (D-CEREMONY-STREAM).
+          sendInput: (event) => {
+            sendToPairing(machine.pairingId, { type: 'ceremony.input', requestId, event });
+          },
+          // The daemon only attaches the CDP screencast while a viewer is connected.
+          onViewerChange: (on) => {
+            sendToPairing(machine.pairingId, { type: 'ceremony.stream', requestId, on });
+          },
+        },
+      });
+    }
+
     // NO requestId on the wire, and no run id echoed back. The client learns the outcome by watching
     // the run it was blocking: the capture wakes it through the ordinary credential-waiter path, so
     // a ceremony handle here would be a second thing to correlate that nothing reads.
@@ -179,7 +206,10 @@ export function cofreRouter(deps: { now: () => number; genId: () => string }): R
     // button that does it (D-CEREMONY-DONE); this sentence reports what happened and stops.
     return res.json({
       started: true,
-      message: 'Abriu-se uma janela na sua máquina para iniciar sessão.',
+      message: streaming
+        ? 'Abriu-se uma janela para iniciar sessão. Pode iniciá-la aqui mesmo, no visor abaixo.'
+        : 'Abriu-se uma janela na sua máquina para iniciar sessão.',
+      ...(streaming ? { streaming: { token: streaming.token, wsUrl: streaming.wsUrl, viewport: streaming.viewport } } : {}),
     });
   });
 

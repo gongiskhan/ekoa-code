@@ -44,7 +44,8 @@ import { join } from 'node:path';
 import type { BridgeFrame } from '../wire/index.js';
 import { ekoaBridgeHome } from '../auth/home.js';
 import { sanitizeProfileId } from '../browser/profile.js';
-import { launchHeadedRealChrome, type HeadedChromeContext } from '../browser/chrome-launch.js';
+import { launchHeadedRealChrome, type BridgeCdpSession, type HeadedChromeContext } from '../browser/chrome-launch.js';
+import { CeremonyStreamController } from './screencast.js';
 
 /** Matches Cortex's CEREMONY_TTL_MS: a human is walking to a card reader, not making a round trip.
  *  Held slightly SHORTER so the window closes before the server-side ceremony expires — pushing
@@ -99,6 +100,17 @@ export interface CeremonyDeps {
   /** Re-fetch the browser after a repairable launch failure; defaults to `playwright install --force`. */
   repairBrowser?: () => Promise<void>;
   now?: () => number;
+  /**
+   * THE LIVE-STREAM HANDOFF (D-CEREMONY-STREAM). Called ONCE, as soon as the ceremony's window is
+   * open, with the controller the daemon runtime drives to start/stop the live stream and dispatch
+   * the human's mouse/keyboard — or `null` when this window cannot stream (the context produced no
+   * CDP seam, or none was wired). ADDITIVE and orthogonal to the capture path: the controller only
+   * attaches a screencast when a viewer connects, so a ceremony nobody watches costs no frames, and
+   * the ceremony's `session.push` behaviour is unchanged whether anyone streams or not.
+   *
+   * The ceremony tears the controller down in its own `finally`, so the runtime never has to.
+   */
+  onStreamReady?: (controller: CeremonyStreamController | null) => void;
 }
 
 /** The slice of Playwright this module needs, named so tests can substitute it without Playwright. */
@@ -112,6 +124,12 @@ export interface CeremonyContext {
   storageState(): Promise<unknown>;
   close(): Promise<void>;
   on(event: 'close', handler: () => void): void;
+  /**
+   * The live-stream seam (D-CEREMONY-STREAM): a minimal CDP session over the window's live page, or
+   * absent when this context cannot produce one. OPTIONAL and additive — a context without it (every
+   * unit-test fake) simply never streams, so the ceremony holds its window exactly as before.
+   */
+  newCDPSession?(): Promise<BridgeCdpSession>;
 }
 export interface CeremonyPage {
   goto(url: string, opts?: { timeout?: number; waitUntil?: 'load' | 'domcontentloaded' }): Promise<unknown>;
@@ -195,9 +213,22 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
 
   let lastSnapshot: unknown = null;
   let landedOn = target;
+  // The live-stream controller for THIS window (D-CEREMONY-STREAM), or null when the context cannot
+  // produce a CDP session. Declared out here so the `finally` can tear it down whichever way the
+  // ceremony ends. It attaches no screencast until a viewer connects, so building it costs nothing.
+  let stream: CeremonyStreamController | null = null;
   try {
     const context = await browser.newContext();
     const page = await context.newPage();
+
+    // Hand the runtime a controller as soon as the window exists, so a viewer who connects the
+    // instant the ceremony opens is not racing a handle that does not exist yet. A context with no
+    // `newCDPSession` never streams — the ceremony is unchanged, local-window-only.
+    if (deps.onStreamReady) {
+      const newCdp = context.newCDPSession?.bind(context);
+      stream = newCdp ? new CeremonyStreamController(newCdp, deps.send, req.requestId) : null;
+      deps.onStreamReady(stream);
+    }
 
     // A navigation failure is NOT fatal: the human can still type the address in the window that is
     // already open, and the portal may redirect through hosts that time out our waitUntil. Report
@@ -280,6 +311,15 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
   } catch (err) {
     deps.log(`ERRO durante a autenticação: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
+    // Tear the live stream down BEFORE closing the window: stop the screencast so no frame is
+    // encoded off a window mid-close, and after this the controller never re-attaches even if a
+    // late `ceremony.stream{on:true}` arrives. Swallows its own errors — the CDP session dies with
+    // the window regardless.
+    try {
+      await stream?.teardown();
+    } catch {
+      /* the stream/page is already gone */
+    }
     try {
       await browser.close();
     } catch {
@@ -373,6 +413,9 @@ export function ceremonyBrowserOverContext(ctx: HeadedChromeContext): CeremonyBr
     storageState: () => ctx.storageState(),
     close: () => ctx.close(),
     on: (_event: 'close', handler: () => void) => ctx.on('close', handler),
+    // Pass the live-stream seam through when the real launch attached one. Absent on a fake/injected
+    // context, so its ceremony simply never streams.
+    ...(ctx.newCDPSession ? { newCDPSession: (): Promise<BridgeCdpSession> => ctx.newCDPSession!() } : {}),
   };
   return {
     newContext: async () => context,

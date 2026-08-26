@@ -14,3 +14,4 @@ export {
   type CeremonyContext,
   type CeremonyPage,
 } from './ceremony.js';
+export { CeremonyScreencast, CeremonyStreamController } from './screencast.js';

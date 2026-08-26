@@ -11,6 +11,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Table, THead, TBody, TR, TH, TD } from '@/components/ui/table';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import { useCofreStore, UNLOCK_DURATIONS, offersDurationControl } from '@/stores/cofre';
+import CeremonyLoginCanvas from '@/components/cofre/ceremony-login-canvas';
 import type { CofreItem, GrantDuration } from '@ekoa/shared';
 
 /**
@@ -158,7 +159,11 @@ function ItemRow({ item }: { item: CofreItem }) {
 function EstablishSessionCard({ origin }: { origin: string }) {
   const { establishSession, captureSession } = useCofreStore();
   const [busy, setBusy] = useState(false);
-  const [outcome, setOutcome] = useState<{ started: boolean; message: string } | null>(null);
+  const [outcome, setOutcome] = useState<{
+    started: boolean;
+    message: string;
+    streaming?: { token: string; wsUrl: string; viewport: { width: number; height: number } };
+  } | null>(null);
   const [capturing, setCapturing] = useState(false);
   const [capture, setCapture] = useState<{ requested: boolean; captured: boolean; message: string } | null>(null);
   /** The Done button exists only once a window has actually been opened FROM HERE. Offering it
@@ -195,14 +200,33 @@ function EstablishSessionCard({ origin }: { origin: string }) {
             </p>
           </div>
           {/*
-            Said BEFORE they go, not diagnosed after they come back. Google refuses OAuth from the
-            browser this ceremony runs in (findings: `google-sso-refuses-the-automated-ceremony-browser`),
-            and on most sites the button people reach for first is the one that cannot work.
+            The window is now a NORMAL real-Chrome window (D-CEREMONY-REALCHROME), so Google's
+            automation refusal (findings: `google-sso-refuses-the-automated-ceremony-browser`) may no
+            longer apply - but it is not guaranteed, so this is a soft heads-up, not an instruction.
           */}
           <p className="text-sm text-muted-foreground">
-            Se o site oferecer início de sessão com a Google, use o email ou o telemóvel - a Google bloqueia
-            navegadores automatizados.
+            Se o site oferecer início de sessão com a Google e ela não avançar, use antes o email ou o telemóvel.
           </p>
+          {/*
+            THE OPTIONAL "reuse my saved passwords" path (D-CEREMONY-CHROME-SIGNIN). The ceremony runs
+            in a real Chrome profile that is private to Ekoa on this machine; a person can sign into
+            Chrome inside it to have their saved passwords autofill. Stated with the tradeoff and the
+            opt-out, exactly as the operator asked: their vault syncs onto this machine, so on a shared
+            box they may prefer to decline and type passwords by hand.
+          */}
+          <details className="text-sm text-muted-foreground">
+            <summary className="cursor-pointer select-none text-foreground/80">
+              Reutilizar as minhas palavras-passe guardadas (opcional)
+            </summary>
+            <p className="mt-1">
+              Pode iniciar sessão no Chrome dentro desta janela (menu do Chrome, &quot;Ativar sincronização&quot;)
+              para que ele preencha automaticamente as palavras-passe que já tem guardadas - assim não precisa de as
+              escrever. O perfil é privado da Ekoa nesta máquina. Em troca, as suas palavras-passe ficam
+              sincronizadas nesta máquina; se for um computador partilhado, pode preferir não o fazer e escrever as
+              palavras-passe quando forem necessárias. A Ekoa nunca lê a sua conta Google nem as palavras-passe - só
+              guarda a sessão (cookies) do site que pediu autenticação.
+            </p>
+          </details>
           <div className="flex flex-wrap items-center gap-3">
             <Button size="sm" onClick={doEstablish} disabled={busy || capturing}>
               {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <KeyRound className="h-3 w-3" />}
@@ -251,9 +275,17 @@ function EstablishSessionCard({ origin }: { origin: string }) {
           </div>
           {windowOpen ? (
             <p className="text-sm text-muted-foreground" data-testid="cofre-capture-hint">
-              Inicie sessão na janela, depois clique aqui - não precisa de fechar a janela.
+              {outcome?.streaming
+                ? 'Inicie sessão no visor abaixo, depois clique em "Concluir e capturar".'
+                : 'Inicie sessão na janela, depois clique aqui - não precisa de fechar a janela.'}
             </p>
           ) : null}
+          {/*
+            THE LIVE VIEW (D-CEREMONY-STREAM). Present only when the machine can stream its ceremony
+            window: the login then happens right here, on whatever device the person is on, instead of
+            only at the bridge machine. Absent (an older Ponte) falls back to the local-window flow.
+          */}
+          {outcome?.streaming ? <CeremonyLoginCanvas streaming={outcome.streaming} /> : null}
         </div>
       </div>
     </Card>

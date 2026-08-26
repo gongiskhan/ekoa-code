@@ -14,6 +14,7 @@ export {
 export {
   launchHeadedRealChrome,
   sweepSingletonMarkers,
+  type BridgeCdpSession,
   type HeadedChromeContext,
   type HeadedChromePage,
   type PersistentContextLauncher,

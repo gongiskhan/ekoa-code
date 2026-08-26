@@ -64,6 +64,13 @@ export interface BridgeServerDeps {
   /** Trust-chip ledger rows streamed up during a delegation (§18.3.8). Default: dropped hosted
    *  (not persisted by default, §18.6). */
   onLedgerRow?: (taskId: string, row: EgressLedgerRow) => void;
+  /** A live ceremony frame arrived from the daemon (D-CEREMONY-STREAM). Injected at the composition
+   *  root to the streaming module's `pushCeremonyFrame`, so `bridge/` does not import `streaming/`
+   *  across the seam. Default: dropped (no live-view wired). The jpeg is an image — never logged. */
+  onCeremonyFrame?: (requestId: string, seq: number, jpegBase64: string) => void;
+  /** A ceremony finished (its session was pushed). Injected to `closeCeremonyStream` so the live view
+   *  tears down when the login completes rather than lingering to its token TTL. */
+  onCeremonyEnded?: (requestId: string) => void;
   heartbeatIntervalMs?: number;
 }
 
@@ -361,6 +368,9 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
             origin: frame.origin,
             storageState: frame.storageState,
           });
+          // The login completed: tear down the live view (if any) rather than leaving it open to its
+          // token TTL. A no-op when the ceremony was never streamed.
+          deps.onCeremonyEnded?.(frame.requestId);
         } catch (e) {
           console.warn(
             `[bridge][attended] session push refused: pairing=${pairingId} reason=${
@@ -370,6 +380,13 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
         }
         break;
       }
+      case 'ceremony.frame':
+        // D-CEREMONY-STREAM: a JPEG frame of the ceremony's login window, relayed to the human's
+        // dashboard. Pushed to the ceremony's live viewer keyed by requestId, or dropped if no one is
+        // watching. NEVER logged - it is a picture of a login page (the frame rode through
+        // `redactInboundFrame`'s default case untouched, deliberately: it is an image, not text).
+        deps.onCeremonyFrame?.(frame.requestId, frame.seq, frame.jpegBase64);
+        break;
       case 'ping':
         sendToPairing(pairingId, { type: 'pong' });
         break;

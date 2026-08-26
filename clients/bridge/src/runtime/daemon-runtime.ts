@@ -11,12 +11,12 @@
  * program; the only model call is the engine's single provider round trip, brokered back to Cortex.
  */
 import { join } from 'node:path';
-import type { BridgeCapability, BridgeFrame, DelegatedTask, EgressLedgerRow } from '../wire/index.js';
+import type { BridgeCapability, BridgeFrame, CeremonyInputEvent, DelegatedTask, EgressLedgerRow } from '../wire/index.js';
 import { verifyDelegatedTask, type VerifyContext } from '../verify/index.js';
 import { runDelegatedTask, type EngineDeps } from '../engine/index.js';
 import type { GrantTable, NonceCache, EgressAccounting } from '../session/index.js';
 import type { EgressLedger, ReadLedgerRow } from '../ledger/index.js';
-import { runAttendedCeremony, type CeremonyDeps, type CeremonyRequest } from '../attended/index.js';
+import { runAttendedCeremony, type CeremonyDeps, type CeremonyRequest, type CeremonyStreamController } from '../attended/index.js';
 import type { ProfileManager } from '../browser/index.js';
 import type { AutomationEnablement } from '../tools/tier2/index.js';
 import { executeToolInvocation, type ToolExecutorDeps } from './tool-executor.js';
@@ -92,8 +92,14 @@ export class DaemonRuntime {
    * `ceremony.capture` frame and has to reach THAT ceremony's loop. The requestId is what makes it
    * that ceremony's: a capture naming a different one is a no-op, so a stale or misrouted frame can
    * never end a window this daemon is holding for a different errand.
+   *
+   * `stream` is the live-stream controller (D-CEREMONY-STREAM), set once the ceremony's window is
+   * open and null until then (or forever, if the window cannot produce a CDP session). The same
+   * requestId guard routes `ceremony.stream` / `ceremony.input` to it, so a frame for any other
+   * requestId can never start a stream of, or dispatch input into, the window this daemon is holding.
    */
-  private ceremonyInFlight: { requestId: string; finishNow: () => void } | null = null;
+  private ceremonyInFlight: { requestId: string; finishNow: () => void; stream: CeremonyStreamController | null } | null =
+    null;
   /**
    * The rebindable half of this daemon's identity (org + signing secret).
    *
@@ -248,6 +254,20 @@ export class DaemonRuntime {
         // for the existing capture rather than a second path a session can travel.
         this.handleCeremonyCapture(frame.requestId);
         break;
+      case 'ceremony.stream':
+        // A dashboard viewer connected (`on:true`) or dropped (`on:false`) for the live ceremony
+        // stream (D-CEREMONY-STREAM). Routed to the in-flight ceremony's controller by requestId
+        // only; a frame for any other requestId is a no-op, so it can never start a stream of a
+        // window this daemon is holding for a different errand.
+        this.handleCeremonyStream(frame.requestId, frame.on);
+        break;
+      case 'ceremony.input':
+        // ONE input event the human produced in the dashboard, dispatched into the live ceremony
+        // window (D-CEREMONY-STREAM). Keyed by requestId so it can only reach the caller's own
+        // ceremony; the event is credential-bearing (a keystroke may be a password character) and is
+        // NEVER logged here or in the producer it reaches.
+        this.handleCeremonyInput(frame.requestId, frame.event);
+        break;
       case 'tool.invoke':
         // J-1's frame pair, now EXECUTED (P1.2). The refusal this replaces was deliberate rather
         // than a stub - running a step on someone's machine on remote instruction needed the
@@ -279,7 +299,10 @@ export class DaemonRuntime {
         this.sessions.deliver(frame.runId, frame.storageState);
         break;
       default:
-        break; // provider_request/ledger_row/delegation_result/denial/ping/pong are not inbound work
+        // provider_request/ledger_row/delegation_result/denial/ping/pong are not inbound work, and
+        // `ceremony.frame` is the daemon's OWN outbound stream frame (D-CEREMONY-STREAM) — the daemon
+        // produces it, never receives it, so it lands here and is ignored.
+        break;
     }
   }
 
@@ -387,22 +410,60 @@ export class DaemonRuntime {
     const finishSignal = new Promise<void>((resolve) => {
       finishNow = resolve;
     });
-    this.ceremonyInFlight = { requestId: frame.requestId, finishNow };
+    const requestId = frame.requestId;
+    this.ceremonyInFlight = { requestId, finishNow, stream: null };
     try {
       await runAttendedCeremony(
-        { requestId: frame.requestId, kind: frame.kind, origin: frame.origin, reason: frame.reason },
+        { requestId, kind: frame.kind, origin: frame.origin, reason: frame.reason },
         {
           send: (f) => this.send(f),
           log,
           finishSignal,
+          // The ceremony hands back a live-stream controller once its window is open (or null when
+          // the window cannot stream). Store it on THIS ceremony's handle so `ceremony.stream` /
+          // `ceremony.input` reach it; guard on requestId so a controller from a superseded ceremony
+          // can never overwrite the current one's.
+          onStreamReady: (controller) => {
+            if (this.ceremonyInFlight?.requestId === requestId) this.ceremonyInFlight.stream = controller;
+          },
           ...(this.deps.launchBrowser ? { launchBrowser: this.deps.launchBrowser } : {}),
           ...(this.deps.home ? { profilesRoot: join(this.deps.home, 'ceremony-profiles') } : {}),
           ...(this.deps.now ? { now: this.deps.now } : {}),
         },
       );
     } finally {
+      // The ceremony's own `finally` has already torn the stream down; clearing the handle here just
+      // frees the machine for the next ceremony.
       this.ceremonyInFlight = null;
     }
+  }
+
+  /**
+   * A dashboard viewer connected to or dropped from the live ceremony stream (D-CEREMONY-STREAM).
+   *
+   * A NO-OP unless the frame names the ceremony this daemon is actually holding AND that ceremony has
+   * a stream controller (its window opened and could produce CDP). The requestId guard is the same
+   * one `ceremony.capture` uses and for the same reason: a frame for another requestId must never
+   * start a stream of the window this daemon holds for a different errand.
+   */
+  private handleCeremonyStream(requestId: string, on: boolean): void {
+    const ceremony = this.ceremonyInFlight;
+    if (!ceremony || ceremony.requestId !== requestId || !ceremony.stream) return;
+    if (on) void ceremony.stream.start();
+    else void ceremony.stream.stop();
+  }
+
+  /**
+   * Dispatch ONE input event into the live ceremony window (D-CEREMONY-STREAM).
+   *
+   * A NO-OP unless the frame names the in-flight ceremony and it is streaming — input into the wrong
+   * window is exactly what the requestId guard exists to prevent. The event is credential-bearing and
+   * is passed straight to the producer, which NEVER logs it; nothing about it is logged here either.
+   */
+  private handleCeremonyInput(requestId: string, event: CeremonyInputEvent): void {
+    const ceremony = this.ceremonyInFlight;
+    if (!ceremony || ceremony.requestId !== requestId || !ceremony.stream) return;
+    ceremony.stream.dispatchInput(event);
   }
 
   /**

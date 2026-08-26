@@ -46,6 +46,7 @@ import { notificationsRouter } from './routes/notifications.js';
 import { sseManager } from './events/sse-manager.js';
 import { startDelivery, stopDelivery } from './events/delivery.js';
 import { attachCanvasServer } from './streaming/index.js';
+import { attachCeremonyStreamServer, pushCeremonyFrame, closeCeremonyStream } from './streaming/ceremony-stream.js';
 import { attachVoiceServer } from './voice/index.js';
 import { attachBridgeServer, bufferLedgerRow, delegateToLocal, rowsForSession, getConnectionByOwner, invokeTool, bridgeConnectionCount, createDaemonStepConnection, authoriseDelivery, deliverSecrets, deliverSession, newInvocationId, isCapabilityGranted } from './bridge/index.js';
 // Deep import, as `routes/integrations.ts` already does for the same registry: the fleet listing
@@ -2145,6 +2146,10 @@ export function boot(): void {
       // The live browser canvas media channel (FIXED-2 carve-out, RESOLVED Q-01): a WS
       // upgrade surface on the same HTTP server, short-TTL token auth, 1000/4000 close codes.
       attachCanvasServer(httpServer);
+      // The attended-ceremony live view (D-CEREMONY-STREAM): a sibling media channel on
+      // /api/v1/ceremony-stream/, so a human not sitting at the bridge machine can log into its
+      // ceremony window from their own device. Frames arrive from the daemon, input goes back to it.
+      attachCeremonyStreamServer(httpServer);
       // The voice relay (mega-run C1, BRIEF §5): streaming/'s sibling WS carve-out -
       // /api/voice/stream (STT relay) + /api/voice/tts-stream ({clear} barge-in), session-JWT
       // ?token= auth (CONV-1), stub providers until C6 lands vendor keys.
@@ -2157,6 +2162,11 @@ export function boot(): void {
         // FC-402 (run s5, D3): ledger rows land in the bounded in-memory per-session buffer
         // the chat pipeline joins per turn — transient display metadata, never persisted.
         onLedgerRow: bufferLedgerRow,
+        // D-CEREMONY-STREAM: relay a ceremony's live frames to its dashboard viewer, and tear the
+        // view down when the login completes. Wired here (the composition root) so bridge/ never
+        // imports streaming/ across the seam.
+        onCeremonyFrame: pushCeremonyFrame,
+        onCeremonyEnded: (requestId) => closeCeremonyStream(requestId),
       });
     })
     .catch((err) => {

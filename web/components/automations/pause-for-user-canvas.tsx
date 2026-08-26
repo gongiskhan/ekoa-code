@@ -1,15 +1,9 @@
 "use client";
 
-import { useEffect, useRef } from 'react';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import { useAutomationsStore } from '@/stores/automations';
-import {
-  openCanvas,
-  CANVAS_CLOSE_NORMAL,
-  type CanvasSession,
-  type CanvasInputEvent,
-  type CanvasStatus,
-} from '@/lib/api';
+import LiveCanvasView from '@/components/streaming/live-canvas-view';
+import type { CanvasStatus } from '@/lib/api';
 import type { StreamingConnectionStatus, StreamingSession } from '@/types/automation';
 
 interface Props {
@@ -30,224 +24,26 @@ function canvasStatusToConnection(status: CanvasStatus): StreamingConnectionStat
   }
 }
 
+/**
+ * The automation-run pause canvas: a thin wrapper around the shared `LiveCanvasView` that wires the
+ * media channel's status into the automations store. The paint + input logic lives in the shared view
+ * (one place, one wire); this only translates status and picks the mobile height.
+ */
 export default function PauseForUserCanvas({ session, onStatusChange }: Props) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const canvasSessionRef = useRef<CanvasSession | null>(null);
-  const rafRef = useRef<number | null>(null);
-  const pendingFrameRef = useRef<string | null>(null);
-  const viewportRef = useRef<{ width: number; height: number }>(session.viewport);
   const isMobile = useIsMobile();
   const setStreamingStatus = useAutomationsStore((s) => s.setStreamingStatus);
-
-  useEffect(() => {
-    viewportRef.current = session.viewport;
-  }, [session.viewport]);
 
   const updateStatus = (status: StreamingConnectionStatus) => {
     setStreamingStatus(status);
     onStatusChange?.(status);
   };
 
-  const paintImageDirect = (img: HTMLImageElement) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-    }
-    ctx.drawImage(img, 0, 0);
-  };
-
-  // Frame paint pump driven by rAF - only the LATEST pending frame is painted, so a slow decode or a
-  // busy tab drops intermediate frames rather than queueing behind them.
-  const scheduleRepaint = () => {
-    if (rafRef.current != null) return;
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null;
-      const dataUrl = pendingFrameRef.current;
-      pendingFrameRef.current = null;
-      if (!dataUrl) return;
-      const img = new Image();
-      img.decoding = 'async';
-      img.onload = () => paintImageDirect(img);
-      img.onerror = () => { /* drop a frame that failed to decode */ };
-      img.src = dataUrl;
-    });
-  };
-
-  // A frame is a ready-to-paint `data:image/jpeg;base64,...` URL (the media channel is text JSON —
-  // see web/lib/api/canvas.ts). Stash the latest and let the rAF pump paint it.
-  const handleIncomingFrame = (frameDataUrl: string) => {
-    pendingFrameRef.current = frameDataUrl;
-    scheduleRepaint();
-  };
-
-  // Canvas lifecycle. The single WebSocket transport lives in `web/lib/api/canvas.ts`
-  // (openCanvas); this component only paints frames and forwards input. The named close
-  // codes are terminal (1000 = normal hand-back / run resumes, 4000 = takeover) and the
-  // media channel never auto-reconnects.
-  useEffect(() => {
-    const canvas = openCanvas({
-      wsUrl: session.wsUrl,
-      token: session.token,
-      viewport: session.viewport,
-    });
-    canvasSessionRef.current = canvas;
-
-    const offFrame = canvas.onFrame((frame) => handleIncomingFrame(frame));
-    const offStatus = canvas.onStatusChange((status) => {
-      updateStatus(canvasStatusToConnection(status));
-    });
-    const offViewport = canvas.onViewport((viewport) => {
-      viewportRef.current = viewport;
-    });
-    const offClose = canvas.onClose((_code, resumed) => {
-      // 1000 (resumed hand-back): the run resumes and the overlay unmounts as the
-      // store clears the streaming session. 4000 / errors: surface as offline.
-      updateStatus(resumed ? 'idle' : 'failed');
-    });
-
-    return () => {
-      offFrame();
-      offStatus();
-      offViewport();
-      offClose();
-      canvasSessionRef.current = null;
-      canvas.close(CANVAS_CLOSE_NORMAL);
-      if (rafRef.current != null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-      pendingFrameRef.current = null;
-    };
-    // session token / wsUrl identify the connection target; reopen if either changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.token, session.wsUrl]);
-
-  // ============================================================================
-  // Input capture
-  // ============================================================================
-
-  const sendInput = (event: CanvasInputEvent) => {
-    canvasSessionRef.current?.sendInput(event);
-  };
-
-  const canvasToViewport = (clientX: number, clientY: number): { x: number; y: number } | null => {
-    const canvas = canvasRef.current;
-    if (!canvas) return null;
-    const rect = canvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return null;
-    const localX = clientX - rect.left;
-    const localY = clientY - rect.top;
-    const viewport = viewportRef.current;
-    const vx = (localX / rect.width) * viewport.width;
-    const vy = (localY / rect.height) * viewport.height;
-    return {
-      x: Math.max(0, Math.min(viewport.width, Math.round(vx))),
-      y: Math.max(0, Math.min(viewport.height, Math.round(vy))),
-    };
-  };
-
-  const buildModifiers = (e: { metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean; shiftKey?: boolean }): string[] => {
-    const modifiers: string[] = [];
-    if (e.metaKey) modifiers.push('Meta');
-    if (e.ctrlKey) modifiers.push('Control');
-    if (e.altKey) modifiers.push('Alt');
-    if (e.shiftKey) modifiers.push('Shift');
-    return modifiers;
-  };
-
-  const handleMouseAction = (
-    e: React.MouseEvent<HTMLCanvasElement>,
-    action: 'down' | 'up' | 'move',
-  ) => {
-    e.preventDefault();
-    if (action === 'down') {
-      // preventDefault on mousedown suppresses native focus shift, so the
-      // canvas would never receive keyboard events without this.
-      canvasRef.current?.focus();
-    }
-    const pos = canvasToViewport(e.clientX, e.clientY);
-    if (!pos) return;
-    if (action === 'down') {
-      sendInput({ type: 'mousedown', x: pos.x, y: pos.y, button: e.button });
-    } else if (action === 'up') {
-      sendInput({ type: 'mouseup', x: pos.x, y: pos.y, button: e.button });
-    } else {
-      sendInput({ type: 'mousemove', x: pos.x, y: pos.y });
-    }
-  };
-
-  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    const pos = canvasToViewport(e.clientX, e.clientY);
-    if (!pos) return;
-    sendInput({ type: 'wheel', x: pos.x, y: pos.y, deltaX: e.deltaX, deltaY: e.deltaY });
-  };
-
-  const handleKey = (e: React.KeyboardEvent<HTMLCanvasElement>, action: 'down' | 'up') => {
-    e.preventDefault();
-    const modifiers = buildModifiers(e);
-    if (action === 'down') {
-      sendInput({ type: 'keydown', key: e.key, code: e.code, modifiers });
-    } else {
-      sendInput({ type: 'keyup', key: e.key, code: e.code, modifiers });
-    }
-  };
-
-  const handleTouch = (
-    e: React.TouchEvent<HTMLCanvasElement>,
-    action: 'down' | 'up' | 'move',
-  ) => {
-    e.preventDefault();
-    if (action === 'down') {
-      canvasRef.current?.focus();
-    }
-    const t = action === 'up' ? e.changedTouches[0] : e.touches[0];
-    if (!t) return;
-    const pos = canvasToViewport(t.clientX, t.clientY);
-    if (!pos) return;
-    if (action === 'down') {
-      sendInput({ type: 'mousedown', x: pos.x, y: pos.y, button: 0 });
-    } else if (action === 'up') {
-      sendInput({ type: 'mouseup', x: pos.x, y: pos.y, button: 0 });
-    } else {
-      sendInput({ type: 'mousemove', x: pos.x, y: pos.y });
-    }
-  };
-
-  // Block native context menu so right-click can be forwarded.
-  const handleContextMenu = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-  };
-
-  // ============================================================================
-  // Render
-  // ============================================================================
-
-  const aspectRatio = `${session.viewport.width} / ${session.viewport.height}`;
-  const maxHeightClass = isMobile ? 'max-h-[50vh]' : 'max-h-[70vh]';
-
   return (
-    <canvas
-      ref={canvasRef}
-      tabIndex={0}
-      width={session.viewport.width}
-      height={session.viewport.height}
-      style={{ aspectRatio, touchAction: 'none' }}
-      className={`block w-full ${maxHeightClass} object-contain rounded-lg border border-neutral-300 bg-neutral-900 outline-none focus:ring-2 focus:ring-cyan-500`}
-      onMouseDown={(e) => handleMouseAction(e, 'down')}
-      onMouseUp={(e) => handleMouseAction(e, 'up')}
-      onMouseMove={(e) => handleMouseAction(e, 'move')}
-      onWheel={handleWheel}
-      onKeyDown={(e) => handleKey(e, 'down')}
-      onKeyUp={(e) => handleKey(e, 'up')}
-      onTouchStart={(e) => handleTouch(e, 'down')}
-      onTouchEnd={(e) => handleTouch(e, 'up')}
-      onTouchMove={(e) => handleTouch(e, 'move')}
-      onContextMenu={handleContextMenu}
+    <LiveCanvasView
+      session={{ wsUrl: session.wsUrl, token: session.token, viewport: session.viewport }}
+      maxHeightClass={isMobile ? 'max-h-[50vh]' : 'max-h-[70vh]'}
+      onStatusChange={(status) => updateStatus(canvasStatusToConnection(status))}
+      onClose={(_code, resumed) => updateStatus(resumed ? 'idle' : 'failed')}
     />
   );
 }

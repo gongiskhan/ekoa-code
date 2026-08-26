@@ -43,6 +43,20 @@ import {
 const LAUNCH_TIMEOUT_MS = 60_000;
 const MIN_FALLBACK_LAUNCH_MS = 5_000;
 
+/**
+ * The minimal Chrome DevTools Protocol session the attended-ceremony LIVE STREAM drives
+ * (D-CEREMONY-STREAM). Exactly two members: `send` (for `Page.startScreencast`,
+ * `Page.screencastFrameAck` and `Input.dispatch*`) and `on` (for `Page.screencastFrame`). A real
+ * Playwright `CDPSession` satisfies this structurally, so the launcher casts at the seam the same way
+ * it casts the context itself; keeping it to two members means a fake in a unit test is a handful of
+ * lines and pulls in no Playwright.
+ */
+export interface BridgeCdpSession {
+  send(method: string, params?: unknown): Promise<unknown>;
+  // A CDP event payload is untyped at this seam; the one handler (`Page.screencastFrame`) narrows it.
+  on(event: string, handler: (payload: any) => void): void;
+}
+
 /** The slice of a Playwright persistent context the ceremony uses. Real `BrowserContext`/`Page`
  *  satisfy these structurally; the launcher casts at the seam, exactly as the run executor does. */
 export interface HeadedChromePage {
@@ -57,6 +71,13 @@ export interface HeadedChromeContext {
   storageState(): Promise<unknown>;
   close(): Promise<void>;
   on(event: 'close', handler: () => void): void;
+  /**
+   * Obtain a minimal CDP session for the live page, or absent when this context cannot produce one.
+   * OPTIONAL and additive: the real launch attaches it below (a cast over Playwright's
+   * `context.newCDPSession(page)`), while an injected/fake launcher that never sets it simply never
+   * streams — the ceremony holds its window exactly as before, local-only.
+   */
+  newCDPSession?(): Promise<BridgeCdpSession>;
 }
 
 /** The injected launcher, so the unit lane drives the ceremony without a real browser. */
@@ -143,7 +164,29 @@ export async function launchHeadedRealChrome(
   }
 
   await context.addInitScript(WEBDRIVER_INIT_SCRIPT).catch(() => undefined);
+  attachCdpSeam(context);
   return context;
+}
+
+/**
+ * Give the returned context the no-arg `newCDPSession()` the live-stream seam expects, wrapping
+ * Playwright's page-taking `context.newCDPSession(page)` so it targets the window's live tab
+ * (`pages()[0]`, the same tab the ceremony drives). The real method is captured BEFORE the own
+ * property shadows it, so the wrapper delegates to the genuine one; a launcher whose context has no
+ * `newCDPSession` (the unit-test fakes) is left untouched and its ceremony simply never streams.
+ */
+function attachCdpSeam(context: HeadedChromeContext): void {
+  const pw = context as unknown as {
+    newCDPSession?: (page: unknown) => Promise<BridgeCdpSession>;
+    pages(): unknown[];
+    newPage(): Promise<unknown>;
+  };
+  if (typeof pw.newCDPSession !== 'function') return;
+  const realNewCdp = pw.newCDPSession.bind(pw);
+  (context as { newCDPSession?: () => Promise<BridgeCdpSession> }).newCDPSession = async (): Promise<BridgeCdpSession> => {
+    const page = pw.pages()[0] ?? (await pw.newPage());
+    return realNewCdp(page);
+  };
 }
 
 /** Playwright's persistent context, HEADED. Imported dynamically so the module graph does not pull

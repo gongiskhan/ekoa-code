@@ -70,8 +70,14 @@ describe('hello — the advertisement (I-1)', () => {
 });
 
 describe('resolveCapabilities — what this machine honestly claims', () => {
-  it('always claims the two it implements, and never the exfiltration-capable ones by default', () => {
-    expect(resolveCapabilities(undefined, undefined)).toEqual(['attended.card_login', 'local.filesystem']);
+  it('always claims the ones it implements, and never the exfiltration-capable ones by default', () => {
+    // `attended.livestream` joins the default set (D-CEREMONY-STREAM): a UX capability, not a
+    // dangerous one, so it is advertised whenever the build supports it. Sorted, so alphabetical.
+    expect(resolveCapabilities(undefined, undefined)).toEqual([
+      'attended.card_login',
+      'attended.livestream',
+      'local.filesystem',
+    ]);
   });
 
   it('claims residential egress ONLY when an endpoint is actually configured', () => {

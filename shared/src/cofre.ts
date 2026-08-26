@@ -444,6 +444,11 @@ export const BridgeCapability = z.enum([
   'attended.card_login',
   'egress.residential',
   'desktop.automation',
+  // The daemon can LIVE-STREAM its attended-ceremony window to the dashboard and accept the human's
+  // mouse/keyboard back, so a person who is not sitting at the bridge machine can still complete the
+  // login from their own device (D-CEREMONY-STREAM). Advertised by a daemon new enough to produce the
+  // screencast; an older one never advertises it and the ceremony stays a local-window-only flow.
+  'attended.livestream',
 ]);
 export type BridgeCapability = z.infer<typeof BridgeCapability>;
 
@@ -576,6 +581,20 @@ export type CofreSessionEstablishRequest = z.infer<typeof CofreSessionEstablishR
 export const CofreSessionEstablishResponse = z.object({
   started: z.boolean(),
   message: z.string().max(500),
+  /**
+   * PRESENT WHEN THE PAIRED MACHINE CAN LIVE-STREAM ITS CEREMONY WINDOW (`attended.livestream`,
+   * D-CEREMONY-STREAM). The dashboard opens the media channel at `wsUrl` with this short-TTL `token`
+   * and shows the login window live, so the human logs in from THEIR device rather than at the bridge.
+   * Absent (the field is optional, Rule 7 additive) when the daemon is too old to stream, in which
+   * case the ceremony stays a local-window-only flow on the bridge machine.
+   */
+  streaming: z
+    .object({
+      token: z.string(),
+      wsUrl: z.string(),
+      viewport: z.object({ width: z.number(), height: z.number() }),
+    })
+    .optional(),
 });
 export type CofreSessionEstablishResponse = z.infer<typeof CofreSessionEstablishResponse>;
 

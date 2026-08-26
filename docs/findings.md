@@ -18,13 +18,14 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   Chrome 136 (May 2025): `--remote-debugging-port`/`--remote-debugging-pipe` are ignored on the default
   `--user-data-dir`, so CDP-attaching to the real profile (the cookie-theft vector) no longer works
   (developer.chrome.com/blog/remote-debugging-port); a dedicated profile is the floor, one login per
-  site. TWO RESIDUALS remain, together MEDIUM not HIGH: (1) the OS still raises the window on each
-  redirect of the login itself (inherent to a headed browser on macOS, see
-  `attended-ceremony-browser-steals-focus-and-hides-its-capture-signal`) - the Done button lets the
-  human finish on their own terms but a mid-login OTP grab from another app can still be interrupted;
-  (2) the window opens on the BRIDGE machine, which may not be where the human sits - a fully
-  frictionless flow wants the window on the human's own machine. Both want their own design pass;
-  neither blocks the acceptance matrix now that the window is a normal browser.
+  site. RESIDUAL #2 (the window opens on the BRIDGE machine, which may not be where the human sits) is
+  now CLOSED by the ceremony live stream (`Recently fixed - 2026-08-26`, D-CEREMONY-STREAM): the window
+  is streamed into the dashboard and driven from whatever device the human is on. ONE residual remains,
+  LOW: even in the streamed view the OS still raises the window on the bridge on each login redirect
+  (inherent to a headed browser on macOS, see
+  `attended-ceremony-browser-steals-focus-and-hides-its-capture-signal`) - harmless when nobody is at
+  the bridge, and the human drives from their own device regardless. Does not block the acceptance
+  matrix.
 
 - **`bridge-pair-drops-extracapabilities-across-a-repair`** (2026-08-25, OPEN, **MINOR**, product;
   found re-pairing during the live acceptance retry). `ekoa-bridge pair` deliberately carries the
@@ -102,6 +103,18 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   ("a LOGIN pause carries the Google-SSO warning..."), and
   `web/__tests__/components/needs-credentials-google-hint.test.tsx`. RESIDUAL, unchanged: a target
   reachable ONLY through Google SSO still cannot have a session established by this executor.
+
+  UPDATE 2026-08-26 (needs live re-verification). Two things changed the ground under this finding, but
+  neither is verified against Google yet, so it stays OPEN. (1) The ceremony window is now a NORMAL
+  persistent real-Chrome window with the `--enable-automation` infobar suppressed (D-CEREMONY-REALCHROME)
+  - a stronger disguise than the `channel:'chrome'` + webdriver-delete the original report tested, so
+  Google's block MAY no longer fire; the card copy was softened from an absolute "Google blocks
+  automated browsers" to "if it does not advance, use email/phone" to match that uncertainty. (2) The
+  card now OFFERS an opt-in Chrome-sync path (D-CEREMONY-CHROME-SIGNIN): sign into Chrome inside the
+  ceremony profile to reuse saved passwords. Whether Google permits that sign-in in this window is the
+  SAME automation-detection question and is equally unverified. NEXT: a live pass driving a Google-SSO
+  target through the real-Chrome ceremony (ideally streamed) to see whether the rejection still occurs;
+  if it does not, this finding downgrades or closes.
 
 - **`delete-pairing-route-has-no-descriptor`** (2026-08-24, OPEN, **MINOR**, contract gap; flagged by
   the capability-grant slice, out of its scope). `DELETE /api/v1/bridge/pairings/:pairingId`
@@ -4007,6 +4020,38 @@ silently absorbed into a ledger note):
   `m365proxy-manifest-flag-stripped`, `P4.2-was-dead-code-in-production`) was code that LOOKED like
   coverage: a correct, tested function kept plausible by a docblock describing a caller it never got.
   Nothing here claims to be reachable, and this entry is the record that it is not.
+
+## Recently fixed - 2026-08-26 the ceremony window streams to the human's own device
+
+- **`attended-ceremony-window-opens-on-the-bridge-not-where-the-human-is`** (**FIXED 2026-08-26** as
+  the residual #2 of `attended-ceremony-headed-browser-is-not-viable-for-a-normal-user`; operator
+  request: "if we're not on the device holding the bridge lets stream the browser to the current
+  machine"). The ceremony's real-Chrome window runs on the bridge; when that is not where the human is,
+  a headed window there is useless to them. FIX (docs/decisions.md, D-CEREMONY-STREAM): the window is
+  live-streamed into the dashboard - JPEG CDP screencast up as a new `ceremony.frame` BridgeFrame,
+  relayed down a media-channel socket; the human's mouse/keyboard up that socket and back to the daemon
+  as `ceremony.input`. So they log in from their own laptop/phone, in a panel in their dashboard tab,
+  with none of the focus war a remote headed window causes and OTP-from-another-app entirely free.
+
+  It reuses the existing canvas media channel (`streaming/`) wholesale - the same short-TTL single-use
+  `ekoa-canvas` token, the same wire (`protocol.ts`), the same 1000/4000 close contract - as a separate
+  session type + path (`/api/v1/ceremony-stream/`) keyed by the ceremony requestId. Gated by a new
+  `attended.livestream` capability (advertised by a new-enough daemon; an older one omits it and the
+  ceremony stays a local-window flow), owner scope, and a live registered session. THE FOUNDATION was a
+  separate B17-port bug fixed first: the dashboard canvas client was wire-incompatible with the server
+  (`the live canvas speaks the server's text-JSON media wire`, below), which had left the whole live
+  view - cloud-automation pauses included - silently dead.
+
+  CREDENTIAL PRIVACY: the human types their real password into the streamed view, so a `ceremony.input`
+  key event carries a password character and a frame is the login page. Both cross Cortex in RAM only
+  and are NEVER logged, traced or ledgered (the Cofre transit rule) - the relay logs by requestId only;
+  the frame rides the redactor's image path untouched; the site masks the password field. Tests:
+  `api/tests/streaming/ceremony-stream.test.ts` (frame relays down; input relays up; a frame/keystroke
+  is never logged; backpressure drops; takeover 4000; viewer-drop stops the screencast; owner recorded;
+  TTL/close teardown), `web/__tests__/lib/canvas.test.ts` (the wire both directions), and the daemon
+  producer's own suite. RESIDUAL, accepted: the Cortex bridge WSS has no per-frame `maxPayload` (ws's
+  100MiB default bounds a hostile daemon's oversized frame); a tighter cap needs a size analysis of
+  every bridge frame and is deferred.
 
 ## Recently fixed - 2026-08-26 a multi-domain login authenticates (via real-Chrome continuity, NOT a wider binding)
 

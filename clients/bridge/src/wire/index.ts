@@ -21,6 +21,7 @@ export {
   EgressLedgerRow,
   BridgeCapability,
   BridgeFrame,
+  CeremonyInputEvent,
   canonicalTaskBinding,
   // The local EXECUTION plane (P1.2/P1.4). Same argument as above: one schema, parsed on both
   // sides, so the step Cortex sends and the step the daemon runs cannot drift apart.
