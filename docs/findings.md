@@ -6,6 +6,34 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`direct-second-registrable-domain-target-needs-a-fresh-ceremony`** (2026-08-26, **MEDIUM**,
+  multi-domain; found by the adversarial lifecycle+binding audit). A session captured on a portal's
+  primary domain (`ubereats.com`, item bound `[ubereats.com]`, jar carrying valid `.uber.com` SSO
+  cookies) does NOT authenticate an unattended replay whose FIRST step targets the SECOND registrable
+  domain DIRECTLY (`uber.com`), not reached by redirect: discovery is binding-keyed, so
+  `findSessionItemsForOrigin('uber.com')` misses the `ubereats.com`-bound item even though its stored
+  jar holds working `uber.com` cookies, and a re-ceremony for `uber.com` opens a FRESH per-host profile
+  (`ceremony.ts` `hostKeyOf` keys profiles per exact host) - a full second attended login, not the
+  "captures at once" the sessions.ts docblock previously (falsely) claimed. The COMMON flow (enter on
+  the primary domain, redirect to the SSO/second domain) is unaffected - the whole jar is injected and
+  rides the redirect authenticated. CLOSE BY (deferred, needs care): either key ceremony profiles per
+  registrable-domain / per-owner, OR add reuse-side discovery that consults the stored jar's own cookie
+  domains (SAFE at reuse time - the jar was already minted through the binding-checked capture path,
+  unlike the push-time jar D-BIND-NARROW distrusts). Needs a public-suffix helper to get registrable
+  domains right (Portuguese gov TLDs etc.), which is why it is deferred rather than guessed.
+
+- **`spa-fetch-login-closed-inside-the-tick-can-mint-a-signed-out-item`** (2026-08-26, **LOW**,
+  ceremony capture; audit). An SPA portal that logs in via `fetch`/XHR (no `framenavigated` after the
+  credential POST) whose human CLOSES the window within the 2s snapshot interval pushes a `lastSnapshot`
+  that predates the `Set-Cookie`; `hasCookies` passes on pre-login consent/analytics cookies and
+  `boundOriginsForEstablishedHost` finds those covering the ceremony host, so a healthy-looking item
+  with an armed grant is minted whose replay is signed out (fails two hops downstream). Bounded: the
+  PRIMARY completion path is the "Concluir e capturar" Done button, which snapshots FRESH state at the
+  moment of the press (not the last tick), so this only bites the CLOSE fallback + SPA-fetch-login +
+  close-inside-tick combination. CLOSE BY: on the close path, treat a snapshot with no cookie NEWER than
+  the ceremony start (or unchanged from the open-time snapshot) as "não concluída" rather than pushing;
+  or snapshot on CDP `Network.responseReceived` Set-Cookie events in addition to `framenavigated`.
+
 - **`attended-ceremony-headed-browser-is-not-viable-for-a-normal-user`** (2026-08-25, **MOSTLY FIXED
   2026-08-26; residual downgraded to MEDIUM**, design; operator-flagged emphatically after the live
   ceremony: "the experience is still very bad ... a normal user would not be able to cope with this").
@@ -4020,6 +4048,60 @@ silently absorbed into a ledger note):
   `m365proxy-manifest-flag-stripped`, `P4.2-was-dead-code-in-production`) was code that LOOKED like
   coverage: a correct, tested function kept plausible by a docblock describing a caller it never got.
   Nothing here claims to be reachable, and this entry is the record that it is not.
+
+## Recently fixed - 2026-08-26 the ceremony stream lifecycle + the multi-domain capture refusal
+
+Found by an adversarial lifecycle+binding audit run BEFORE any live pass (ultracode verification loop).
+The feature was unit-green but had showstoppers in the common flow and the multi-domain case that the
+per-side unit tests and the two security reviews all missed - because they were in the LIFECYCLE and
+the multi-domain flows, not the security properties. All fixed on branch `fix/ceremony-stream-lifecycle`.
+
+- **`ceremony-capture-refused-when-the-login-lands-on-a-different-host`** (**FIXED**, was HIGH; the
+  likely real root cause of the original Uber failure). `acceptSessionPush` (`api/src/bridge/attended.ts`)
+  gated on an EXACT-HOST `sameOrigin(ceremony.origin, input.origin)` comparison, where `input.origin`
+  is the URL the daemon reports it LANDED on. A real login lands wherever the portal's auth flow ends:
+  an Uber Eats ceremony for `www.ubereats.com` completes on `auth.uber.com`; a naked-domain request for
+  `ubereats.com` canonicalises to `www.ubereats.com`; an SSO portal returns through a central host. So
+  the human pressed "Concluir" on a page whose host differed from the one asked, the exact-host check
+  silently vetoed the capture (dropped, no error channel - the daemon had already said "Sessão
+  capturada"), and the run parked in `needs_credentials` forever. The gate is REMOVED: the real control
+  is `boundOriginsForEstablishedHost(jar, ceremony.origin)` (the jar must cover the CEREMONY origin,
+  which a multi-domain login's `.ubereats.com` cookie still does), and the docblock always conceded the
+  field comparison "only ever pretended to be" the origin cross-check. Tests updated:
+  `adhoc-ceremony-capture.test.ts` + `attended-ceremony.test.ts` now assert a landed-elsewhere push
+  with a jar covering the ceremony origin SUCCEEDS, and a jar covering nothing is refused by the
+  evidence check.
+
+- **`ceremony-stream-viewer-on-signal-dropped-during-chrome-launch`** (**FIXED**, was HIGH; the common
+  flow). The viewer's `ceremony.stream{on:true}` arrives ~200ms after establish, but real Chrome takes
+  1-3s to launch, so it reached the daemon while `ceremonyInFlight.stream` was still null and was
+  silently dropped and never replayed -> BLACK CANVAS forever, input dead, in the normal path. FIX
+  (`clients/bridge/src/runtime/daemon-runtime.ts`): buffer `wantStream` on the ceremony handle and
+  apply it in `onStreamReady` when the controller registers. Pinned by a livestream-routing test that
+  sends on:true while the launch is suspended.
+
+- **`ceremony-stream-has-no-viewer-re-attach-path`** (**FIXED**, was HIGH; page reload kills the
+  stream). `openCeremonyStream` was reached only from establish, and every establish opened a FRESH
+  ceremony; so after any viewer drop, re-clicking "Abrir janela" minted a second ceremony the daemon
+  (holding the first) refuses, returning a connected-looking DEAD canvas. FIX: `findOpenCeremony`
+  (`api/src/bridge/attended.ts`, owner+pairing+origin scoped, mirroring `requestCeremonyCapture`) +
+  establish REUSES an open ceremony's requestId and re-mints the viewer token, so reconnect / 4000
+  takeover / kept-window re-attach are all reachable. Pinned by a cofre-contract test (two establishes
+  for one origin -> same wsUrl, one ceremony).
+
+- **`ceremony-stream-controller-cannot-cancel-an-in-flight-start`** (**FIXED**, was MEDIUM). A stop
+  landing while `newCdp()` was awaited was a no-op; the start closure then installed a screencast with
+  no viewer -> orphan 15fps stream for up to 9 min. FIX (`clients/bridge/src/attended/screencast.ts`):
+  a `desired` state the start closure re-checks after each await, and a `stopped` re-check in
+  `CeremonyScreencast.start()` between `Page.enable` and `Page.startScreencast`.
+
+- **`ceremony-stream-refused-push-strands-the-viewer-and-a-low-token-ttl-cuts-a-live-stream`**
+  (**FIXED**, was LOW). `onCeremonyEnded` was success-path only, so a refused push left the viewer
+  frozen until the backstop; and the backstop was derived from the viewer-token TTL, so lowering
+  `EKOA_STREAMING_TOKEN_TTL_SECONDS` could cut a live stream mid-login. FIX: `onCeremonyEnded` fires in
+  the `session.push` catch too (`api/src/bridge/server.ts`), and the backstop is a fixed
+  `CEREMONY_STREAM_MAX_MS` (11 min, past the 9-min ceremony window) independent of the token TTL
+  (`api/src/streaming/ceremony-stream.ts`).
 
 ## Recently fixed - 2026-08-26 the ceremony window streams to the human's own device
 

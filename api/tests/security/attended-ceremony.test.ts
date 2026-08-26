@@ -139,10 +139,12 @@ describe('a push is only accepted for the ceremony that was actually opened', ()
     ).rejects.toBeInstanceOf(AttendedError);
   });
 
-  it('THE DANGEROUS ONE: a session for a different origin is refused', async () => {
-    // Without this the push would mint a perfectly valid, correctly-encrypted, correctly
-    // origin-bound Cofre item for the WRONG SITE — quietly usable later by anything that looks a
-    // session up by label.
+  it('THE DANGEROUS ONE: a session whose JAR covers no cookie for the ceremony origin is refused', async () => {
+    // A jar for the WRONG SITE would otherwise mint a valid, correctly-encrypted item usable later by
+    // anything that looks a session up by label. The control is no longer a landed-origin field
+    // comparison (removed - it vetoed legitimate multi-domain logins, adversarial audit 2026-08-26)
+    // but `boundOriginsForEstablishedHost` against the CEREMONY origin: a jar covering only
+    // `attacker.example` leaves nothing to bind to, so `captureSessionToCofre` refuses at capture (I6).
     captureWire();
     const requestId = await open();
     await expect(
@@ -152,7 +154,7 @@ describe('a push is only accepted for the ceremony that was actually opened', ()
         origin: 'attacker.example',
         storageState: storageState('attacker.example'),
       }),
-    ).rejects.toBeInstanceOf(AttendedError);
+    ).rejects.toThrow(/origins it may be replayed against/i);
 
     const { cofreItems } = await import('../../src/cofre/store.js');
     expect(await cofreItems.raw.find({})).toHaveLength(0);

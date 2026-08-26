@@ -51,7 +51,7 @@ const CEREMONY_TTL_MS = 10 * 60_000;
 
 export type AttendedKind = 'card_login' | 'relay_code' | 'login';
 
-interface PendingCeremony {
+export interface PendingCeremony {
   requestId: string;
   pairingId: string;
   kind: AttendedKind;
@@ -140,6 +140,54 @@ export async function requestAttendedCeremony(
     { now: () => now },
   ).catch(() => undefined);
   return requestId;
+}
+
+/**
+ * The caller's NEWEST still-open ceremony for this machine + origin, or undefined.
+ *
+ * WHY IT EXISTS (D-CEREMONY-STREAM lifecycle audit, L2). `openCeremonyStream` is reached only from
+ * `/sessions/establish`, and every establish used to open a FRESH ceremony via
+ * `requestAttendedCeremony` (a new `randomUUID`). But the daemon holds at most one ceremony at a time
+ * and silently refuses a second `attended.request` while a window is up. So when a viewer DROPS (a
+ * page reload, a network blip, a laptop sleep) and the human re-clicks "Abrir janela de
+ * autenticação", a second establish minted a second ceremony + stream token for requestId2 while the
+ * daemon kept holding requestId1 and no-op'd every `ceremony.stream`/`ceremony.input` for requestId2:
+ * a dead canvas that looks connected. This lets establish RE-ATTACH a viewer to the ceremony the
+ * daemon is actually holding instead of opening one it will ignore.
+ *
+ * MATCHING IS EXACTLY `requestCeremonyCapture`'s: owner scope (userId + orgId, D-ADHOC-3) + pairing +
+ * origin HOST. NEWEST first, because a re-click is the human asking about the window in front of
+ * them now; `requestCeremonyCapture` fans out to every candidate so it takes them oldest-first, but
+ * here there is a single ceremony to reuse and the freshest one is the live one.
+ */
+export function findOpenCeremony(actor: Actor, pairingId: string, origin: string, now = Date.now()): PendingCeremony | undefined {
+  sweep(now);
+  const host = hostOf(origin);
+  let best: PendingCeremony | undefined;
+  for (const c of ceremonies.values()) {
+    if (c.pairingId !== pairingId) continue;
+    if (c.actor.userId !== actor.userId || c.actor.orgId !== actor.orgId) continue;
+    if (hostOf(c.origin) !== host) continue;
+    if (!best || c.createdAt > best.createdAt) best = c;
+  }
+  return best;
+}
+
+/**
+ * Drop a ceremony the daemon has STOPPED HOLDING without a capture (`ceremony.ended`, L2). Returns
+ * true if a ceremony was removed.
+ *
+ * PAIRING-BOUND: a machine may only end a ceremony IT is holding, so `pairingId` (taken from the
+ * delivering socket, never the frame) must match the ceremony's. Without it a daemon on another
+ * pairing that learned a requestId could delete a ceremony it never owned. This is the counterpart to
+ * `findOpenCeremony`: together they mean a re-establish only ever re-attaches to a ceremony the daemon
+ * is actually still holding, and drops it the instant the daemon lets go.
+ */
+export function abortCeremony(requestId: string, pairingId: string): boolean {
+  const c = ceremonies.get(requestId);
+  if (!c || c.pairingId !== pairingId) return false;
+  ceremonies.delete(requestId);
+  return true;
 }
 
 /**
@@ -252,31 +300,34 @@ export async function requestCeremonyCapture(
 /**
  * Accept a `session.push` and store the result as a Cofre session item.
  *
- * Four refusals, each closing a different way this could go wrong:
+ * Three refusals, each closing a different way this could go wrong:
  *  - an UNKNOWN requestId: a push for a ceremony this process never asked for;
  *  - a push arriving from a DIFFERENT pairing than the one asked: a machine answering for another;
- *  - an ORIGIN that does not match the ceremony's: the session for a portal nobody requested;
  *  - a JAR THAT COVERS NO COOKIE FOR THE CEREMONY ORIGIN: a login that left nothing for the portal
  *    this ceremony was about.
  *
- * THE LAST TWO ARE ONE CONTROL, AND SPLITTING THEM WAS THE DEFECT. The `sameOrigin` check compares
- * the ceremony's origin to `input.origin`, a field the DAEMON declares - so on its own it is a
- * machine agreeing with itself. What the item is actually usable for is decided by `boundOrigins`,
- * and that used to be `originsFromStorageState`: EVERY cookie domain in the pushed jar. A confused
- * or compromised daemon could therefore pass the field comparison (`input.origin` = the ceremony's)
- * and push a jar whose cookies are for somewhere else entirely, minting a valid, correctly-encrypted
- * item bound to the WRONG SITE - the exact outcome the paragraph above claimed was closed. An HONEST
- * daemon produced a softer version of the same thing: a real login leaves analytics, CDN, SSO and
- * parent-domain cookies beside the portal's own, and binding to all of them makes the session
- * unwrappable under every one.
+ * THERE IS NO LANDED-ORIGIN GATE, AND ADDING ONE BACK WOULD BREAK EVERY MULTI-DOMAIN LOGIN. An
+ * earlier version compared the ceremony's origin to `input.origin` - the URL the DAEMON reports it
+ * LANDED on - and refused a mismatch. But a real login lands wherever the portal's auth flow ends:
+ * an Uber Eats ceremony for `www.ubereats.com` completes on `auth.uber.com`, a naked-domain request
+ * for `ubereats.com` canonicalises to `www.ubereats.com`, an SSO portal returns through a central
+ * host. So the human presses "Concluir" on a page whose host differs from the one asked, and the
+ * exact-host comparison silently vetoed the capture - the run then parked in `needs_credentials`
+ * forever (findings, adversarial audit 2026-08-26). The comparison was redundant anyway: it compares
+ * two fields the DAEMON supplies (`input.origin` against a ceremony it also answered), so it only
+ * ever pretended to be an origin cross-check.
  *
- * THE BINDING IS NOW DERIVED FROM THE CEREMONY'S ORIGIN, which is the one statement in this
- * transaction that Cortex made rather than received. `boundOriginsForEstablishedHost` narrows to
- * that single host and uses the jar only as EVIDENCE - at least one cookie must cover it, or there
- * is no session for this portal and the empty list makes `captureSessionToCofre` refuse the push.
- * That is the origin cross-check the field comparison only ever pretended to be. It is the same
- * function, with the same matcher, that the typist's capture path uses (`session-establishment.ts`),
- * so the two ways a session can enter the Cofre bind identically.
+ * THE REAL ORIGIN CONTROL is `boundOriginsForEstablishedHost(jar, ceremony.origin)`, derived from the
+ * one statement in this transaction Cortex made rather than received - the CEREMONY'S origin, not the
+ * daemon's landed URL. The jar is EVIDENCE: at least one cookie must cover the ceremony origin, or
+ * there is no session for this portal and the empty list makes `captureSessionToCofre` refuse the
+ * push. A multi-domain login that landed on `auth.uber.com` still carries the `.ubereats.com` app
+ * cookie, so the evidence check passes and the item binds to the requested host; a jar with nothing
+ * for the ceremony origin is refused. It is the same function, with the same matcher, that the
+ * typist's capture path uses (`session-establishment.ts`), so the two ways a session enters bind
+ * identically. `input.origin` (the daemon's report of where it LANDED) is now unused by this handler -
+ * the audit event records the CEREMONY origin, and nothing gates on the landed one; it stays on the
+ * wire only as the honest statement of where the login finished.
  *
  * IT TIGHTENS `card_login` TOO, deliberately. The declared rail had the same wide binding and was
  * merely less exposed by it (its item is minted LOCKED); a narrower binding is strictly better
@@ -292,9 +343,9 @@ export async function acceptSessionPush(
   if (ceremony.pairingId !== input.pairingId) {
     throw new AttendedError('the session was pushed by a different machine than the one asked');
   }
-  if (!sameOrigin(ceremony.origin, input.origin)) {
-    throw new AttendedError('the pushed session is for a different origin than the ceremony declared');
-  }
+  // NO landed-origin gate here (see docblock): a multi-domain login lands on a host that differs from
+  // the one asked, and the real control is `boundOriginsForEstablishedHost` against the CEREMONY
+  // origin below. `input.origin` is advisory only.
   // One ceremony, one session. Consumed before the store write so a duplicate push cannot mint a
   // second item even if the first write is still in flight.
   ceremonies.delete(input.requestId);
@@ -327,12 +378,6 @@ export async function acceptSessionPush(
     { now: () => now },
   ).catch(() => undefined);
   return item;
-}
-
-/** Host comparison, case-insensitive and scheme/port tolerant — the daemon reports what the browser
- *  landed on, which may carry a scheme where the request carried a bare host. */
-function sameOrigin(a: string, b: string): boolean {
-  return hostOf(a) === hostOf(b);
 }
 
 function hostOf(value: string): string {

@@ -29,6 +29,18 @@ import { ClientMessageSchema, type MouseMessage, type KeyMessage } from './proto
 /** The ceremony media-channel path, distinct from the run canvas (`/api/v1/automation-stream/`). */
 export const CEREMONY_WS_PATH_PREFIX = '/api/v1/ceremony-stream/';
 
+/**
+ * The registry-leak backstop: the longest a ceremony stream may sit registered before it self-closes.
+ *
+ * DERIVED FROM THE CEREMONY, NOT THE VIEWER TOKEN (D-CEREMONY-STREAM lifecycle, L4). This used to be
+ * `tokenTtlSeconds() + 30`, so lowering `EKOA_STREAMING_TOKEN_TTL_SECONDS` (a viewer-auth knob) would
+ * silently cut a LIVE stream out from under a human mid-login. The backstop only guards against a
+ * leaked registry entry when a ceremony expires without ever pushing a session, so it is pinned to a
+ * fixed lifetime comfortably past the daemon's ~9-minute ceremony window (and the rail's 10-minute
+ * `CEREMONY_TTL_MS`) - the socket-drop and completion paths still close far earlier in the common case.
+ */
+export const CEREMONY_STREAM_MAX_MS = 11 * 60_000;
+
 const ALLOWED_ORIGINS = (process.env.EKOA_STREAMING_ALLOWED_ORIGINS || '')
   .split(',')
   .map((s) => s.trim())
@@ -196,9 +208,11 @@ export function openCeremonyStream(input: OpenCeremonyStreamInput): OpenCeremony
   });
   sessions.set(input.requestId, session);
   // Backstop: if the ceremony expires without ever pushing a session (the human walked away), the
-  // `onCeremonyEnded` close never fires, so self-close a little past the token TTL rather than leak
-  // the registry entry. The socket-drop and completion paths close earlier in the common case.
-  const ttlTimer = setTimeout(() => closeCeremonyStream(input.requestId, 'ttl'), (tokenTtlSeconds() + 30) * 1000);
+  // `onCeremonyEnded` close never fires, so self-close after a FIXED max lifetime rather than leak
+  // the registry entry. Pinned to `CEREMONY_STREAM_MAX_MS` and NOT to the viewer-token TTL, so a low
+  // `EKOA_STREAMING_TOKEN_TTL_SECONDS` cannot close an actively-used stream mid-login. The socket-drop
+  // and completion paths close earlier in the common case.
+  const ttlTimer = setTimeout(() => closeCeremonyStream(input.requestId, { reason: 'ttl' }), CEREMONY_STREAM_MAX_MS);
   ttlTimer.unref?.();
   session.setTtlTimer(ttlTimer);
   return {
@@ -221,12 +235,25 @@ export function pushCeremonyFrame(requestId: string, pairingId: string, seq: num
   session.pushFrame(seq, jpegBase64);
 }
 
-/** Tear the stream down (ceremony ended/expired). Idempotent. */
-export function closeCeremonyStream(requestId: string, reason = 'ceremony-ended'): void {
+/**
+ * Tear the stream down (ceremony ended/expired). Idempotent.
+ *
+ * PAIRING GATE (L4). A caller that names a delivering pairing - a `session.push` handler acting on a
+ * frame from some machine - may only close a stream owned by THAT pairing. Without it, a daemon on any
+ * pairing could refuse-push a victim's requestId and, via the catch-side teardown, close the victim's
+ * live ceremony stream (a transient cross-tenant DoS, the mirror of the `pushCeremonyFrame` pairing
+ * guard). Internal callers (the TTL backstop, a replaced session) pass no `requirePairingId` and close
+ * unconditionally.
+ */
+export function closeCeremonyStream(
+  requestId: string,
+  opts: { reason?: string; requirePairingId?: string } = {},
+): void {
   const session = sessions.get(requestId);
   if (!session) return;
+  if (opts.requirePairingId !== undefined && session.pairingId !== opts.requirePairingId) return;
   sessions.delete(requestId);
-  session.close(1000, reason);
+  session.close(1000, opts.reason ?? 'ceremony-ended');
 }
 
 export function getCeremonyStreamSession(requestId: string): CeremonyStreamSession | undefined {

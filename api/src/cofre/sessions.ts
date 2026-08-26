@@ -157,13 +157,24 @@ export async function captureSessionWithGrant(
  * bound to the second domain, because (1) the whole `storageState` jar is INJECTED at reuse regardless
  * of `boundOrigins` (`automation/local-browser-session.ts` `addCookies` takes every cookie), so the
  * cross-domain auth cookies ride along and a redirect to `auth.uber.com` is already authenticated;
- * and (2) a run halts at the SPECIFIC origin it needs, so Cortex opens the ceremony for exactly that
- * origin and the narrow binding matches what the run asks for. If a later step targets a second
- * registrable domain DIRECTLY (not via redirect), it re-ceremonies — and because the ceremony profile
- * is persistent real Chrome (D-CEREMONY-REALCHROME) the human is already logged in, so it captures at
- * once. The real fix for the live Uber failure was that capture/replay now share one real-Chrome
- * environment, not a wider binding. Lives beside `originsFromStorageState` and uses the same matcher
- * `unwrap` uses, so the derivation and the check can never drift apart.
+ * (2) a run halts at the SPECIFIC origin it needs, so Cortex opens the ceremony for exactly that
+ * origin and binds to THAT host - which is the same host the run's step, its credential-waiter and its
+ * reuse-discovery all key on, so a capture on the primary domain wakes and is found by the run that
+ * asked for it, even when the login itself landed on a different host (the landed-origin gate that
+ * used to veto that is gone, `bridge/attended.ts`); and (3) the real fix for the live Uber failure was
+ * that capture/replay now share one real-Chrome environment, not a wider binding.
+ *
+ * KNOWN LIMITATION, stated honestly (adversarial audit 2026-08-26, findings ledger). This does NOT
+ * make an UNATTENDED replay authenticate when a run's FIRST step targets a SECOND registrable domain
+ * DIRECTLY (not reached by redirect from the primary), with a session only ever established on the
+ * primary: discovery is binding-keyed, so the `uber.com`-targeted run does not find the
+ * `ubereats.com`-bound item even though its stored jar holds valid `uber.com` cookies. And a
+ * re-ceremony for that second domain opens a FRESH per-host profile (ceremony profiles are keyed per
+ * exact host, `attended/ceremony.ts` `hostKeyOf`), so it is a full second attended login, not a
+ * capture-at-once. The common flow (enter on the primary, redirect to the SSO domain) is unaffected;
+ * the fix for the direct-second-domain case (registrable-domain keying, or reuse-side jar-domain
+ * discovery) is deferred and tracked in findings. Lives beside `originsFromStorageState` and uses the
+ * same matcher `unwrap` uses, so the derivation and the check can never drift apart.
  */
 export function boundOriginsForEstablishedHost(storageState: unknown, host: string): string[] {
   const h = hostOf(host);

@@ -166,6 +166,16 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
       ceremonyBrowserOverContext(await launchHeadedRealChrome(userDataDir, { log: deps.log })));
   const repair = deps.repairBrowser ?? installChromium;
 
+  // Tell Cortex the ceremony ended WITHOUT a capture (D-CEREMONY-STREAM lifecycle L2). Every path that
+  // leaves this function without a `session.push` - a launch failure, an abandoned login, a TTL expiry
+  // - calls this, so Cortex drops the ceremony (and any live stream) at once instead of leaving it
+  // lingering in its map for the full TTL, where a re-establish would re-attach to the dead entry and
+  // open no window. A no-op if the socket is already down (`send` returns false and Cortex will TTL it
+  // anyway). NOT called after a successful push - the push itself consumes the ceremony.
+  const signalCeremonyEnded = (): void => {
+    deps.send({ type: 'ceremony.ended', requestId: req.requestId });
+  };
+
   deps.log('');
   deps.log('==============================================================');
   deps.log('  AUTENTICAÇÃO NECESSÁRIA NESTE COMPUTADOR');
@@ -194,6 +204,7 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
   } catch (first) {
     if (!isRepairableBrowser(first)) {
       deps.log(`ERRO: não foi possível abrir o navegador — ${first instanceof Error ? first.message : String(first)}`);
+      signalCeremonyEnded();
       return false;
     }
     // Say so before the pause. A human is waiting at the machine, and a silent two-minute gap
@@ -207,6 +218,7 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
       // `--force`: without it playwright SKIPS a version already on disk, so the advice printed
       // here used to be a no-op against the truncated download that most often causes this.
       deps.log('Sugestão: reinstale o navegador da automação com  npx playwright install --force chromium');
+      signalCeremonyEnded();
       return false;
     }
   }
@@ -332,19 +344,22 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
     // it would mint a perfectly valid, correctly-encrypted, USELESS Cofre item that later looks like
     // a working session — a silent failure that only surfaces when an automation runs on it.
     deps.log('Nenhuma sessão foi capturada (a autenticação não chegou a ser concluída).');
+    signalCeremonyEnded();
     return false;
   }
 
   const sent = deps.send({
     type: 'session.push',
     requestId: req.requestId,
-    // What we actually landed on, not what we were asked for. Cortex compares the two and refuses a
-    // mismatch (J-5) — reporting the REQUESTED origin here would defeat that check by construction.
+    // What we actually landed on, not what we were asked for. Cortex binds the captured session to the
+    // CEREMONY origin (it no longer gates on this landed origin - a multi-domain login lands elsewhere,
+    // D-CEREMONY-STREAM-LIFECYCLE); this is reported as an advisory only.
     origin: originOf(landedOn) ?? target,
     storageState: lastSnapshot,
   });
   if (!sent) {
     deps.log('A sessão foi capturada mas a ligação ao Cortex caiu; repita a autenticação.');
+    signalCeremonyEnded();
     return false;
   }
   deps.log('Sessão capturada e enviada para o cofre. Pode continuar na Ekoa.');

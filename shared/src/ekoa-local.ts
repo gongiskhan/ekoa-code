@@ -612,6 +612,24 @@ export const BridgeFrame = z.discriminatedUnion('type', [
     requestId: z.string(),
     event: CeremonyInputEvent,
   }),
+  /**
+   * "THE CEREMONY ENDED WITHOUT A CAPTURE", daemon -> hosted. Sent when the daemon stops holding the
+   * window without a `session.push` - a launch failure, an abandoned/incomplete login (no cookies), or
+   * the window's TTL expiring. Cortex has no other way to learn this: a `session.push` is the only
+   * frame that removed a ceremony from Cortex's map, so a ceremony that ended without one LINGERED
+   * there for the full 10-minute TTL, and any re-establish for that origin RE-ATTACHED to the dead
+   * entry (no new window opened) instead of opening a fresh one. This frame lets Cortex drop the
+   * ceremony (and close any live stream) at the moment the daemon actually let go of the window.
+   *
+   * NOT sent on the success path - there the `session.push` already consumes the ceremony. Pairing-
+   * bound at the boundary (`bridge/server.ts`): a daemon may only end a ceremony IT is holding.
+   * ADDITIVE (Rule 7): an old Cortex ignores it at the switch default; an old daemon never sends it, so
+   * the pre-existing "linger to TTL" behaviour is simply the un-upgraded fallback.
+   */
+  z.object({
+    type: z.literal('ceremony.ended'),
+    requestId: z.string(),
+  }),
 ]);
 export type BridgeFrame = z.infer<typeof BridgeFrame>;
 

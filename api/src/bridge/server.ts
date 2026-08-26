@@ -40,7 +40,7 @@ import {
 } from './registry.js';
 import { normaliseEgressEndpoint } from './egress-endpoint.js';
 import { spendConnectNonce } from './connect-nonce.js';
-import { acceptSessionPush, AttendedError } from './attended.js';
+import { acceptSessionPush, abortCeremony, AttendedError } from './attended.js';
 import { redactInboundFrame, releasePairingSecrets } from './ingress-redaction.js';
 import { dropPendingDeliveriesForPairing } from './secret-delivery.js';
 import { resolveToolResult, failInvocationsForPairing } from './tool-invocation.js';
@@ -78,7 +78,7 @@ export interface BridgeServerDeps {
   onCeremonyFrame?: (requestId: string, pairingId: string, seq: number, jpegBase64: string) => void;
   /** A ceremony finished (its session was pushed). Injected to `closeCeremonyStream` so the live view
    *  tears down when the login completes rather than lingering to its token TTL. */
-  onCeremonyEnded?: (requestId: string) => void;
+  onCeremonyEnded?: (requestId: string, pairingId: string) => void;
   heartbeatIntervalMs?: number;
 }
 
@@ -383,9 +383,18 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
             storageState: frame.storageState,
           });
           // The login completed: tear down the live view (if any) rather than leaving it open to its
-          // token TTL. A no-op when the ceremony was never streamed.
-          deps.onCeremonyEnded?.(frame.requestId);
+          // token TTL. A no-op when the ceremony was never streamed. `pairingId` gates the close to
+          // the stream THIS pairing owns (L4).
+          deps.onCeremonyEnded?.(frame.requestId, pairingId);
         } catch (e) {
+          // A REFUSED push ends the stream just as surely as a successful one - the daemon closed its
+          // window and will not push again for this ceremony - so tear the live view down here too
+          // (D-CEREMONY-STREAM lifecycle, L4). Without this the viewer sat 'Ligado' on a frozen frame
+          // until the backstop fired. The `pairingId` gate is LOAD-BEARING here: a refused push runs
+          // BEFORE acceptSessionPush proved the pairing, so an unrelated daemon that refuse-pushes a
+          // victim's requestId must not close the victim's stream - closeCeremonyStream drops a
+          // mismatch. A no-op when the ceremony was never streamed.
+          deps.onCeremonyEnded?.(frame.requestId, pairingId);
           console.warn(
             `[bridge][attended] session push refused: pairing=${pairingId} reason=${
               e instanceof AttendedError ? e.message : 'store-failure'
@@ -402,6 +411,14 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
         // The delivering `pairingId` is passed so the streaming side can refuse a frame from a machine
         // that is not the one holding this ceremony.
         deps.onCeremonyFrame?.(frame.requestId, pairingId, frame.seq, frame.jpegBase64);
+        break;
+      case 'ceremony.ended':
+        // D-CEREMONY-STREAM lifecycle (L2): the daemon stopped holding this ceremony's window WITHOUT a
+        // capture (launch failure, abandoned login, TTL). Drop the ceremony from the map - pairing-
+        // bound, so a machine can only end a ceremony it owns - so a re-establish opens a FRESH window
+        // instead of re-attaching to a dead entry; and tear down any live view for it (pairing-gated).
+        abortCeremony(frame.requestId, pairingId);
+        deps.onCeremonyEnded?.(frame.requestId, pairingId);
         break;
       case 'ping':
         sendToPairing(pairingId, { type: 'pong' });

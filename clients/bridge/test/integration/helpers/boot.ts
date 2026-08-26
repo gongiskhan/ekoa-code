@@ -16,6 +16,7 @@
  */
 import { createServer, type Server } from 'node:http';
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { MongoMemoryServer } from 'mongodb-memory-server';
@@ -32,7 +33,14 @@ const PACKAGE_ROOT = path.resolve(HERE, '..', '..', '..');
 const EKOA_CODE_DIR = process.env.EKOA_CODE_DIR ? path.resolve(process.env.EKOA_CODE_DIR) : path.resolve(PACKAGE_ROOT, '..', '..');
 const API_DIST = path.join(EKOA_CODE_DIR, 'api', 'dist');
 
-export const ekoaCodeAvailable = existsSync(path.join(API_DIST, 'bridge', 'server.js')) && existsSync(path.join(API_DIST, 'llm', 'anonymise', 'index.js'));
+export const ekoaCodeAvailable =
+  existsSync(path.join(API_DIST, 'bridge', 'server.js')) &&
+  existsSync(path.join(API_DIST, 'llm', 'anonymise', 'index.js')) &&
+  // The attended-ceremony live-stream lane (D-CEREMONY-STREAM) loads these two dist entrypoints in
+  // addition to the bridge server; require them here so a stale/partial dist skips the whole lane
+  // rather than testing yesterday's Cortex (a green-but-meaningless run, harness.risks #1).
+  existsSync(path.join(API_DIST, 'streaming', 'ceremony-stream.js')) &&
+  existsSync(path.join(API_DIST, 'routes', 'cofre.js'));
 
 /** Dynamic-import an ekoa-code dist module by its api/dist-relative path (untyped — cast per use). */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -57,9 +65,20 @@ export interface Captured {
   ledgerRows: { taskId: string; correlationId: string; path: string }[];
 }
 
+/** The Cofre item VIEW fields the ceremony lane asserts on (a subset of the api's CofreItem). */
+export interface CeremonyCofreItemView {
+  id: string;
+  type: string;
+  label: string;
+  state: string;
+  boundOrigins: string[];
+}
+
 export interface Cortex {
   port: number;
   captured: Captured;
+  /** CEREMONY LANE ONLY. Cortex-side ceremony-stream log lines (requestId-only; never a frame/keystroke). */
+  ceremonyStreamLogs?: string[];
   registerPairing(input: { pairingId: string; org: string; ownerUserId: string }): Promise<void>;
   revokePairing(pairingId: string): Promise<void>;
   setActivation(userId: string, s: { active: boolean; billingLocked: boolean }): void;
@@ -76,6 +95,16 @@ export interface Cortex {
   delegateToLocal(actor: { userId: string; orgId: string; sessionId: string }, req: { task: string; grantRefs: string[]; budget: { egressBytes: number; modelSpend: { userId: string } } }): Promise<DelegationResultShape>;
   /** The deny-listed party value planted in the org ruleset (must be tokenized in outbound payloads). */
   readonly party: string;
+  /** CEREMONY LANE ONLY (`opts.ceremony`). The owner's Cofre items, for the session-item assertion. */
+  listCofreItems?(actor: { userId: string; orgId: string; role: string }, now: number): Promise<CeremonyCofreItemView[]>;
+  /** CEREMONY LANE ONLY. Count of open server-side ceremonies (L2: no leaked second ceremony). */
+  openCeremonyCount?(): number;
+  /** CEREMONY LANE ONLY. Whether the pairing row advertises a capability yet — POLL this after `hello`
+   *  (the hello handler awaits `registerPairing`, so the row updates asynchronously; harness.risks #3). */
+  advertisesCapability?(pairingId: string, capability: string): Promise<boolean>;
+  /** CEREMONY LANE ONLY. Reset the three ceremony registries (streams, consumed tokens, ceremonies)
+   *  between scenarios for deterministic isolation. */
+  resetCeremonyState?(): void;
   teardown(): Promise<void>;
 }
 
@@ -90,9 +119,23 @@ function cannedCompletionBody(text: string): string {
  * handles the tests drive. The provider handler is bound to a fixed pairing/org so the daemon's
  * provider_request resolves without a full session/pairing DB round trip (as correlation-join does).
  */
-export async function bootCortex(opts: { pairingId: string; org: string; ownerUserId: string; party: string }): Promise<Cortex> {
+export async function bootCortex(opts: {
+  pairingId: string;
+  org: string;
+  ownerUserId: string;
+  party: string;
+  /** Mount the attended-ceremony live-stream surface (D-CEREMONY-STREAM): the cofre router at
+   *  `/api/v1/cofre`, `attachCeremonyStreamServer`, and the `onCeremonyFrame`/`onCeremonyEnded`
+   *  injections on `attachBridgeServer` — a line-for-line mirror of the production composition at
+   *  `api/src/server.ts` boot. Off by default so the existing round-trip lane is untouched. */
+  ceremony?: boolean;
+}): Promise<Cortex> {
   process.env.JWT_SECRET = process.env.JWT_SECRET ?? 'test-secret-integration';
   process.env.ENCRYPTION_KEY = process.env.ENCRYPTION_KEY ?? 'test-encryption-key';
+  // `streaming/ceremony-stream.js` reads EKOA_STREAMING_ALLOWED_ORIGINS at MODULE LOAD (harness.risks
+  // #4): a value leaking from the shell would 403 the originless `ws` test client at upgrade. Clear it
+  // before the first `imp()` so the module loads with an empty allow-list (the production default).
+  delete process.env.EKOA_STREAMING_ALLOWED_ORIGINS;
 
   const config = await imp('config.js');
   config.__resetConfigForTests();
@@ -124,7 +167,35 @@ export async function bootCortex(opts: { pairingId: string; org: string; ownerUs
   anonMod.__resetVaultForTests();
   anonMod.__resetAuditForTests();
 
+  // CEREMONY LANE (opts.ceremony). Load the streaming + cofre dist modules through the SAME `imp()`
+  // loader as everything else, so `openCeremonyStream` (reached inside the cofre router) and
+  // `pushCeremonyFrame` (injected into the bridge server below) resolve to ONE module-cache instance
+  // and therefore ONE `sessions` registry (harness.risks #7). Reset the three per-process registries.
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  let streaming: any;
+  let streamingAuthMod: any;
+  let cofreMod: any;
+  let attendedMod: any;
+  let cofreRouterFactory: ((deps: { now: () => number; genId: () => string }) => any) | undefined;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+  const resetCeremonyRegistries = (): void => {
+    streaming.__resetCeremonyStreamsForTest();
+    streamingAuthMod.__resetConsumedStreamTokensForTests();
+    attendedMod.__resetCeremoniesForTests();
+  };
+  if (opts.ceremony) {
+    streaming = await imp('streaming/ceremony-stream.js');
+    streamingAuthMod = await imp('streaming/auth.js');
+    attendedMod = await imp('bridge/attended.js');
+    cofreMod = await imp('cofre/index.js');
+    const cofreRoutesMod = await imp('routes/cofre.js');
+    cofreRouterFactory = cofreRoutesMod.cofreRouter;
+    resetCeremonyRegistries();
+  }
+
   const captured: Captured = { outbound: [], auditIds: [], ledgerRows: [] };
+  /** Cortex-side ceremony-stream log lines (requestId-only by contract; never a frame or keystroke). */
+  const ceremonyStreamLogs: string[] = [];
 
   // A provider credential (oauth) so the chokepoint has something to bill against.
   await credsMod.setCredential({ mode: 'oauth', secret: 'tok', refreshToken: 'rt', expiresAt: Date.now() + 3_600_000 });
@@ -159,6 +230,11 @@ export async function bootCortex(opts: { pairingId: string; org: string; ownerUs
   const app = express();
   app.use(express.json());
   app.use('/api/v1/bridge', bridgeRoutes.bridgeTokenRouter());
+  if (opts.ceremony) {
+    // The Cofre REST surface, mounted next to the bridge-token router exactly as the production app
+    // does. `POST /sessions/establish` and `/sessions/capture` drive the ceremony rail.
+    app.use('/api/v1/cofre', cofreRouterFactory!({ now: () => Date.now(), genId: () => randomUUID() }));
+  }
 
   const httpServer: Server = createServer(app);
   const handle = serverMod.attachBridgeServer(httpServer, {
@@ -170,13 +246,36 @@ export async function bootCortex(opts: { pairingId: string; org: string; ownerUs
       getActivation: () => ({ active: true, billingLocked: false }),
       runCompletion: (body: Record<string, unknown>, billee: string, correlationId: string) => clientMod.proxyGatewayMessages(body, billee, correlationId),
     }),
+    // D-CEREMONY-STREAM: the exact injection the production composition root makes
+    // (`api/src/server.ts` boot) — relay a ceremony's live frames to its dashboard viewer, and tear
+    // the view down when the login completes (or is refused). `pushCeremonyFrame`/`closeCeremonyStream`
+    // come from the SAME streaming module the cofre router's `openCeremonyStream` writes to.
+    ...(opts.ceremony
+      ? {
+          onCeremonyFrame: streaming.pushCeremonyFrame,
+          onCeremonyEnded: (requestId: string) => streaming.closeCeremonyStream(requestId),
+        }
+      : {}),
   });
+  // The ceremony media channel WS server (path-scoped upgrade on the same HTTP server). Both this and
+  // the bridge server register their own `upgrade` listener scoped to their own path prefix, so the
+  // attach order is irrelevant.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let ceremonyWss: any;
+  if (opts.ceremony) {
+    // The streaming module logs by requestId ONLY (never a frame or a keystroke) — capture those
+    // lines so the never-logged assertion can scan Cortex's side of the channel too.
+    ceremonyWss = streaming.attachCeremonyStreamServer(httpServer, {
+      log: (event: string, fields: Record<string, unknown>) => ceremonyStreamLogs.push(`${event} ${JSON.stringify(fields)}`),
+    });
+  }
   await new Promise<void>((r) => httpServer.listen(0, () => r()));
   const port = (httpServer.address() as { port: number }).port;
 
   return {
     port,
     captured,
+    ceremonyStreamLogs,
     party: opts.party,
     async registerPairing(input) {
       await registry.registerPairing(input);
@@ -199,7 +298,29 @@ export async function bootCortex(opts: { pairingId: string; org: string; ownerUs
     async delegateToLocal(actor, req) {
       return (await delegation.delegateToLocal(actor, req)) as DelegationResultShape;
     },
+    ...(opts.ceremony
+      ? {
+          async listCofreItems(actor: { userId: string; orgId: string; role: string }, now: number): Promise<CeremonyCofreItemView[]> {
+            return (await cofreMod.listCofreItems(actor, now)) as CeremonyCofreItemView[];
+          },
+          openCeremonyCount(): number {
+            return attendedMod.__openCeremonyCount() as number;
+          },
+          async advertisesCapability(pairingId: string, capability: string): Promise<boolean> {
+            return (await registry.advertisesCapability(pairingId, capability)) as boolean;
+          },
+          resetCeremonyState(): void {
+            resetCeremonyRegistries();
+          },
+        }
+      : {}),
     async teardown() {
+      if (opts.ceremony) {
+        // Close any lingering viewer sockets and the WS server BEFORE the http server, so a forked
+        // worker does not linger on an open socket (harness.risks #9).
+        streaming.__resetCeremonyStreamsForTest();
+        ceremonyWss?.close();
+      }
       await handle.close();
       await new Promise<void>((r) => httpServer.close(() => r()));
       clientMod.__resetTransportForTests();

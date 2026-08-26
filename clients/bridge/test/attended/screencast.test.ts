@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { CeremonyScreencast } from '../../src/attended/index.js';
+import { CeremonyScreencast, CeremonyStreamController } from '../../src/attended/index.js';
+import type { BridgeCdpSession } from '../../src/browser/index.js';
 import type { BridgeFrame, CeremonyInputEvent } from '../../src/wire/index.js';
 import { FakeCdp } from './fake-browser.js';
 
@@ -168,5 +169,122 @@ describe('CeremonyScreencast — credential privacy (the non-negotiable)', () =>
     }
     // ...and the strongest form: the producer logs NOTHING at all.
     for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe('CeremonyStreamController — a stop() that races an in-flight start() (BUG L3)', () => {
+  it('leaves NO screencast running when the viewer drops while newCdp() is still in flight', async () => {
+    const cdp = new FakeCdp();
+    const sent: BridgeFrame[] = [];
+    // A DEFERRED newCdp so a stop() can land while start() is suspended on the CDP attach — the exact
+    // race the bug needs: viewer connects (start begins, `await newCdp()` in flight) then immediately
+    // drops (stop reads screencast still null and no-ops).
+    let resolveCdp!: (c: BridgeCdpSession) => void;
+    const newCdp = (): Promise<BridgeCdpSession> => new Promise<BridgeCdpSession>((r) => (resolveCdp = r));
+    const ctrl = new CeremonyStreamController(
+      newCdp,
+      (f) => {
+        sent.push(f);
+        return true;
+      },
+      REQUEST_ID,
+    );
+
+    const startP = ctrl.start(); // suspends on `await newCdp()`
+    const stopP = ctrl.stop(); // the viewer drops before the CDP session resolves
+    resolveCdp(cdp); // the CDP attach completes AFTER the drop
+    await Promise.all([startP, stopP]);
+
+    // Before the fix the start closure re-checked only `this.torndown` (false) and installed a
+    // screencast with NO viewer — orphan frames at 15fps up the bridge link for the rest of the
+    // ceremony (up to 9 min). The fix drops the just-created session: nothing is ever started.
+    expect(cdp.callsTo('Page.startScreencast')).toHaveLength(0);
+    // And no frame handler was installed, so a frame that fires anyway is relayed by nobody.
+    cdp.fireFrame({ data: 'ORPHAN_FRAME', sessionId: 1 });
+    expect(frames(sent)).toHaveLength(0);
+  });
+
+  it('a normal connect (no drop) still installs and streams', async () => {
+    // The guard must not break the ordinary path: a start() with no racing stop attaches the stream.
+    const cdp = new FakeCdp();
+    const sent: BridgeFrame[] = [];
+    const ctrl = new CeremonyStreamController(
+      () => Promise.resolve(cdp as BridgeCdpSession),
+      (f) => {
+        sent.push(f);
+        return true;
+      },
+      REQUEST_ID,
+    );
+
+    await ctrl.start();
+    expect(cdp.callsTo('Page.startScreencast')).toHaveLength(1);
+    cdp.fireFrame({ data: 'LIVE_FRAME', sessionId: 2 });
+    expect(frames(sent)).toHaveLength(1);
+  });
+
+  it('a viewer that RE-ATTACHES during the in-flight start KEEPS its stream (start-stop-start, L3 2nd-order)', async () => {
+    // A fast close+reconnect (reload) while the first start() is still awaiting newCdp(): the reconnect
+    // set `desired` back to 'on' and joined the same in-flight start. Before the second-order fix,
+    // stop() resumed after its await and tore down the screencast the reconnected viewer was now
+    // watching (black canvas until reload). stop() now re-reads `desired` after the await and bails.
+    const cdp = new FakeCdp();
+    const sent: BridgeFrame[] = [];
+    let resolveCdp!: (c: BridgeCdpSession) => void;
+    const newCdp = (): Promise<BridgeCdpSession> => new Promise<BridgeCdpSession>((r) => (resolveCdp = r));
+    const ctrl = new CeremonyStreamController(
+      newCdp,
+      (f) => {
+        sent.push(f);
+        return true;
+      },
+      REQUEST_ID,
+    );
+
+    const start1 = ctrl.start(); // suspends on newCdp()
+    const stop1 = ctrl.stop(); // viewer drops (desired='off', awaits the in-flight start)
+    const start2 = ctrl.start(); // viewer RECONNECTS before the CDP resolves (desired='on', joins start1)
+    resolveCdp(cdp);
+    await Promise.all([start1, stop1, start2]);
+
+    expect(cdp.callsTo('Page.startScreencast')).toHaveLength(1); // installed for the reconnected viewer
+    cdp.fireFrame({ data: 'RECONNECTED_FRAME', sessionId: 3 });
+    expect(frames(sent)).toHaveLength(1); // ...and it is still streaming, not torn down by the stop
+  });
+});
+
+describe('CeremonyScreencast — a stop() during Page.enable (BUG L3, second half)', () => {
+  it('re-checks stopped after Page.enable and never sends Page.startScreencast', async () => {
+    // A CDP whose `Page.enable` is deferred, so a stop() can slip in between enable and the screencast
+    // start. Without the re-check the producer would still send `Page.startScreencast` and leave
+    // frames flowing to a viewer that has gone.
+    const calls: string[] = [];
+    let resolveEnable!: () => void;
+    const cdp: BridgeCdpSession = {
+      send(method: string): Promise<unknown> {
+        calls.push(method);
+        if (method === 'Page.enable') return new Promise<void>((r) => (resolveEnable = r));
+        return Promise.resolve(undefined);
+      },
+      on(): void {
+        /* no frame handler needed for this test */
+      },
+    };
+    const sent: BridgeFrame[] = [];
+    const sc = new CeremonyScreencast(
+      cdp,
+      (f) => {
+        sent.push(f);
+        return true;
+      },
+      REQUEST_ID,
+    );
+
+    const startP = sc.start(); // suspends on Page.enable
+    await sc.stop(); // the viewer drops mid-enable
+    resolveEnable(); // Page.enable completes AFTER the stop
+    await startP;
+
+    expect(calls).not.toContain('Page.startScreencast');
   });
 });

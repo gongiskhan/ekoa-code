@@ -97,9 +97,19 @@ export class DaemonRuntime {
    * open and null until then (or forever, if the window cannot produce a CDP session). The same
    * requestId guard routes `ceremony.stream` / `ceremony.input` to it, so a frame for any other
    * requestId can never start a stream of, or dispatch input into, the window this daemon is holding.
+   *
+   * `wantStream` BUFFERS the viewer's desired on/off while `stream` is still null. In the common flow
+   * the HTTP establish returns in ~200ms and the viewer connects, but `launchHeadedRealChrome` takes
+   * 1-3s, so `ceremony.stream{on:true}` reaches `handleCeremonyStream` before the controller exists.
+   * Recording it here (rather than dropping it) lets `onStreamReady` apply it the instant the
+   * controller registers — without this the first viewer sees a black canvas forever (BUG L1).
    */
-  private ceremonyInFlight: { requestId: string; finishNow: () => void; stream: CeremonyStreamController | null } | null =
-    null;
+  private ceremonyInFlight: {
+    requestId: string;
+    finishNow: () => void;
+    stream: CeremonyStreamController | null;
+    wantStream?: boolean;
+  } | null = null;
   /**
    * The rebindable half of this daemon's identity (org + signing secret).
    *
@@ -424,7 +434,15 @@ export class DaemonRuntime {
           // `ceremony.input` reach it; guard on requestId so a controller from a superseded ceremony
           // can never overwrite the current one's.
           onStreamReady: (controller) => {
-            if (this.ceremonyInFlight?.requestId === requestId) this.ceremonyInFlight.stream = controller;
+            const ceremony = this.ceremonyInFlight;
+            if (ceremony?.requestId !== requestId) return;
+            ceremony.stream = controller;
+            // Apply the desired state a viewer asked for while the controller did not yet exist
+            // (BUG L1): a `ceremony.stream{on:true}` that arrived during the 1-3s Chrome launch was
+            // buffered in `wantStream`, not dropped, so start the stream now that the controller is
+            // registered. `wantStream === false`/unset leaves it stopped — the default — so a viewer
+            // who connected then dropped before the window opened is not streamed at.
+            if (controller && ceremony.wantStream === true) void controller.start();
           },
           ...(this.deps.launchBrowser ? { launchBrowser: this.deps.launchBrowser } : {}),
           ...(this.deps.home ? { profilesRoot: join(this.deps.home, 'ceremony-profiles') } : {}),
@@ -441,14 +459,22 @@ export class DaemonRuntime {
   /**
    * A dashboard viewer connected to or dropped from the live ceremony stream (D-CEREMONY-STREAM).
    *
-   * A NO-OP unless the frame names the ceremony this daemon is actually holding AND that ceremony has
-   * a stream controller (its window opened and could produce CDP). The requestId guard is the same
-   * one `ceremony.capture` uses and for the same reason: a frame for another requestId must never
-   * start a stream of the window this daemon holds for a different errand.
+   * A NO-OP unless the frame names the ceremony this daemon is actually holding. The requestId guard
+   * is the same one `ceremony.capture` uses and for the same reason: a frame for another requestId
+   * must never start a stream of the window this daemon holds for a different errand.
+   *
+   * When the ceremony matches but its controller is not registered yet (Chrome is still launching,
+   * `stream` still null), the desired state is BUFFERED in `wantStream` rather than dropped — the
+   * common case, since the viewer connects ~1-3s before the window opens. `onStreamReady` applies it
+   * the moment the controller arrives (BUG L1). Once the controller exists, act on it directly.
    */
   private handleCeremonyStream(requestId: string, on: boolean): void {
     const ceremony = this.ceremonyInFlight;
-    if (!ceremony || ceremony.requestId !== requestId || !ceremony.stream) return;
+    if (!ceremony || ceremony.requestId !== requestId) return;
+    if (!ceremony.stream) {
+      ceremony.wantStream = on;
+      return;
+    }
     if (on) void ceremony.stream.start();
     else void ceremony.stream.stop();
   }

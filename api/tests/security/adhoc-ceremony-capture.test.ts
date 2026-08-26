@@ -7,7 +7,8 @@ import {
   requestAttendedCeremony,
   requestCeremonyCapture,
   acceptSessionPush,
-  AttendedError,
+  abortCeremony,
+  findOpenCeremony,
   __resetCeremoniesForTests,
 } from '../../src/bridge/attended.js';
 import { unwrap, findSessionItemsForOrigin } from '../../src/cofre/index.js';
@@ -334,12 +335,30 @@ describe('an ad-hoc ceremony captures a session the halted run can actually use'
     expect(await cofreGrants.listVisible(alice)).toHaveLength(0);
   });
 
-  it('still refuses a push for an origin the ceremony did not declare', async () => {
+  it('ACCEPTS a push that landed on a DIFFERENT host, as long as the jar covers the ceremony origin', async () => {
+    // The multi-domain fix (adversarial audit 2026-08-26). A real login lands wherever the portal's
+    // auth flow ends - Uber Eats on auth.uber.com, a naked domain on its www host - so the daemon
+    // reports a landed origin that differs from the ceremony's. The exact-host `sameOrigin` gate used
+    // to veto exactly this and park the run in needs_credentials forever. There is no landed-origin
+    // gate now; the jar covering the CEREMONY origin is the real control.
     captureWire();
     const requestId = await openAdhoc();
+    const item = await acceptSessionPush({
+      requestId,
+      pairingId: PAIRING,
+      origin: 'auth.sso-provider.example', // where the login LANDED - a different host
+      storageState: storageState(ALICE_COOKIE, ORIGIN), // ...but the jar carries the ceremony origin's cookie
+    });
+    expect(item.boundOrigins).toEqual([ORIGIN]);
+    await expect(unwrap(item._id, alice, { kind: 'browser', origin: `https://${ORIGIN}` })).resolves.toBeDefined();
+  });
 
-    // Unchanged by the ad-hoc kind, and the most dangerous of the rail's three refusals: a mismatched
-    // push would mint a perfectly valid, correctly-encrypted, ARMED item for the WRONG SITE.
+  it('still refuses a push whose jar covers NO cookie for the ceremony origin, whatever landed-origin it claims', async () => {
+    // The real control: a jar for somewhere else entirely is refused at capture (I6) - a mismatched
+    // landed-origin field cannot smuggle in a session for a site the user never curated, because the
+    // binding is derived from the CEREMONY origin and there is nothing here to bind to.
+    captureWire();
+    const requestId = await openAdhoc();
     await expect(
       acceptSessionPush({
         requestId,
@@ -347,7 +366,7 @@ describe('an ad-hoc ceremony captures a session the halted run can actually use'
         origin: 'attacker.example',
         storageState: storageState(ALICE_COOKIE, 'attacker.example'),
       }),
-    ).rejects.toBeInstanceOf(AttendedError);
+    ).rejects.toThrow(/origins it may be replayed against/i);
     expect(await cofreGrants.listVisible(alice)).toHaveLength(0);
   });
 });
@@ -536,5 +555,22 @@ describe('the Done signal can only finish the CALLER OWN ceremony (D-CEREMONY-DO
     const item = await acceptSessionPush({ requestId, pairingId: PAIRING, origin: ORIGIN, storageState: storageState() });
     expect(item.userId).toBe('alice');
     expect(item.boundOrigins).toEqual([ORIGIN]);
+  });
+});
+
+describe('a ceremony the daemon stopped holding is dropped, so a re-establish opens a FRESH window (L2)', () => {
+  it('abortCeremony removes the ceremony (pairing-bound) so findOpenCeremony no longer returns it', async () => {
+    captureWire();
+    const requestId = await openAdhoc();
+    // It is open and re-attachable...
+    expect(findOpenCeremony(alice, PAIRING, ORIGIN)?.requestId).toBe(requestId);
+    // A daemon on ANOTHER pairing cannot end it (it does not own it).
+    expect(abortCeremony(requestId, 'pair-someone-else')).toBe(false);
+    expect(findOpenCeremony(alice, PAIRING, ORIGIN)?.requestId).toBe(requestId);
+    // The holding pairing ends it (the `ceremony.ended` frame path): it is gone, so a re-establish
+    // opens a new window instead of re-attaching to a dead entry.
+    expect(abortCeremony(requestId, PAIRING)).toBe(true);
+    expect(findOpenCeremony(alice, PAIRING, ORIGIN)).toBeUndefined();
+    expect(abortCeremony(requestId, PAIRING)).toBe(false); // idempotent
   });
 });

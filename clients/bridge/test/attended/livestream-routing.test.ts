@@ -99,6 +99,53 @@ describe('ceremony.stream / ceremony.input — the daemon side of the live strea
     await settle();
   });
 
+  it('BUG L1: a ceremony.stream{on:true} that arrives BEFORE the controller is registered still starts the stream once it is', async () => {
+    const cdp = new FakeCdp();
+    const h = harness({ cdp });
+    const runtime = runtimeWith(h.deps.launchBrowser);
+
+    // The real timing this reproduces: the HTTP establish returns and the viewer connects in ~200ms,
+    // but `launchHeadedRealChrome` takes 1-3s. So `ceremony.stream{on:true}` reaches the daemon while
+    // the ceremony's window is still opening — `ceremonyInFlight.stream` is still null, because
+    // `onStreamReady` has not fired yet. `openCeremony` returns with `handleAttended` suspended at
+    // `await launch(...)`, i.e. exactly that state.
+    openCeremony(runtime);
+    runtime.onFrame({ type: 'ceremony.stream', requestId: REQUEST_ID, on: true });
+
+    // Before the fix the frame was DROPPED here (the guard required a non-null stream) and never
+    // replayed when the controller registered — black canvas forever. Now the desire is buffered and
+    // applied the instant `onStreamReady` hands over the controller.
+    await settle();
+    expect(cdp.callsTo('Page.startScreencast')).toHaveLength(1);
+
+    // And it is a live stream, not just a started one: frames relay up under the ceremony's requestId.
+    cdp.fireFrame({ data: 'FIRST_FRAME', sessionId: 5 });
+    const up = ceremonyFrames();
+    expect(up).toHaveLength(1);
+    expect(up[0]).toMatchObject({ type: 'ceremony.frame', requestId: REQUEST_ID, seq: 1, jpegBase64: 'FIRST_FRAME' });
+
+    h.page.fire('close');
+    await settle();
+  });
+
+  it('BUG L1: a viewer that connects then drops BEFORE the controller registers is left NOT streaming', async () => {
+    const cdp = new FakeCdp();
+    const h = harness({ cdp });
+    const runtime = runtimeWith(h.deps.launchBrowser);
+
+    // on:true then on:false both land while the window is still opening. The buffered desire is the
+    // LAST one seen (off), so the controller must register stopped — not stream at a viewer who left.
+    openCeremony(runtime);
+    runtime.onFrame({ type: 'ceremony.stream', requestId: REQUEST_ID, on: true });
+    runtime.onFrame({ type: 'ceremony.stream', requestId: REQUEST_ID, on: false });
+
+    await settle();
+    expect(cdp.callsTo('Page.startScreencast')).toHaveLength(0);
+
+    h.page.fire('close');
+    await settle();
+  });
+
   it('dispatches a ceremony.input mouse-down into the in-flight ceremony window', async () => {
     const cdp = new FakeCdp();
     const h = harness({ cdp });

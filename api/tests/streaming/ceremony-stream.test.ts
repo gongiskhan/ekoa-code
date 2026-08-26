@@ -9,8 +9,10 @@ import {
   _extractRequestIdForTest,
   _parseTokenForTest,
   CEREMONY_WS_PATH_PREFIX,
+  CEREMONY_STREAM_MAX_MS,
   type CeremonyInput,
 } from '../../src/streaming/ceremony-stream.js';
+import { tokenTtlSeconds } from '../../src/streaming/auth.js';
 
 /**
  * The Cortex half of the attended-ceremony live view (D-CEREMONY-STREAM): frames from the bridge go
@@ -206,6 +208,54 @@ describe('ownership + lifecycle', () => {
     closeCeremonyStream('req-1');
     expect(getCeremonyStreamSession('req-1')).toBeUndefined();
     expect(viewer.at(-1)).toBe(false);
+  });
+
+  it('REFUSES to close a stream when the requiring pairing is not the one that owns it (L4 cross-tenant DoS)', () => {
+    // A refuse-push arrives at the session.push handler from ANOTHER pairing BEFORE acceptSessionPush
+    // proves the pairing; its catch-side teardown must not be able to close this owner's live stream by
+    // naming their requestId. closeCeremonyStream drops a requirePairingId mismatch, mirroring the
+    // pairing binding pushCeremonyFrame already has (adversarial re-audit, 2026-08-26).
+    const { hooks } = makeHooks();
+    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', pairingId: 'pair-1', hooks });
+    const ws = new MockWs();
+    getCeremonyStreamSession('req-1')!.attachSocket(ws as never);
+
+    closeCeremonyStream('req-1', { requirePairingId: 'pair-ATTACKER' });
+    expect(getCeremonyStreamSession('req-1')).toBeDefined(); // untouched
+
+    closeCeremonyStream('req-1', { requirePairingId: 'pair-1' }); // the owning pairing
+    expect(getCeremonyStreamSession('req-1')).toBeUndefined();
+  });
+});
+
+describe('the self-close backstop is a FIXED lifetime, never derived from the viewer-token TTL (L4)', () => {
+  it('self-closes at CEREMONY_STREAM_MAX_MS, not at the old (tokenTtlSeconds + 30) point', () => {
+    vi.useFakeTimers();
+    try {
+      const { hooks } = makeHooks();
+      openCeremonyStream({ requestId: 'req-ttl', ownerUserId: 'alice', pairingId: 'pair-1', hooks });
+
+      // Just before the fixed max lifetime the stream is STILL registered. This is the load-bearing
+      // assertion: the backstop used to be armed at `(tokenTtlSeconds() + 30) * 1000` (630s at the
+      // default 600s token TTL), so at this point the stream would already have been torn down - and
+      // lowering EKOA_STREAMING_TOKEN_TTL_SECONDS made that gap arbitrarily worse, cutting a live
+      // login short. Pinned to CEREMONY_STREAM_MAX_MS, it survives here.
+      vi.advanceTimersByTime(CEREMONY_STREAM_MAX_MS - 1000);
+      expect(getCeremonyStreamSession('req-ttl')).toBeDefined();
+
+      // At the fixed lifetime it self-closes and unregisters, so the registry entry never leaks.
+      vi.advanceTimersByTime(1001);
+      expect(getCeremonyStreamSession('req-ttl')).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('the backstop const is a fixed 11 minutes, past the ceremony window and above the token TTL', () => {
+    expect(CEREMONY_STREAM_MAX_MS).toBe(11 * 60_000);
+    // Independent of - and dominating - the viewer-token TTL knob, so no value of
+    // EKOA_STREAMING_TOKEN_TTL_SECONDS can shorten it below the daemon's ceremony window.
+    expect(CEREMONY_STREAM_MAX_MS).toBeGreaterThan((tokenTtlSeconds() + 30) * 1000);
   });
 });
 

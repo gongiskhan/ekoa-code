@@ -2166,7 +2166,7 @@ export function boot(): void {
         // view down when the login completes. Wired here (the composition root) so bridge/ never
         // imports streaming/ across the seam.
         onCeremonyFrame: pushCeremonyFrame,
-        onCeremonyEnded: (requestId) => closeCeremonyStream(requestId),
+        onCeremonyEnded: (requestId, pairingId) => closeCeremonyStream(requestId, { requirePairingId: pairingId }),
       });
     })
     .catch((err) => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import type { Server } from 'node:http';
 import { createMem, type MongoMemoryServer } from '../helpers/mongo-mem.js';
 import { connectMongo, closeMongo } from '../../src/data/mongo.js';
@@ -8,6 +8,9 @@ import { __resetRevocationsForTests } from '../../src/auth/revocation.js';
 import { login } from '../../src/auth/service.js';
 import { hashPassword } from '../../src/auth/password.js';
 import { buildApp } from '../../src/server.js';
+import { attachLiveConnection, registerPairing, __resetLiveConnectionsForTests } from '../../src/bridge/registry.js';
+import { __resetCeremoniesForTests, __openCeremonyCount } from '../../src/bridge/attended.js';
+import { getCeremonyStreamSession, __resetCeremonyStreamsForTest, _extractRequestIdForTest } from '../../src/streaming/ceremony-stream.js';
 import { loadConfig, __resetConfigForTests, defaultLlmConfig, type Config } from '../../src/config.js';
 import {
   CofreItem,
@@ -300,5 +303,76 @@ describe('cofre contract', () => {
       const res = await fetch(`http://127.0.0.1:${port}${p}`, { method, headers: { 'content-type': 'application/json' }, body: method === 'POST' ? '{}' : undefined });
       expect(res.status, `${method} ${p}`).toBe(401);
     }
+  });
+});
+
+/**
+ * The ad-hoc ceremony LIVE-STREAM lifecycle (D-CEREMONY-STREAM, L2). `openCeremonyStream` is reached
+ * only from `/sessions/establish`, and each establish used to open a FRESH ceremony. The daemon holds
+ * at most one ceremony and silently refuses a second `attended.request`, so a viewer drop (reload,
+ * sleep, network blip) followed by the human re-clicking "Abrir janela" minted a SECOND ceremony +
+ * stream the daemon would never match - a canvas that looks connected and streams nothing. Establish
+ * must now RE-ATTACH to the already-open ceremony instead of opening a dead second one.
+ *
+ * This suite wires a live machine directly into the registry (there is no bridge WS server in the
+ * contract app) advertising both the ceremony capability and its live stream.
+ */
+describe('cofre session establish - viewer re-attach (D-CEREMONY-STREAM L2)', () => {
+  const PAIRING = 'reattach-machine';
+  const ORIGIN = 'orders.adhoc.example';
+  // Minimal daemon socket: sendToPairing writes the `attended.request`/`ceremony.*` frames to it.
+  const ws = { send: () => {}, close: () => {} };
+
+  const wireMachine = async () => {
+    __resetLiveConnectionsForTests();
+    __resetCeremoniesForTests();
+    __resetCeremonyStreamsForTest();
+    // usr belongs to orgA (seeded by the top-level beforeEach). A live socket for that owner + org.
+    attachLiveConnection({ pairingId: PAIRING, org: 'orgA', ownerUserId: 'usr', ws: ws as never });
+    await registerPairing({
+      pairingId: PAIRING,
+      org: 'orgA',
+      ownerUserId: 'usr',
+      capabilities: ['attended.card_login', 'attended.livestream'],
+    });
+  };
+
+  const establish = async (t: string) =>
+    (await authed('/api/v1/cofre/sessions/establish', t, {
+      method: 'POST',
+      body: JSON.stringify({ origin: ORIGIN }),
+    }).then((r) => r.json())) as { started: boolean; message: string; streaming?: { wsUrl: string; token: string } };
+
+  afterEach(() => {
+    __resetLiveConnectionsForTests();
+    __resetCeremoniesForTests();
+    __resetCeremonyStreamsForTest();
+  });
+
+  it('establishing twice for one origin while a ceremony is open REUSES it - no dead second ceremony', async () => {
+    await wireMachine();
+    const t = await tokenFor('usr');
+
+    const first = await establish(t);
+    expect(CofreSessionEstablishResponse.safeParse(first), JSON.stringify(first)).toMatchObject({ success: true });
+    expect(first.started).toBe(true);
+    expect(first.streaming?.wsUrl).toBeTruthy();
+    expect(__openCeremonyCount()).toBe(1);
+
+    // The viewer dropped (reload / sleep) and the human clicked "Abrir janela" a second time.
+    const second = await establish(t);
+    expect(second.started).toBe(true);
+
+    // SAME ceremony reused: the wsUrl (which carries the requestId) is identical, there is still
+    // exactly ONE PendingCeremony, and the reused id's stream session is live. BEFORE the fix the
+    // second establish called `requestAttendedCeremony` again - a new requestId, a second ceremony
+    // the daemon no-ops - so the count would be 2 and the two wsUrls would differ.
+    expect(second.streaming?.wsUrl).toBe(first.streaming?.wsUrl);
+    expect(__openCeremonyCount()).toBe(1);
+    const reqId = _extractRequestIdForTest(first.streaming!.wsUrl);
+    expect(reqId).toBeTruthy();
+    expect(getCeremonyStreamSession(reqId!)).toBeDefined();
+    // Re-mint handed the client a fresh single-use viewer token for the reconnect.
+    expect(second.streaming?.token).toBeTruthy();
   });
 });

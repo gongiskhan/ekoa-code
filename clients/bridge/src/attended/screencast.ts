@@ -82,6 +82,11 @@ export class CeremonyScreencast {
     // `Page.enable` first: a fresh CDP session (`newCDPSession`) is a separate channel from
     // Playwright's own, so screencast frames will not fire until Page is enabled on THIS one.
     await this.cdp.send('Page.enable');
+    // A stop() that landed DURING `Page.enable` must abort before the screencast starts (BUG L3):
+    // without this re-check the viewer-gone case would still send `Page.startScreencast` and leave
+    // frames flowing to no one. `onFrame` already guards on `this.stopped`, so the pipeline stays
+    // silent, but not starting it at all is the honest outcome.
+    if (this.stopped) return;
     // everyNthFrame from FPS exactly as the hosted canvas derives it: at 15fps Chrome emits every
     // 4th compositor frame (~15/s off a 60Hz pipeline).
     const everyNthFrame = Math.max(1, Math.round(60 / Math.max(1, FPS)));
@@ -190,6 +195,18 @@ export class CeremonyStreamController {
   private screencast: CeremonyScreencast | null = null;
   private starting: Promise<void> | null = null;
   private torndown = false;
+  /**
+   * The last state a caller asked for. `start()` sets it 'on', `stop()`/`teardown()` set it 'off'.
+   *
+   * It exists because `stop()` alone cannot cancel an in-flight `start()`: a viewer that connects
+   * (`start()` begins, `await this.newCdp()` in flight) then immediately drops (`stop()` reads
+   * `this.screencast` still null and no-ops) used to leave the start closure — which re-checked only
+   * `this.torndown` — free to install and start a screencast with NO viewer, orphan frames flowing up
+   * the bridge link for the rest of the ceremony (BUG L3). `stop()` now records 'off' AND awaits the
+   * in-flight start, and the closure re-checks this AFTER the await and tears the just-created CDP
+   * session down instead of installing it.
+   */
+  private desired: 'on' | 'off' = 'off';
 
   constructor(
     private readonly newCdp: () => Promise<BridgeCdpSession>,
@@ -199,12 +216,18 @@ export class CeremonyStreamController {
 
   /** A viewer connected: attach the screencast if it is not already up. Concurrent starts join. */
   async start(): Promise<void> {
+    this.desired = 'on';
     if (this.torndown || this.screencast) return;
     if (this.starting) return this.starting;
     this.starting = (async (): Promise<void> => {
       const cdp = await this.newCdp();
-      // A stop/teardown that raced the CDP attach wins: do not start a stream nobody is waiting for.
-      if (this.torndown) {
+      // A stop/teardown that raced the CDP attach WINS: do not install a stream nobody is waiting
+      // for (BUG L3). The viewer dropped while `newCdp()` was in flight, so `desired` is now 'off' (or
+      // the ceremony tore down) — drop the just-created session on the floor rather than screencasting
+      // to no one. Leaving `screencast` null lets a genuinely later viewer re-attach with a fresh
+      // `start()`. The seam exposes no detach, and none is needed: an un-started CDP session with no
+      // `Page.startScreencast` sent produces no frames and dies with the window.
+      if (this.torndown || this.desired === 'off') {
         return;
       }
       const sc = new CeremonyScreencast(cdp, this.send, this.requestId);
@@ -219,9 +242,30 @@ export class CeremonyStreamController {
   /** The viewer dropped (`ceremony.stream{on:false}`): stop the screencast but keep the window, so a
    *  later viewer can re-attach with a fresh `start()`. */
   async stop(): Promise<void> {
+    this.desired = 'off';
+    // Await any in-flight start so its post-`newCdp()` re-check runs before we return: otherwise a
+    // stop() that lands mid-launch would return while the start closure is still about to install an
+    // orphan screencast (BUG L3). The closure, seeing `desired === 'off'`, installs nothing, so once
+    // it settles there is no screencast to stop.
+    if (this.starting) await this.starting;
+    // A viewer that RE-ATTACHED while we awaited the in-flight start (a fast close+reconnect - the
+    // connect set `desired` back to 'on' and joined the same `starting` promise, which then installed
+    // the screencast) must keep its stream. Without this re-read, stop() would tear down the stream the
+    // reconnected viewer is now watching, leaving it black until a reload (BUG L3, second-order:
+    // start-stop-start). Read through `desiredIsOn()` because the `await` above can mutate `desired`
+    // and TS's flow analysis cannot see that (it narrowed it to 'off' at the top of stop()).
+    // teardown() is unaffected - it gates on `torndown`, not `desired`.
+    if (this.desiredIsOn()) return;
     const sc = this.screencast;
     this.screencast = null;
     if (sc) await sc.stop();
+  }
+
+  /** Whether a viewer currently wants the stream. A method (not an inline `this.desired === 'on'`)
+   *  so a caller reading it AFTER an `await` gets the live value - inline, TS narrows `desired` to
+   *  whatever it was assigned before the await and flags the comparison as impossible. */
+  private desiredIsOn(): boolean {
+    return this.desired === 'on';
   }
 
   /** Dispatch the human's input into the live page. A no-op when no viewer is streaming. */

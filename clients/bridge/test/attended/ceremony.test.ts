@@ -83,7 +83,7 @@ describe('attended ceremony — the machine half of J-5', () => {
     expect(h.sent.find((f) => f.type === 'session.push')).toMatchObject({ storageState: LOGGED_IN });
   });
 
-  it('reports failure and pushes nothing when the browser cannot launch', async () => {
+  it('pushes no session when the browser cannot launch, but SIGNALS the ceremony ended', async () => {
     const sent: BridgeFrame[] = [];
     const logs: string[] = [];
     const ok = await runAttendedCeremony(REQ, {
@@ -97,7 +97,11 @@ describe('attended ceremony — the machine half of J-5', () => {
     });
 
     expect(ok).toBe(false);
-    expect(sent).toHaveLength(0);
+    // No session is captured...
+    expect(sent.filter((f) => f.type === 'session.push')).toHaveLength(0);
+    // ...but the daemon tells Cortex the ceremony ended so it drops the entry instead of leaving it to
+    // linger for the full TTL, where a re-establish would re-attach to a dead ceremony (L2).
+    expect(sent.map((f) => f.type)).toEqual(['ceremony.ended']);
     // `--force` matters: plain `playwright install` skips a version already on disk, so the advice
     // this prints has to be the form that actually repairs a truncated download.
     expect(logs.join('\n')).toContain('playwright install --force chromium');

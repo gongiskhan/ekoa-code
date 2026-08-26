@@ -27,7 +27,7 @@ import {
   recordCofreEvent,
 } from '../cofre/index.js';
 import { ADHOC_SESSION_GRANT } from '../cofre/sessions.js';
-import { requestAttendedCeremony, requestCeremonyCapture } from '../bridge/attended.js';
+import { requestAttendedCeremony, requestCeremonyCapture, findOpenCeremony } from '../bridge/attended.js';
 import { advertisesCapability, getConnectionByOwner, sendToPairing } from '../bridge/registry.js';
 import { openCeremonyStream, type OpenCeremonyStreamResult } from '../streaming/ceremony-stream.js';
 import { notFound, parseBody, sendError } from './helpers.js';
@@ -149,25 +149,39 @@ export function cofreRouter(deps: { now: () => number; genId: () => string }): R
       });
     }
 
+    // RE-ATTACH BEFORE RE-OPEN (D-CEREMONY-STREAM lifecycle, L2). A viewer drop (reload, sleep,
+    // network blip) followed by the human re-clicking "Abrir janela" lands here again. The daemon
+    // holds at most one ceremony and silently refuses a second `attended.request` while a window is
+    // up, so opening a fresh ceremony would mint a requestId the daemon never matches - a canvas that
+    // looks connected and streams nothing. If a ceremony for this machine + origin is still open,
+    // REUSE its requestId (no second `attended.request`, no second PendingCeremony) and let the
+    // streaming block below re-mint the viewer token against it; `openCeremonyStream` already
+    // closes+replaces any prior stream session for the id, so the reconnect, the attachSocket
+    // 4000-takeover and the daemon's kept window all line up on the one ceremony.
     let requestId: string;
-    try {
-      requestId = await requestAttendedCeremony(actor, {
-        pairingId: machine.pairingId,
-        kind: 'login',
-        origin: body.origin,
-        reason: `Iniciar sessão em ${body.origin} para continuar a automação`,
-        label: `${body.origin} session`,
-        // D-ADHOC-2. The one field that differs from the declared ceremony, and it is set HERE - by
-        // the code that knows this is the ad-hoc errand - rather than defaulted inside the rail.
-        grant: ADHOC_SESSION_GRANT,
-      });
-    } catch (error) {
-      // Offline is a REFUSAL, never a queued promise (bridge/attended.ts): a ceremony needs a human
-      // there now, so "we will ask when it comes back" would ask when nobody is standing there.
-      return res.json({
-        started: false,
-        message: error instanceof Error ? error.message : 'A cerimónia não pôde ser iniciada.',
-      });
+    const open = findOpenCeremony(actor, machine.pairingId, body.origin);
+    if (open) {
+      requestId = open.requestId;
+    } else {
+      try {
+        requestId = await requestAttendedCeremony(actor, {
+          pairingId: machine.pairingId,
+          kind: 'login',
+          origin: body.origin,
+          reason: `Iniciar sessão em ${body.origin} para continuar a automação`,
+          label: `${body.origin} session`,
+          // D-ADHOC-2. The one field that differs from the declared ceremony, and it is set HERE - by
+          // the code that knows this is the ad-hoc errand - rather than defaulted inside the rail.
+          grant: ADHOC_SESSION_GRANT,
+        });
+      } catch (error) {
+        // Offline is a REFUSAL, never a queued promise (bridge/attended.ts): a ceremony needs a human
+        // there now, so "we will ask when it comes back" would ask when nobody is standing there.
+        return res.json({
+          started: false,
+          message: error instanceof Error ? error.message : 'A cerimónia não pôde ser iniciada.',
+        });
+      }
     }
 
     // LIVE STREAM (D-CEREMONY-STREAM): if the machine can stream its ceremony window, register a
