@@ -116,6 +116,30 @@ describe('launchHeadedRealChrome — the ceremony window, hygiene and recovery',
     }
   });
 
+  it('headless mode launches windowless and skips the off-screen window management', async () => {
+    // On a same-machine bridge the operator opts into headless so the headed window's macOS
+    // app-activation cannot steal focus from the panel. Headless has no window, so it is neither
+    // positioned off-screen nor hidden via CDP.
+    const cdpCalls: string[] = [];
+    const fakeCdp = { send: async (m: string) => (cdpCalls.push(m), undefined), on: () => undefined };
+    const ctx = {
+      ...fakeContext(),
+      pages: () => [{ goto: async () => undefined, url: () => 'about:blank', on: () => undefined }],
+      newCDPSession: async (_page: unknown) => fakeCdp,
+    } as unknown as HeadedChromeContext;
+    const seen: Array<{ opts: Record<string, unknown> }> = [];
+    const launch: PersistentContextLauncher = async (_dir, opts) => (seen.push({ opts }), ctx);
+    const dir = mkdtempSync(join(tmpdir(), 'ekoa-ceremony-'));
+    try {
+      await launchHeadedRealChrome(dir, { launch, headless: true });
+      expect(seen[0]!.opts.headless).toBe(true);
+      expect(seen[0]!.opts.args).not.toContain(`--window-position=${OFFSCREEN_WINDOW_LEFT},${OFFSCREEN_WINDOW_TOP}`);
+      expect(cdpCalls).not.toContain('Browser.setWindowBounds'); // no window to hide
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('falls back to the bundled browser (no channel) when real Chrome is absent', async () => {
     const seen: Array<Record<string, unknown>> = [];
     const launch: PersistentContextLauncher = async (_dir, opts) => {

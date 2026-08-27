@@ -165,8 +165,8 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
   const userDataDir = join(profilesRoot, sanitizeProfileId(hostKeyOf(target)));
   const launch =
     deps.launchBrowser ??
-    (async (_o: { headless: boolean }): Promise<CeremonyBrowser> =>
-      ceremonyBrowserOverContext(await launchHeadedRealChrome(userDataDir, { log: deps.log })));
+    (async (o: { headless: boolean }): Promise<CeremonyBrowser> =>
+      ceremonyBrowserOverContext(await launchHeadedRealChrome(userDataDir, { log: deps.log, headless: o.headless })));
   const repair = deps.repairBrowser ?? installChromium;
 
   // Tell Cortex the ceremony ended WITHOUT a capture (D-CEREMONY-STREAM lifecycle L2). Every path that
@@ -201,9 +201,16 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
   // inside the default launcher so it applies to whatever launcher is in use and can be asserted
   // through the public API — while it sat in `defaultLaunch`, the retry was unreachable from a test
   // and the corrupt-install case below went unnoticed until a real laptop slept mid-download.
+  // Headless only when the operator asks (EKOA_CEREMONY_HEADLESS=1): on a machine where the bridge and
+  // the dashboard are the SAME, a headed window's macOS app-activation steals keyboard focus from the
+  // panel the human types into, so headless (no window) is the typable mode there. Headed stays the
+  // default (lower bot-detection; a separate bridge machine steals no focus). Read once so both the
+  // launch and the retry agree.
+  const headless = process.env.EKOA_CEREMONY_HEADLESS === '1';
+  if (headless) deps.log('  (Modo sem janela: conduza tudo no visor da Ekoa.)');
   let browser: CeremonyBrowser;
   try {
-    browser = await launch({ headless: false });
+    browser = await launch({ headless });
   } catch (first) {
     if (!isRepairableBrowser(first)) {
       deps.log(`ERRO: não foi possível abrir o navegador — ${first instanceof Error ? first.message : String(first)}`);
@@ -215,7 +222,7 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
     deps.log('A preparar o navegador da automação (uma só vez, pode demorar 1-2 minutos)...');
     try {
       await repair();
-      browser = await launch({ headless: false });
+      browser = await launch({ headless });
     } catch (second) {
       deps.log(`ERRO: não foi possível abrir o navegador — ${second instanceof Error ? second.message : String(second)}`);
       // `--force`: without it playwright SKIPS a version already on disk, so the advice printed

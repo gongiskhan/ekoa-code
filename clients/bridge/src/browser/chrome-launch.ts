@@ -130,6 +130,18 @@ export interface LaunchHeadedChromeDeps {
   launch?: PersistentContextLauncher;
   /** User-visible progress, in Portuguese — this runs where the human is sitting. */
   log?: (message: string) => void;
+  /**
+   * Run WITHOUT a visible window (headless). Default false: a real headed window, hidden off-screen.
+   *
+   * WHY THE SWITCH. On macOS, dispatching input into a HEADED window keeps making Chrome the active
+   * application, which steals keyboard focus from the dashboard tab the human is typing into - so on a
+   * machine where the bridge and the viewer are the SAME, a headed ceremony is barely typable (off-
+   * screen does not help: it is app-activation, not window position). Headless has no window/app to
+   * activate, so the human types into the streamed panel uninterrupted. The cost is that headless is
+   * more bot-detectable, so headed stays the DEFAULT (in production the bridge is a separate machine
+   * and steals no focus); the operator opts into headless for same-machine work.
+   */
+  headless?: boolean;
 }
 
 /**
@@ -156,10 +168,11 @@ export function sweepSingletonMarkers(userDataDir: string): void {
 }
 
 /**
- * Open a headed, persistent real-Chrome window at `userDataDir`. Real installed Chrome first (real
+ * Open a persistent real-Chrome context at `userDataDir`. Real installed Chrome first (real
  * UA/TLS/client hints), bundled chromium as the honest fallback, and a machine with neither told so
- * by name with the one command that fixes it. The infobar is suppressed so the window reads as an
- * ordinary browser to the human who has to log into it.
+ * by name with the one command that fixes it. Headed by default with the window hidden off-screen and
+ * the infobar suppressed, so it reads as an ordinary browser; `deps.headless` runs it windowless (see
+ * `LaunchHeadedChromeDeps.headless` for why the operator flips it on for same-machine work).
  */
 export async function launchHeadedRealChrome(
   userDataDir: string,
@@ -169,17 +182,18 @@ export async function launchHeadedRealChrome(
   sweepSingletonMarkers(userDataDir);
 
   const launch = deps.launch ?? defaultPersistentLaunch;
+  const headless = deps.headless ?? false;
   const base: Record<string, unknown> = {
-    headless: false,
+    headless,
     viewport: { ...DEFAULT_VIEWPORT },
     ...hostLocale(),
     args: [
       '--disable-blink-features=AutomationControlled',
-      // Launch OFF-SCREEN so the window never flashes onto the desktop before we hide it (the
-      // established Chrome offscreen position; `attachWindowHide` re-applies it and re-hides on each
-      // navigation). Off-screen, not minimized - a minimized macOS window stops compositing (black
-      // stream); an off-screen window keeps rendering.
-      `--window-position=${OFFSCREEN_WINDOW_LEFT},${OFFSCREEN_WINDOW_TOP}`,
+      // Headed only: launch OFF-SCREEN so the window never flashes onto the desktop before we hide it
+      // (the established Chrome offscreen position; `attachWindowHide` re-applies it and re-hides on
+      // each navigation). Off-screen, not minimized - a minimized macOS window stops compositing (black
+      // stream); an off-screen window keeps rendering. Headless has no window, so this is skipped.
+      ...(headless ? [] : [`--window-position=${OFFSCREEN_WINDOW_LEFT},${OFFSCREEN_WINDOW_TOP}`]),
       // Keep the renderer HOT while the window is off the desktop, so the live stream does not freeze.
       // Chrome throttles/stops painting a backgrounded or occluded window by default; these keep it
       // producing frames at full rate.
@@ -225,10 +239,11 @@ export async function launchHeadedRealChrome(
   // raising a second window the stream cannot follow (and macOS cannot stop raising to the front).
   await context.addInitScript(SAME_TAB_INIT_SCRIPT).catch(() => undefined);
   attachCdpSeam(context);
-  // Move the window OFF-SCREEN so it never takes over the desktop; the streamed panel is the control
-  // surface. Off-screen (not minimized) because a minimized macOS window stops compositing and the
-  // screencast goes black - an off-screen NORMAL window keeps rendering at full rate.
-  await attachWindowHide(context);
+  // Headed: move the window OFF-SCREEN so it never takes over the desktop; the streamed panel is the
+  // control surface. Off-screen (not minimized) because a minimized macOS window stops compositing and
+  // the screencast goes black - an off-screen NORMAL window keeps rendering at full rate. Headless has
+  // no window to hide, so this is skipped.
+  if (!headless) await attachWindowHide(context);
   return context;
 }
 
