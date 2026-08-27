@@ -130,6 +130,9 @@ export interface CeremonyContext {
    * unit-test fake) simply never streams, so the ceremony holds its window exactly as before.
    */
   newCDPSession?(): Promise<BridgeCdpSession>;
+  /** Minimize the window so it cannot take over the desktop; re-called on each navigation. Optional
+   *  and best-effort — absent on a fake context, which just holds a visible window as before. */
+  minimizeWindow?(): Promise<void>;
 }
 export interface CeremonyPage {
   goto(url: string, opts?: { timeout?: number; waitUntil?: 'load' | 'domcontentloaded' }): Promise<unknown>;
@@ -251,6 +254,9 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
       deps.log(`Aviso: a página não abriu automaticamente (${err instanceof Error ? err.message : String(err)}).`);
       deps.log(`Escreva o endereço na janela: ${target}`);
     }
+    // Re-minimize after the initial load: the goto can raise the window back onto the desktop, and the
+    // stream (not the local window) is the control surface. Best-effort; the launch already minimized.
+    void context.minimizeWindow?.();
 
     const closed = waitForClose(browser, context, page);
     const deadline = now() + CEREMONY_TTL_MS;
@@ -284,7 +290,13 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
       });
       return inFlight;
     };
-    page.on?.('framenavigated', () => void snapshot());
+    // On every navigation: snapshot the (possibly now-authenticated) state AND re-minimize - a login
+    // redirects through several pages and macOS can restore a minimized window on some of them, which
+    // is exactly the "takes over the machine" flap. Keeping it minimized holds the desktop.
+    page.on?.('framenavigated', () => {
+      void snapshot();
+      void context.minimizeWindow?.();
+    });
     await snapshot();
 
     // Both non-TTL arms are built ONCE, outside the loop. Re-deriving them per iteration would hang
@@ -431,6 +443,8 @@ export function ceremonyBrowserOverContext(ctx: HeadedChromeContext): CeremonyBr
     // Pass the live-stream seam through when the real launch attached one. Absent on a fake/injected
     // context, so its ceremony simply never streams.
     ...(ctx.newCDPSession ? { newCDPSession: (): Promise<BridgeCdpSession> => ctx.newCDPSession!() } : {}),
+    // Pass the window-minimize seam through likewise (absent on a fake context).
+    ...(ctx.minimizeWindow ? { minimizeWindow: (): Promise<void> => ctx.minimizeWindow!() } : {}),
   };
   return {
     newContext: async () => context,

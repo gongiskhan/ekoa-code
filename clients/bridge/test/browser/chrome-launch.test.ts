@@ -68,6 +68,38 @@ describe('launchHeadedRealChrome — the ceremony window, hygiene and recovery',
     expect(scripts).toContain(SAME_TAB_INIT_SCRIPT);
   });
 
+  it('minimizes the window at launch via CDP, and exposes a re-callable minimizeWindow seam', async () => {
+    // The window is hidden off the desktop so it cannot take over the machine; the streamed panel is
+    // the control surface. Pins that we minimize at launch and can re-minimize (called on navigation).
+    const cdpCalls: Array<{ method: string; params?: unknown }> = [];
+    const fakeCdp = {
+      send: async (method: string, params?: unknown) => {
+        cdpCalls.push({ method, params });
+        return method === 'Browser.getWindowForTarget' ? { windowId: 42 } : undefined;
+      },
+      on: () => undefined,
+    };
+    const ctx = {
+      ...fakeContext(),
+      pages: () => [{ goto: async () => undefined, url: () => 'about:blank', on: () => undefined }],
+      // page-taking newCDPSession, exactly as Playwright exposes; attachCdpSeam wraps it 0-arg.
+      newCDPSession: async (_page: unknown) => fakeCdp,
+    } as unknown as HeadedChromeContext;
+    const launch: PersistentContextLauncher = async () => ctx;
+    const dir = mkdtempSync(join(tmpdir(), 'ekoa-ceremony-'));
+    try {
+      const out = await launchHeadedRealChrome(dir, { launch });
+      const bounds = cdpCalls.filter((c) => c.method === 'Browser.setWindowBounds');
+      expect(bounds).toHaveLength(1); // minimized once at launch
+      expect(bounds[0]!.params).toMatchObject({ windowId: 42, bounds: { windowState: 'minimized' } });
+      await out.minimizeWindow?.(); // re-minimize (the navigation path) works and reuses the windowId
+      expect(cdpCalls.filter((c) => c.method === 'Browser.setWindowBounds')).toHaveLength(2);
+      expect(cdpCalls.filter((c) => c.method === 'Browser.getWindowForTarget')).toHaveLength(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('falls back to the bundled browser (no channel) when real Chrome is absent', async () => {
     const seen: Array<Record<string, unknown>> = [];
     const launch: PersistentContextLauncher = async (_dir, opts) => {

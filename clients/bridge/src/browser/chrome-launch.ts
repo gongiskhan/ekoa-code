@@ -78,6 +78,14 @@ export interface HeadedChromeContext {
    * streams — the ceremony holds its window exactly as before, local-only.
    */
   newCDPSession?(): Promise<BridgeCdpSession>;
+  /**
+   * Minimize the ceremony window so it cannot take over the human's desktop - the streamed dashboard
+   * panel is the control surface (D-CEREMONY-STREAM), so the window itself never needs to be visible on
+   * the bridge machine. Idempotent and best-effort (a fake/injected context, or a CDP that cannot do
+   * window management, leaves the window as it is). Called at launch AND re-called on each navigation,
+   * because macOS can restore a minimized window when the page redirects during a login.
+   */
+  minimizeWindow?(): Promise<void>;
 }
 
 /**
@@ -165,7 +173,15 @@ export async function launchHeadedRealChrome(
     headless: false,
     viewport: { ...DEFAULT_VIEWPORT },
     ...hostLocale(),
-    args: ['--disable-blink-features=AutomationControlled'],
+    args: [
+      '--disable-blink-features=AutomationControlled',
+      // Keep the renderer HOT while the window is minimized (below), so the live stream does not freeze
+      // when the window is hidden off the desktop. Chrome throttles/stops painting a backgrounded or
+      // occluded window by default; these keep it producing frames at full rate.
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--disable-background-timer-throttling',
+    ],
     // Drop the "Chrome is being controlled by automated test software" infobar. A human is about to
     // type a real password here; the banner is both alarming and a stronger automation tell than the
     // one `WEBDRIVER_INIT_SCRIPT` removes.
@@ -204,6 +220,8 @@ export async function launchHeadedRealChrome(
   // raising a second window the stream cannot follow (and macOS cannot stop raising to the front).
   await context.addInitScript(SAME_TAB_INIT_SCRIPT).catch(() => undefined);
   attachCdpSeam(context);
+  // Minimize the window so it never takes over the desktop; the streamed panel is the control surface.
+  await attachWindowMinimize(context);
   return context;
 }
 
@@ -226,6 +244,36 @@ function attachCdpSeam(context: HeadedChromeContext): void {
     const page = pw.pages()[0] ?? (await pw.newPage());
     return realNewCdp(page);
   };
+}
+
+/**
+ * Give the returned context a `minimizeWindow()` that hides the window off the desktop via CDP window
+ * management (`Browser.getWindowForTarget` + `Browser.setWindowBounds{windowState:'minimized'}`), and
+ * call it once at launch. It reuses a single window-management CDP session (separate from the
+ * screencast's) resolved lazily. Best-effort throughout: a context with no `newCDPSession` (the unit
+ * fakes) is left untouched, and any CDP failure leaves the window visible rather than throwing.
+ */
+async function attachWindowMinimize(context: HeadedChromeContext): Promise<void> {
+  const newCdp = (context as { newCDPSession?: () => Promise<BridgeCdpSession> }).newCDPSession;
+  if (typeof newCdp !== 'function') return;
+  let cdp: BridgeCdpSession | undefined;
+  let windowId: number | undefined;
+  const minimize = async (): Promise<void> => {
+    try {
+      if (!cdp) cdp = await newCdp();
+      if (windowId === undefined) {
+        const r = (await cdp.send('Browser.getWindowForTarget')) as { windowId?: number };
+        windowId = r?.windowId;
+      }
+      if (windowId !== undefined) {
+        await cdp.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } });
+      }
+    } catch {
+      /* window management unavailable on this platform/CDP; the window simply stays visible */
+    }
+  };
+  (context as { minimizeWindow?: () => Promise<void> }).minimizeWindow = minimize;
+  await minimize();
 }
 
 /** Playwright's persistent context, HEADED. Imported dynamically so the module graph does not pull
