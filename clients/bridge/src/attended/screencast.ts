@@ -37,6 +37,17 @@ const QUALITY = parseInt(process.env.EKOA_STREAMING_QUALITY || '70', 10);
  *  repaint, so an already-loaded login page can sit silent after the first frame; the hosted canvas
  *  keeps the same fallback (`api/src/streaming/session.ts`). */
 const POLL_INTERVAL_MS = parseInt(process.env.EKOA_STREAMING_POLL_INTERVAL_MS || '500', 10);
+/**
+ * The recurring screenshot poll runs ONLY in headless mode. On a HEADED macOS window,
+ * `Page.captureScreenshot` on an OCCLUDED window (the operator clicked away to the dashboard or the
+ * terminal) forces the window back to the FRONT to grab its surface - so a 500ms poll yanks Chrome
+ * forward twice a second and the operator cannot hold focus anywhere else (they could not even Ctrl-C
+ * the daemon). The screencast alone keeps a headed window's panel updated (it reads the compositor
+ * with the anti-throttle flags and never raises); the poll is only NEEDED headless, where there is no
+ * window to raise and the screencast is silent on a static page. The immediate first screenshot still
+ * runs in both modes (at launch the window is already frontmost, so it does not fight anything).
+ */
+const POLL_WHEN_IDLE = process.env.EKOA_CEREMONY_HEADLESS === '1';
 /** How long the CSS-viewport probe may take before the screencast starts unclamped anyway. A blocked
  *  probe must NEVER hold up frame production - a black canvas is worse than an unclamped one. */
 const VIEWPORT_PROBE_TIMEOUT_MS = 1500;
@@ -147,7 +158,9 @@ export class CeremonyScreencast {
     // keeps (`api/src/streaming/session.ts`). Screenshots are pictures of the login page and ride the
     // exact same no-log `ceremony.frame` path as screencast frames.
     void this.pushScreenshot();
-    this.startPolling();
+    // Headless only: on a headed window the recurring poll force-raises the occluded window (see
+    // POLL_WHEN_IDLE). Headed relies on the screencast, which reads the compositor without raising.
+    if (POLL_WHEN_IDLE) this.startPolling();
   }
 
   /** Capture one screenshot over CDP and relay it up as a `ceremony.frame`. Best-effort: a busy or
