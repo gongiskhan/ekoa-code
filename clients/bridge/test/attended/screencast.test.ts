@@ -78,6 +78,28 @@ describe('CeremonyScreencast — start, relay, ack', () => {
     expect(start).not.toHaveProperty('maxHeight');
   });
 
+  it('pushes an immediate screenshot frame so an already-loaded (static) page is never left black', async () => {
+    // CDP screencast only fires on a repaint, so a headed page that is already loaded can emit no
+    // Page.screencastFrame after startScreencast. The producer must push a screenshot at once (and
+    // poll one when quiet) - the same fallback the hosted canvas keeps - or the viewer stays black.
+    const sent: BridgeFrame[] = [];
+    const cdp: BridgeCdpSession = {
+      send(method: string): Promise<unknown> {
+        if (method === 'Page.captureScreenshot') return Promise.resolve({ data: 'SCREENSHOT_JPEG' });
+        return Promise.resolve(undefined);
+      },
+      on(): void {},
+    };
+    const sc = new CeremonyScreencast(cdp, (f) => (sent.push(f), true), REQUEST_ID);
+    await sc.start();
+    await sc.stop(); // stop clears the poll timer so the test leaves nothing running
+
+    // No Page.screencastFrame was ever fired, yet a frame reached the viewer - the immediate shot.
+    const up = frames(sent);
+    expect(up.length).toBeGreaterThanOrEqual(1);
+    expect(up[0]).toMatchObject({ type: 'ceremony.frame', jpegBase64: 'SCREENSHOT_JPEG' });
+  });
+
   it('relays a fired frame up as ceremony.frame with the base64, and acks it back to Chrome', async () => {
     const { cdp, sent, sc } = make();
     await sc.start();

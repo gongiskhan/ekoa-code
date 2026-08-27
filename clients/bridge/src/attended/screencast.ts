@@ -33,6 +33,13 @@ import type { BridgeCdpSession } from '../browser/chrome-launch.js';
  *  quality and cadence. Read once at load; a bad value folds to the safe default via `Math.max`. */
 const FPS = parseInt(process.env.EKOA_STREAMING_FPS || '15', 10);
 const QUALITY = parseInt(process.env.EKOA_STREAMING_QUALITY || '70', 10);
+/** How often to push a screenshot when the screencast has gone quiet. CDP screencast only fires on a
+ *  repaint, so an already-loaded login page can sit silent after the first frame; the hosted canvas
+ *  keeps the same fallback (`api/src/streaming/session.ts`). */
+const POLL_INTERVAL_MS = parseInt(process.env.EKOA_STREAMING_POLL_INTERVAL_MS || '500', 10);
+/** How long the CSS-viewport probe may take before the screencast starts unclamped anyway. A blocked
+ *  probe must NEVER hold up frame production - a black canvas is worse than an unclamped one. */
+const VIEWPORT_PROBE_TIMEOUT_MS = 1500;
 
 /** The shape CDP delivers on `Page.screencastFrame`. Only the two fields this producer touches. */
 interface ScreencastFrameEvent {
@@ -52,6 +59,25 @@ function modifiersToBits(m: Modifiers): number {
   return (m.alt ? 1 : 0) | (m.ctrl ? 2 : 0) | (m.meta ? 4 : 0) | (m.shift ? 8 : 0);
 }
 
+/** Reject `p` if it has not settled within `ms`, so a hung CDP round-trip cannot block the caller.
+ *  The timer is unref'd so it never keeps the daemon alive on its own. */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timeout')), ms);
+    timer.unref?.();
+    p.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e as Error);
+      },
+    );
+  });
+}
+
 /**
  * A live screencast of ONE ceremony window. Constructed only once a viewer connects
  * (`ceremony.stream{on:true}`), torn down on `{on:false}` or when the ceremony ends. Owns the one
@@ -61,6 +87,10 @@ export class CeremonyScreencast {
   private seq = 0;
   private started = false;
   private stopped = false;
+  /** Screenshot fallback (mirrors `api/src/streaming/session.ts`): the wall-clock of the last frame
+   *  sent, and the poll timer that pushes a screenshot when the screencast has been quiet. */
+  private lastFrameAt = 0;
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly cdp: BridgeCdpSession,
@@ -106,6 +136,50 @@ export class CeremonyScreencast {
       everyNthFrame,
       ...(clamp ? { maxWidth: clamp.width, maxHeight: clamp.height } : {}),
     });
+    // Push one screenshot immediately so the viewer paints at once - a headed page that is already
+    // loaded may emit no screencast frame until something repaints, leaving the canvas black - then
+    // poll a screenshot whenever the screencast has gone quiet. The same safety net the hosted canvas
+    // keeps (`api/src/streaming/session.ts`). Screenshots are pictures of the login page and ride the
+    // exact same no-log `ceremony.frame` path as screencast frames.
+    void this.pushScreenshot();
+    this.startPolling();
+  }
+
+  /** Capture one screenshot over CDP and relay it up as a `ceremony.frame`. Best-effort: a busy or
+   *  gone page just skips this tick. NEVER logs the image. */
+  private async pushScreenshot(): Promise<void> {
+    if (this.stopped) return;
+    let data: string | undefined;
+    try {
+      const res = (await this.cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: QUALITY })) as
+        | { data?: string }
+        | undefined;
+      data = res?.data;
+    } catch {
+      return; // the screencast path still drives updates when the page is dynamic
+    }
+    if (this.stopped || !data) return;
+    this.lastFrameAt = Date.now();
+    this.send({ type: 'ceremony.frame', requestId: this.requestId, seq: ++this.seq, jpegBase64: data });
+  }
+
+  private startPolling(): void {
+    this.stopPolling();
+    this.pollTimer = setInterval(() => {
+      if (this.stopped) return;
+      // Only screenshot when the screencast has delivered nothing recently - a dynamic page keeps
+      // frames flowing and needs no poll.
+      if (Date.now() - this.lastFrameAt < POLL_INTERVAL_MS) return;
+      void this.pushScreenshot();
+    }, POLL_INTERVAL_MS);
+    this.pollTimer.unref?.();
+  }
+
+  private stopPolling(): void {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
   }
 
   /**
@@ -117,7 +191,12 @@ export class CeremonyScreencast {
    */
   private async cssViewport(): Promise<{ width: number; height: number } | null> {
     try {
-      const metrics = (await this.cdp.send('Page.getLayoutMetrics')) as
+      // Bounded: a probe that never answers must not hold up `Page.startScreencast`. On timeout we
+      // resolve to an unclamped screencast (correct on a 1x display; the viewer adapts regardless).
+      const metrics = (await withTimeout(
+        this.cdp.send('Page.getLayoutMetrics'),
+        VIEWPORT_PROBE_TIMEOUT_MS,
+      )) as
         | {
             cssLayoutViewport?: { clientWidth?: number; clientHeight?: number };
             layoutViewport?: { clientWidth?: number; clientHeight?: number };
@@ -144,6 +223,7 @@ export class CeremonyScreencast {
     // Ack Chrome first so the pipeline keeps producing even if the relay is momentarily slow, then
     // send the frame up. `seq` increments per frame so Cortex/the dashboard can order them.
     const ack = this.ack(frame.sessionId);
+    this.lastFrameAt = Date.now();
     this.send({ type: 'ceremony.frame', requestId: this.requestId, seq: ++this.seq, jpegBase64: frame.data });
     await ack;
   }
@@ -160,6 +240,7 @@ export class CeremonyScreencast {
   async stop(): Promise<void> {
     if (this.stopped) return;
     this.stopped = true;
+    this.stopPolling();
     try {
       await this.cdp.send('Page.stopScreencast');
     } catch {
