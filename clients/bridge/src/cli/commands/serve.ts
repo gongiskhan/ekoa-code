@@ -64,6 +64,14 @@ export function resolveCapabilities(extra: string[] | undefined, egressEndpoint:
   }
   if (egressEndpoint) set.add('egress.residential');
   else set.delete('egress.residential');
+  // OPT-OUT of the live stream (`EKOA_CEREMONY_NO_STREAM=1`). Streaming a HEADED window on the SAME
+  // machine as the dashboard is self-defeating on macOS: to screencast an occluded window Chrome force-
+  // composites it to the FRONT, so the ceremony window keeps yanking itself over the dashboard/terminal
+  // and cannot be escaped. When the operator is AT the bridge machine they do not need the stream - they
+  // log in IN the window - so this drops `attended.livestream`, and the dashboard then shows the
+  // window-direct flow with no screencast. The stream stays the default because it is exactly right for
+  // a SEPARATE bridge machine, where nothing is force-composited over the viewer's desktop.
+  if (process.env.EKOA_CEREMONY_NO_STREAM === '1') set.delete('attended.livestream');
   return [...set].sort();
 }
 

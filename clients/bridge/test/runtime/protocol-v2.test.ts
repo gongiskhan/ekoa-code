@@ -97,6 +97,22 @@ describe('resolveCapabilities — what this machine honestly claims', () => {
     expect(caps).not.toContain('local.everything');
     expect(caps).toContain('local.bash');
   });
+
+  it('drops attended.livestream when the operator opts out (EKOA_CEREMONY_NO_STREAM=1)', () => {
+    // On a same-machine bridge, streaming a headed window force-composites it to the front; the
+    // operator turns the stream off and logs in directly in the window instead.
+    const prev = process.env.EKOA_CEREMONY_NO_STREAM;
+    try {
+      process.env.EKOA_CEREMONY_NO_STREAM = '1';
+      const caps = resolveCapabilities(undefined, undefined);
+      expect(caps).not.toContain('attended.livestream');
+      // ...but the ceremony itself is still offered - only its LIVE view is dropped.
+      expect(caps).toContain('attended.card_login');
+    } finally {
+      if (prev === undefined) delete process.env.EKOA_CEREMONY_NO_STREAM;
+      else process.env.EKOA_CEREMONY_NO_STREAM = prev;
+    }
+  });
 });
 
 describe('attended.request — the frame that used to vanish', () => {
