@@ -135,10 +135,12 @@ export default function LiveCanvasView({ session, onStatusChange, onClose, class
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
-    // Map into the FRAME's pixel space, not a guessed viewport: with the box sized to the frame's
-    // aspect there is no letterbox, so the rect maps 1:1 onto the rendered image, and the frame space
-    // equals the page CSS-pixel space the producer dispatches input in.
-    const viewport = frameSizeRef.current;
+    // Map into the reported CSS-pixel viewport (the space `Input.dispatch*` runs in), NOT the frame's
+    // own pixels: a HiDPI frame is 2x the CSS viewport and a screenshot-fallback frame is a different
+    // size again, so mapping to frame pixels would land clicks off-target. The box is sized to the
+    // frame aspect (below), which equals the CSS-viewport aspect, so there is no letterbox and the
+    // rect maps 1:1 onto the rendered image; the fraction is then scaled by the CSS viewport.
+    const viewport = viewportRef.current;
     const vx = ((clientX - rect.left) / rect.width) * viewport.width;
     const vy = ((clientY - rect.top) / rect.height) * viewport.height;
     return {

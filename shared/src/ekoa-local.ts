@@ -588,6 +588,17 @@ export const BridgeFrame = z.discriminatedUnion('type', [
     seq: z.number(),
     /** Base64 JPEG. Opaque on the wire, exactly as `tool.result.screenshotB64`. */
     jpegBase64: z.string(),
+    /**
+     * The window's CSS-pixel viewport at capture time (ADDITIVE, Rule 7). The dashboard maps a click
+     * into THIS space - the space `Input.dispatch*` is dispatched in - not into the frame's own pixel
+     * dimensions, which vary with the display's device scale factor (a HiDPI frame is 2x the CSS
+     * viewport) and with the frame's source (a screencast frame is clamped, a screenshot-fallback
+     * frame is not). Reporting the CSS viewport decouples the coordinate space from the frame pixels,
+     * so a click lands on the element the human aimed at regardless. Absent from an older daemon: the
+     * dashboard then falls back to the frame's own dimensions.
+     */
+    cssWidth: z.number().optional(),
+    cssHeight: z.number().optional(),
   }),
   /**
    * START/STOP the ceremony stream, hosted -> daemon. The daemon holds the window regardless; it only

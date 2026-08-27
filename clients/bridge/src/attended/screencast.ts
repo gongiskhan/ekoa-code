@@ -91,6 +91,10 @@ export class CeremonyScreencast {
    *  sent, and the poll timer that pushes a screenshot when the screencast has been quiet. */
   private lastFrameAt = 0;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
+  /** The window's CSS-pixel viewport (from `Page.getLayoutMetrics`), stamped on every frame so the
+   *  dashboard maps clicks into the space `Input.dispatch*` is in - not the frame's own pixels, which
+   *  are 2x on a HiDPI display and differ between screencast and screenshot frames. Null until probed. */
+  private cssSize: { width: number; height: number } | null = null;
 
   constructor(
     private readonly cdp: BridgeCdpSession,
@@ -125,6 +129,7 @@ export class CeremonyScreencast {
     // 1:1 with the coordinate space input is dispatched in, exactly as the hosted canvas does with
     // page.viewportSize() (api/src/streaming/session.ts). It also ~halves the bytes on a Retina display.
     const clamp = await this.cssViewport();
+    this.cssSize = clamp; // stamped on every frame so the dashboard maps clicks into CSS-pixel space
     // Re-check stopped after the metrics round-trip, same honesty as the post-`Page.enable` guard.
     if (this.stopped) return;
     // everyNthFrame from FPS exactly as the hosted canvas derives it: at 15fps Chrome emits every
@@ -160,7 +165,19 @@ export class CeremonyScreencast {
     }
     if (this.stopped || !data) return;
     this.lastFrameAt = Date.now();
-    this.send({ type: 'ceremony.frame', requestId: this.requestId, seq: ++this.seq, jpegBase64: data });
+    this.sendFrame(data);
+  }
+
+  /** Relay one JPEG up as a `ceremony.frame`, stamped with the CSS-pixel viewport (when known) so the
+   *  dashboard maps clicks into the coordinate space `Input.dispatch*` runs in. NEVER logs the image. */
+  private sendFrame(jpegBase64: string): void {
+    this.send({
+      type: 'ceremony.frame',
+      requestId: this.requestId,
+      seq: ++this.seq,
+      jpegBase64,
+      ...(this.cssSize ? { cssWidth: this.cssSize.width, cssHeight: this.cssSize.height } : {}),
+    });
   }
 
   private startPolling(): void {
@@ -224,7 +241,7 @@ export class CeremonyScreencast {
     // send the frame up. `seq` increments per frame so Cortex/the dashboard can order them.
     const ack = this.ack(frame.sessionId);
     this.lastFrameAt = Date.now();
-    this.send({ type: 'ceremony.frame', requestId: this.requestId, seq: ++this.seq, jpegBase64: frame.data });
+    this.sendFrame(frame.data);
     await ack;
   }
 

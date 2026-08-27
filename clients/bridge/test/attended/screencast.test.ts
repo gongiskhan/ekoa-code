@@ -68,6 +68,35 @@ describe('CeremonyScreencast — start, relay, ack', () => {
     expect(start[0]!.params).toMatchObject({ format: 'jpeg', maxWidth: 1440, maxHeight: 782 });
   });
 
+  it('stamps every frame with the CSS viewport so the dashboard maps clicks into CSS-pixel space', async () => {
+    // The frame carries the window's CSS viewport; the dashboard maps clicks into THAT space, not the
+    // frame's own (HiDPI-scaled, source-varying) pixels. Both a screencast frame and the screenshot
+    // fallback must carry it.
+    const sent: BridgeFrame[] = [];
+    let frameHandler: ((p: unknown) => void) | null = null;
+    const cdp: BridgeCdpSession = {
+      send(method: string): Promise<unknown> {
+        if (method === 'Page.getLayoutMetrics') {
+          return Promise.resolve({ cssLayoutViewport: { clientWidth: 1440, clientHeight: 782 } });
+        }
+        if (method === 'Page.captureScreenshot') return Promise.resolve({ data: 'SHOT' });
+        return Promise.resolve(undefined);
+      },
+      on(event: string, handler: (p: unknown) => void): void {
+        if (event === 'Page.screencastFrame') frameHandler = handler;
+      },
+    };
+    const sc = new CeremonyScreencast(cdp, (f) => (sent.push(f), true), REQUEST_ID);
+    await sc.start();
+    frameHandler!({ data: 'SCREENCAST_JPEG', sessionId: 1 });
+    await sc.stop();
+
+    const up = frames(sent);
+    expect(up.length).toBeGreaterThanOrEqual(1);
+    // Both the immediate screenshot and the screencast frame carry the CSS viewport.
+    for (const f of up) expect(f).toMatchObject({ cssWidth: 1440, cssHeight: 782 });
+  });
+
   it('starts UNCLAMPED when the CSS viewport is unavailable (1x display / a CDP that does not answer)', async () => {
     // FakeCdp returns undefined for Page.getLayoutMetrics, so no maxWidth/maxHeight is sent — correct
     // on a 1x display, and the viewer adapts to whatever frame size arrives.

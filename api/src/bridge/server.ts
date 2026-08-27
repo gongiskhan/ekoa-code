@@ -75,7 +75,14 @@ export interface BridgeServerDeps {
    *  ceremony. Injected at the composition root to the streaming module's `pushCeremonyFrame`, so
    *  `bridge/` does not import `streaming/` across the seam. Default: dropped (no live-view wired).
    *  The jpeg is an image — never logged. */
-  onCeremonyFrame?: (requestId: string, pairingId: string, seq: number, jpegBase64: string) => void;
+  onCeremonyFrame?: (
+    requestId: string,
+    pairingId: string,
+    seq: number,
+    jpegBase64: string,
+    cssWidth?: number,
+    cssHeight?: number,
+  ) => void;
   /** A ceremony finished (its session was pushed). Injected to `closeCeremonyStream` so the live view
    *  tears down when the login completes rather than lingering to its token TTL. */
   onCeremonyEnded?: (requestId: string, pairingId: string) => void;
@@ -410,7 +417,7 @@ export function attachBridgeServer(httpServer: HttpServer, deps: BridgeServerDep
         // `redactInboundFrame`'s default case untouched, deliberately: it is an image, not text).
         // The delivering `pairingId` is passed so the streaming side can refuse a frame from a machine
         // that is not the one holding this ceremony.
-        deps.onCeremonyFrame?.(frame.requestId, pairingId, frame.seq, frame.jpegBase64);
+        deps.onCeremonyFrame?.(frame.requestId, pairingId, frame.seq, frame.jpegBase64, frame.cssWidth, frame.cssHeight);
         break;
       case 'ceremony.ended':
         // D-CEREMONY-STREAM lifecycle (L2): the daemon stopped holding this ceremony's window WITHOUT a

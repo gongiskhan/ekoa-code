@@ -78,6 +78,9 @@ export class CeremonyStreamSession {
   private readonly log: (event: string, fields: Record<string, unknown>) => void;
   private closed = false;
   private ttlTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The last CSS-pixel viewport the daemon reported for this ceremony, sent to the viewer as a
+   *  `viewport` message whenever it changes so clicks map into the right coordinate space. */
+  private cssViewport: { width: number; height: number } | null = null;
 
   constructor(opts: { requestId: string; ownerUserId: string; pairingId: string; hooks: CeremonyStreamHooks }) {
     this.requestId = opts.requestId;
@@ -114,10 +117,22 @@ export class CeremonyStreamSession {
 
   /** A frame arrived from the bridge (`ceremony.frame`). Forward it down the socket — dropping it if
    *  the socket is backpressured, so a slow viewer never makes Cortex buffer unboundedly. NEVER logs
-   *  the frame data. */
-  pushFrame(seq: number, jpegBase64: string): void {
+   *  the frame data. When the daemon reports a CSS viewport that differs from the last, a `viewport`
+   *  message is sent first so the dashboard maps clicks into the coordinate space input is dispatched
+   *  in (not the frame's own pixels, which vary with device scale factor and frame source). */
+  pushFrame(seq: number, jpegBase64: string, cssWidth?: number, cssHeight?: number): void {
     const s = this.socket;
     if (!s || s.readyState !== s.OPEN) return;
+    if (
+      typeof cssWidth === 'number' &&
+      typeof cssHeight === 'number' &&
+      cssWidth > 0 &&
+      cssHeight > 0 &&
+      (this.cssViewport?.width !== cssWidth || this.cssViewport?.height !== cssHeight)
+    ) {
+      this.cssViewport = { width: cssWidth, height: cssHeight };
+      this.send({ type: 'viewport', width: cssWidth, height: cssHeight });
+    }
     // Relay-side backpressure: if the viewer is not draining, skip this frame rather than queue it.
     if (typeof s.bufferedAmount === 'number' && s.bufferedAmount > 1_000_000) return;
     this.send({ type: 'frame', seq, jpegBase64 });
@@ -229,10 +244,17 @@ export function openCeremonyStream(input: OpenCeremonyStreamInput): OpenCeremony
  * is dropped: a compromised daemon on another pairing that guessed the requestId must not be able to
  * paint this owner's dashboard. This mirrors the binding the input path already enforces.
  */
-export function pushCeremonyFrame(requestId: string, pairingId: string, seq: number, jpegBase64: string): void {
+export function pushCeremonyFrame(
+  requestId: string,
+  pairingId: string,
+  seq: number,
+  jpegBase64: string,
+  cssWidth?: number,
+  cssHeight?: number,
+): void {
   const session = sessions.get(requestId);
   if (!session || session.pairingId !== pairingId) return;
-  session.pushFrame(seq, jpegBase64);
+  session.pushFrame(seq, jpegBase64, cssWidth, cssHeight);
 }
 
 /**

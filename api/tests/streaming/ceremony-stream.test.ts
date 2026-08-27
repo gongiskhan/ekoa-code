@@ -102,6 +102,34 @@ describe('frames relay down, input relays up, and NEITHER is ever logged', () =>
     expect(frame?.parsed).toEqual({ type: 'frame', seq: 5, jpegBase64: 'QUJD' });
   });
 
+  it('emits a `viewport` message when the daemon reports a CSS viewport, and only re-emits on change', () => {
+    // The frame carries the window's CSS-pixel viewport (D-CEREMONY-STREAM-LIVE-FIXES): the dashboard
+    // maps clicks into THIS space, not the frame's own pixels (2x on HiDPI, different again for a
+    // screenshot-fallback frame). It is sent once and only re-sent when the viewport actually changes,
+    // so a static ceremony does not spam viewport messages.
+    const { hooks } = makeHooks();
+    openCeremonyStream({ requestId: 'req-1', ownerUserId: 'alice', pairingId: 'pair-1', hooks });
+    const ws = new MockWs();
+    getCeremonyStreamSession('req-1')!.attachSocket(ws as never);
+    const viewports = (): Array<Record<string, unknown>> =>
+      ws.sent.filter((s) => s.parsed.type === 'viewport').map((s) => s.parsed);
+    // attachSocket sends a placeholder viewport (the default 1280x800) before any frame arrives.
+    const baseline = viewports().length;
+
+    pushCeremonyFrame('req-1', 'pair-1', 1, 'QUJD', 1440, 782);
+    expect(viewports()).toHaveLength(baseline + 1);
+    expect(viewports().at(-1)).toEqual({ type: 'viewport', width: 1440, height: 782 });
+
+    // Same viewport on the next frame: no repeat.
+    pushCeremonyFrame('req-1', 'pair-1', 2, 'QUJD', 1440, 782);
+    expect(viewports()).toHaveLength(baseline + 1);
+
+    // A genuine change (window resized) re-emits.
+    pushCeremonyFrame('req-1', 'pair-1', 3, 'QUJD', 1024, 640);
+    expect(viewports()).toHaveLength(baseline + 2);
+    expect(viewports().at(-1)).toEqual({ type: 'viewport', width: 1024, height: 640 });
+  });
+
   it('DROPS a frame delivered by a pairing that is not the one holding the ceremony', () => {
     // Cross-tenant frame injection (adversarial review, 2026-08-26): a compromised daemon on another
     // pairing that learned this requestId must not paint this owner's dashboard. The frame path is
