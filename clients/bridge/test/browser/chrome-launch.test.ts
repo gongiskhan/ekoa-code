@@ -8,7 +8,13 @@ import {
   type HeadedChromeContext,
   type PersistentContextLauncher,
 } from '../../src/browser/chrome-launch.js';
-import { BrowserUnavailableError, WEBDRIVER_INIT_SCRIPT, SAME_TAB_INIT_SCRIPT } from '../../src/browser/index.js';
+import {
+  BrowserUnavailableError,
+  WEBDRIVER_INIT_SCRIPT,
+  SAME_TAB_INIT_SCRIPT,
+  OFFSCREEN_WINDOW_LEFT,
+  OFFSCREEN_WINDOW_TOP,
+} from '../../src/browser/index.js';
 
 /**
  * The shared launch primitive the attended ceremony opens its window with. These assert the REALNESS
@@ -68,9 +74,10 @@ describe('launchHeadedRealChrome — the ceremony window, hygiene and recovery',
     expect(scripts).toContain(SAME_TAB_INIT_SCRIPT);
   });
 
-  it('minimizes the window at launch via CDP, and exposes a re-callable minimizeWindow seam', async () => {
-    // The window is hidden off the desktop so it cannot take over the machine; the streamed panel is
-    // the control surface. Pins that we minimize at launch and can re-minimize (called on navigation).
+  it('hides the window OFF-SCREEN at launch via CDP (not minimized), with a re-callable seam', async () => {
+    // The window is placed off every display so it cannot take over the desktop, but stays in NORMAL
+    // state (minimized freezes compositing on macOS -> black stream). Pins the off-screen bounds, that
+    // it launches off-screen too, and that the seam re-hides (called on navigation).
     const cdpCalls: Array<{ method: string; params?: unknown }> = [];
     const fakeCdp = {
       send: async (method: string, params?: unknown) => {
@@ -85,14 +92,23 @@ describe('launchHeadedRealChrome — the ceremony window, hygiene and recovery',
       // page-taking newCDPSession, exactly as Playwright exposes; attachCdpSeam wraps it 0-arg.
       newCDPSession: async (_page: unknown) => fakeCdp,
     } as unknown as HeadedChromeContext;
-    const launch: PersistentContextLauncher = async () => ctx;
+    const seen: Array<{ opts: Record<string, unknown> }> = [];
+    const launch: PersistentContextLauncher = async (_dir, opts) => {
+      seen.push({ opts });
+      return ctx;
+    };
     const dir = mkdtempSync(join(tmpdir(), 'ekoa-ceremony-'));
     try {
       const out = await launchHeadedRealChrome(dir, { launch });
+      // Launched off-screen so the window never flashes onto the desktop.
+      expect(seen[0]!.opts.args).toContain(`--window-position=${OFFSCREEN_WINDOW_LEFT},${OFFSCREEN_WINDOW_TOP}`);
       const bounds = cdpCalls.filter((c) => c.method === 'Browser.setWindowBounds');
-      expect(bounds).toHaveLength(1); // minimized once at launch
-      expect(bounds[0]!.params).toMatchObject({ windowId: 42, bounds: { windowState: 'minimized' } });
-      await out.minimizeWindow?.(); // re-minimize (the navigation path) works and reuses the windowId
+      expect(bounds).toHaveLength(1); // hidden once at launch
+      expect(bounds[0]!.params).toMatchObject({
+        windowId: 42,
+        bounds: { left: OFFSCREEN_WINDOW_LEFT, top: OFFSCREEN_WINDOW_TOP, windowState: 'normal' },
+      });
+      await out.minimizeWindow?.(); // re-hide (the navigation path) works and reuses the windowId
       expect(cdpCalls.filter((c) => c.method === 'Browser.setWindowBounds')).toHaveLength(2);
       expect(cdpCalls.filter((c) => c.method === 'Browser.getWindowForTarget')).toHaveLength(1);
     } finally {

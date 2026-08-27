@@ -175,9 +175,14 @@ export async function launchHeadedRealChrome(
     ...hostLocale(),
     args: [
       '--disable-blink-features=AutomationControlled',
-      // Keep the renderer HOT while the window is minimized (below), so the live stream does not freeze
-      // when the window is hidden off the desktop. Chrome throttles/stops painting a backgrounded or
-      // occluded window by default; these keep it producing frames at full rate.
+      // Launch OFF-SCREEN so the window never flashes onto the desktop before we hide it (the
+      // established Chrome offscreen position; `attachWindowHide` re-applies it and re-hides on each
+      // navigation). Off-screen, not minimized - a minimized macOS window stops compositing (black
+      // stream); an off-screen window keeps rendering.
+      `--window-position=${OFFSCREEN_WINDOW_LEFT},${OFFSCREEN_WINDOW_TOP}`,
+      // Keep the renderer HOT while the window is off the desktop, so the live stream does not freeze.
+      // Chrome throttles/stops painting a backgrounded or occluded window by default; these keep it
+      // producing frames at full rate.
       '--disable-backgrounding-occluded-windows',
       '--disable-renderer-backgrounding',
       '--disable-background-timer-throttling',
@@ -220,8 +225,10 @@ export async function launchHeadedRealChrome(
   // raising a second window the stream cannot follow (and macOS cannot stop raising to the front).
   await context.addInitScript(SAME_TAB_INIT_SCRIPT).catch(() => undefined);
   attachCdpSeam(context);
-  // Minimize the window so it never takes over the desktop; the streamed panel is the control surface.
-  await attachWindowMinimize(context);
+  // Move the window OFF-SCREEN so it never takes over the desktop; the streamed panel is the control
+  // surface. Off-screen (not minimized) because a minimized macOS window stops compositing and the
+  // screencast goes black - an off-screen NORMAL window keeps rendering at full rate.
+  await attachWindowHide(context);
   return context;
 }
 
@@ -246,19 +253,29 @@ function attachCdpSeam(context: HeadedChromeContext): void {
   };
 }
 
+/** Far off-screen origin for the hidden ceremony window (the established Chrome "offscreen" position).
+ *  The window keeps its NORMAL state (so it keeps compositing and the screencast stays live) but sits
+ *  well outside any display, so it never covers the human's desktop. */
+export const OFFSCREEN_WINDOW_LEFT = -32000;
+export const OFFSCREEN_WINDOW_TOP = -32000;
+
 /**
- * Give the returned context a `minimizeWindow()` that hides the window off the desktop via CDP window
- * management (`Browser.getWindowForTarget` + `Browser.setWindowBounds{windowState:'minimized'}`), and
- * call it once at launch. It reuses a single window-management CDP session (separate from the
- * screencast's) resolved lazily. Best-effort throughout: a context with no `newCDPSession` (the unit
- * fakes) is left untouched, and any CDP failure leaves the window visible rather than throwing.
+ * Give the returned context a `minimizeWindow()` (named for its intent - keep the window out of the
+ * human's way) that moves the window OFF-SCREEN via CDP window management (`Browser.getWindowForTarget`
+ * + `Browser.setWindowBounds` to `OFFSCREEN_WINDOW_LEFT/TOP`, windowState `normal`), and calls it once
+ * at launch. Off-screen, NOT minimized: a minimized macOS window stops compositing and freezes the
+ * screencast, whereas an off-screen normal window renders at full rate (with the anti-throttle launch
+ * flags) and can still be captured. Re-callable (the ceremony re-hides on each navigation, since a
+ * redirect can re-centre the window). Reuses one window-management CDP session, resolved lazily.
+ * Best-effort: a context with no `newCDPSession` (the unit fakes) is left untouched, and any CDP
+ * failure leaves the window where it is rather than throwing.
  */
-async function attachWindowMinimize(context: HeadedChromeContext): Promise<void> {
+async function attachWindowHide(context: HeadedChromeContext): Promise<void> {
   const newCdp = (context as { newCDPSession?: () => Promise<BridgeCdpSession> }).newCDPSession;
   if (typeof newCdp !== 'function') return;
   let cdp: BridgeCdpSession | undefined;
   let windowId: number | undefined;
-  const minimize = async (): Promise<void> => {
+  const hide = async (): Promise<void> => {
     try {
       if (!cdp) cdp = await newCdp();
       if (windowId === undefined) {
@@ -266,14 +283,20 @@ async function attachWindowMinimize(context: HeadedChromeContext): Promise<void>
         windowId = r?.windowId;
       }
       if (windowId !== undefined) {
-        await cdp.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } });
+        // windowState 'normal' + an off-screen origin: keeps the window compositing (live screencast)
+        // while placing it outside every display. Width/height are omitted so the window keeps the size
+        // Playwright launched it at (changing it would resize the frame and re-trigger the viewport).
+        await cdp.send('Browser.setWindowBounds', {
+          windowId,
+          bounds: { left: OFFSCREEN_WINDOW_LEFT, top: OFFSCREEN_WINDOW_TOP, windowState: 'normal' },
+        });
       }
     } catch {
-      /* window management unavailable on this platform/CDP; the window simply stays visible */
+      /* window management unavailable on this platform/CDP; the window simply stays where it is */
     }
   };
-  (context as { minimizeWindow?: () => Promise<void> }).minimizeWindow = minimize;
-  await minimize();
+  (context as { minimizeWindow?: () => Promise<void> }).minimizeWindow = hide;
+  await hide();
 }
 
 /** Playwright's persistent context, HEADED. Imported dynamically so the module graph does not pull
