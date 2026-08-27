@@ -176,7 +176,12 @@ export async function launchHeadedRealChrome(
   const startedAt = Date.now();
   let context: HeadedChromeContext;
   try {
-    context = await launch(userDataDir, { ...base, channel: 'chrome' });
+    // `chromiumSandbox: true` on the real-Chrome attempt: Playwright DEFAULTS it to false, which adds
+    // `--no-sandbox` and paints Chrome's yellow "unsupported command-line flag: --no-sandbox" banner
+    // over the human's login - a real automation tell and a real security downgrade. A user's own
+    // installed Chrome on a desktop runs sandboxed fine. The bundled-chromium fallback below keeps the
+    // default (some sandbox-less Linux setups need it), so this never blocks a launch.
+    context = await launch(userDataDir, { ...base, channel: 'chrome', chromiumSandbox: true });
   } catch (err) {
     deps.log?.('Chrome não encontrado; a usar o navegador incluído.');
     const remaining = LAUNCH_TIMEOUT_MS - (Date.now() - startedAt);

@@ -91,7 +91,7 @@ export class CeremonyScreencast {
    *  sent, and the poll timer that pushes a screenshot when the screencast has been quiet. */
   private lastFrameAt = 0;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
-  /** The window's CSS-pixel viewport (from `Page.getLayoutMetrics`), stamped on every frame so the
+  /** The window's CSS-pixel visual viewport (`window.innerWidth`/`innerHeight`), stamped on every frame so the
    *  dashboard maps clicks into the space `Input.dispatch*` is in - not the frame's own pixels, which
    *  are 2x on a HiDPI display and differ between screencast and screenshot frames. Null until probed. */
   private cssSize: { width: number; height: number } | null = null;
@@ -206,28 +206,32 @@ export class CeremonyScreencast {
   }
 
   /**
-   * The page's CSS-pixel layout viewport, read over CDP so the screencast can be clamped to it (the
-   * coordinate fix above). Absent - a CDP session that does not answer `Page.getLayoutMetrics`, or a
-   * zero/garbage viewport - leaves the screencast unclamped: correct on a 1x display, and the viewer
-   * adapts to whatever frame size arrives regardless. This touches no credential-bearing material, but
-   * consistent with the whole-file rule it logs nothing.
+   * The page's CSS-pixel VISUAL viewport (`window.innerWidth`/`innerHeight`), read over CDP so the
+   * screencast can be clamped and stamped with it. Absent - a CDP session that cannot evaluate, or a
+   * zero/garbage result - leaves the screencast unclamped: correct on a 1x display, and the viewer
+   * adapts to whatever frame size arrives. This touches no credential-bearing material, but consistent
+   * with the whole-file rule it logs nothing.
+   *
+   * WHY innerWidth AND NOT `Page.getLayoutMetrics.cssLayoutViewport.clientWidth`: the latter EXCLUDES a
+   * space-reserving vertical scrollbar, but both the screencast surface and `Input.dispatchMouseEvent`
+   * use the FULL visual viewport (0..innerWidth, scrollbar column included). Stamping the scrollbar-
+   * excluded width made the dashboard under-map every click near the right edge by the scrollbar width,
+   * landing it on the neighbouring element - the live Uber "Log in hits Get-a-ride" symptom.
    */
   private async cssViewport(): Promise<{ width: number; height: number } | null> {
     try {
       // Bounded: a probe that never answers must not hold up `Page.startScreencast`. On timeout we
       // resolve to an unclamped screencast (correct on a 1x display; the viewer adapts regardless).
-      const metrics = (await withTimeout(
-        this.cdp.send('Page.getLayoutMetrics'),
+      const res = (await withTimeout(
+        this.cdp.send('Runtime.evaluate', {
+          expression: '({ w: window.innerWidth, h: window.innerHeight })',
+          returnByValue: true,
+        }),
         VIEWPORT_PROBE_TIMEOUT_MS,
-      )) as
-        | {
-            cssLayoutViewport?: { clientWidth?: number; clientHeight?: number };
-            layoutViewport?: { clientWidth?: number; clientHeight?: number };
-          }
-        | undefined;
-      const vp = metrics?.cssLayoutViewport ?? metrics?.layoutViewport;
-      const w = vp?.clientWidth;
-      const h = vp?.clientHeight;
+      )) as { result?: { value?: { w?: number; h?: number } } } | undefined;
+      const v = res?.result?.value;
+      const w = v?.w;
+      const h = v?.h;
       if (typeof w === 'number' && typeof h === 'number' && w > 0 && h > 0) {
         return { width: Math.round(w), height: Math.round(h) };
       }

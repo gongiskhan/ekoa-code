@@ -101,7 +101,12 @@ export class CeremonyStreamSession {
       }
     }
     this.socket = socket;
-    this.send({ type: 'viewport', width: CEREMONY_VIEWPORT.width, height: CEREMONY_VIEWPORT.height });
+    // Send the REAL viewport if the daemon has already reported one (a reconnect/takeover onto a live
+    // ceremony), else the placeholder. Without this a second viewer stayed on the 1280x800 placeholder
+    // because `pushFrame` only emits `viewport` on CHANGE, and the value had not changed for the new
+    // socket - so its clicks mapped against the wrong space (D-CEREMONY-STREAM-COORDS).
+    const vp = this.cssViewport ?? CEREMONY_VIEWPORT;
+    this.send({ type: 'viewport', width: vp.width, height: vp.height });
 
     socket.on('message', (raw) => this.handleClientMessage(raw));
     socket.on('close', () => {

@@ -53,8 +53,9 @@ describe('CeremonyScreencast — start, relay, ack', () => {
     const cdp: BridgeCdpSession = {
       send(method: string, params?: unknown): Promise<unknown> {
         calls.push({ method, params });
-        if (method === 'Page.getLayoutMetrics') {
-          return Promise.resolve({ cssLayoutViewport: { clientWidth: 1440, clientHeight: 782 } });
+        if (method === 'Runtime.evaluate') {
+          // window.innerWidth/innerHeight (scrollbar-inclusive), the space input is dispatched in.
+          return Promise.resolve({ result: { value: { w: 1440, h: 782 } } });
         }
         return Promise.resolve(undefined);
       },
@@ -76,8 +77,8 @@ describe('CeremonyScreencast — start, relay, ack', () => {
     let frameHandler: ((p: unknown) => void) | null = null;
     const cdp: BridgeCdpSession = {
       send(method: string): Promise<unknown> {
-        if (method === 'Page.getLayoutMetrics') {
-          return Promise.resolve({ cssLayoutViewport: { clientWidth: 1440, clientHeight: 782 } });
+        if (method === 'Runtime.evaluate') {
+          return Promise.resolve({ result: { value: { w: 1440, h: 782 } } });
         }
         if (method === 'Page.captureScreenshot') return Promise.resolve({ data: 'SHOT' });
         return Promise.resolve(undefined);

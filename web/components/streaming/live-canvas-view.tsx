@@ -50,9 +50,12 @@ export default function LiveCanvasView({ session, onStatusChange, onClose, class
   const frameSizeRef = useRef<{ width: number; height: number }>(session.viewport);
   const [frameSize, setFrameSize] = useState<{ width: number; height: number }>(session.viewport);
 
-  useEffect(() => {
-    viewportRef.current = session.viewport;
-  }, [session.viewport]);
+  // NOTE: `viewportRef` is seeded ONCE (its useRef initial value) and thereafter owned by the daemon's
+  // `viewport` message via `onViewport` (in the connection effect below). It is deliberately NOT
+  // re-seeded from `session.viewport` on every render: the old effect that did so re-clobbered a
+  // learned real viewport (e.g. 1440x782) back to the placeholder (1280x800) whenever the parent
+  // re-rendered, mapping every subsequent click against the wrong space (D-CEREMONY-STREAM-COORDS).
+  // A genuinely new connection (token/wsUrl change) re-seeds it inside the connection effect.
 
   const paintImageDirect = (img: HTMLImageElement) => {
     const canvas = canvasRef.current;
@@ -98,6 +101,14 @@ export default function LiveCanvasView({ session, onStatusChange, onClose, class
   };
 
   useEffect(() => {
+    // Seed the coordinate space with this connection's placeholder; `onViewport` replaces it the moment
+    // the daemon reports the real viewport (which the server now also re-sends on attach). Clear any
+    // stale frame from a previous connection so nothing wrong is shown or clickable during 'connecting'.
+    viewportRef.current = session.viewport;
+    frameSizeRef.current = session.viewport;
+    const staleCanvas = canvasRef.current;
+    if (staleCanvas) staleCanvas.getContext('2d')?.clearRect(0, 0, staleCanvas.width, staleCanvas.height);
+
     const canvas = openCanvas({ wsUrl: session.wsUrl, token: session.token, viewport: session.viewport });
     canvasSessionRef.current = canvas;
 
@@ -134,18 +145,36 @@ export default function LiveCanvasView({ session, onStatusChange, onClose, class
     const canvas = canvasRef.current;
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return null;
+    // Work in the CONTENT box, not the border box: `getBoundingClientRect` includes the 1px border,
+    // but `object-contain` fits the image inside the content box. `clientLeft`/`clientTop` are the
+    // top/left border widths; `clientWidth`/`clientHeight` are the content-box size.
+    const boxW = canvas.clientWidth;
+    const boxH = canvas.clientHeight;
+    if (boxW <= 0 || boxH <= 0) return null;
+    const contentLeft = rect.left + canvas.clientLeft;
+    const contentTop = rect.top + canvas.clientTop;
     // Map into the reported CSS-pixel viewport (the space `Input.dispatch*` runs in), NOT the frame's
-    // own pixels: a HiDPI frame is 2x the CSS viewport and a screenshot-fallback frame is a different
-    // size again, so mapping to frame pixels would land clicks off-target. The box is sized to the
-    // frame aspect (below), which equals the CSS-viewport aspect, so there is no letterbox and the
-    // rect maps 1:1 onto the rendered image; the fraction is then scaled by the CSS viewport.
+    // own pixels (a HiDPI frame is 2x the CSS viewport; a screenshot-fallback frame differs again).
     const viewport = viewportRef.current;
-    const vx = ((clientX - rect.left) / rect.width) * viewport.width;
-    const vy = ((clientY - rect.top) / rect.height) * viewport.height;
+    // `object-contain` fits the frame inside the box PRESERVING aspect, so whenever the box aspect
+    // differs from the frame's (a `max-h` clamp, odd dimensions) there are letterbox/pillarbox bars and
+    // the visible image is smaller than and offset within the box. Mapping over the whole box skews
+    // EVERY click toward centre by the bar width - enough to land one element off. Compute the RENDERED
+    // image rect and subtract the bars. `imgAR` uses `frameSize` - the SAME source that drives the box
+    // aspect ratio and the drawn bitmap (`aspectRatio` + `object-contain`) - so in the common no-clamp
+    // case renderedW === boxW exactly, with no phantom bars from a viewport/frame aspect mismatch.
+    const imgAR = frameSizeRef.current.width / frameSizeRef.current.height;
+    const boxAR = boxW / boxH;
+    const renderedW = boxAR > imgAR ? boxH * imgAR : boxW;
+    const renderedH = boxAR > imgAR ? boxH : boxW / imgAR;
+    const offsetX = (boxW - renderedW) / 2;
+    const offsetY = (boxH - renderedH) / 2;
+    const fx = (clientX - contentLeft - offsetX) / renderedW;
+    const fy = (clientY - contentTop - offsetY) / renderedH;
+    if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null; // the click landed on a bar, not the frame
     return {
-      x: Math.max(0, Math.min(viewport.width, Math.round(vx))),
-      y: Math.max(0, Math.min(viewport.height, Math.round(vy))),
+      x: Math.max(0, Math.min(viewport.width, Math.round(fx * viewport.width))),
+      y: Math.max(0, Math.min(viewport.height, Math.round(fy * viewport.height))),
     };
   };
 
