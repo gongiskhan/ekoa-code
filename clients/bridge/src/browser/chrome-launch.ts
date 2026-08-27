@@ -80,6 +80,37 @@ export interface HeadedChromeContext {
   newCDPSession?(): Promise<BridgeCdpSession>;
 }
 
+/**
+ * Keep the whole ceremony inside the ONE tab the live stream follows (D-CEREMONY-STREAM-COORDS,
+ * 2026-08-27). A login page's "Log in"/nav links routinely open a NEW tab or a popup
+ * (`target="_blank"`, `window.open`), and the stream follows only the ceremony's own tab - so a login
+ * that jumped to a new tab was invisible and uncontrollable in the dashboard, the human clicked again
+ * thinking it failed, and every new tab RAISED the headed window on macOS: a few stray clicks spiralled
+ * into the window stealing focus over and over ("it takes over the computer"). This forces those opens
+ * back into the current tab: `window.open` navigates in place, and a capture-phase click strips
+ * `target="_blank"` before the browser acts on it. A full-page login (email/password/2FA - what these
+ * portals use) is unchanged. The one flow it does NOT serve is an OAuth login that genuinely needs a
+ * separate popup window posting back to its opener; that is a documented limitation, not the common
+ * case, and the ceremony card already steers Google-SSO users to email/phone.
+ */
+export const SAME_TAB_INIT_SCRIPT = `(() => {
+  try {
+    window.open = function (url) {
+      if (url != null) { try { window.location.href = String(url); } catch (e) {} }
+      return null;
+    };
+  } catch (e) {}
+  try {
+    document.addEventListener('click', function (e) {
+      try {
+        var t = e.target;
+        var a = t && t.closest ? t.closest('a[target="_blank"]') : null;
+        if (a) a.removeAttribute('target');
+      } catch (err) {}
+    }, true);
+  } catch (e) {}
+})();`;
+
 /** The injected launcher, so the unit lane drives the ceremony without a real browser. */
 export type PersistentContextLauncher = (
   userDataDir: string,
@@ -164,6 +195,9 @@ export async function launchHeadedRealChrome(
   }
 
   await context.addInitScript(WEBDRIVER_INIT_SCRIPT).catch(() => undefined);
+  // Keep the ceremony in the one streamed tab: new-tab/popup opens navigate in place instead of
+  // raising a second window the stream cannot follow (and macOS cannot stop raising to the front).
+  await context.addInitScript(SAME_TAB_INIT_SCRIPT).catch(() => undefined);
   attachCdpSeam(context);
   return context;
 }

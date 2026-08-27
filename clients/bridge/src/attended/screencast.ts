@@ -156,9 +156,15 @@ export class CeremonyScreencast {
     if (this.stopped) return;
     let data: string | undefined;
     try {
-      const res = (await this.cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: QUALITY })) as
-        | { data?: string }
-        | undefined;
+      // `fromSurface: true` + `captureBeyondViewport: false` capture from the compositor surface
+      // without bringing the tab/window to the foreground - so the poll never raises the ceremony
+      // window on the human's desktop (part of the "takes over the computer" flap).
+      const res = (await this.cdp.send('Page.captureScreenshot', {
+        format: 'jpeg',
+        quality: QUALITY,
+        fromSurface: true,
+        captureBeyondViewport: false,
+      })) as { data?: string } | undefined;
       data = res?.data;
     } catch {
       return; // the screencast path still drives updates when the page is dynamic

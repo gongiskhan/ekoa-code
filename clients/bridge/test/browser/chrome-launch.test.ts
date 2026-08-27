@@ -8,7 +8,7 @@ import {
   type HeadedChromeContext,
   type PersistentContextLauncher,
 } from '../../src/browser/chrome-launch.js';
-import { BrowserUnavailableError, WEBDRIVER_INIT_SCRIPT } from '../../src/browser/index.js';
+import { BrowserUnavailableError, WEBDRIVER_INIT_SCRIPT, SAME_TAB_INIT_SCRIPT } from '../../src/browser/index.js';
 
 /**
  * The shared launch primitive the attended ceremony opens its window with. These assert the REALNESS
@@ -50,7 +50,7 @@ describe('launchHeadedRealChrome — the ceremony window, hygiene and recovery',
     expect(seen[0]!.opts.ignoreDefaultArgs).toContain('--enable-automation');
   });
 
-  it('removes the webdriver tell on the context it returns', async () => {
+  it('removes the webdriver tell AND keeps the ceremony in one tab on the context it returns', async () => {
     const scripts: string[] = [];
     const launch: PersistentContextLauncher = async () => ({
       ...fakeContext(),
@@ -63,6 +63,9 @@ describe('launchHeadedRealChrome — the ceremony window, hygiene and recovery',
       rmSync(dir, { recursive: true, force: true });
     }
     expect(scripts).toContain(WEBDRIVER_INIT_SCRIPT);
+    // The same-tab script keeps new-tab/popup opens in the streamed tab so the window is not raised
+    // repeatedly and the login stays visible (the "takes over the computer" fix).
+    expect(scripts).toContain(SAME_TAB_INIT_SCRIPT);
   });
 
   it('falls back to the bundled browser (no channel) when real Chrome is absent', async () => {
