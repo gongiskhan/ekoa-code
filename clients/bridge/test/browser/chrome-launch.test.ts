@@ -24,6 +24,7 @@ function fakeContext(): HeadedChromeContext {
     newPage: async () => ({ goto: async () => undefined, url: () => 'about:blank', on: () => undefined }),
     addInitScript: async () => undefined,
     storageState: async () => ({ cookies: [], origins: [] }),
+    cookies: async () => [],
     close: async () => undefined,
     on: () => undefined,
   };

@@ -122,6 +122,9 @@ export interface CeremonyBrowser {
 export interface CeremonyContext {
   newPage(): Promise<CeremonyPage>;
   storageState(): Promise<unknown>;
+  /** Cookies only, browser-level (CDP `Storage.getCookies`) - the CHEAP live poll that, unlike
+   *  `storageState()`, opens no page and so never activates the window (D-CEREMONY-STREAM-FOCUS). */
+  cookies(): Promise<unknown[]>;
   close(): Promise<void>;
   on(event: 'close', handler: () => void): void;
   /**
@@ -262,25 +265,28 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
     const closed = waitForClose(browser, context, page);
     const deadline = now() + CEREMONY_TTL_MS;
 
-    // `storageState()` is unreadable once the context is gone, so the last good snapshot before the
-    // close is what gets pushed — which makes WHEN we snapshot the whole of whether this works.
-    //
-    // Snapshotting only on an interval loses any login completed and closed inside one tick, and a
-    // fast human (password manager, card already in the reader) is well inside 2s. So snapshot on
-    // all three of: open, every navigation, and the tick. The navigation hook is the one that
-    // matters — a completed login always ends in a redirect, so the state is captured at the moment
-    // it becomes real rather than up to a tick later.
+    // WHY THE HOT PATH POLLS COOKIES ONLY (D-CEREMONY-STREAM-FOCUS, 2026-08-27). A full
+    // `context.storageState()` opens a hidden FOREGROUND `about:blank` target for every FOREIGN origin
+    // it has visited (Playwright 1.62.1's `newPage(forStorageState)` creates it WITHOUT `background:true`
+    // - and these pages are excluded from `context.pages()`, which is why a page-count test could not
+    // see them). Creating a target ACTIVATES Chrome on macOS, stealing the operator's keyboard focus.
+    // On a real login - which always crosses several origins (e.g. ubereats.com -> auth.uber.com) - that
+    // fired on EVERY 2s tick and EVERY redirect, yanking the window forward continuously and making the
+    // machine barely usable. So the recurring poll reads COOKIES ONLY (`context.cookies()` -> CDP
+    // `Storage.getCookies`, browser-level, creates no page, no activation), and the ONE full
+    // `storageState()` (localStorage included) is taken only at the Done capture, when the human has
+    // finished and a single activation is harmless. The portals this rail serves are cookie-session
+    // based, so the live window losing localStorage costs nothing; the close-fallback pushes the
+    // freshest cookie poll. Snapshotting on open, every navigation and the tick still holds - a completed
+    // login always ends in a redirect, so the cookie state is captured the moment it becomes real.
     let inFlight: Promise<void> | null = null;
-    const snapshot = (): Promise<void> => {
-      // Overlapping `storageState()` reads would race for the same CDP session, so a caller arriving
-      // mid-read JOINS that read rather than skipping it. Skipping was harmless while every caller
-      // was a tick that would come round again; the Done path gets no second chance, and its whole
-      // value is that what it pushes is the state as of the moment the human said "finished".
+    const pollCookies = (): Promise<void> => {
+      // Overlapping reads would race for the same CDP session, so a caller arriving mid-read JOINS it.
       if (inFlight) return inFlight;
       const read = (async (): Promise<void> => {
         try {
-          const state = await context.storageState();
-          lastSnapshot = state;
+          const cookies = await context.cookies();
+          lastSnapshot = { cookies, origins: [] };
           landedOn = page.url() || target;
         } catch {
           /* the context is gone; whatever we already hold is what we push */
@@ -291,8 +297,19 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
       });
       return inFlight;
     };
-    page.on?.('framenavigated', () => void snapshot());
-    await snapshot();
+    // The ONE full snapshot (cookies + localStorage). Taken only at the Done capture: it is the single
+    // place that pays the foreground-target activation, and by then the human has finished logging in.
+    const captureFull = async (): Promise<void> => {
+      if (inFlight) await inFlight.catch(() => {}); // let any in-flight cookie poll settle first
+      try {
+        lastSnapshot = await context.storageState();
+        landedOn = page.url() || target;
+      } catch {
+        /* the context is gone; the last cookie poll is what we push */
+      }
+    };
+    page.on?.('framenavigated', () => void pollCookies());
+    await pollCookies();
 
     // Both non-TTL arms are built ONCE, outside the loop. Re-deriving them per iteration would hang
     // a fresh `.then` off the same promises on every tick - 270 of them over a full ceremony - for
@@ -316,16 +333,15 @@ export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDe
         sleep(Math.min(SNAPSHOT_INTERVAL_MS, remaining)).then(() => 'tick' as const),
       ]);
       if (finished === 'done') {
-        // THE ONE COMPLETION SIGNAL THAT ARRIVES WITH THE CONTEXT STILL ALIVE, so it takes a fresh
-        // snapshot instead of pushing whatever the last tick happened to hold. That is not an
-        // optimisation: the human presses Done at the instant the login completes, which is exactly
-        // when the state that matters is newest.
-        await snapshot();
+        // THE ONE COMPLETION SIGNAL THAT ARRIVES WITH THE CONTEXT STILL ALIVE, so it takes the full
+        // snapshot (localStorage included) at the instant the human says they finished - the newest and
+        // most complete state, and the one activation we accept because the login is already done.
+        await captureFull();
         deps.log('Recebido: a concluir e a capturar a sessão...');
         break;
       }
       if (finished === 'closed') break;
-      await snapshot();
+      await pollCookies();
     }
   } catch (err) {
     deps.log(`ERRO durante a autenticação: ${err instanceof Error ? err.message : String(err)}`);
@@ -433,6 +449,7 @@ export function ceremonyBrowserOverContext(ctx: HeadedChromeContext): CeremonyBr
       return (existing[0] ?? (await ctx.newPage())) as unknown as CeremonyPage;
     },
     storageState: () => ctx.storageState(),
+    cookies: () => ctx.cookies(),
     close: () => ctx.close(),
     on: (_event: 'close', handler: () => void) => ctx.on('close', handler),
     // Pass the live-stream seam through when the real launch attached one. Absent on a fake/injected

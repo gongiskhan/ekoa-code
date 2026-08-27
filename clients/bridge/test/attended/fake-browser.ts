@@ -79,6 +79,12 @@ export class FakeContext implements CeremonyContext {
   storageState(): Promise<unknown> {
     return Promise.resolve(this.state);
   }
+  cookies(): Promise<unknown[]> {
+    // The cheap live poll: return just the current state's cookies (no localStorage/origins), exactly
+    // as the real `context.cookies()` does, so the cookies-only hot path is exercised.
+    const s = this.state as { cookies?: unknown[] } | null;
+    return Promise.resolve(Array.isArray(s?.cookies) ? s!.cookies! : []);
+  }
   close(): Promise<void> {
     return Promise.resolve();
   }

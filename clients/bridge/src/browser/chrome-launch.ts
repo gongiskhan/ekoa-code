@@ -69,6 +69,9 @@ export interface HeadedChromeContext {
   newPage(): Promise<HeadedChromePage>;
   addInitScript(script: string): Promise<void>;
   storageState(): Promise<unknown>;
+  /** Cookies only (CDP `Storage.getCookies`) - the cheap live poll that opens no page, so it never
+   *  activates the window the way `storageState()` does (D-CEREMONY-STREAM-FOCUS). */
+  cookies(): Promise<unknown[]>;
   close(): Promise<void>;
   on(event: 'close', handler: () => void): void;
   /**
