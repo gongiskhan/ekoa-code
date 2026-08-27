@@ -15,8 +15,6 @@ export {
   launchHeadedRealChrome,
   sweepSingletonMarkers,
   SAME_TAB_INIT_SCRIPT,
-  OFFSCREEN_WINDOW_LEFT,
-  OFFSCREEN_WINDOW_TOP,
   type BridgeCdpSession,
   type HeadedChromeContext,
   type HeadedChromePage,

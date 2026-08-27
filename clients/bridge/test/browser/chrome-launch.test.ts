@@ -8,13 +8,7 @@ import {
   type HeadedChromeContext,
   type PersistentContextLauncher,
 } from '../../src/browser/chrome-launch.js';
-import {
-  BrowserUnavailableError,
-  WEBDRIVER_INIT_SCRIPT,
-  SAME_TAB_INIT_SCRIPT,
-  OFFSCREEN_WINDOW_LEFT,
-  OFFSCREEN_WINDOW_TOP,
-} from '../../src/browser/index.js';
+import { BrowserUnavailableError, WEBDRIVER_INIT_SCRIPT, SAME_TAB_INIT_SCRIPT } from '../../src/browser/index.js';
 
 /**
  * The shared launch primitive the attended ceremony opens its window with. These assert the REALNESS
@@ -74,67 +68,18 @@ describe('launchHeadedRealChrome — the ceremony window, hygiene and recovery',
     expect(scripts).toContain(SAME_TAB_INIT_SCRIPT);
   });
 
-  it('hides the window OFF-SCREEN at launch via CDP (not minimized), with a re-callable seam', async () => {
-    // The window is placed off every display so it cannot take over the desktop, but stays in NORMAL
-    // state (minimized freezes compositing on macOS -> black stream). Pins the off-screen bounds, that
-    // it launches off-screen too, and that the seam re-hides (called on navigation).
-    const cdpCalls: Array<{ method: string; params?: unknown }> = [];
-    const fakeCdp = {
-      send: async (method: string, params?: unknown) => {
-        cdpCalls.push({ method, params });
-        return method === 'Browser.getWindowForTarget' ? { windowId: 42 } : undefined;
-      },
-      on: () => undefined,
-    };
-    const ctx = {
-      ...fakeContext(),
-      pages: () => [{ goto: async () => undefined, url: () => 'about:blank', on: () => undefined }],
-      // page-taking newCDPSession, exactly as Playwright exposes; attachCdpSeam wraps it 0-arg.
-      newCDPSession: async (_page: unknown) => fakeCdp,
-    } as unknown as HeadedChromeContext;
+  it('opts into headless when asked (same-machine bridge), else headed by default', async () => {
+    // Headed (visible) is the default - lowest detection, and the human logs in directly in the window.
+    // On a same-machine bridge the operator sets headless so the headed window's macOS app-activation
+    // cannot steal keyboard focus from the panel.
     const seen: Array<{ opts: Record<string, unknown> }> = [];
-    const launch: PersistentContextLauncher = async (_dir, opts) => {
-      seen.push({ opts });
-      return ctx;
-    };
+    const launch: PersistentContextLauncher = async (_dir, opts) => (seen.push({ opts }), fakeContext());
     const dir = mkdtempSync(join(tmpdir(), 'ekoa-ceremony-'));
     try {
-      const out = await launchHeadedRealChrome(dir, { launch });
-      // Launched off-screen so the window never flashes onto the desktop.
-      expect(seen[0]!.opts.args).toContain(`--window-position=${OFFSCREEN_WINDOW_LEFT},${OFFSCREEN_WINDOW_TOP}`);
-      const bounds = cdpCalls.filter((c) => c.method === 'Browser.setWindowBounds');
-      expect(bounds).toHaveLength(1); // hidden once at launch
-      expect(bounds[0]!.params).toMatchObject({
-        windowId: 42,
-        bounds: { left: OFFSCREEN_WINDOW_LEFT, top: OFFSCREEN_WINDOW_TOP, windowState: 'normal' },
-      });
-      await out.minimizeWindow?.(); // re-hide (the navigation path) works and reuses the windowId
-      expect(cdpCalls.filter((c) => c.method === 'Browser.setWindowBounds')).toHaveLength(2);
-      expect(cdpCalls.filter((c) => c.method === 'Browser.getWindowForTarget')).toHaveLength(1);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it('headless mode launches windowless and skips the off-screen window management', async () => {
-    // On a same-machine bridge the operator opts into headless so the headed window's macOS
-    // app-activation cannot steal focus from the panel. Headless has no window, so it is neither
-    // positioned off-screen nor hidden via CDP.
-    const cdpCalls: string[] = [];
-    const fakeCdp = { send: async (m: string) => (cdpCalls.push(m), undefined), on: () => undefined };
-    const ctx = {
-      ...fakeContext(),
-      pages: () => [{ goto: async () => undefined, url: () => 'about:blank', on: () => undefined }],
-      newCDPSession: async (_page: unknown) => fakeCdp,
-    } as unknown as HeadedChromeContext;
-    const seen: Array<{ opts: Record<string, unknown> }> = [];
-    const launch: PersistentContextLauncher = async (_dir, opts) => (seen.push({ opts }), ctx);
-    const dir = mkdtempSync(join(tmpdir(), 'ekoa-ceremony-'));
-    try {
-      await launchHeadedRealChrome(dir, { launch, headless: true });
-      expect(seen[0]!.opts.headless).toBe(true);
-      expect(seen[0]!.opts.args).not.toContain(`--window-position=${OFFSCREEN_WINDOW_LEFT},${OFFSCREEN_WINDOW_TOP}`);
-      expect(cdpCalls).not.toContain('Browser.setWindowBounds'); // no window to hide
+      await launchHeadedRealChrome(dir, { launch }); // default
+      expect(seen[0]!.opts.headless).toBe(false);
+      await launchHeadedRealChrome(dir, { launch, headless: true }); // opt-in
+      expect(seen[1]!.opts.headless).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

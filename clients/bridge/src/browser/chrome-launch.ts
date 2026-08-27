@@ -78,14 +78,6 @@ export interface HeadedChromeContext {
    * streams — the ceremony holds its window exactly as before, local-only.
    */
   newCDPSession?(): Promise<BridgeCdpSession>;
-  /**
-   * Minimize the ceremony window so it cannot take over the human's desktop - the streamed dashboard
-   * panel is the control surface (D-CEREMONY-STREAM), so the window itself never needs to be visible on
-   * the bridge machine. Idempotent and best-effort (a fake/injected context, or a CDP that cannot do
-   * window management, leaves the window as it is). Called at launch AND re-called on each navigation,
-   * because macOS can restore a minimized window when the page redirects during a login.
-   */
-  minimizeWindow?(): Promise<void>;
 }
 
 /**
@@ -131,15 +123,17 @@ export interface LaunchHeadedChromeDeps {
   /** User-visible progress, in Portuguese — this runs where the human is sitting. */
   log?: (message: string) => void;
   /**
-   * Run WITHOUT a visible window (headless). Default false: a real headed window, hidden off-screen.
+   * Run WITHOUT a visible window (headless). Default false: a real, visible headed window.
    *
    * WHY THE SWITCH. On macOS, dispatching input into a HEADED window keeps making Chrome the active
    * application, which steals keyboard focus from the dashboard tab the human is typing into - so on a
-   * machine where the bridge and the viewer are the SAME, a headed ceremony is barely typable (off-
-   * screen does not help: it is app-activation, not window position). Headless has no window/app to
-   * activate, so the human types into the streamed panel uninterrupted. The cost is that headless is
-   * more bot-detectable, so headed stays the DEFAULT (in production the bridge is a separate machine
-   * and steals no focus); the operator opts into headless for same-machine work.
+   * machine where the bridge and the VIEWER are the SAME, driving a headed window through the streamed
+   * panel is barely typable (position tricks do not help: it is app-activation, not window position).
+   * On the same machine the human should instead log in DIRECTLY in the visible window (real input, so
+   * it holds focus), with the panel as a live mirror; but if they must drive it from the panel there,
+   * headless (no window/app to activate) is the typable mode - at the cost of being more bot-detectable.
+   * So headed stays the DEFAULT (in production the bridge is a separate machine and steals no focus),
+   * and the operator opts into headless for same-machine panel-driven work.
    */
   headless?: boolean;
 }
@@ -170,9 +164,10 @@ export function sweepSingletonMarkers(userDataDir: string): void {
 /**
  * Open a persistent real-Chrome context at `userDataDir`. Real installed Chrome first (real
  * UA/TLS/client hints), bundled chromium as the honest fallback, and a machine with neither told so
- * by name with the one command that fixes it. Headed by default with the window hidden off-screen and
- * the infobar suppressed, so it reads as an ordinary browser; `deps.headless` runs it windowless (see
- * `LaunchHeadedChromeDeps.headless` for why the operator flips it on for same-machine work).
+ * by name with the one command that fixes it. Headed and VISIBLE by default with the infobar
+ * suppressed, so it reads as an ordinary browser the human logs into directly; `deps.headless` runs it
+ * windowless (see `LaunchHeadedChromeDeps.headless` for why the operator flips it on for same-machine
+ * panel-driven work).
  */
 export async function launchHeadedRealChrome(
   userDataDir: string,
@@ -189,14 +184,9 @@ export async function launchHeadedRealChrome(
     ...hostLocale(),
     args: [
       '--disable-blink-features=AutomationControlled',
-      // Headed only: launch OFF-SCREEN so the window never flashes onto the desktop before we hide it
-      // (the established Chrome offscreen position; `attachWindowHide` re-applies it and re-hides on
-      // each navigation). Off-screen, not minimized - a minimized macOS window stops compositing (black
-      // stream); an off-screen window keeps rendering. Headless has no window, so this is skipped.
-      ...(headless ? [] : [`--window-position=${OFFSCREEN_WINDOW_LEFT},${OFFSCREEN_WINDOW_TOP}`]),
-      // Keep the renderer HOT while the window is off the desktop, so the live stream does not freeze.
-      // Chrome throttles/stops painting a backgrounded or occluded window by default; these keep it
-      // producing frames at full rate.
+      // Keep the renderer HOT even when the window is OCCLUDED (behind the operator's dashboard while
+      // they watch the streamed mirror) so the screencast does not freeze. Chrome throttles/stops
+      // painting a backgrounded or occluded window by default; these keep it producing frames.
       '--disable-backgrounding-occluded-windows',
       '--disable-renderer-backgrounding',
       '--disable-background-timer-throttling',
@@ -239,11 +229,6 @@ export async function launchHeadedRealChrome(
   // raising a second window the stream cannot follow (and macOS cannot stop raising to the front).
   await context.addInitScript(SAME_TAB_INIT_SCRIPT).catch(() => undefined);
   attachCdpSeam(context);
-  // Headed: move the window OFF-SCREEN so it never takes over the desktop; the streamed panel is the
-  // control surface. Off-screen (not minimized) because a minimized macOS window stops compositing and
-  // the screencast goes black - an off-screen NORMAL window keeps rendering at full rate. Headless has
-  // no window to hide, so this is skipped.
-  if (!headless) await attachWindowHide(context);
   return context;
 }
 
@@ -266,52 +251,6 @@ function attachCdpSeam(context: HeadedChromeContext): void {
     const page = pw.pages()[0] ?? (await pw.newPage());
     return realNewCdp(page);
   };
-}
-
-/** Far off-screen origin for the hidden ceremony window (the established Chrome "offscreen" position).
- *  The window keeps its NORMAL state (so it keeps compositing and the screencast stays live) but sits
- *  well outside any display, so it never covers the human's desktop. */
-export const OFFSCREEN_WINDOW_LEFT = -32000;
-export const OFFSCREEN_WINDOW_TOP = -32000;
-
-/**
- * Give the returned context a `minimizeWindow()` (named for its intent - keep the window out of the
- * human's way) that moves the window OFF-SCREEN via CDP window management (`Browser.getWindowForTarget`
- * + `Browser.setWindowBounds` to `OFFSCREEN_WINDOW_LEFT/TOP`, windowState `normal`), and calls it once
- * at launch. Off-screen, NOT minimized: a minimized macOS window stops compositing and freezes the
- * screencast, whereas an off-screen normal window renders at full rate (with the anti-throttle launch
- * flags) and can still be captured. Re-callable (the ceremony re-hides on each navigation, since a
- * redirect can re-centre the window). Reuses one window-management CDP session, resolved lazily.
- * Best-effort: a context with no `newCDPSession` (the unit fakes) is left untouched, and any CDP
- * failure leaves the window where it is rather than throwing.
- */
-async function attachWindowHide(context: HeadedChromeContext): Promise<void> {
-  const newCdp = (context as { newCDPSession?: () => Promise<BridgeCdpSession> }).newCDPSession;
-  if (typeof newCdp !== 'function') return;
-  let cdp: BridgeCdpSession | undefined;
-  let windowId: number | undefined;
-  const hide = async (): Promise<void> => {
-    try {
-      if (!cdp) cdp = await newCdp();
-      if (windowId === undefined) {
-        const r = (await cdp.send('Browser.getWindowForTarget')) as { windowId?: number };
-        windowId = r?.windowId;
-      }
-      if (windowId !== undefined) {
-        // windowState 'normal' + an off-screen origin: keeps the window compositing (live screencast)
-        // while placing it outside every display. Width/height are omitted so the window keeps the size
-        // Playwright launched it at (changing it would resize the frame and re-trigger the viewport).
-        await cdp.send('Browser.setWindowBounds', {
-          windowId,
-          bounds: { left: OFFSCREEN_WINDOW_LEFT, top: OFFSCREEN_WINDOW_TOP, windowState: 'normal' },
-        });
-      }
-    } catch {
-      /* window management unavailable on this platform/CDP; the window simply stays where it is */
-    }
-  };
-  (context as { minimizeWindow?: () => Promise<void> }).minimizeWindow = hide;
-  await hide();
 }
 
 /** Playwright's persistent context, HEADED. Imported dynamically so the module graph does not pull
