@@ -87,6 +87,16 @@ export class CeremonyScreencast {
     // frames flowing to no one. `onFrame` already guards on `this.stopped`, so the pipeline stays
     // silent, but not starting it at all is the honest outcome.
     if (this.stopped) return;
+    // CLAMP the screencast to the page's CSS-pixel viewport (D-CEREMONY-STREAM-COORDS). Chrome
+    // screencasts at DEVICE resolution, so on a HiDPI window (deviceScaleFactor 2 - a Retina Mac) the
+    // frame image is TWICE the CSS viewport. `Input.dispatchMouseEvent` takes CSS pixels, so a click at
+    // the frame's visual position then lands at the wrong page coordinate - the human aims at "Log in"
+    // and hits the link beside it. maxWidth/maxHeight = the CSS viewport collapses the frame back to
+    // 1:1 with the coordinate space input is dispatched in, exactly as the hosted canvas does with
+    // page.viewportSize() (api/src/streaming/session.ts). It also ~halves the bytes on a Retina display.
+    const clamp = await this.cssViewport();
+    // Re-check stopped after the metrics round-trip, same honesty as the post-`Page.enable` guard.
+    if (this.stopped) return;
     // everyNthFrame from FPS exactly as the hosted canvas derives it: at 15fps Chrome emits every
     // 4th compositor frame (~15/s off a 60Hz pipeline).
     const everyNthFrame = Math.max(1, Math.round(60 / Math.max(1, FPS)));
@@ -94,7 +104,35 @@ export class CeremonyScreencast {
       format: 'jpeg',
       quality: QUALITY,
       everyNthFrame,
+      ...(clamp ? { maxWidth: clamp.width, maxHeight: clamp.height } : {}),
     });
+  }
+
+  /**
+   * The page's CSS-pixel layout viewport, read over CDP so the screencast can be clamped to it (the
+   * coordinate fix above). Absent - a CDP session that does not answer `Page.getLayoutMetrics`, or a
+   * zero/garbage viewport - leaves the screencast unclamped: correct on a 1x display, and the viewer
+   * adapts to whatever frame size arrives regardless. This touches no credential-bearing material, but
+   * consistent with the whole-file rule it logs nothing.
+   */
+  private async cssViewport(): Promise<{ width: number; height: number } | null> {
+    try {
+      const metrics = (await this.cdp.send('Page.getLayoutMetrics')) as
+        | {
+            cssLayoutViewport?: { clientWidth?: number; clientHeight?: number };
+            layoutViewport?: { clientWidth?: number; clientHeight?: number };
+          }
+        | undefined;
+      const vp = metrics?.cssLayoutViewport ?? metrics?.layoutViewport;
+      const w = vp?.clientWidth;
+      const h = vp?.clientHeight;
+      if (typeof w === 'number' && typeof h === 'number' && w > 0 && h > 0) {
+        return { width: Math.round(w), height: Math.round(h) };
+      }
+    } catch {
+      /* fall through to unclamped */
+    }
+    return null;
   }
 
   /**

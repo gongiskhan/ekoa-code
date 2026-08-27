@@ -116,3 +116,35 @@ describe('the live canvas speaks the server media-channel wire', () => {
     expect(ws.sent).toEqual([]);
   });
 });
+
+/**
+ * The server mints a RELATIVE wsUrl (`/api/v1/ceremony-stream/<id>`) because prod is same-origin. In
+ * split-origin dev (page on `:3000`, API on `:4111`) a relative WebSocket URL would dial the PAGE
+ * origin and never reach the ceremony-stream handler — the canvas hangs at `connecting`. These pin
+ * the resolution to the API origin so that cannot regress (the live-verification bug, 2026-08-27).
+ */
+describe('the canvas resolves the wsUrl to the API origin, not the page origin', () => {
+  const prevEnv = process.env.NEXT_PUBLIC_API_URL;
+  afterEach(() => {
+    if (prevEnv === undefined) delete process.env.NEXT_PUBLIC_API_URL;
+    else process.env.NEXT_PUBLIC_API_URL = prevEnv;
+  });
+
+  it('resolves a relative path against the API port, not the page port', () => {
+    // Page origin is jsdom's default (`http://localhost:3000`); API env points at :4111. The socket
+    // must dial :4111 (where the WS handler lives), NOT the :3000 the page is served from.
+    process.env.NEXT_PUBLIC_API_URL = 'http://localhost:4111';
+    openCanvas({ ...OPTS, wsUrl: '/api/v1/ceremony-stream/r1' });
+    const url = MockWebSocket.last!.url;
+    expect(url).toMatch(/^ws:\/\/localhost:4111\/api\/v1\/ceremony-stream\/r1\?token=/);
+    // A relative URL that leaked through unresolved would start with `/` — never construct one.
+    expect(url.startsWith('/')).toBe(false);
+  });
+
+  it('passes an already-absolute ws(s):// URL through unchanged', () => {
+    openCanvas({ ...OPTS, wsUrl: 'wss://app.ekoa.io/api/v1/ceremony-stream/r2' });
+    expect(MockWebSocket.last!.url).toMatch(
+      /^wss:\/\/app\.ekoa\.io\/api\/v1\/ceremony-stream\/r2\?token=/,
+    );
+  });
+});

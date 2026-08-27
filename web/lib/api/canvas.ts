@@ -13,8 +13,29 @@
  * auto-reconnect - both named close codes are terminal. SSR-guarded (WebSocket is browser-only).
  */
 
+import { resolveBaseUrl } from './base-url';
+
 export type CanvasStatus = 'connecting' | 'open' | 'closed';
 export type Unsubscribe = () => void;
+
+/**
+ * Resolve the streaming `wsUrl` to an ABSOLUTE ws(s):// URL against the API origin.
+ *
+ * The server mints a RELATIVE path (`/api/v1/ceremony-stream/<id>`, `/api/v1/automation-stream/<id>`)
+ * because in production the web page and the API are same-origin behind one edge proxy. But `new
+ * WebSocket(<relative>)` resolves against the PAGE origin, and in split-origin dev the page is the
+ * Next server (`:3000`) while the WS handler lives only on the API (`:4111`) - so a relative URL
+ * dials the wrong port and the socket never opens (the canvas hangs at `connecting`). Resolve it
+ * against `resolveBaseUrl()` - the single API-origin resolver, which already adopts the browser host
+ * for LAN/Tailscale dev - so the socket always reaches the API in every environment. An already-
+ * absolute ws(s):// URL passes through; an http(s):// URL has only its scheme swapped.
+ */
+function toAbsoluteWsUrl(wsUrl: string): string {
+  if (/^wss?:\/\//i.test(wsUrl)) return wsUrl;
+  if (/^https?:\/\//i.test(wsUrl)) return wsUrl.replace(/^http/i, 'ws');
+  const wsBase = resolveBaseUrl().replace(/^http/i, 'ws'); // http->ws, https->wss
+  return `${wsBase}${wsUrl.startsWith('/') ? '' : '/'}${wsUrl}`;
+}
 
 /** Close codes from the ch03 §3.7 handoff contract. */
 export const CANVAS_CLOSE_NORMAL = 1000;
@@ -117,8 +138,9 @@ class LiveCanvas implements CanvasSession {
       this._status = 'closed';
       return;
     }
-    const sep = opts.wsUrl.includes('?') ? '&' : '?';
-    const ws = new WebSocket(`${opts.wsUrl}${sep}token=${encodeURIComponent(opts.token)}`);
+    const absoluteWsUrl = toAbsoluteWsUrl(opts.wsUrl);
+    const sep = absoluteWsUrl.includes('?') ? '&' : '?';
+    const ws = new WebSocket(`${absoluteWsUrl}${sep}token=${encodeURIComponent(opts.token)}`);
     this.ws = ws;
 
     ws.onopen = () => this.setStatus('open');

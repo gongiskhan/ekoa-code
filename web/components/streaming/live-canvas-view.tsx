@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   openCanvas,
   CANVAS_CLOSE_NORMAL,
@@ -39,6 +39,16 @@ export default function LiveCanvasView({ session, onStatusChange, onClose, class
   const rafRef = useRef<number | null>(null);
   const pendingFrameRef = useRef<string | null>(null);
   const viewportRef = useRef<{ width: number; height: number }>(session.viewport);
+  /**
+   * The natural pixel size of the frames actually arriving. Two things read it: clicks map INTO this
+   * space (the producer has clamped the screencast to the page's CSS viewport, which is the space
+   * `Input.dispatch*` is in), and the display box is sized to its aspect ratio. Sizing the box to the
+   * REAL frame aspect is what removes the object-contain letterbox - a box locked to a guessed
+   * aspect ratio (the old `session.viewport`) mismatches the frame, letterboxes it, and then maps
+   * clicks over the black bars so they land off-target (the ceremony coordinate bug, 2026-08-27).
+   */
+  const frameSizeRef = useRef<{ width: number; height: number }>(session.viewport);
+  const [frameSize, setFrameSize] = useState<{ width: number; height: number }>(session.viewport);
 
   useEffect(() => {
     viewportRef.current = session.viewport;
@@ -52,6 +62,13 @@ export default function LiveCanvasView({ session, onStatusChange, onClose, class
     if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
       canvas.width = img.naturalWidth;
       canvas.height = img.naturalHeight;
+    }
+    // Adopt the frame's true dimensions as the coordinate + aspect space. `frameSizeRef` is what the
+    // click mapper reads (synchronously); the state drives the box aspect ratio re-render.
+    if (frameSizeRef.current.width !== img.naturalWidth || frameSizeRef.current.height !== img.naturalHeight) {
+      const next = { width: img.naturalWidth, height: img.naturalHeight };
+      frameSizeRef.current = next;
+      setFrameSize(next);
     }
     ctx.drawImage(img, 0, 0);
   };
@@ -118,7 +135,10 @@ export default function LiveCanvasView({ session, onStatusChange, onClose, class
     if (!canvas) return null;
     const rect = canvas.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
-    const viewport = viewportRef.current;
+    // Map into the FRAME's pixel space, not a guessed viewport: with the box sized to the frame's
+    // aspect there is no letterbox, so the rect maps 1:1 onto the rendered image, and the frame space
+    // equals the page CSS-pixel space the producer dispatches input in.
+    const viewport = frameSizeRef.current;
     const vx = ((clientX - rect.left) / rect.width) * viewport.width;
     const vy = ((clientY - rect.top) / rect.height) * viewport.height;
     return {
@@ -172,7 +192,7 @@ export default function LiveCanvasView({ session, onStatusChange, onClose, class
     else sendInput({ type: 'mousemove', x: pos.x, y: pos.y });
   };
 
-  const aspectRatio = `${session.viewport.width} / ${session.viewport.height}`;
+  const aspectRatio = `${frameSize.width} / ${frameSize.height}`;
 
   return (
     <canvas

@@ -44,6 +44,40 @@ describe('CeremonyScreencast — start, relay, ack', () => {
     expect(methods.indexOf('Page.enable')).toBeLessThan(methods.indexOf('Page.startScreencast'));
   });
 
+  it('clamps the screencast to the page CSS viewport so HiDPI frames map 1:1 to input coordinates', async () => {
+    // Chrome screencasts at DEVICE resolution; on a Retina window (deviceScaleFactor 2) an unclamped
+    // frame is 2x the CSS viewport, and a click on it lands at the wrong page coordinate when
+    // dispatched via Input.dispatchMouseEvent (CSS pixels). Given the real CSS viewport, the producer
+    // must pass it as maxWidth/maxHeight so Chrome scales the frame back to 1:1.
+    const calls: Array<{ method: string; params?: unknown }> = [];
+    const cdp: BridgeCdpSession = {
+      send(method: string, params?: unknown): Promise<unknown> {
+        calls.push({ method, params });
+        if (method === 'Page.getLayoutMetrics') {
+          return Promise.resolve({ cssLayoutViewport: { clientWidth: 1440, clientHeight: 782 } });
+        }
+        return Promise.resolve(undefined);
+      },
+      on(): void {},
+    };
+    const sc = new CeremonyScreencast(cdp, () => true, REQUEST_ID);
+    await sc.start();
+
+    const start = calls.filter((c) => c.method === 'Page.startScreencast');
+    expect(start).toHaveLength(1);
+    expect(start[0]!.params).toMatchObject({ format: 'jpeg', maxWidth: 1440, maxHeight: 782 });
+  });
+
+  it('starts UNCLAMPED when the CSS viewport is unavailable (1x display / a CDP that does not answer)', async () => {
+    // FakeCdp returns undefined for Page.getLayoutMetrics, so no maxWidth/maxHeight is sent — correct
+    // on a 1x display, and the viewer adapts to whatever frame size arrives.
+    const { cdp, sc } = make();
+    await sc.start();
+    const start = cdp.callsTo('Page.startScreencast')[0]!.params as Record<string, unknown>;
+    expect(start).not.toHaveProperty('maxWidth');
+    expect(start).not.toHaveProperty('maxHeight');
+  });
+
   it('relays a fired frame up as ceremony.frame with the base64, and acks it back to Chrome', async () => {
     const { cdp, sent, sc } = make();
     await sc.start();
