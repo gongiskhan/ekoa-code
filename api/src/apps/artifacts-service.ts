@@ -39,6 +39,11 @@ export interface Deps { now: () => number; genId: () => string }
  */
 export const RESERVED_ARTIFACT_DATA_KEYS: readonly string[] = [
   'projectDir', 'appUrl', 'sessionId', 'sdkSessionId',
+  // Token-economics port: the running build summary + its stamp are the follow-up continuity
+  // carrier, written ONLY by the server build pipeline (a client-writable summary would let a
+  // caller steer the next follow-up's briefing). `sdkSessionId` is retired as a resume key but
+  // stays reserved — legacy artifacts still carry it and it must remain un-writable.
+  'buildSummary', 'buildSummaryUpdatedAt',
   'seededFrom', 'seededVersion', 'updateAvailable',
   'importedFrom', 'forkedFrom', 'lastBundleUpdateAt', 'customized',
   // Server-owned build outputs, set ONLY at activation from the app's own project

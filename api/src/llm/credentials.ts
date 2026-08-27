@@ -396,6 +396,10 @@ export interface SubprocessEnvOptions {
   homeDir?: string;
   /** Agent-face runs raise `CLAUDE_CODE_STREAM_CLOSE_TIMEOUT` (§5.4.1, default 180 000 ms). */
   streamCloseTimeoutMs?: number;
+  /** Build runs set the SDK auto-compaction guardrail (token-economics port): compact at
+   *  `pctOverride`% of a bounded `windowTokens` window instead of just below the real 1M ceiling.
+   *  A zero on either field leaves that SDK default in place. */
+  autoCompact?: { windowTokens: number; pctOverride: number };
 }
 
 /** True when the chokepoint base URL is this server's own local gateway (loopback host) —
@@ -509,6 +513,14 @@ export async function buildSubprocessEnv(opts: SubprocessEnvOptions = {}): Promi
     env.PWD = opts.homeDir;
   }
   if (opts.streamCloseTimeoutMs !== undefined) env.CLAUDE_CODE_STREAM_CLOSE_TIMEOUT = String(opts.streamCloseTimeoutMs);
+  // Auto-compaction guardrail (token-economics port): compact at ~pctOverride% of a bounded window
+  // instead of ~13k below the real (1M) ceiling, which never fired. Set AFTER the CLAUDE_* scrub
+  // loop above (which drops inherited CLAUDE_* vars) so these explicit values survive. A zero on
+  // either field leaves the SDK default untouched. Build runs pass this; other spawns do not.
+  if (opts.autoCompact) {
+    if (opts.autoCompact.windowTokens > 0) env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(opts.autoCompact.windowTokens);
+    if (opts.autoCompact.pctOverride > 0) env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = String(opts.autoCompact.pctOverride);
+  }
   return env;
 }
 

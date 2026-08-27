@@ -93,3 +93,36 @@ describe('RouterDecision resolution (config-driven models + weights)', () => {
     expect(classify('architect a novel multi-file security audit refactor')).toBe('EXPERT');
   });
 });
+
+/**
+ * Follow-up build routing (token-economics port). Follow-ups floor at WORKHORSE, not EXPERT — a
+ * routine edit is a Sonnet task; a genuine rebuild still self-escalates via 2+ Tier-4 hits. The
+ * PT-PT product needed its own big-change verbs and triviality markers in the keyword sets.
+ */
+describe('follow-up routing floor + PT-PT keywords (token-economics port)', () => {
+  it('a WORKHORSE floor leaves a routine follow-up on Sonnet, not Opus', () => {
+    expect(decideForTask('tweak the header', undefined, 'WORKHORSE').model).toBe('claude-sonnet-5');
+    expect(decideForTask('muda o texto do botão', undefined, 'WORKHORSE').model).toBe('claude-sonnet-5');
+    expect(decideForTask('adiciona uma coluna', undefined, 'WORKHORSE').model).toBe('claude-sonnet-5');
+  });
+
+  it('a big rebuild still escalates a follow-up to Opus despite the WORKHORSE floor', () => {
+    // 2+ Tier-4 hits ("refactor" + "dashboard" + "feature") clear EXPERT before the floor applies.
+    expect(decideForTask('refactor the dashboard: rebuild the whole feature', undefined, 'WORKHORSE').model).toBe('claude-opus-5');
+  });
+
+  it('PT-PT big-change verbs escalate: a lone phrase (double-scored) reaches EXPERT', () => {
+    // "do zero" is a space-containing pattern → +2, past the >=2 EXPERT gate on its own.
+    expect(classify('reconstruir a aplicação do zero')).toBe('EXPERT');
+    expect(classify('refazer tudo de raiz')).toBe('EXPERT');
+    // A single PT big-change verb alone floors at WORKHORSE, exactly like its EN counterpart.
+    expect(classify('reconstruir isto')).toBe('WORKHORSE');
+  });
+
+  it('PT-PT triviality markers cap a would-be EXPERT follow-up at WORKHORSE', () => {
+    expect(classify('reconstruir a aplicação do zero, apenas o cabeçalho')).toBe('WORKHORSE');
+    expect(classify('refazer tudo de raiz, mas simples')).toBe('WORKHORSE');
+    // The floor + demotion compose: a demoted classify still respects a WORKHORSE floor (no lower).
+    expect(decideForTask('só um ajuste rápido', undefined, 'WORKHORSE').tier).toBe('WORKHORSE');
+  });
+});

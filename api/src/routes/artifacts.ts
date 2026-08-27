@@ -30,12 +30,13 @@ import { actorOf, notFound, sendError, parseBody } from './helpers.js';
 import type { SnapshotAudit } from '../services/commit-guard.js';
 import { SecretCommitError } from '../services/commit-guard.js';
 import type { AppDataDeps } from '../apps/app-data-access.js';
-import { loadReadable, loadWritable, projectDirFor, getArtifactById, setFeaturedFlag, isAppArtifact } from '../apps/app-paths.js';
+import { loadReadable, loadWritable, projectDirFor, getArtifactById, setFeaturedFlag, isAppArtifact, patchArtifactData } from '../apps/app-paths.js';
 import { ensureArtifactScreenshot } from '../services/artifact-screenshot.js';
 import { forkArtifact } from '../apps/artifact-fork.js';
 import { exportArtifact, importArtifact, updateArtifactFromBundle, ManifestIdMismatchError, ImportIdCollisionError, ImportIdInvalidError } from '../apps/artifact-bundle.js';
 import { applyFeaturedUpdate, ignoreFeaturedUpdate } from '../apps/artifact-featured-update.js';
 import { listVersions, restoreAndRebuild } from '../apps/versions.js';
+import { awaitPendingBuildSummary } from '../agents/build-summary.js';
 import { listArtifactFiles, readArtifactFile, writeArtifactFile, FilePathError } from '../apps/artifact-files.js';
 import { AppDataBackups } from '../apps/backups.js';
 import {
@@ -282,6 +283,19 @@ export function artifactsRouter(deps: { now: () => number; genId: () => string }
       { projectDir: projectDirFor(art), sha: req.params.sha as string, authorName, authorEmail: `${authorName}@ekoa.local` },
       art.name,
     );
+    // Clear the running build summary (token-economics port): it described the code that a
+    // rollback just discarded, so leaving it would brief the next follow-up on features that no
+    // longer exist. The next successful build writes a fresh one from the restored tree. `''` reads
+    // as "no summary" in resolveFollowUp (falsy check), so the follow-up falls back to the legacy
+    // conversation tail until then. Best-effort — a metadata write must not fail the restore.
+    //
+    // Order matters: a summary pass from a just-completed build is fire-and-forget and may still be
+    // in flight. Await it (bounded) FIRST so the clear is the last writer — otherwise the in-flight
+    // pass could persist a fresh summary of the now-reverted code AFTER the clear, resurrecting
+    // exactly what the clear removes. Nothing re-schedules a pass during a restore (the rebuild is
+    // esbuild-only, not an agent build), so after this the '' stands until the next agent build.
+    await awaitPendingBuildSummary(art._id);
+    await patchArtifactData(art._id, { buildSummary: '', buildSummaryUpdatedAt: '' }).catch(() => undefined);
     res.json({ newHeadSha: result.newHeadSha });
   });
 

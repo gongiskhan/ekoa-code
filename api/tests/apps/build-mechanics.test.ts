@@ -107,21 +107,26 @@ describe('createBuildMechanics — first build (ch05 §5.6.2, ch07 §7.3/§7.4)'
     expect((active?.data as Record<string, unknown>).customized).toBe(true); // MERGE, not replace
     expect((active?.data as Record<string, unknown>).projectDir).toBe(prep.projectDir); // preserved
 
-    // Follow-up resolution reads projectDir + the resume session id back off the record.
-    await mech.persistSdkSessionId(prep.artifactId, 'sdk-123');
+    // Follow-up resolution reads projectDir + the running build summary back off the record
+    // (token-economics port: the summary is the continuity carrier, not a resumed SDK session).
+    await mech.persistBuildSummary(prep.artifactId, 'A CRM app: clientes collection with nif + estado.');
     const follow = await mech.resolveFollowUp(prep.artifactId);
     expect(follow?.projectDir).toBe(prep.projectDir);
-    expect(follow?.resumeSessionId).toBe('sdk-123');
+    expect(follow?.buildSummary).toBe('A CRM app: clientes collection with nif + estado.');
+    // The retired sdkSessionId is never resurfaced as a resume key.
+    expect((follow as Record<string, unknown>).resumeSessionId).toBeUndefined();
   });
 
-  it('persistSdkSessionId writes only when the id changed', async () => {
+  it('persistBuildSummary writes the summary + a stamp, and ignores a blank summary', async () => {
     const prep = await mech.prepareFirstBuild({ userId: USER, sessionId: 'sess-3', description: 'One', language: 'pt' });
-    await mech.persistSdkSessionId(prep.artifactId, 'sid-1');
-    const before = (await artifacts.get(prep.artifactId)) as ArtifactDoc;
-    await mech.persistSdkSessionId(prep.artifactId, 'sid-1'); // unchanged — no write
-    const after = (await artifacts.get(prep.artifactId)) as ArtifactDoc;
-    expect((after.data as Record<string, unknown>).sdkSessionId).toBe('sid-1');
-    expect(after).toEqual(before);
+    await mech.persistBuildSummary(prep.artifactId, 'v1 summary');
+    const after1 = (await artifacts.get(prep.artifactId)) as ArtifactDoc;
+    expect((after1.data as Record<string, unknown>).buildSummary).toBe('v1 summary');
+    expect((after1.data as Record<string, unknown>).buildSummaryUpdatedAt).toBeTruthy();
+    // A blank summary is a no-op — never overwrite a good summary with nothing.
+    await mech.persistBuildSummary(prep.artifactId, '   ');
+    const after2 = (await artifacts.get(prep.artifactId)) as ArtifactDoc;
+    expect((after2.data as Record<string, unknown>).buildSummary).toBe('v1 summary');
   });
 
   it('resolveFollowUp returns null for an unknown artifact', async () => {

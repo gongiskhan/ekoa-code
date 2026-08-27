@@ -42,9 +42,15 @@ export const Artifact = z
      * The chat session this artifact was built/continued from (`data.sessionId`), lifted the same
      * way as `importedFrom`: the client needs it to resolve "continue working" to the right
      * session without ever seeing the rest of the server-owned `data` bag (`projectDir`,
-     * `sdkSessionId`, ...). Set at first build (`prepareFirstBuild`) and re-linked server-side
+     * `buildSummary`, ...). Set at first build (`prepareFirstBuild`) and re-linked server-side
      * whenever a session is created FOR this artifact (`POST /sessions` with `artifactId`) - never
      * client-writable via the artifact PATCH route (`sessionId` is a reserved `data` key).
+     *
+     * Follow-up continuity no longer resumes an SDK transcript: the retired `data.sdkSessionId`
+     * regrew an unbounded transcript that never compacted under the 1M window (token-economics
+     * port, ekoa-dev `docs/token-economics.md`). Continuity now rides `data.buildSummary` — a
+     * running ≤600-word engineering summary refreshed after each build — plus the files on disk and
+     * a short conversation tail. Both are server-owned, off the wire, and reserved `data` keys.
      */
     sessionId: z.string().optional(),
     /**

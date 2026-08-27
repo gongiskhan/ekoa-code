@@ -65,6 +65,17 @@ export interface AgentsConfig {
   verifyWallClockMs: number;
   /** ch07 §7.2.6 verify-agent turn ceiling (generous backstop, not the operative bound). */
   maxTurnsVerify: number;
+  /**
+   * Auto-compaction guardrail for build runs (token-economics port, ekoa-dev
+   * `docs/token-economics.md`). Set on the build subprocess env as
+   * `CLAUDE_CODE_AUTO_COMPACT_WINDOW` + `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, so the SDK compacts at
+   * ~pctOverride% of the bounded window (200k @ 60% ⇒ ~108k tokens) instead of ~13k below the real
+   * 1M ceiling (which never fired). Since follow-ups now run FRESH sessions, this is a backstop for
+   * one runaway build, not the main lever — a fresh session rarely reaches it. `0` on either
+   * disables that env var (leaves the SDK default).
+   */
+  buildAutoCompactWindowTokens: number;
+  buildAutoCompactPctOverride: number;
   /** 5.4.2 transient-provider retry backoff. */
   transientRetryBackoffMs: number[];
   /** 5.4.1 agent-face stream-close timeout. */
@@ -205,6 +216,8 @@ export function defaultAgentsConfig(): AgentsConfig {
     maxTurnsText: envInt('MAX_TURNS_TEXT', 60),
     verifyWallClockMs: envInt('VERIFY_WALL_CLOCK_MS', 300_000),
     maxTurnsVerify: envInt('MAX_TURNS_VERIFY', 60),
+    buildAutoCompactWindowTokens: envInt('CLAUDE_CODE_AUTO_COMPACT_WINDOW', 200_000),
+    buildAutoCompactPctOverride: envInt('CLAUDE_AUTOCOMPACT_PCT_OVERRIDE', 60),
     transientRetryBackoffMs: [envInt('TRANSIENT_RETRY_BACKOFF_MS_1', 5_000), envInt('TRANSIENT_RETRY_BACKOFF_MS_2', 15_000)],
     agentFaceStreamCloseTimeoutMs: envInt('AGENT_FACE_STREAM_CLOSE_TIMEOUT_MS', 180_000),
     memoryAutoExtractEnabled: process.env.MEMORY_AUTO_EXTRACT_ENABLED !== 'false',

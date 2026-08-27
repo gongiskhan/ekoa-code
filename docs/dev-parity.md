@@ -88,6 +88,19 @@ be audited/ported. Ported the one committed fix this run.
 |---|---|---|---|
 | `a7b5e10a` | 2026-08-19 | feat(pdf): per-page letterhead chrome in renderHtmlToPdf via displayHeaderFooter | PORTED 2026-08-20 - `api/src/apps/pdf.ts`: `PdfPageChrome` + `parsePdfMarginShorthand` + `extractPdfPageChrome` (DOM-extracted `<template data-pdf-header\|footer>` + `data-pdf-margin`), wired into `renderHtmlToPdf` and painted via Chromium's native `displayHeaderFooter`. `renderHtmlToPdf` is the exact fn the composition root injects into `integrations/zoho-sign.ts` (`ZohoSignDeps.renderHtmlToPdf`), so the signed-proposal PDF picks the chrome up. Fixes the PROP-0244 "floating footer" (the in-flow thead/tfoot repetition trick dropped the footer mid-page on the last page of each section). Regression: `api/tests/apps/pdf-page-chrome.test.ts` - the pure margin-shorthand cases always run; a Chromium-guarded real render (browser-pool.test.ts pattern) asserts the footer repeats once per physical page and is absent without a template, verified live via `pdfjs-dist` text extraction. Adapted to ekoa-code, not copied verbatim: string-form `page.evaluate` (no DOM lib in the api tsconfig, same as `renderAppDocumentPdf`) and an explicit shorthand parse (this repo runs `noUncheckedIndexedAccess`, which rejects upstream's destructuring-with-defaults). Upstream shipped NO test; this port adds one. The commit stays UNPUSHED on `dev-madrid`. |
 
+## Design port 2026-08-27 - token economics (follow-up build continuity)
+
+Conveyed as ekoa-dev's `docs/token-economics.md` (an engineering report artifact), not a git commit
+this checkout can name a SHA for - ekoa-dev's own commit for it is on a peer/unpushed and was not
+audited by SHA here. Recorded as a **design port** (like the `1dd0019b` / `eb05231d` "reasoning, not
+code" rows below): the ekoa-code equivalent is `docs/token-economics.md` in this repo, with the full
+file map, tests, and the decision entry (`docs/decisions.md`, 2026-08-27). When a matching ekoa-dev
+SHA later surfaces in an audit, disposition it PORTED and point at that doc.
+
+| upstream | date | subject | disposition |
+|---|---|---|---|
+| ekoa-dev `docs/token-economics.md` | 2026-08-27 | follow-up builds burn the usage window: SDK-transcript resume regrows unbounded, never compacts under the 1M window, floors to Opus | PORTED 2026-08-27 - follow-up builds no longer resume the SDK session; continuity moves to a running `data.buildSummary` (fire-and-forget FAST pass, `api/src/agents/build-summary.ts`) + a short verbatim tail + agent-maintained `NOTES.md` + the files on disk. Follow-up routing floor EXPERT->WORKHORSE (`api/src/agents/build.ts`, `api/src/llm/router.ts` incl. PT-PT big-change/triviality keywords). Auto-compact guardrail on the build subprocess env (`config.ts` + `llm/credentials.ts` + `llm/client.ts`). Lifecycle: version-restore clears the summary (`routes/artifacts.ts`), featured source-update exempts `NOTES.md` (`apps/artifact-featured-update.ts`), `buildSummary`/`buildSummaryUpdatedAt` reserved (`apps/artifacts-service.ts`). `[1m]` model drop is N/A (ekoa-code already runs `claude-opus-5` at 1M default). Diagram `04-agent-job` updated. Tests: `build-summary`, `router`, `build`, `build-mechanics`, `artifact-family`. Full detail: `docs/token-economics.md`. |
+
 ### Open work this ledger opened
 
 | item | disposition |

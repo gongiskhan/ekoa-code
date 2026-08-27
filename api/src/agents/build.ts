@@ -1,11 +1,18 @@
 /**
  * Build jobs (ch05 §5.6.2). The §5.2 pipeline plus build specifics: follow-up detection and the
  * in-build classifier (under the abort rules of §5.3.2), the first-build reservation (§5.3.3) and
- * the one-follow-up-per-artifact 409 (§5.3.5), routing floored at the expert tier, the inactivity
- * + wall-clock timers (§5.3.6), session resume via sdkSessionId persisted-only-when-changed
- * (§5.4.5), the completion sequence (§5.6.2 steps 1-8) including the per-build verification stage
- * (step 5, ch07 §7.2.6), the provider-error reroute (§5.3.7), the dual-fire guard (§5.3.4), and
- * the P-10 persistence + in-process zombie net.
+ * the one-follow-up-per-artifact 409 (§5.3.5), routing floored at the expert tier for first builds
+ * and the workhorse tier for follow-ups, the inactivity + wall-clock timers (§5.3.6), the
+ * completion sequence (§5.6.2 steps 1-8) including the per-build verification stage (step 5, ch07
+ * §7.2.6), the provider-error reroute (§5.3.7), the dual-fire guard (§5.3.4), and the P-10
+ * persistence + in-process zombie net.
+ *
+ * Continuity (token-economics port, ekoa-dev `docs/token-economics.md`): follow-ups run a FRESH
+ * SDK session — they do NOT resume the prior transcript (which regrew unbounded, never compacted
+ * under the 1M window, and floored every follow-up to Opus). Continuity is carried instead by the
+ * files on disk, a short verbatim conversation tail, an agent-maintained NOTES.md, and a running
+ * `buildSummary` refreshed by a fire-and-forget FAST pass after each successful build
+ * (`build-summary.ts`).
  */
 import { runErrorText, type RunErrorCode } from '@ekoa/shared';
 import type { Actor } from '@ekoa/shared';
@@ -46,6 +53,7 @@ import { assembleAgentContext, getBuildMechanics, knowledgeGrounding, ingestBuil
 import { detectDomainHeavy, knowledgeScopingNarration, knowledgeIndexedNarration, knowledgeNotIndexedNarration } from './domain-scoping.js';
 import { logActivity } from '../data/activity.js';
 import { loadHistory, renderPrompt, capHistory } from './context.js';
+import { scheduleBuildSummary, awaitPendingBuildSummary } from './build-summary.js';
 
 /** Registo (F3): build lifecycle rows, metadata-only (ids/codes — NEVER the request description
  *  or any prompt text). The single audit write path (FIXED-8); best-effort so bookkeeping never
@@ -396,7 +404,7 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
   let projectDir = '';
   let slug = '';
   let appUrl = '';
-  let resumeSessionId: string | undefined;
+  let buildSummary: string | undefined; // the artifact's running summary (follow-up continuity carrier)
   let terminalReached = false;
 
   /**
@@ -490,10 +498,15 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
         terminalReached = true;
         return;
       }
+      // The previous build's running summary is written fire-and-forget after completion and may
+      // still be in flight; block briefly (bounded) so this follow-up reads a CURRENT summary
+      // rather than a stale one (token-economics port). Bounded, so a background pass never hangs
+      // the build.
+      await awaitPendingBuildSummary(artifactId);
       const resolved = await mech.resolveFollowUp(artifactId);
       if (!resolved) { clearTimers(); await finishError('ADAPTER_ERROR'); return; }
       projectDir = resolved.projectDir;
-      resumeSessionId = resolved.resumeSessionId;
+      buildSummary = resolved.buildSummary;
       slug = resolved.slug;
       appUrl = resolved.appUrl;
       basePromptSections = resolved.basePromptSections ?? [];
@@ -508,19 +521,35 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       if (projectDir) await mech.watchRebuilds({ artifactId, projectDir, onRebuild: () => sink.previewReload() });
     }
 
-    // Routing floor (§5.2 step 5, re-decided 2026-08-14): a FIRST build's floor follows the
-    // brief's AMBITION, not a blanket frontier mandate. The FAST classifier labels the brief
-    // 'basic' (standard internal tool) or 'ambitious' (design-led / public-facing /
-    // multi-domain); basic floors at EXPERT, ambitious keeps the frontier GENIUS floor
-    // (operator directive 2026-08-07, effort since lowered max→high). Measured basis
-    // (2026-08-13, a basic time-tracking app): the blanket GENIUS-max floor spent ~68K of
-    // 96K output tokens THINKING — ~14 of 20.5 minutes. Follow-ups keep the EXPERT floor.
+    // The user's ACTUAL request text: the original words when a chat delegation carried them, else
+    // `description` (a direct composer build, where description already IS the user's own words).
+    // Computed HERE — before routing — because it is the classifier input below (WS6: `description`
+    // may be the chat-agent's <=15-word build PARAPHRASE, which strips the very verbs the router
+    // scores). See its downstream uses (grounding, prompt, summary) further down.
+    const buildQuery = input.originalMessage?.trim() || input.description;
+
+    // Routing floor (§5.2 step 5, re-decided 2026-08-14; follow-up floor lowered by the
+    // token-economics port). A FIRST build's floor follows the brief's AMBITION, not a blanket
+    // frontier mandate: the FAST classifier labels the brief 'basic' (standard internal tool) or
+    // 'ambitious' (design-led / public-facing / multi-domain); basic floors at EXPERT, ambitious
+    // keeps the frontier GENIUS floor (operator directive 2026-08-07, effort since lowered
+    // max→high). Measured basis (2026-08-13, a basic time-tracking app): the blanket GENIUS-max
+    // floor spent ~68K of 96K output tokens THINKING — ~14 of 20.5 minutes.
+    //
+    // FOLLOW-UPS floor at WORKHORSE (Sonnet), not EXPERT. Most follow-ups are edits ("change this
+    // label", "add a column") that Opus over-serves at ~5x the usage-window weight; the router
+    // still escalates a genuinely big change to Opus on its own (2+ Tier-4 keyword hits in the
+    // classify() scoring). Because the WORKHORSE floor makes that keyword scoring the SOLE
+    // escalation lever for follow-ups, the router must read the RAW request (`buildQuery`), never
+    // the chat-agent's paraphrase — a paraphrase drops the big-change verbs ("reconstrói do zero")
+    // and would strand a genuine rebuild on Sonnet. It is likewise never the augmented prompt,
+    // whose injected "Prior Work On This App" framing would otherwise escalate every follow-up.
     let routingReason = 'follow-up build';
-    let routingFloor: 'GENIUS' | 'EXPERT' = 'EXPERT';
+    let routingFloor: 'GENIUS' | 'EXPERT' | 'WORKHORSE' = 'WORKHORSE';
     if (opts.firstBuild) {
       let ambition: Awaited<ReturnType<typeof classifyBuildAmbition>>;
       try {
-        ambition = await classifyBuildAmbition(input.description, input.actor.userId, abort.signal);
+        ambition = await classifyBuildAmbition(buildQuery, input.actor.userId, abort.signal);
       } catch (err) {
         if (err instanceof LlmAbortedError) { await settleAborted(); return; } // Stop pressed mid-classify: never start a build (§5.3.2)
         throw err;
@@ -528,7 +557,7 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       routingFloor = ambition === 'ambitious' ? 'GENIUS' : 'EXPERT';
       routingReason = `first build (${ambition})`;
     }
-    const decision = decideForTask(input.description, undefined, routingFloor);
+    const decision = decideForTask(buildQuery, undefined, routingFloor);
     sink.routing(decision.tier, routingReason);
     await patchJob(jobId, { routing: { tier: decision.tier, reason: routingReason } });
 
@@ -573,7 +602,21 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
 
     const policy = toolPolicyFor('build');
     let liveMarkers = new MarkerProcessor(); // replaced on `text_reset` (B7 retraction)
-    let capturedSessionId: string | undefined;
+
+    // Files this build wrote/edited — the WHAT-changed signal fed to the running-summary pass
+    // (token-economics port). Project-relative, deduped, insertion-order preserved. Read-only
+    // tools (Read/Glob/Grep) never mutate, so they are not collected.
+    const filesChanged = new Set<string>();
+    const collectChangedFile = (e: ToolEventInput): void => {
+      if (e.phase !== 'started') return;
+      if (!['Write', 'Edit', 'MultiEdit', 'NotebookEdit'].includes(e.tool)) return;
+      const fp = (e.args as Record<string, unknown> | undefined)?.file_path;
+      if (typeof fp !== 'string' || !fp.trim()) return;
+      // Project-relative when it sits under the run's projectDir; otherwise the raw path (already
+      // sandbox-confined). Keeps summaries free of the sandbox absolute prefix.
+      const rel = projectDir && fp.startsWith(projectDir) ? fp.slice(projectDir.length).replace(/^\/+/, '') : fp;
+      if (rel) filesChanged.add(rel);
+    };
 
     // Progress narration (operator directive 2026-08-10). Before this, a build emitted
     // `knowledge-scope` and then NOTHING until the post-agent `verifying` phase - on a 34-minute
@@ -596,14 +639,12 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     // entrypoint steering) — pre-fix, builds sent ONLY the 6-line inline prompt and the whole
     // coding-agent content package was dead weight. The grounding block self-gates (legal-context
     // builds only, §5.5.2 layer 2); both layers are non-fatal.
-    // WS6 incident fix: the model is briefed on the user's ORIGINAL words, never the chat-agent's
-    // <=15-word build paraphrase (`input.description`) - that paraphrase is what used to be the
-    // build agent's ENTIRE prompt, so "a construir uma apresentação do teu produto Cobranças"
-    // briefed a slide deck when the user asked for a website. `description` keeps doing what it
-    // is good at: naming the artifact (deriveAppName, build-mechanics.ts) and the classifier text
-    // when no original message is carried (a direct composer build, where description already IS
-    // the user's own words).
-    const buildQuery = input.originalMessage?.trim() || input.description;
+    // WS6 incident fix: the model is briefed on the user's ORIGINAL words (`buildQuery`, computed
+    // above), never the chat-agent's <=15-word build paraphrase (`input.description`) - that
+    // paraphrase is what used to be the build agent's ENTIRE prompt, so "a construir uma
+    // apresentação do teu produto Cobranças" briefed a slide deck when the user asked for a website.
+    // `description` keeps doing what it is good at: naming the artifact (deriveAppName,
+    // build-mechanics.ts).
     let contentSections: string[] = [];
     let groundingBlock = '';
     try {
@@ -613,21 +654,33 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       console.warn('[build] content/grounding assembly failed (non-fatal):', err instanceof Error ? err.message : err);
     }
 
-    // First-build conversation continuity (WS6 DO #2): no SDK session exists yet to resume, so
-    // without this the build agent sees ONLY the current message - the same loss chat.ts already
-    // fixed for chat turns (context.ts renderPrompt). Follow-ups skip this: they resume the real
-    // SDK session (`resumeSessionId` below), which already carries the prior turns; re-injecting
-    // history there would just duplicate context the engine already has. Capped like ekoa-dev's
-    // conversation-transcript injection (cortex/src/adapters/external.ts) - non-fatal, a history
-    // load failure just falls back to the bare query.
+    // Conversation continuity (WS6 DO #2 + token-economics port). No SDK transcript is resumed —
+    // every build runs a FRESH session — so without this the agent would see ONLY the current
+    // message (the loss chat.ts already fixes for chat turns via context.ts renderPrompt).
+    //   - FIRST build: the recent conversation, budgeted like ekoa-dev's transcript injection
+    //     (cortex/src/adapters/external.ts) at 16 turns / 48k chars.
+    //   - FOLLOW-UP with a running summary: the summary as a "Prior Work On This App" section plus
+    //     a SHRUNK verbatim tail (6 turns / 24k) — the summary carries the older detail, so the tail
+    //     only needs "what the user just said" precision.
+    //   - FOLLOW-UP with no summary yet (the first follow-up after this ships, or a summary the FAST
+    //     pass could not produce): the legacy 16/48k tail, so no continuity is lost during rollout.
+    // Per-turn cap stays paste-sized (24k) in both branches. Non-fatal: a history load failure falls
+    // back to the bare query (still prefixed with the summary, if any).
+    const hasSummary = !opts.firstBuild && !!buildSummary?.trim();
     let buildPrompt = buildQuery;
-    if (opts.firstBuild && input.sessionId) {
+    if (input.sessionId) {
       try {
-        const history = capHistory(await loadHistory(input.sessionId), { maxTurns: 16, totalBudgetChars: 48_000, maxTurnChars: 24_000 });
+        const budget = hasSummary
+          ? { maxTurns: 6, totalBudgetChars: 24_000, maxTurnChars: 24_000 }
+          : { maxTurns: 16, totalBudgetChars: 48_000, maxTurnChars: 24_000 };
+        const history = capHistory(await loadHistory(input.sessionId), budget);
         buildPrompt = renderPrompt(history, buildQuery);
       } catch (err) {
         console.warn('[build] conversation-history injection failed (non-fatal):', err instanceof Error ? err.message : err);
       }
+    }
+    if (hasSummary) {
+      buildPrompt = `# Prior Work On This App\n${buildSummary!.trim()}\n\n${buildPrompt}`;
     }
 
     // Overload resilience (finding 2026-08-13, the "20-minute todo app"): a run that dies to
@@ -724,12 +777,18 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
             // degrade exactly as their own docs specify (assigned direction, no browser page); the
             // roll API is additionally forced offline via env at server boot (server.ts).
             ...(cfg.impeccablePluginDir ? { plugins: [cfg.impeccablePluginDir] } : {}),
-            ...(resumeSessionId ? { resume: resumeSessionId } : {}),
+            // Token-economics port: NO `resume`. Every build runs a fresh SDK session; continuity
+            // is the summary + tail injected into `buildPrompt` above, not a regrowing transcript.
+            // The compaction guardrail is now a backstop for one monster run (a fresh session
+            // rarely reaches it), not the main lever: compact at ~pctOverride% of a bounded window.
+            autoCompact: { windowTokens: cfg.buildAutoCompactWindowTokens, pctOverride: cfg.buildAutoCompactPctOverride },
             steerable: true, // Conduzir: mid-run user messages join this run (POST /jobs/:id/steer)
             signal: attemptAbort.signal,
             callbacks: {
-              onToolEvent: (e) => { sawEvent(); resetInactivity(); sink.toolEvent(e); narrateProgress(e); },
-              onSessionId: (sid) => { sawEvent(); capturedSessionId = sid; },
+              onToolEvent: (e) => { sawEvent(); resetInactivity(); sink.toolEvent(e); narrateProgress(e); collectChangedFile(e); },
+              // The session id still fires (it resets the overload deadline via sawEvent); it is no
+              // longer captured/persisted — nothing resumes it (token-economics port).
+              onSessionId: () => { sawEvent(); },
               onPlanNotification: () => { sawEvent(); resetInactivity(); },
             },
           },
@@ -826,11 +885,6 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
       resetInactivity();
     }
     clearTimers();
-
-    // Session resume (§5.4.5): persist sdkSessionId ONLY when it differs from what we resumed with.
-    if (capturedSessionId && capturedSessionId !== resumeSessionId) {
-      await mech.persistSdkSessionId(artifactId, capturedSessionId);
-    }
 
     // Step 2: final bundle. Step 3: version snapshot (broken builds snapshotted with a failure tag).
     const bundle = await mech.finalizeBundle({ artifactId, projectDir });
@@ -979,9 +1033,27 @@ export async function executeBuildJob(jobId: string, input: BuildCreateInput, ab
     // Step 7: artifact → active with a MERGE onto its data bag (§5.6.2 step 7).
     // projectDir lets activation capture the app's declared UI action manifest (C2).
     await mech.activateArtifact({ artifactId, slug, appUrl, ...(projectDir ? { projectDir } : {}) });
-    // Step 8: fire-and-forget screenshot + post-run memory extraction OFF the terminal event.
+    // Step 8: fire-and-forget screenshot + post-run memory extraction + running-summary refresh,
+    // all OFF the terminal event (the user's "done" never waits on them).
     mech.screenshot(artifactId);
     void runPostRunExtraction({ userId: input.actor.userId, username: input.username, orgId: input.actor.orgId, sessionId: input.sessionId, runId: jobId, transcript: `${input.description}\n\n${result.text}`, deps: input.deps }).catch(() => undefined);
+    // Refresh the artifact's running summary (token-economics port): previous summary + this
+    // request + the final reply (with any build notes) + the files changed → a new ≤600-word
+    // summary the NEXT follow-up briefs on instead of a resumed transcript. Success only, serialized
+    // per artifact, never throws. `completionText` carries a failed-bundle note so the summary
+    // records a change that did not fully land.
+    if (artifactId) {
+      scheduleBuildSummary({
+        artifactId,
+        userId: input.actor.userId,
+        ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+        runId: jobId,
+        ...(buildSummary ? { previousSummary: buildSummary } : {}),
+        userRequest: buildQuery,
+        finalReply: completionText,
+        filesChanged: [...filesChanged],
+      });
+    }
   } catch (err) {
     clearTimers();
     // Classify (a dead platform credential is AUTH_ERROR, not a retryable blip) and LOG. The old

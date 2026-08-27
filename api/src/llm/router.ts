@@ -89,6 +89,12 @@ const TIER4_KEYWORDS = new Set([
   'refactor', 'architect', 'redesign', 'debug complex', 'multi-file',
   'cross-file', 'deep analysis', 'novel', 'complex', 'critical',
   'security audit',
+  // PT-PT big-change verbs (token-economics port): a follow-up floors at WORKHORSE, so a genuine
+  // rebuild needs 2+ Tier-4 hits to escalate to Opus — and PT rebuild verbs used to score nothing.
+  // Single-word verbs join the set; the multi-word phrases ("do zero", "de raiz", "refazer tudo")
+  // ride the space-containing-pattern pass below (each counts double, so one phrase alone escalates).
+  'reconstruir', 'reconstrói', 'reconstroi', 'reescrever', 'redesenhar', 'rearquitetar',
+  'refazer', 'refaz', 'arquitetura', 'do zero', 'de raiz', 'refazer tudo',
 ]);
 
 /** Ambiguous verbs: a lone hit is usually a small single-file task, so they score T3, not
@@ -102,6 +108,9 @@ const TIER3_AMBIGUOUS = new Set([
  *  matching): a false demotion stranding heavy work on Haiku hurts more than a miss. */
 const DEMOTION_KEYWORDS = new Set([
   'just', 'simple', 'small', 'quick', 'trivial', 'tiny', 'minor', 'little',
+  // PT-PT triviality markers (token-economics port): the same signal the EN set carries, for the
+  // PT-facing product. Caps a would-be EXPERT follow-up back to WORKHORSE.
+  'apenas', 'simples', 'pequeno', 'pequena', 'rápido', 'rapido', 'ligeiro', 'menor', 'só',
 ]);
 
 /** Map an internal keyword level (1..4) to a public tier — the retired level-2 collapses onto

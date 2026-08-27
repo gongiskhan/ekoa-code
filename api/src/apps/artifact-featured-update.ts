@@ -131,7 +131,11 @@ export async function applyFeaturedUpdate(
       await writeFile(dest, await readFile(join(scaffoldDir, rel)));
     }
     for (const rel of await collectScaffoldPaths(workingDir)) {
-      if (keep.has(rel) || rel === '.gitignore') continue;
+      // NOTES.md is the agent's durable engineering-notes carrier (token-economics port): business
+      // rules, data contracts, corrections, gotchas it accrues across follow-up builds. It is NOT a
+      // scaffold file, so a source update must not sweep it away — the next follow-up would lose the
+      // decisions it records. Exempt it exactly like the .gitignore the sweep already spares.
+      if (keep.has(rel) || rel === '.gitignore' || rel === 'NOTES.md') continue;
       await rm(join(workingDir, ...rel.split('/')), { force: true });
     }
 

@@ -361,8 +361,16 @@ export interface FirstBuildPrep {
 
 export interface FollowUpResolution {
   projectDir: string;
-  /** The SDK session id to resume with (§5.4.5). */
-  resumeSessionId?: string;
+  /**
+   * The artifact's running build summary (token-economics port, ekoa-dev `docs/token-economics.md`):
+   * the cheap continuity carrier that REPLACED SDK-transcript resume on follow-up builds. Resuming
+   * the SDK session (`resumeSessionId` ← `sdkSessionId`) regrew an unbounded transcript that never
+   * compacted under the 1M window and floored every follow-up to Opus — five prompts burned a whole
+   * usage window. Follow-ups now run a FRESH SDK session; this summary (plus a short verbatim tail
+   * and the on-disk files) carries continuity instead. Absent until the first summary is written
+   * (first follow-up after deploy, or a summary the FAST pass could not produce).
+   */
+  buildSummary?: string;
   /** The artifact's existing slug + served URL. Follow-up completion re-activates the artifact
    *  with these — pre-fix, build.ts carried '' through and blanked the slug on every follow-up. */
   slug: string;
@@ -376,7 +384,7 @@ export interface FollowUpResolution {
 /**
  * The heavy ch07 build mechanics `agents/` invokes but does not own: scaffold + first-build
  * artifact creation, final-bundle, version snapshot, screenshot, artifact activation, and the
- * sdkSessionId persistence. `apps/` implements these at the composition root; the defaults are
+ * build-summary persistence. `apps/` implements these at the composition root; the defaults are
  * honest no-ops so the lifecycle + guards are testable without the real esbuild pipeline.
  */
 export interface BuildMechanics {
@@ -413,8 +421,10 @@ export interface BuildMechanics {
   snapshot(input: { artifactId: string; projectDir: string; broken: boolean }): Promise<void>;
   /** Fire-and-forget screenshot. */
   screenshot(artifactId: string): void;
-  /** Persist sdkSessionId onto the artifact — ONLY when it changed (§5.4.5). */
-  persistSdkSessionId(artifactId: string, sdkSessionId: string): Promise<void>;
+  /** Persist the running build summary onto the artifact (token-economics port): the follow-up
+   *  continuity carrier that replaced `sdkSessionId` transcript-resume. Written fire-and-forget
+   *  after a successful build; `data.buildSummary` + `data.buildSummaryUpdatedAt`. */
+  persistBuildSummary(artifactId: string, summary: string): Promise<void>;
   /** Activate the artifact with a MERGE onto its existing data bag (§5.6.2 step 7). */
   activateArtifact(input: { artifactId: string; slug: string; appUrl: string; projectDir?: string }): Promise<void>;
   /** (Re)start the incremental watcher with a rebuild callback — the live-preview heartbeat:
@@ -446,7 +456,7 @@ const noopBuildMechanics: BuildMechanics = {
   },
   async snapshot() {},
   screenshot() {},
-  async persistSdkSessionId() {},
+  async persistBuildSummary() {},
   async activateArtifact() {},
   async watchRebuilds() {},
   async assertProgress() {

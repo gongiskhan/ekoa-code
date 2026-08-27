@@ -11,6 +11,7 @@ import { __resetConfigForTests, __resetAgentsConfigForTests, loadConfig } from '
 import { setCredential, __resetCredentialsForTests } from '../../src/llm/credentials.js';
 import { __setTransportForTests, __resetTransportForTests, __resetOrgResolverForTests } from '../../src/llm/client.js';
 import { __resetAttributionCountersForTests } from '../../src/llm/attribution.js';
+import { __resetRateCapsForTests } from '../../src/billing/rate-caps.js';
 import { __resetVaultForTests, __resetRulesetResolverForTests, __resetNerForTests, __resetAuditForTests } from '../../src/llm/anonymise/index.js';
 import { __resetRegistryForTests } from '../../src/agents/registry.js';
 import { __resetAgentSeamsForTests } from '../../src/agents/seams.js';
@@ -52,6 +53,11 @@ export function resetAgentState(script: FakeTransportScript = {}): FakeTransport
   __resetRulesetResolverForTests();
   __resetNerForTests();
   __resetAuditForTests();
+  // Reset the sliding-window rate caps so a test's per-user/-org call counts do not bleed into the
+  // next test. The window is 60s and the per-user cap 60 calls; a file that runs many builds (each
+  // several billed model calls, incl. the post-run memory-extract and running-summary passes) would
+  // otherwise accumulate across tests and spuriously trip RATE_LIMITED in a later, unrelated case.
+  __resetRateCapsForTests();
   const t = makeFakeTransport(script);
   __setTransportForTests(t);
   return t;

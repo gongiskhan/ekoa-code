@@ -260,21 +260,22 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
       return { artifactId, projectDir, slug, appUrl, ...(promptSections.length > 0 ? { basePromptSections: promptSections } : {}) };
     },
 
-    /** Follow-up resolution (ch05 §5.3.5, §5.4.5): the artifact record → its project dir, the
-     *  SDK session id to resume with, and its existing slug + served URL (follow-up completion
+    /** Follow-up resolution (ch05 §5.3.5; token-economics port): the artifact record → its project
+     *  dir, the running build summary that carries continuity (the fresh-session replacement for
+     *  `sdkSessionId` transcript-resume), and its existing slug + served URL (follow-up completion
      *  re-activates with these — carrying '' through blanked the slug on every follow-up).
      *  Null when the artifact is gone. */
-    async resolveFollowUp(artifactId: string): Promise<{ projectDir: string; resumeSessionId?: string; slug: string; appUrl: string; basePromptSections?: string[] } | null> {
+    async resolveFollowUp(artifactId: string): Promise<{ projectDir: string; buildSummary?: string; slug: string; appUrl: string; basePromptSections?: string[] } | null> {
       const art = (await artifacts.get(artifactId)) as ArtifactDoc | null;
       if (!art) return null;
       const projectDir = projectDirFor(art);
       const data = (art.data as Record<string, unknown> | undefined) ?? {};
-      const resumeSessionId = typeof data.sdkSessionId === 'string' ? data.sdkSessionId : undefined;
+      const buildSummary = typeof data.buildSummary === 'string' && data.buildSummary ? data.buildSummary : undefined;
       const appUrl = typeof data.appUrl === 'string' && data.appUrl ? data.appUrl : `/apps/${artifactId}/`;
       const base = await baseOfProject(projectDir);
       return {
         projectDir,
-        ...(resumeSessionId ? { resumeSessionId } : {}),
+        ...(buildSummary ? { buildSummary } : {}),
         slug: art.slug ?? '',
         appUrl,
         ...(base ? { basePromptSections: base.promptSections } : {}),
@@ -353,12 +354,13 @@ export function createBuildMechanics(deps: BuildMechanicsDeps) {
       });
     },
 
-    /** Persist the SDK session id onto the artifact data bag ONLY when it changed (ch05 §5.4.5). */
-    async persistSdkSessionId(artifactId: string, sdkSessionId: string): Promise<void> {
-      const art = (await artifacts.get(artifactId)) as ArtifactDoc | null;
-      const current = (art?.data as Record<string, unknown> | undefined)?.sdkSessionId;
-      if (current === sdkSessionId) return;
-      await patchArtifactData(artifactId, { sdkSessionId });
+    /** Persist the running build summary onto the artifact data bag (token-economics port): the
+     *  fresh-session continuity carrier that replaced `sdkSessionId` transcript-resume. Written
+     *  fire-and-forget after a successful build; a blank summary is ignored (never overwrite a
+     *  good summary with nothing — the caller already keeps the previous one on a failed pass). */
+    async persistBuildSummary(artifactId: string, summary: string): Promise<void> {
+      if (!summary.trim()) return;
+      await patchArtifactData(artifactId, { buildSummary: summary, buildSummaryUpdatedAt: new Date(deps.now()).toISOString() });
     },
 
     /** (Re)start the incremental watcher with a rebuild callback (ch07 §7.4 trigger 2) — the

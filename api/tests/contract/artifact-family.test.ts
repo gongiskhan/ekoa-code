@@ -493,6 +493,26 @@ describe('files: commit-on-save + versions round-trip (ch07 §7.9)', () => {
     expectValid(ArtifactFilesResponse, await files.json());
   });
 
+  it('restore CLEARS the running build summary (token-economics port)', async () => {
+    await mkApp('files-sum', { userId: 'owner1', orgId: 'orgA' }, { git: true });
+    const t = await tokenFor('owner1');
+    await jwtApi('/api/v1/artifacts/files-sum/file', t, { method: 'PUT', body: JSON.stringify({ path: 'notes.txt', content: 'first' }) });
+    await jwtApi('/api/v1/artifacts/files-sum/file', t, { method: 'PUT', body: JSON.stringify({ path: 'notes.txt', content: 'second' }) });
+
+    // A stale summary describing the code that a rollback will discard.
+    await artifacts.update('files-sum', (a) => ({ ...a, data: { ...((a.data as Record<string, unknown> | undefined) ?? {}), buildSummary: 'describes features that the rollback removes' } }));
+
+    const vres = await jwtApi('/api/v1/artifacts/files-sum/versions', t);
+    const versions = ((await vres.json()) as { items: Array<{ sha: string; message?: string }> }).items;
+    const targetSha = versions[versions.length - 1]!.sha;
+    const rres = await jwtApi(`/api/v1/artifacts/files-sum/versions/${targetSha}/restore`, t, { method: 'POST' });
+    expect(rres.status).toBe(200);
+
+    // The summary is cleared so the next follow-up does not brief on reverted features.
+    const after = (await artifacts.get('files-sum')) as ArtifactDoc;
+    expect((after.data as Record<string, unknown>).buildSummary).toBe('');
+  });
+
   it('list emits screenshotUrl only for artifacts with a captured PNG (ch07 §7.11)', async () => {
     await mkApp('shot1', { userId: 'owner1', orgId: 'orgA' });
     await mkApp('noshot1', { userId: 'owner1', orgId: 'orgA' });
@@ -612,6 +632,10 @@ describe('featured-update apply/ignore (ch07 §7.13)', () => {
     await mkdir(workDir, { recursive: true });
     await writeFile(join(workDir, 'manifest.json'), JSON.stringify({ id: 'feat2', name: 'Feat2', version: '1.0.0', entryPoint: 'frontend/src/index.jsx', outputDir: 'dist/', type: 'html-app' }));
     await writeFile(join(workDir, 'index.html'), '<!doctype html><html><body>OLD-USER-EDIT</body></html>');
+    // The agent-maintained NOTES.md carrier must SURVIVE a source update (token-economics port);
+    // an unrelated non-scaffold file must still be swept, proving the deletion loop still runs.
+    await writeFile(join(workDir, 'NOTES.md'), '# Durable decisions\nclientes.estado is an enum.');
+    await writeFile(join(workDir, 'stale.txt'), 'not part of the scaffold');
     execFileSync('git', ['-C', workDir, 'init', '-q']);
     execFileSync('git', ['-C', workDir, 'add', '-A']);
     execFileSync('git', ['-C', workDir, '-c', 'user.name=t', '-c', 'user.email=t@t.pt', 'commit', '-q', '-m', 'seed', '--no-gpg-sign']);
@@ -629,6 +653,9 @@ describe('featured-update apply/ignore (ch07 §7.13)', () => {
     expect((status as { restorePointCount: number }).restorePointCount).toBeGreaterThanOrEqual(1);
     // The scaffold was applied over the working copy.
     expect(readFileSync(join(workDir, 'index.html'), 'utf-8')).toContain('SCAFFOLD-V3');
+    // NOTES.md is exempt from the deletion sweep; a non-scaffold file is still removed.
+    expect(existsSync(join(workDir, 'NOTES.md'))).toBe(true);
+    expect(existsSync(join(workDir, 'stale.txt'))).toBe(false);
     delete process.env.EKOA_FEATURED_ARTIFACTS_DIR;
     await rm(featRoot, { recursive: true, force: true });
   });
@@ -752,17 +779,20 @@ describe('PATCH data reserved-key strip (ch09 — no client-controlled build san
 
     const res = await jwtApi('/api/v1/artifacts/sec1', t, {
       method: 'PATCH',
-      body: JSON.stringify({ data: { projectDir: '/tmp/evil', sdkSessionId: 'hijack', foo: 'bar' } }),
+      body: JSON.stringify({ data: { projectDir: '/tmp/evil', sdkSessionId: 'hijack', buildSummary: 'client-forged summary', foo: 'bar' } }),
     });
     expect(res.status).toBe(200);
     expectValid(Artifact, await res.json());
 
-    // The reserved keys are stripped: projectDir keeps its server-set value, no sdkSessionId
-    // injected; the non-reserved `foo` merges onto the existing bag (never a wholesale replace).
+    // The reserved keys are stripped: projectDir keeps its server-set value, no sdkSessionId or
+    // client-forged buildSummary injected (a writable summary would let a caller steer the next
+    // follow-up's briefing); the non-reserved `foo` merges onto the existing bag (never a wholesale
+    // replace).
     const row = (await artifacts.get('sec1')) as ArtifactDoc;
     const data = row.data as Record<string, unknown>;
     expect(data.projectDir).toBe(realDir);
     expect(data.sdkSessionId).toBeUndefined();
+    expect(data.buildSummary).toBeUndefined();
     expect(data.appUrl).toBe('/apps/sec1/'); // existing reserved key preserved through the merge
     expect(data.foo).toBe('bar');
 

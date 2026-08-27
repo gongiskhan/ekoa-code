@@ -824,6 +824,9 @@ export interface AgentRunOptions {
   /** Build runs set HOME = projectDir; agent-face runs raise the stream-close timeout (§5.4.1). */
   homeDir?: string;
   streamCloseTimeoutMs?: number;
+  /** Build runs set the SDK auto-compaction guardrail (token-economics port): compact at
+   *  `pctOverride`% of a bounded `windowTokens` window. Forwarded verbatim to buildSubprocessEnv. */
+  autoCompact?: { windowTokens: number; pctOverride: number };
   /** In-process MCP tools this run mounts (§5.4.4) — plain specs; the chokepoint instantiates. */
   sdkTools?: SdkToolSpec[];
   /** Platform-owned Agent SDK local-plugin dirs (skills) this run mounts. Server-resolved
@@ -965,6 +968,7 @@ export function runAgent(opts: AgentRunOptions, attribution: LlmAttribution): Ag
       const env = await buildSubprocessEnv({
         homeDir: runHome,
         ...(opts.streamCloseTimeoutMs !== undefined ? { streamCloseTimeoutMs: opts.streamCloseTimeoutMs } : {}),
+        ...(opts.autoCompact ? { autoCompact: opts.autoCompact } : {}),
       });
       const stream = transport.streamAgent({
         prompt: promptAnon.text,

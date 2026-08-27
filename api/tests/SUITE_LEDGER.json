@@ -337,6 +337,11 @@
         "note": "security block H5 (authored by H5, run by the operator): request-changes queue journey - a user files from inside an org-shared app (route+screen context) -> lands in the OWNER org queue -> org-admin sees it with context -> convert starts an H1-gated patch run + links the jobId; folds in H4's live cross-org proof (a different-org user filing -> 404, no injection). Budget: 1 setup build + 1 follow-up build STARTED then cancelled (convert asserted at the API level, not awaited); 1 build with REQCHG_APP_ID."
       },
       {
+        "name": "token-economics-followup",
+        "targetGate": "operator-run token-economics",
+        "note": "token-economics port live proof (docs/token-economics.md; run by the operator on the credentialed stack): follow-up builds run a FRESH SDK session (no transcript resume) and floor at WORKHORSE (Sonnet) instead of EXPERT (Opus), yet a genuine rebuild still escalates. Asserts the DETERMINISTIC routing tier on the job SSE `routing` event (pure classify(), no model call): (1) first build floors EXPERT/GENIUS; (2) a routine follow-up ('muda a cor do titulo') floors WORKHORSE + HEAD advances (continuity across a fresh session); (3) a big-change follow-up whose verbs live ONLY in originalMessage (bland description) escalates to EXPERT - proving the router classifies the RAW request, not the chat paraphrase (the review-found bug the floor-lowering would otherwise introduce) - then CANCELLED so no Opus rebuild is spent; (4) a forward-restore after a follow-up returns 200 (the summary-clear path runs clean). Budget: 2 full builds (setup + routine) + 1 routing-only cancelled build + 1 restore; TOKENECON_APP_ID=<id> reuses an app and skips the setup build."
+      },
+      {
         "name": "gateway-claude-code",
         "targetGate": "OPERATOR-RUN",
         "note": "S6 (run 20260717): stock Claude Code end-to-end over the LLM gateway. Needs a credentialed live stack + the claude CLI (verified by hand during the run), so it reports awaiting OPERATOR-RUN like the operator-run drivers - never books a skip as a false green."

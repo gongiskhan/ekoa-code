@@ -158,6 +158,12 @@ sentido uma automação invocá-la ("adicionar cliente", "listar faturas em aber
 NÃO é a forma certa quando exige UI ou computação fora dos primitivos - isso fica no
 código da app.
 
+## Continuidade entre builds - NOTES.md
+Cada build corre em sessão nova (sem transcrição retomada). Num build de seguimento, lê o
+`NOTES.md` da raiz antes de editar; no fim, acrescenta-lhe só factos DURÁVEIS (regras de negócio,
+contratos de dados, decisões e a sua razão, correções do utilizador, ciladas) - nunca estado
+transitório nem o que o código já diz. Curto (≤ ~150 linhas); nota interna, nunca servida na UI.
+
 ## Estrutura por tipo - vem do modelo interno (base) selecionado
 As convenções ESTRUTURAIS específicas do tipo de artefacto (identidade/SSO do
 visitante, integrações, documentos Word/PDF, wiring de dados) NÃO estão aqui: são

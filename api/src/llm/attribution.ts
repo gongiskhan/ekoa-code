@@ -37,6 +37,10 @@ export type UserWorkAgentType =
   | 'answer-about-ekoa'
   | 'memory-extract'
   | 'build-verify'
+  // Token-economics port: the fire-and-forget FAST pass that maintains an artifact's running
+  // build summary after each successful build — the follow-up continuity carrier that replaced
+  // SDK-transcript resume. Billed to the build's user, stamped with the artifact id.
+  | 'build-summary'
   | 'reply-summary'
   | `artifact-backend:${string}`;
 

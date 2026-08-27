@@ -11,6 +11,7 @@ import { makeFakeTransport } from './_fake-transport.js';
 import { __setTransportForTests } from '../../src/llm/client.js';
 import { __resetAgentsConfigForTests } from '../../src/config.js';
 import type { FakeTransport } from './_fake-transport.js';
+import { awaitPendingBuildSummary, __resetBuildSummaryChainsForTests } from '../../src/agents/build-summary.js';
 
 /**
  * Build jobs (ch05 §5.6.2). Acceptance criteria 1 (409, reservation, aborted-classifier bail),
@@ -21,17 +22,19 @@ const actor = { userId: 'u1', orgId: 'o1', role: 'user' as const };
 let seq = 0;
 const deps = () => ({ now: () => 1_700_000_000_000 + seq++, genId: () => `id_${seq++}` });
 
-function fakeMechanics(over: Partial<BuildMechanics> = {}): { mech: BuildMechanics; calls: { persistSdkSessionId: Array<[string, string]>; activate: number } } {
-  const calls = { persistSdkSessionId: [] as Array<[string, string]>, activate: 0 };
+function fakeMechanics(over: Partial<BuildMechanics> = {}): { mech: BuildMechanics; calls: { persistBuildSummary: Array<[string, string]>; activate: number } } {
+  const calls = { persistBuildSummary: [] as Array<[string, string]>, activate: 0 };
   const mech: BuildMechanics = {
     async prepareFirstBuild() { return { artifactId: 'artNew', projectDir: '/pd', slug: 'my-app', appUrl: 'http://app' }; },
-    async resolveFollowUp() { return { projectDir: '/pd', resumeSessionId: 'old-sess', slug: 'my-app', appUrl: 'http://app' }; },
+    // Token-economics port: a follow-up resolves the running summary (no `resumeSessionId`). Default
+    // returns none — the follow-up then uses the legacy conversation tail; override to inject one.
+    async resolveFollowUp() { return { projectDir: '/pd', slug: 'my-app', appUrl: 'http://app' }; },
     async revalidateWritable() { return 'ok'; }, // TOCTOU re-check: writable by default (H1 MEDIUM)
     async finalizeBundle() { return { ok: true }; },
     async snapshot() {},
     async watchRebuilds() {},
     screenshot() {},
-    async persistSdkSessionId(id, sid) { calls.persistSdkSessionId.push([id, sid]); },
+    async persistBuildSummary(id, summary) { calls.persistBuildSummary.push([id, summary]); },
     async activateArtifact() { calls.activate++; },
     async assertProgress() { return { clean: true, reasons: [] }; },
     ...over,
@@ -211,7 +214,7 @@ describe('build execution (§5.4, §5.6.2)', () => {
     expect(buildProgressLine({ phase: 'finished', tool: 'Write', args: { file_path: '/p/frontend/src/pages/X.jsx' } })).toBeNull();
   });
 
-  it('a FOLLOW-UP build keeps the EXPERT floor (claude-opus-5) and still mounts the design-skill plugin', async () => {
+  it('a routine FOLLOW-UP floors at WORKHORSE (claude-sonnet-5), runs a FRESH session (no resume), and still mounts the design-skill plugin (token-economics port)', async () => {
     const t = resetAgentState({ finalText: 'edited' });
     startEvents();
     const { mech } = fakeMechanics();
@@ -222,37 +225,75 @@ describe('build execution (§5.4, §5.6.2)', () => {
     setBuildMechanics(mech);
     await executeBuildJob(jobId, { actor, username: 'u1', sessionId: 's1', description: 'tweak the header', language: 'pt', deps: deps() }, abort, { firstBuild: false, artifactId: 'artX' });
     const call = t.streamCalls[0]!;
-    expect(call.model).toBe('claude-opus-5');
+    expect(call.model).toBe('claude-sonnet-5'); // WORKHORSE floor, not Opus
+    expect(call.resume).toBeUndefined(); // fresh session — never resumes a transcript
     expect(call.plugins?.some((p) => p.endsWith('content/plugins/impeccable'))).toBe(true);
+    const job = (await jobs.get(jobId)) as JobRecord & { routing?: { tier: string } };
+    expect(job.routing?.tier).toBe('WORKHORSE');
+  });
+
+  it('a big-change FOLLOW-UP (2+ Tier-4 keywords) still escalates to EXPERT (claude-opus-5)', async () => {
+    const t = resetAgentState({ finalText: 'rebuilt' });
+    startEvents();
+    const { mech } = fakeMechanics();
+    const jobId = 'job-followup-big';
+    const abort = new AbortController();
+    const desc = 'refactor the dashboard: rebuild the whole feature';
+    registerRun({ id: jobId, ownerUserId: 'u1', orgId: 'o1', kind: 'build', abort, startedAt: 0, artifactId: 'artB', sessionId: 's1' });
+    await persistJob({ _id: jobId, kind: 'build', status: 'created', userId: 'u1', sessionId: 's1', artifactId: 'artB', request: { description: desc, language: 'pt' }, createdAt: 'x' } as JobRecord);
+    setBuildMechanics(mech);
+    await executeBuildJob(jobId, { actor, username: 'u1', sessionId: 's1', description: desc, language: 'pt', deps: deps() }, abort, { firstBuild: false, artifactId: 'artB' });
+    expect(t.streamCalls[0]!.model).toBe('claude-opus-5');
     const job = (await jobs.get(jobId)) as JobRecord & { routing?: { tier: string } };
     expect(job.routing?.tier).toBe('EXPERT');
   });
 
-  it('persists a CHANGED sdkSessionId but not an unchanged one (§5.4.5)', async () => {
-    // Changed: resume 'old-sess', SDK reports 'new-sess'.
-    let t = resetAgentState({ finalText: 'ok', stream: [{ kind: 'session', sessionId: 'new-sess' }] });
+  it('a completed build schedules a running-summary refresh through the mechanics seam (token-economics port)', async () => {
+    resetAgentState({ finalText: 'edited the clientes screen', oneShotText: 'CRM app: clientes collection with nif + estado.' });
     startEvents();
-    let fm = fakeMechanics();
-    const jobId = 'job-resume';
+    const fm = fakeMechanics();
+    const jobId = 'job-summary';
     const abort = new AbortController();
     registerRun({ id: jobId, ownerUserId: 'u1', kind: 'build', abort, startedAt: 0, artifactId: 'artF', sessionId: 's1' });
     await persistJob({ _id: jobId, kind: 'build', status: 'created', userId: 'u1', artifactId: 'artF', request: { description: 'x', language: 'pt' }, createdAt: 'x' } as JobRecord);
     setBuildMechanics(fm.mech);
     await executeBuildJob(jobId, { actor, username: 'u1', sessionId: 's1', description: 'change', language: 'pt', artifactId: 'artF', deps: deps() }, abort, { firstBuild: false, artifactId: 'artF' });
-    expect(fm.calls.persistSdkSessionId).toEqual([['artF', 'new-sess']]);
+    // The summary pass is fire-and-forget off the terminal event; let its FAST one-shot + persist settle.
+    await awaitPendingBuildSummary('artF', 2_000);
+    expect(fm.calls.persistBuildSummary.map(([id]) => id)).toEqual(['artF']);
+    expect(fm.calls.persistBuildSummary[0]![1]).toBeTruthy(); // a non-empty summary was written
+  });
 
-    // Unchanged: SDK reports the same id it resumed with → NOT persisted.
-    t = resetAgentState({ finalText: 'ok', stream: [{ kind: 'session', sessionId: 'old-sess' }] });
-    startEvents();
-    fm = fakeMechanics();
-    const jobId2 = 'job-resume2';
-    const abort2 = new AbortController();
-    registerRun({ id: jobId2, ownerUserId: 'u1', kind: 'build', abort: abort2, startedAt: 0, artifactId: 'artF2', sessionId: 's1' });
-    await persistJob({ _id: jobId2, kind: 'build', status: 'created', userId: 'u1', artifactId: 'artF2', request: { description: 'x', language: 'pt' }, createdAt: 'x' } as JobRecord);
-    setBuildMechanics(fm.mech);
-    await executeBuildJob(jobId2, { actor, username: 'u1', sessionId: 's1', description: 'change', language: 'pt', artifactId: 'artF2', deps: deps() }, abort2, { firstBuild: false, artifactId: 'artF2' });
-    expect(fm.calls.persistSdkSessionId).toEqual([]);
-    void t;
+  it('a follow-up with a running summary injects "Prior Work On This App" into the build prompt and feeds the files changed (project-relative) to the summary pass (token-economics port)', async () => {
+    const SUMMARY = 'App overview: a customer list screen with a status column.';
+    const t = resetAgentState({
+      finalText: 'edited the customer list',
+      oneShotText: 'v2 running summary',
+      // A Write tool event drives collectChangedFile -> filesChanged (path is project-relative to /pd).
+      stream: [{ kind: 'tool_use', tool: 'Write', toolId: 'w1', args: { file_path: '/pd/frontend/src/Clientes.jsx' } }],
+    });
+    const { mech, calls } = fakeMechanics({
+      async resolveFollowUp() { return { projectDir: '/pd', buildSummary: SUMMARY, slug: 'my-app', appUrl: 'http://app' }; },
+    });
+    const jobId = 'job-priorwork';
+    const abort = new AbortController();
+    registerRun({ id: jobId, ownerUserId: 'u1', kind: 'build', abort, startedAt: 0, artifactId: 'artPW', sessionId: 's1' });
+    await persistJob({ _id: jobId, kind: 'build', status: 'created', userId: 'u1', artifactId: 'artPW', request: { description: 'change the header', language: 'pt' }, createdAt: 'x' } as JobRecord);
+    setBuildMechanics(mech);
+    await executeBuildJob(jobId, { actor, username: 'u1', sessionId: 's1', description: 'change the header', language: 'pt', artifactId: 'artPW', deps: deps() }, abort, { firstBuild: false, artifactId: 'artPW' });
+
+    // [4] The build prompt leads with the summary section, so the fresh session inherits prior work.
+    const buildPrompt = t.streamCalls[0]!.prompt;
+    expect(buildPrompt.startsWith('# Prior Work On This App')).toBe(true);
+    expect(buildPrompt).toContain(SUMMARY);
+
+    // [5] The changed file reaches the summary pass, stripped to a project-relative path (no /pd prefix).
+    await awaitPendingBuildSummary('artPW', 2_000);
+    const summaryCall = t.oneShotCalls.find((c) => c.prompt.includes('<files_changed>'));
+    expect(summaryCall).toBeTruthy();
+    expect(summaryCall!.prompt).toContain('frontend/src/Clientes.jsx');
+    expect(summaryCall!.prompt).not.toContain('/pd/frontend'); // absolute sandbox prefix stripped
+    expect(calls.persistBuildSummary).toEqual([['artPW', 'v2 running summary']]);
   });
 
   it('TOCTOU: a follow-up whose artifact became UNWRITABLE between create and execute fails the job (EDIT_FORBIDDEN), never resuming the agent (H1 MEDIUM)', async () => {
@@ -386,7 +427,7 @@ describe('F1 knowledge-during-build — scoping narrates a knowledge request and
   beforeAll(() => bootAgentTestDb('ekoa_build_f1'));
   afterAll(shutdownAgentTestDb);
   beforeEach(async () => { await seedUser('u1', 'o1'); });
-  afterEach(async () => { __resetAgentSeamsForTests(); vi.restoreAllMocks(); restoreTransport(); await jobs.deleteMany({}); await userSettings.deleteMany({}); });
+  afterEach(async () => { __resetBuildSummaryChainsForTests(); __resetAgentSeamsForTests(); vi.restoreAllMocks(); restoreTransport(); await jobs.deleteMany({}); await userSettings.deleteMany({}); });
 
   const passVerify = () => setVerifyRunner(async (): Promise<VerifyRunResult> => ({ ran: true, passed: true }));
   const planSteps = (events: Array<{ stream: string; type: string; data: unknown }>, status: string) =>
