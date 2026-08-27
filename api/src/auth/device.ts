@@ -18,6 +18,10 @@ import { getDb } from '../data/mongo.js';
 import { users } from '../data/stores.js';
 import { signToken } from './jwt.js';
 import { authUserView, mintIat, type AuthUserView, type Deps } from './service.js';
+import { configuredDashboardOrigin } from '../security-headers.js';
+
+/** The dashboard route that lists paired devices and approves a pending code. */
+const DEVICE_APPROVAL_PATH = '/settings/devices';
 
 const COLLECTION = 'device_auth';
 const EXPIRES_IN_SEC = 600; // 10 min approval window
@@ -63,7 +67,14 @@ export async function startDeviceAuth(deps: Deps): Promise<DeviceStart> {
     createdAtMs: now,
     expiresAtMs: now + EXPIRES_IN_SEC * 1000,
   });
-  return { deviceCode, userCode, verificationUri: '/settings/devices', interval: POLL_INTERVAL_SEC, expiresIn: EXPIRES_IN_SEC };
+  // ABSOLUTE web URL when the dashboard origin is explicitly configured (split-origin dev: the API is
+  // on :4111 but this page lives on the web app at :3000, so a relative path joined to the API base -
+  // what the bridge does - would point at the wrong port). Null (bare same-origin default) keeps the
+  // relative path, which the bridge joins onto the Cortex base correctly when web and API share an
+  // origin in production.
+  const origin = configuredDashboardOrigin();
+  const verificationUri = origin ? `${origin}${DEVICE_APPROVAL_PATH}` : DEVICE_APPROVAL_PATH;
+  return { deviceCode, userCode, verificationUri, interval: POLL_INTERVAL_SEC, expiresIn: EXPIRES_IN_SEC };
 }
 
 export type DevicePoll =

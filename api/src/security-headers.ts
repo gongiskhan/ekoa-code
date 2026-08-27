@@ -66,6 +66,37 @@ export function dashboardOrigins(): string[] {
   cachedDashboardOrigins = out;
   return out;
 }
+function isLocalhostOrigin(origin: string): boolean {
+  try {
+    const h = new URL(origin).hostname;
+    return h === 'localhost' || h === '127.0.0.1' || h === '::1';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The primary dashboard origin for building an ABSOLUTE user-facing URL (the device-pairing approval
+ * page), or null when no web origin is explicitly configured.
+ *
+ * Returns null on the bare default so a SAME-ORIGIN production (web and API behind one edge proxy)
+ * keeps a relative path joined to the API base - hard-coding localhost would be wrong there. When
+ * `EKOA_DASHBOARD_ORIGINS`/`EKOA_APP_ORIGIN` IS set (split-origin dev, or a prod that declares its web
+ * origin) it prefers an https non-localhost origin, then any non-localhost one, so a tailnet user is
+ * sent to the reachable https URL and not to `localhost` (the wrong-port pairing-URL bug, 2026-08-27).
+ */
+export function configuredDashboardOrigin(): string | null {
+  if (!(process.env.EKOA_DASHBOARD_ORIGINS || process.env.EKOA_APP_ORIGIN)) return null;
+  const origins = dashboardOrigins();
+  if (origins.length === 0) return null;
+  return (
+    origins.find((o) => o.startsWith('https://') && !isLocalhostOrigin(o)) ??
+    origins.find((o) => !isLocalhostOrigin(o)) ??
+    origins.find((o) => o.startsWith('https://')) ??
+    origins[0]!
+  );
+}
+
 export function __resetDashboardOriginsForTests(): void {
   cachedDashboardOrigins = null;
 }

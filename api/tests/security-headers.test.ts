@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, beforeAll } from 'vitest';
 import type { Server } from 'node:http';
 import { buildApp } from '../src/server.js';
-import { __resetDashboardOriginsForTests } from '../src/security-headers.js';
+import { __resetDashboardOriginsForTests, configuredDashboardOrigin } from '../src/security-headers.js';
 import { __resetConfigForTests, defaultLlmConfig, type Config } from '../src/config.js';
 
 // buildApp registers the gateway, which reads loadConfig() (JWT_SECRET/ENCRYPTION_KEY required).
@@ -135,5 +135,48 @@ describe('security-headers baseline (ch09 §9.8 D1, FIXED-14)', () => {
     const res = await fetch(`http://127.0.0.1:${port}/health`);
     expect(res.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
     expect(res.headers.get('x-frame-options')).toBe('DENY');
+  });
+});
+
+/**
+ * The primary dashboard origin used to build the ABSOLUTE device-pairing approval URL (the wrong-port
+ * pairing-URL fix, 2026-08-27). Null on the bare default so same-origin prod keeps a relative path;
+ * an explicit config prefers the reachable https non-localhost origin over localhost.
+ */
+describe('configuredDashboardOrigin picks the reachable web origin, or null on the bare default', () => {
+  const prevDash = process.env.EKOA_DASHBOARD_ORIGINS;
+  const prevApp = process.env.EKOA_APP_ORIGIN;
+  const setEnv = (v: string | undefined): void => {
+    if (v === undefined) delete process.env.EKOA_DASHBOARD_ORIGINS;
+    else process.env.EKOA_DASHBOARD_ORIGINS = v;
+    delete process.env.EKOA_APP_ORIGIN;
+    __resetDashboardOriginsForTests();
+  };
+  afterEach(() => {
+    if (prevDash === undefined) delete process.env.EKOA_DASHBOARD_ORIGINS;
+    else process.env.EKOA_DASHBOARD_ORIGINS = prevDash;
+    if (prevApp === undefined) delete process.env.EKOA_APP_ORIGIN;
+    else process.env.EKOA_APP_ORIGIN = prevApp;
+    __resetDashboardOriginsForTests();
+  });
+
+  it('returns null when no dashboard origin is configured (same-origin prod keeps the relative path)', () => {
+    setEnv(undefined);
+    expect(configuredDashboardOrigin()).toBeNull();
+  });
+
+  it('prefers the https non-localhost origin over localhost (a tailnet user reaches https, not :3000 local)', () => {
+    setEnv('http://localhost:3000,http://dev.example.ts.net:3000,https://dev.example.ts.net:3000');
+    expect(configuredDashboardOrigin()).toBe('https://dev.example.ts.net:3000');
+  });
+
+  it('falls back to the sole localhost origin when that is all that is configured (plain local dev)', () => {
+    setEnv('http://localhost:3000');
+    expect(configuredDashboardOrigin()).toBe('http://localhost:3000');
+  });
+
+  it('takes an explicit production https origin verbatim', () => {
+    setEnv('https://app.ekoa.io');
+    expect(configuredDashboardOrigin()).toBe('https://app.ekoa.io');
   });
 });
