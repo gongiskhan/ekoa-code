@@ -6,6 +6,29 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`mint-read-verdict-misclassification-enables-unattended-re-execution`** (2026-08-28, **MEDIUM**,
+  mint classifier; cornerstone adversarial review). D-CORNERSTONE-MUTATES-CLASS accepts that the
+  mint's read verdict on a BROWSER-step flow rests on the model confirmation alone (the
+  deterministic floor has no signal for what a browser step does), fail-closed on any doubt. The
+  review named the sharpest consequence: a write-shaped browser flow the model wrongly confirms as
+  a read is minted `mutates:false`, so (a) it learns a recipe (whose non-idempotent calls the
+  replay write-gate still refuses - layered), and (b) a `needs_credentials` first contact stamps
+  `actionRetry` and the K3 post-ceremony driver RE-EXECUTES the flow once in the background - a
+  duplicated side effect (e.g. a form submitted twice) with no human in the loop. Bounded: the
+  same user goal-authored the flow and watched its rehearsal; the re-run repeats what they just
+  ran. ACCEPTED for now as the recorded D-K4 trade-off; CLOSE BY tightening the floor with
+  browser-step signals (form-submit detection in rehearsal records) or gating the K3 re-run on a
+  second cheap read-confirmation.
+
+- **`record-replay-racing-a-supersede-resets-the-new-recipes-drift-streak`** (2026-08-28, **LOW**,
+  recipe stats; cornerstone adversarial review). Concurrent executions of one action: run A replays
+  v3 ok while run B drifts and supersedes to v4 (driftStreak+1); A's best-effort `recordReplay`
+  then lands on v4 (the CAS re-runs its decide against the current row) and writes replayCount+1 +
+  driftStreak:0 onto a version that never replayed - so under concurrent schedule ticks a genuinely
+  unhealable action can thrash past HEAL_BUDGET indefinitely. Requires sustained concurrency of the
+  same action with alternating replay-ok and drift outcomes. CLOSE BY carrying the replayed VERSION
+  into `recordReplay` and refusing the stats write when the row's version moved.
+
 - **`action-cache-persists-resolved-fill-values-verbatim`** (2026-08-28, **MEDIUM**, security triage;
   cornerstone audit incidental). The per-step action cache stores the resolved PlaywrightAction
   verbatim, including `fill` values (`api/src/automation/cache.ts:259-289` - only the term-scored

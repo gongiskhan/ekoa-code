@@ -373,6 +373,7 @@ export interface Translations {
         recipeCallsCount: (count: number) => string;
         recipeSupersededNote: (version: number, reason: string) => string;
         recipeForget: string;
+        recipeForgetFailed: string;
         recipeForgetting: string;
         recipeError: string;
         evidenceTitle: string;

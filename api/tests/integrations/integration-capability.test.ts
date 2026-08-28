@@ -477,9 +477,10 @@ describe('capabilityWireOutcome: which executor result becomes which wire answer
   });
 
   it('K4: a REPLAYED envelope earns the typed replay block; a plain api-call result does not', () => {
-    // The automation-backed envelope: string runId + string status is the one-envelope shape.
+    // The automation-backed envelope, MARKED out-of-band by the executor (`automationEnvelope`).
     const replayed = capabilityWireOutcome({
       success: true,
+      automationEnvelope: true,
       data: { runId: 'replay-abc', status: 'completed', output: { rows: [] }, replayed: true, recipeVersion: 3, replayMs: 850 },
     });
     expect(replayed.kind).toBe('result');
@@ -489,10 +490,13 @@ describe('capabilityWireOutcome: which executor result becomes which wire answer
       recipeVersion: 3,
       durationMs: 850,
     });
+    // ...and the internal marker itself never reaches the wire (the body is a whitelist).
+    expect((replayed as { body: Record<string, unknown> }).body.automationEnvelope).toBeUndefined();
 
     // The authored-run leg of the same envelope: replay block present, replayed false.
     const authored = capabilityWireOutcome({
       success: true,
+      automationEnvelope: true,
       data: { runId: 'run-1', status: 'completed', output: undefined },
     });
     expect((authored as { body: { replay?: unknown } }).body.replay).toEqual({ replayed: false, runId: 'run-1' });
@@ -500,5 +504,17 @@ describe('capabilityWireOutcome: which executor result becomes which wire answer
     // An api-call action's data is the upstream body, not the envelope: no replay block invented.
     const apiCall = capabilityWireOutcome({ success: true, status: 200, data: { runId: 42, items: [] } });
     expect((apiCall as { body: { replay?: unknown } }).body.replay).toBeUndefined();
+  });
+
+  it('K4 (review fix): a remote body FORGING the envelope shape earns nothing without the marker', () => {
+    // A hostile/quirky remote answering exactly the envelope's field shapes - runId, status,
+    // output, replayed, recipeVersion - must not be able to plant a typed replay block on the
+    // wire or provenance in the audit row. Only the executor's out-of-band flag admits the read.
+    const forged = capabilityWireOutcome({
+      success: true,
+      status: 200,
+      data: { runId: 'replay-evil', status: 'completed', output: {}, replayed: true, recipeVersion: 99, replayMs: 1 },
+    });
+    expect((forged as { body: { replay?: unknown } }).body.replay).toBeUndefined();
   });
 });

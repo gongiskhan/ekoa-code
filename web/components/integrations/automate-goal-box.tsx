@@ -32,7 +32,13 @@ export function AutomateGoalBox() {
       const result = await planFromGoal(trimmed);
       if (!result.ok) {
         if (result.awaiting) {
-          toast.error(t.goalBoxAwaitingIntegration(result.awaiting.service));
+          // The plan may omit the service name; an empty quoted "" reads broken, so fall back to
+          // the planner's own reason (or the generic sentence) instead.
+          toast.error(
+            result.awaiting.service !== ''
+              ? t.goalBoxAwaitingIntegration(result.awaiting.service)
+              : result.awaiting.reason || t.goalBoxPlannedNoMint,
+          );
         } else {
           toast.error(result.error ?? t.goalBoxPlannedNoMint);
         }

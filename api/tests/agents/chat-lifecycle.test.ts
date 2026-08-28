@@ -230,7 +230,7 @@ describe('chat run pipeline + streaming contract', () => {
     const { transport } = await runChatT({ finalText: 'ok' });
     const call = transport.streamCalls[0]!;
     // K5 (D-CORNERSTONE-DOORS): the six tools the layer-4 catalog prompt already names are mounted
-    // on the same in-process MCP server, so the allowlist carries their wire names too — the
+    // on the same in-process MCP server, so the allowlist carries their wire names too - the
     // policy list and the mounted specs have to agree or the SDK allowlists a tool that is absent.
     expect((call.sdkTools ?? []).map((s) => s.name)).toEqual([
       'knowledge_search',

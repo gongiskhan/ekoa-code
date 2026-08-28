@@ -210,6 +210,13 @@ export interface ReplayInput {
    * recipe and reported success for a write that never happened.
    */
   mutates: boolean;
+  /**
+   * The mount's REPLAY_BUDGET abort (K6 review fix): once the budget abandons this attempt,
+   * issuing MORE calls is pure waste that also holds the owner's browser lease against the
+   * authored run falling through - and for an assented write recipe it is a double-execution
+   * hazard. Checked between calls; the in-flight transport finishes on its own timeout.
+   */
+  signal?: AbortSignal;
 }
 
 export interface ReplayDeps {
@@ -331,6 +338,12 @@ export async function replayCompiledAction(input: ReplayInput, deps: ReplayDeps)
 
   const calls: ReplayedCall[] = [];
   for (let index = 0; index < planned.length; index += 1) {
+    // Abandoned by the budget: stop issuing calls and let the caller's finally release the
+    // session. A throw, not an outcome - the mount already answered with its fall-through, so
+    // nothing reads this attempt's result; what matters is that it STOPS.
+    if (input.signal?.aborted) {
+      throw new Error(`replay abandoned after ${index} of ${planned.length} call(s): REPLAY_BUDGET exceeded`);
+    }
     const { call, resolved } = planned[index]!;
     const startedAt = now();
     let status: number;

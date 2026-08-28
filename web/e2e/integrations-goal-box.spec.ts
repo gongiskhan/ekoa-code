@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { uiLogin } from './helpers/ui-login';
 
 /**
- * integrations-goal-box — the free-text door (cornerstone K5, D-CORNERSTONE-DOORS).
+ * integrations-goal-box - the free-text door (cornerstone K5, D-CORNERSTONE-DOORS).
  *
  * "Minhas Integrações" carries a goal box: describe what to do on an outside site, and the
  * platform plans the step sequence and (mint-on-plan, K1) turns it into a per-site integration.
@@ -18,7 +18,7 @@ async function gotoMinhas(page: Page) {
   await expect(page.getByTestId('my-integrations-section')).toBeVisible({ timeout: 15_000 });
 }
 
-test.describe('integrations — the free-text goal box', () => {
+test.describe('integrations - the free-text goal box', () => {
   test('renders in Minhas above the content, and the submit arms only with a goal', async ({ page }) => {
     const consoleErrors: string[] = [];
     page.on('console', (msg) => {

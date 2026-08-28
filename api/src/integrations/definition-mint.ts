@@ -49,6 +49,7 @@ import {
 } from './definition-store.js';
 import { canEditDefinitionRaw } from './definition-registry.js';
 import { goalTokens, MUTATING_GOAL_VERBS } from './integration-achieve.js';
+import { forgetRecipe } from './recipe-lifecycle.js';
 import { completeFast } from '../llm/index.js';
 
 /**
@@ -342,6 +343,21 @@ export async function mintSiteIntegrationForAutomation(
   const actions = boundIdx >= 0
     ? existingActions.map((a, i) => (i === boundIdx ? wrapper : a))
     : [...existingActions, wrapper];
+
+  // ── A RE-PLAN INVALIDATES THE LEARNED RECIPE (adversarial-review HIGH finding). ─────────────
+  //
+  // The store's replace path deliberately carries recipes forward per action NAME
+  // (`carryRecipesForward`), which is right for an ordinary builder re-save - but a RE-PLAN
+  // rewrote the automation's STEPS, so the recipe compiled from the old flow no longer describes
+  // this action. Left in place it keeps replaying the OLD site calls successfully (no drift fires
+  // while the old endpoints still answer 200), and the re-planned steps never run. Dropped through
+  // the ONE lifecycle path, so the raw evidence pile goes with it; the next successful run learns
+  // a fresh v1 from the new flow.
+  if (boundIdx >= 0) {
+    await forgetRecipe({ orgId: actor.orgId, integrationKey: key, actionName }).catch((err: unknown) => {
+      console.warn(`[mint] could not drop the stale recipe for ${key}/${actionName} on re-plan: ${err instanceof Error ? err.message : String(err)}`);
+    });
+  }
 
   const host = key.replace(/-site$/, '');
   try {

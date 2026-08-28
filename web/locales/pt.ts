@@ -332,6 +332,7 @@ export const pt: Translations = {
         recipeCallsCount: (count: number) => count === 1 ? '1 chamada aprendida' : `${count} chamadas aprendidas`,
         recipeSupersededNote: (version: number, reason: string) => `Substituiu a v${version} (${reason}).`,
         recipeForget: 'Esquecer receita',
+        recipeForgetFailed: 'Não foi possível esquecer a receita. Tente novamente.',
         recipeForgetting: 'A esquecer...',
         recipeError: 'Não foi possível carregar as receitas aprendidas.',
         evidenceTitle: 'Última execução com sucesso',

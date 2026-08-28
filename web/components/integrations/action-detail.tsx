@@ -66,6 +66,7 @@ import { AlertTriangle, CalendarClock, ChevronDown, NotebookPen, Play, RefreshCw
 import { ACTION_FEEDBACK_MAX_CHARS, type IntegrationCapabilityAction, type RunRecord, type Schedule } from '@ekoa/shared';
 import { api } from '@/lib/api';
 import { useTranslation } from '@/stores/i18n';
+import { toast } from '@/stores/toast';
 import { useIntegrationDetailStore, feedbackSlot, type ReadFailure } from '@/stores/integration-detail';
 import { httpTemplateOf } from '@/lib/integrations/action-view';
 import { formatStamp, recurrenceText } from '@/lib/schedules/recurrence-text';
@@ -224,8 +225,10 @@ export function ActionDetail({
   const runsError = useIntegrationDetailStore((s) => s.runsError[action.actionName]);
   const running = useIntegrationDetailStore((s) => Boolean(s.running[action.actionName]));
   const recipe = useIntegrationDetailStore((s) => s.recipes[action.actionName]);
+  const recipesError = useIntegrationDetailStore((s) => s.recipesError);
   const recipeForgetting = useIntegrationDetailStore((s) => Boolean(s.recipeForgetting[action.actionName]));
   const forgetRecipe = useIntegrationDetailStore((s) => s.forgetRecipe);
+  const fetchRecipes = useIntegrationDetailStore((s) => s.fetchRecipes);
   const fetchSteps = useIntegrationDetailStore((s) => s.fetchSteps);
   const fetchRuns = useIntegrationDetailStore((s) => s.fetchRuns);
   const fetchEvidence = useIntegrationDetailStore((s) => s.fetchEvidence);
@@ -357,6 +360,20 @@ export function ActionDetail({
           </section>
 
           {/* --- THE LEARNED RECIPE (cornerstone K4): what replays instead of re-driving ------- */}
+          {/* A failed recipes read is a SECTION's failure, rendered like the evidence section's
+              (review fix: it used to be fully silent, so "no badge" and "the read broke" were
+              indistinguishable). Shown once, on the first action card that is open. */}
+          {recipesError && !recipe && (
+            <section className="space-y-2" data-testid={`integration-action-recipe-error-${action.actionName}`}>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{t.recipeTitle}</h3>
+              <ErrorRow
+                message={t.recipeError}
+                detail={recipesError.detail}
+                onRetry={integrationKey ? () => void fetchRecipes(integrationKey) : undefined}
+                retryLabel={common.retry}
+              />
+            </section>
+          )}
           {recipe && (
             <section className="space-y-2" data-testid={`integration-action-recipe-detail-${action.actionName}`}>
               <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{t.recipeTitle}</h3>
@@ -391,7 +408,14 @@ export function ActionDetail({
                   variant="secondary"
                   size="sm"
                   loading={recipeForgetting}
-                  onClick={() => integrationKey && void forgetRecipe(integrationKey, action.actionName)}
+                  onClick={() => {
+                    if (!integrationKey) return;
+                    // A failed forget must not be silent: the badge staying put with no sentence
+                    // reads as a dead button (review fix).
+                    void forgetRecipe(integrationKey, action.actionName).then((ok) => {
+                      if (!ok) toast.error(t.recipeForgetFailed);
+                    });
+                  }}
                   data-testid={`integration-action-recipe-forget-${action.actionName}`}
                 >
                   {recipeForgetting ? t.recipeForgetting : t.recipeForget}

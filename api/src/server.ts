@@ -120,7 +120,7 @@ import {
   setKnowledgeToolSearch,
   setKnowledgeToolRead,
   setLoadContextContent,
-  // K5 — the four seams behind the six chat catalog tools.
+  // K5 - the four seams behind the six chat catalog tools.
   setCatalogToolList,
   setCallIntegrationActionTool,
   setCallEkoaActionTool,
@@ -174,7 +174,7 @@ import {
   automationBackedActionHandler,
   buildAutomationCatalog,
   formatCatalogForPrompt,
-  // K5 — the owner-scoped run start and the ekoa_action rail behind two of the chat catalog tools.
+  // K5 - the owner-scoped run start and the ekoa_action rail behind two of the chat catalog tools.
   startRun,
   AutomationServiceError,
   resolveArtifactProjectDir,
@@ -873,11 +873,11 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     );
   });
 
-  // K5 (D-CORNERSTONE-DOORS) — the six chat catalog TOOLS. The layer-4 catalog prompt bound above
+  // K5 (D-CORNERSTONE-DOORS) - the six chat catalog TOOLS. The layer-4 catalog prompt bound above
   // (`setCatalog`) has named all six to the model since it shipped; these four seams are what makes
   // them exist. Each is a one-liner onto a rail that already enforces its own policy, which is the
   // point: a chat turn is just another caller, never a second implementation (Rule 1) and never a
-  // special case (Rule 3). The ACTOR is the run's own — `agents/` passes it, no tool argument
+  // special case (Rule 3). The ACTOR is the run's own - `agents/` passes it, no tool argument
   // reaches these lambdas.
   //
   // 1. The listing the three `list_*` tools search, projected from the SAME `buildAutomationCatalog`
@@ -885,7 +885,7 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
   //    can search cannot drift apart.
   //    NOT wrapped in the `setCatalog` binding's try/catch, and the difference is deliberate: a
   //    failed PROMPT catalog degrades to an empty section (the agent simply is not told), but a
-  //    failed LISTING must not degrade to "you have no automations" — that is a lie the model would
+  //    failed LISTING must not degrade to "you have no automations" - that is a lie the model would
   //    act on. The throw reaches the chokepoint's handler wrapper and comes back as an is_error
   //    tool result, which is the honest answer and never crashes the run.
   setCatalogToolList(async ({ userId, orgId }) => {
@@ -902,7 +902,7 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       ekoaActions: catalog.ekoaActions,
     };
   });
-  // 2. `call_integration_action` — the ONE executor rail, same shape as the K3 driver above and the
+  // 2. `call_integration_action` - the ONE executor rail, same shape as the K3 driver above and the
   //    schedules supervisor below. Consent (`awaiting_consent`), the credential halt
   //    (`needs_credentials`) and tenancy therefore answer a chat turn exactly as they answer a
   //    schedule; the tool only translates those codes into a sentence the model can act on.
@@ -918,7 +918,7 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       ...(r.error ? { error: r.error } : {}),
     };
   });
-  // 3. `call_automation` — the owner-scoped `startRun` the REST route uses, so a chat-started run is
+  // 3. `call_automation` - the owner-scoped `startRun` the REST route uses, so a chat-started run is
   //    ownership-checked, audited and idempotency-shaped identically. FIRE-AND-FORGET by design: the
   //    tool hands back the run id and the run's own surface owns the outcome.
   setStartAutomationTool(async ({ userId, orgId }, { automationId, inputs }) => {
@@ -934,11 +934,11 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       return { success: false, code: 'unknown', error: err instanceof Error ? err.message : 'failed to start the run' };
     }
   });
-  // 4. `call_ekoa_action` — an artifact capability invoked directly (no run record). The artifact is
+  // 4. `call_ekoa_action` - an artifact capability invoked directly (no run record). The artifact is
   //    resolved ORG-SCOPED to the caller, so a slug argument naming another tenant's app resolves to
   //    nothing; the recipe then runs through the same interpreter an `ekoa_action` step uses, and a
   //    nested `artifact.invoke` inside it still goes through the engine's own registered hook.
-  //    This assembly duplicates that hook's body because the hook is anonymous — see the re-export
+  //    This assembly duplicates that hook's body because the hook is anonymous - see the re-export
   //    block in automation/index.ts for the follow-up that removes the duplication.
   setCallEkoaActionTool(async ({ userId, orgId }, { artifactSlug, capabilityName, args }) => {
     try {
@@ -951,6 +951,19 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       const capability = getCapability(loadManifestFromFile(manifestPath), capabilityName);
       if (!capability) {
         return { success: false, code: 'unknown_capability', error: `capability "${capabilityName}" not in ${artifactSlug}` };
+      }
+      // A MUTATING capability is refused at this door (adversarial-review fix). The sibling
+      // call_integration_action door inherits the executor's consent gate; this direct recipe
+      // path has none, and before K5 its only production entry was an owner-started automation
+      // run - a human initiation this chat door removed. A prompt-injected turn must not be able
+      // to rewrite tenant app data with zero approval, so writes stay on the doors that gate them.
+      // `mutates` here is the manifest parser's own normalisation (explicit true only).
+      if (capability.mutates === true) {
+        return {
+          success: false,
+          code: 'mutating_capability',
+          error: `A capacidade "${capabilityName}" escreve dados e não pode ser executada a partir do chat. Use a aplicação ou uma sequência de passos aprovada.`,
+        };
       }
       const ctx: EkoaActionContext = {
         userId,

@@ -165,6 +165,13 @@ export interface ExecuteIntegrationActionResult {
   code?: IntegrationErrorCode;
   details?: IntegrationErrorDetails;
   /**
+   * K4: `data` IS the automation rail's one envelope. The OUT-OF-BAND marker the wire/audit
+   * replay projection is gated on - set only where the automation-backed leg answers, so a remote
+   * API body carrying {runId, status, replayed} can never forge replay provenance. Internal only:
+   * never projected onto the wire (the wire body is a whitelist).
+   */
+  automationEnvelope?: true;
+  /**
    * Present ONLY with `code: 'awaiting_consent'` — what the human must be shown to answer. Carries
    * no credential and no argument values: which integration, which action, what it does and where
    * it writes. A caller that can reach a human renders it; one that cannot (a listener tick)
@@ -722,7 +729,11 @@ export async function executeUserIntegrationAction(
       // registry rather than an empty one. `resolvedFields` is the same bundle the seam received.
       Object.values(resolvedFields),
     );
-    return automationResult;
+    // K4 (review fix): the OUT-OF-BAND envelope marker. `data` here is the automation rail's own
+    // envelope; the wire/audit replay projection reads facts off it ONLY behind this flag, so a
+    // remote API body that happens to carry {runId, status, replayed} can never forge a replay
+    // block or an audit row's provenance. Internal-only: the wire body is built by whitelist.
+    return { ...automationResult, automationEnvelope: true };
   }
 
   // `api-call`: guaranteed to carry an httpConfig — an EXPLICIT api-call without one is refused by

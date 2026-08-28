@@ -120,7 +120,10 @@ export default function IntegrationDetailPage() {
         // FEELS the integration having gotten faster deserves its own sentence.
         const replay = outcome.result?.replay;
         if (replay?.replayed) {
-          toast.success(t.runReplayed(replay.durationMs !== undefined ? Math.round(replay.durationMs / 100) / 10 : undefined));
+          // Sub-100ms replays clamp to 0.1s rather than rendering the absurd "in 0s".
+          toast.success(t.runReplayed(
+            replay.durationMs !== undefined ? Math.max(0.1, Math.round(replay.durationMs / 100) / 10) : undefined,
+          ));
         } else {
           toast.success(t.runStarted);
         }

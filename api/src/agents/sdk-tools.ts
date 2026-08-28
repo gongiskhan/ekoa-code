@@ -150,14 +150,14 @@ function compactResultJson(data: unknown): string {
  * executor, so the write-consent gate and the credential halt answer for a chat turn exactly as
  * they do for a schedule; `call_automation` goes through the owner-scoped `startRun`;
  * `call_ekoa_action` through the org-scoped recipe interpreter. What the tools add is the
- * TRANSLATION of those coded outcomes into something a model can act on — above all that
+ * TRANSLATION of those coded outcomes into something a model can act on - above all that
  * `awaiting_consent` and `needs_credentials` are waiting on a human, not failures to retry.
  */
 export function catalogToolSpecs(actor: ToolActor): SdkToolSpec[] {
   const bound: CatalogToolActor = { userId: actor.userId, orgId: actor.orgId };
   const [listAutomations, listIntegrationActions, listEkoaActions, callAutomation, callIntegrationAction, callEkoaAction] =
     CATALOG_TOOLS;
-  const queryArg = z.string().optional().describe('Termos de pesquisa (opcional) — filtra por nome, chave ou descrição');
+  const queryArg = z.string().optional().describe('Termos de pesquisa (opcional) - filtra por nome, chave ou descrição');
   const argsArg = z
     .record(z.string(), z.unknown())
     .optional()
@@ -169,7 +169,7 @@ export function catalogToolSpecs(actor: ToolActor): SdkToolSpec[] {
       description:
         'Lista as sequências (automations) do utilizador, opcionalmente filtradas por termos de ' +
         'pesquisa. Devolve nome, id, descrição e entradas de cada uma. As que têm gatilho correm ' +
-        'sozinhas — não as invoques sem o utilizador o pedir explicitamente.',
+        'sozinhas - não as invoques sem o utilizador o pedir explicitamente.',
       inputSchema: { query: queryArg },
       handler: async (args) => {
         const rows = (await catalogToolList(bound)).automations;
@@ -180,7 +180,7 @@ export function catalogToolSpecs(actor: ToolActor): SdkToolSpec[] {
             ? ` [entradas: ${a.inputs.map((i) => `${i.name}${i.required ? '*' : ''}`).join(', ')}]`
             : '';
           const trigger = a.trigger
-            ? ` [gatilho ${a.trigger.kind}: ${a.trigger.integrationKey}/${a.trigger.eventName} — corre sozinha]`
+            ? ` [gatilho ${a.trigger.kind}: ${a.trigger.integrationKey}/${a.trigger.eventName} - corre sozinha]`
             : '';
           return `- ${a.name} (id: ${a.id}): ${a.description}${inputs}${trigger}`;
         });
@@ -246,7 +246,7 @@ export function catalogToolSpecs(actor: ToolActor): SdkToolSpec[] {
           return `Não foi possível iniciar a sequência ${automationId} (${result.code ?? 'desconhecido'}): ${result.error ?? 'sem detalhe'}.`;
         }
         return (
-          `Sequência ${automationId} iniciada (execução ${result.runId}). Está a correr em segundo plano — ` +
+          `Sequência ${automationId} iniciada (execução ${result.runId}). Está a correr em segundo plano - ` +
           'não esperes por ela nesta resposta; o progresso e o resultado aparecem na página da automação.'
         );
       },
@@ -279,7 +279,7 @@ export function catalogToolSpecs(actor: ToolActor): SdkToolSpec[] {
         if (result.code === 'needs_credentials') {
           return (
             `A execução de ${what} ficou EM ESPERA: faltam credenciais e a execução parou para a ` +
-            'cerimónia de credenciais. Nada falhou — diz ao utilizador para completar a ligação ' +
+            'cerimónia de credenciais. Nada falhou - diz ao utilizador para completar a ligação ' +
             `(Integrações → ${integrationKey}); a execução retoma a partir daí.`
           );
         }

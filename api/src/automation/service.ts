@@ -1009,7 +1009,13 @@ async function dispatchCredentialResume(run: StoredRun): Promise<boolean> {
       // the action rail accepts both spellings, and this gate must not be narrower than that one.
       const finalStatus: string = result.status;
       if (finalStatus !== 'completed' && finalStatus !== 'succeeded') return;
-      const retry = run.actionRetry;
+      // RE-READ, never the closure row (adversarial-review finding): the `actionRetry` stamp is
+      // written AFTER the engine's halt returns (the engine persists the halt, parks the waiter and
+      // emits before resolving, then the action mount stamps), so a ceremony completed inside that
+      // window re-dispatched off a row read BEFORE the stamp landed - and the learn silently never
+      // fired on exactly the first-contact flow it exists for. The fresh read closes the window.
+      const fresh = (await automationRuns.get(run.id)) as StoredRun | null;
+      const retry = fresh?.actionRetry;
       const driver = resumeLearnDriver();
       if (!retry || !driver) return;
       await driver({
@@ -1618,14 +1624,18 @@ export async function runAutomationForAction(
     const replayRunId = `replay-${randomUUID()}`;
     const replayStartedAt = Date.now();
     // K6 (REPLAY_BUDGET): the ATTEMPT is bounded, not only its per-call transports. On the ceiling
-    // the race resolves to a fall-through and the authored run answers - the abandoned attempt's
-    // promise is left to settle on its own (its own timeouts end it; nothing reads its result).
+    // the race resolves to a fall-through and the authored run answers - and the abandoned attempt
+    // is ABORTED, not merely ignored (review fix): the signal stops it issuing further calls, so
+    // it releases the owner's browser lease promptly instead of making the fall-through run queue
+    // behind it, and an assented write recipe cannot keep writing concurrently with the authored
+    // re-run (bounded to the one call already in flight).
+    const replayAbort = new AbortController();
     let replayTimer: NodeJS.Timeout | undefined;
     const replayTimeout = new Promise<{ outcome: 'no-recipe'; reason: string }>((resolve) => {
-      replayTimer = setTimeout(
-        () => resolve({ outcome: 'no-recipe', reason: `replay exceeded ${REPLAY_BUDGET.maxWallClockMs}ms` }),
-        REPLAY_BUDGET.maxWallClockMs,
-      );
+      replayTimer = setTimeout(() => {
+        replayAbort.abort();
+        resolve({ outcome: 'no-recipe', reason: `replay exceeded ${REPLAY_BUDGET.maxWallClockMs}ms` });
+      }, REPLAY_BUDGET.maxWallClockMs);
     });
     const result = await Promise.race([
       replay({
@@ -1636,6 +1646,7 @@ export async function runAutomationForAction(
         args: input.args,
         runId: replayRunId,
         secrets,
+        signal: replayAbort.signal,
         ...(input.writeAssent !== undefined ? { writeAssent: input.writeAssent } : {}),
         mutates: mutating,
       }).catch((err: unknown) => {
@@ -2125,8 +2136,13 @@ async function clearRefusedRecipe(input: ActionRunInput, reason: string, deps: A
     // clear/relearn thrash cycle between two users that also destroyed the drift history. The one
     // writer rule now covers the destructive path too: a non-owner's refusal falls through to the
     // automation leg (where `forbidden` answers them), and the recipe stands.
+    // A MISSING automation row is an ORPHANED binding, and the clear proceeds (review finding):
+    // the replay short-circuit answers BEFORE the automation is fetched, so a recipe whose bound
+    // automation was deleted would otherwise keep answering forever with no refusal path able to
+    // remove it. Nothing is widened - the binding's automationId comes off the definition, never
+    // the caller.
     const automation = (await automations.get(input.binding.automationId)) as { ownerUserId?: string } | null;
-    if (!automation || automation.ownerUserId !== input.ownerUserId) {
+    if (automation && automation.ownerUserId !== input.ownerUserId) {
       console.warn(
         `[automation] not discarding the recipe for ${input.integrationKey}/${input.actionName}: ` +
           `the caller does not own its bound automation (${reason}).`,

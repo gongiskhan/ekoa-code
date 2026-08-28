@@ -224,6 +224,32 @@ describe('mintSiteIntegrationForAutomation - the write', () => {
     expect(doc?.actions[0]?.description).toBe('listar pedidos pendentes e exportar');
   });
 
+  it('a RE-plan DROPS the stale learned recipe (review fix): the old flow must not keep answering', async () => {
+    const confirmRead = vi.fn(async () => true);
+    const r1 = await mintSiteIntegrationForAutomation(userA, { automationId: 'auto-1', goal, name: 'n', steps: readSteps }, { store, confirmRead });
+    expect(r1.minted).toBe(true);
+    if (!r1.minted) return;
+    // A recipe learned from the OLD steps, seeded through the one legitimate writer.
+    const recipes = new (await import('../../src/integrations/recipe-store.js')).IntegrationRecipeStore(integrationDefinitions);
+    const put = await recipes.putRecipe('orgA', r1.integrationKey, r1.actionName, {
+      goal: 'old flow',
+      injectedCalls: [{ method: 'GET', urlTemplate: 'https://portal.acme.example/api/old', headerNames: [], idempotent: true } as never],
+      scriptedSteps: [],
+      lessons: [],
+    });
+    expect(put.verdict).toBe('ok');
+
+    // The re-plan rewrites the steps; the mint refresh must take the recipe with them - the
+    // store's own replace path deliberately carries recipes forward per action name, so leaving
+    // it would replay the OLD flow's calls forever with no drift to catch it.
+    const r2 = await mintSiteIntegrationForAutomation(userA, {
+      automationId: 'auto-1', goal: 'listar pedidos pendentes com filtros novos', name: 'n', steps: readSteps,
+      existingSource: { integrationKey: r1.integrationKey, templateKey: 'plan:auto-1' },
+    }, { store, confirmRead });
+    expect(r2.minted).toBe(true);
+    expect(await recipes.getRecipe('orgA', r1.integrationKey, r1.actionName)).toBeNull();
+  });
+
   it('same goal against the same site from a DIFFERENT automation gets a suffixed action name', async () => {
     const confirmRead = vi.fn(async () => true);
     const r1 = await mintSiteIntegrationForAutomation(userA, { automationId: 'auto-1', goal, name: 'n', steps: readSteps }, { store, confirmRead });

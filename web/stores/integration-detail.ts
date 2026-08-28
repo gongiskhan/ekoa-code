@@ -496,10 +496,14 @@ export const useIntegrationDetailStore = create<IntegrationDetailState & Integra
         ...(result.code ? { errorCode: result.code } : {}),
       });
     }
-    // The run succeeded, so the sample and the history the page is showing are both stale.
+    // The run succeeded, so the sample, the history AND the recipe stats the page is showing are
+    // all stale - a replayed run just bumped replayCount/lastReplayMs, and a learning run may have
+    // just minted the badge the user is looking for (review fix: the stats went stale at the exact
+    // moment the toast announced the replay).
     const automationId = automationIdOf(get().capability, actionName);
     await Promise.all([
       get().fetchEvidence(key),
+      get().fetchRecipes(key),
       automationId ? get().fetchRuns(actionName, automationId) : Promise.resolve(),
     ]);
     return finish({ ok: true, result });

@@ -27,7 +27,7 @@ export {
   setLoadContextContent,
   setIntegrationPrefetch,
   setCatalog,
-  // K5 — the four seams behind the six chat catalog tools (one listing, three invocations).
+  // K5 - the four seams behind the six chat catalog tools (one listing, three invocations).
   setCatalogToolList,
   setCallIntegrationActionTool,
   setCallEkoaActionTool,

@@ -490,8 +490,11 @@ async function auditExecute(
         // K4: HOW an automation-backed action answered - by recipe replay or by its authored run.
         // Before this the row could not tell the two apart, so a replayed execution (which writes
         // no automation_runs document) was unfindable after the fact. Facts only, never payload:
-        // the envelope's ids and version, read off the leg markers the one envelope carries.
-        ...(replayAuditFieldsOf(result.data) ?? {}),
+        // the envelope's ids and version - and ONLY behind the executor's out-of-band
+        // `automationEnvelope` marker, never a structural probe a remote body could satisfy
+        // (review fix: an api-call action's `data` is the REMOTE's JSON, and a payload-controlled
+        // audit row is the exact contamination the docblock above forbids).
+        ...(result.automationEnvelope === true ? (replayAuditFieldsOf(result.data) ?? {}) : {}),
       },
     );
   } catch (err) {
@@ -523,11 +526,13 @@ export type CapabilityWireOutcome =
   | { kind: 'result'; body: { success: boolean; status?: number; data?: unknown; code?: string; error?: string } };
 
 /**
- * The automation-backed envelope's LEG MARKERS, read structurally (K4). The envelope is
- * `ActionRunEnvelope` (automation/service.ts) riding `data` as `unknown` - a lower tier this
- * module does not import, so the read is a narrow structural probe: a `data` carrying a string
- * `runId` AND a string `status` is the one-envelope shape (the exact discriminator
- * `user-defined-poll.ts` unwraps by), and only that shape yields replay facts.
+ * The automation-backed envelope's LEG MARKERS (K4). The envelope is `ActionRunEnvelope`
+ * (automation/service.ts) riding `data` as `unknown` - a lower tier this module does not import -
+ * so the FIELDS are read structurally, but WHETHER `data` is the envelope at all is never a
+ * structural question: callers gate on the executor's out-of-band `automationEnvelope` marker
+ * (review fix - an api-call action's `data` is the remote's JSON, and a remote answering
+ * {"runId","status","replayed"} must not be able to forge replay provenance onto the wire or the
+ * audit row).
  */
 function envelopeMarkersOf(data: unknown): { runId: string; replayed?: boolean; recipeVersion?: number; replayMs?: number } | null {
   if (typeof data !== 'object' || data === null) return null;
@@ -562,9 +567,10 @@ export function capabilityWireOutcome(result: ExecuteIntegrationActionResult): C
     return { kind: 'awaiting_consent', consentRequest };
   }
   // K4: the typed replay block. The same facts used to ride only inside `data` (z.unknown on the
-  // wire), where no client could rely on them; the block is attached exactly when `data` is the
-  // one automation-backed envelope, so api-call/tenant-read responses are unchanged.
-  const markers = envelopeMarkersOf(result.data);
+  // wire), where no client could rely on them; the block is attached exactly when the EXECUTOR
+  // says `data` is the one automation-backed envelope (`automationEnvelope`, out-of-band), so
+  // api-call/tenant-read responses are unchanged and a remote body cannot fabricate one.
+  const markers = result.automationEnvelope === true ? envelopeMarkersOf(result.data) : null;
   return {
     kind: 'result',
     body: {

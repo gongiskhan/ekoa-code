@@ -16,7 +16,7 @@ import {
  * (automation/catalog.ts) has named all six to the model since it shipped; these are the tools.
  *
  * Two properties carry the suite. First, IDENTITY: every handler runs under the actor bound at
- * spec-build time, so an argument naming another user or org changes nothing — the same
+ * spec-build time, so an argument naming another user or org changes nothing - the same
  * construction the knowledge tools use for `orgId` (ch04 §4.4.1; ch09). Second, the coded
  * outcomes that mean "a human must act" (`awaiting_consent`, `needs_credentials`) must reach the
  * model as exactly that, never as a failure it should retry.
@@ -35,7 +35,7 @@ function spec(name: string) {
 
 afterEach(() => __resetAgentSeamsForTests());
 
-describe('catalogToolSpecs — mounting', () => {
+describe('catalogToolSpecs - mounting', () => {
   it('declares exactly the six catalog tools, in policy order', () => {
     expect(catalogToolSpecs(actor).map((s) => s.name)).toEqual([...CATALOG_TOOLS]);
   });
@@ -74,7 +74,7 @@ describe('the three list_* tools', () => {
     const text = await spec('list_automations').handler({});
     expect(text).toContain('- Relatório semanal (id: a1): Envia o relatório [entradas: mes*]');
     // A triggered automation runs itself; the agent must be able to see that before invoking it.
-    expect(text).toContain('[gatilho webhook: citius/nova-notificacao — corre sozinha]');
+    expect(text).toContain('[gatilho webhook: citius/nova-notificacao - corre sozinha]');
   });
 
   it('list_integration_actions marks writes and renders the args summary', async () => {
@@ -98,7 +98,7 @@ describe('the three list_* tools', () => {
     expect(text).not.toContain('Recibo Citius');
   });
 
-  it('distinguishes "nothing matched" from "you have none" — neither invents rows', async () => {
+  it('distinguishes "nothing matched" from "you have none" - neither invents rows', async () => {
     setCatalogToolList(async () => listing());
     expect(await spec('list_automations').handler({ query: 'zzz' })).toBe('Nada em sequências corresponde a "zzz".');
     setCatalogToolList(async () => emptyListing());
@@ -122,7 +122,7 @@ describe('the three list_* tools', () => {
     expect(text).not.toContain('a40(');
   });
 
-  it('the listing seam is asked under the BOUND actor — an identity argument never wins', async () => {
+  it('the listing seam is asked under the BOUND actor - an identity argument never wins', async () => {
     const seen: CatalogToolActor[] = [];
     setCatalogToolList(async (a) => {
       seen.push(a);
@@ -143,7 +143,7 @@ describe('call_integration_action', () => {
     expect(text).toContain('{"ok":true,"sent":2}');
   });
 
-  it('truncates a huge result rather than flooding the turn — and SAYS it truncated', async () => {
+  it('truncates a huge result rather than flooding the turn - and SAYS it truncated', async () => {
     setCallIntegrationActionTool(async () => ({ success: true, data: { blob: 'x'.repeat(20_000) } }));
     const text = await spec('call_integration_action').handler({ integrationKey: 'k', actionName: 'a' });
     expect(text).toContain('(resultado truncado)');
@@ -177,7 +177,7 @@ describe('call_integration_action', () => {
     expect(text).toContain('is not connected for this user');
   });
 
-  it('runs under the BOUND actor — an orgId/ownerUserId argument is not read', async () => {
+  it('runs under the BOUND actor - an orgId/ownerUserId argument is not read', async () => {
     const seen: Array<{ actor: CatalogToolActor; input: unknown }> = [];
     setCallIntegrationActionTool(async (a, input) => {
       seen.push({ actor: a, input });
@@ -205,7 +205,7 @@ describe('call_integration_action', () => {
     expect(seen).toEqual([{}]);
   });
 
-  it('an unwired root refuses honestly — it never reports an action as run', async () => {
+  it('an unwired root refuses honestly - it never reports an action as run', async () => {
     const text = await spec('call_integration_action').handler({ integrationKey: 'slack', actionName: 'post_message' });
     expect(text).toContain('falhou (unavailable)');
     expect(text).not.toContain('executada');
@@ -231,7 +231,7 @@ describe('call_automation', () => {
     expect(seen[0]!.input).toEqual({ automationId: 'a1', inputs: { mes: '08' } });
   });
 
-  it('a refused start surfaces the service code — and claims no run', async () => {
+  it('a refused start surfaces the service code - and claims no run', async () => {
     setStartAutomationTool(async () => ({ success: false, code: 'FORBIDDEN', error: 'not authorized to run this automation' }));
     const text = await spec('call_automation').handler({ automationId: 'a-other' });
     expect(text).toContain('Não foi possível iniciar a sequência a-other (FORBIDDEN)');
@@ -253,7 +253,7 @@ describe('call_ekoa_action', () => {
     expect(text).toContain('falhou (unknown_artifact)');
   });
 
-  it('runs under the BOUND actor — a slug cannot be paired with another org', async () => {
+  it('runs under the BOUND actor - a slug cannot be paired with another org', async () => {
     const seen: Array<{ actor: CatalogToolActor; input: unknown }> = [];
     setCallEkoaActionTool(async (a, input) => {
       seen.push({ actor: a, input });

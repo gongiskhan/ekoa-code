@@ -69,6 +69,13 @@ export interface ReplayActionInput {
   /** The owner's answer to this action's write approval, carried down from the executor's gate. */
   writeAssent?: boolean;
   /**
+   * The mount's REPLAY_BUDGET abort (K6 review fix). The budget race abandons the attempt's
+   * promise; without this signal the abandoned attempt kept issuing its remaining calls and held
+   * the owner's browser lease, so the authored run the budget fell through to queued behind the
+   * very attempt it was rescuing the action from. Checked between calls, never mid-transport.
+   */
+  signal?: AbortSignal;
+  /**
    * The action's DECLARED effect (`IntegrationAction.mutates`). Not the assent - see `ReplayInput`.
    *
    * REQUIRED, not optional, and that is the point: the field is optional at the SEAM
@@ -142,6 +149,7 @@ export async function replayIntegrationAction(
         // page"), which asserts the CONSEQUENCE - the machine was never asked to make the call.
         ...(input.secrets !== undefined ? { secrets: input.secrets } : {}),
         ...(input.writeAssent !== undefined ? { writeAssent: input.writeAssent } : {}),
+        ...(input.signal !== undefined ? { signal: input.signal } : {}),
         mutates: input.mutates,
       },
       { loadRecipe: async () => stored },

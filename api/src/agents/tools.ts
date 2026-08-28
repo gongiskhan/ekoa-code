@@ -34,13 +34,13 @@ export const ATTACHMENT_TOOLS = ['Read', 'Glob', 'Grep'] as const;
  * The six cross-agent catalog tools (K5, D-CORNERSTONE-DOORS): discover, then invoke, the actor's
  * OWN automations, integration actions and Ekoa actions. CHAT ONLY.
  *
- * These names are not new vocabulary — the layer-4 catalog prompt (automation/catalog.ts) has
+ * These names are not new vocabulary - the layer-4 catalog prompt (automation/catalog.ts) has
  * named all six to the model since it shipped, listing the concrete rows and telling the agent to
  * "use the call_… tools to invoke these". The prompt half landed without the tool half, so a chat
  * agent read an inventory of capabilities and had nothing to call. This closes that.
  *
  * NOT on the text-attachments run class (which mounts no in-process tools at all) and not on brand
- * research (deliberately tool-less, §5.6.4 — a prompt-injected page must not be able to reach a
+ * research (deliberately tool-less, §5.6.4 - a prompt-injected page must not be able to reach a
  * user's automations). Builds keep their own rails and are not widened here.
  */
 export const CATALOG_TOOLS = [
@@ -74,7 +74,7 @@ export interface ToolPolicy {
 
 /**
  * Resolve the tool policy for a run class. Chat is locked to the two knowledge tools, the §5.4.8
- * local-bridge delegation tool and the six K5 catalog tools — never Bash/Write/Edit on the hosted
+ * local-bridge delegation tool and the six K5 catalog tools - never Bash/Write/Edit on the hosted
  * machine (§5.4.4, acceptance criterion 5; delegation runs on the USER's machine inside their
  * grants, ch18, and the catalog tools reach only the actor's own automations/actions).
  * Builds get the coding preset plus the knowledge + delegation + docx tools. Brand research is

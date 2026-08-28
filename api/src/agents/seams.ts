@@ -179,7 +179,7 @@ export function catalog(input: { userId: string; orgId: string }): Promise<strin
 // --- Cross-agent catalog TOOLS (K5, D-CORNERSTONE-DOORS; ch05 §5.4.4 chat row) -------------
 
 /** The identity every catalog tool runs under: the run's actor, bound at spec-build time. A tool
- *  ARGUMENT naming another user or org changes nothing — the same rule the knowledge tools apply. */
+ *  ARGUMENT naming another user or org changes nothing - the same rule the knowledge tools apply. */
 export interface CatalogToolActor {
   userId: string;
   orgId: string;
@@ -227,7 +227,7 @@ export interface CatalogToolListing {
  * The listing behind the three `list_*` tools. The root binds it to the SAME
  * `buildAutomationCatalog` the layer-4 prompt is rendered from, so what the model is told exists
  * and what it can list can never drift apart. Query filtering and formatting are the tools' own
- * (sdk-tools.ts) — this seam answers the whole visible catalog for the bound actor.
+ * (sdk-tools.ts) - this seam answers the whole visible catalog for the bound actor.
  */
 export type CatalogToolListFn = (actor: CatalogToolActor) => Promise<CatalogToolListing>;
 const emptyCatalogToolListing = (): CatalogToolListing => ({ automations: [], integrationActions: [], ekoaActions: [] });
@@ -242,7 +242,7 @@ export function catalogToolList(actor: CatalogToolActor): Promise<CatalogToolLis
 
 /**
  * What an invoking catalog tool gets back. `code` is the underlying rail's OWN code kept verbatim
- * — `awaiting_consent` and `needs_credentials` are the two the tool turns into a specific sentence
+ * - `awaiting_consent` and `needs_credentials` are the two the tool turns into a specific sentence
  * for the model, because both mean "a human has to act", not "this failed".
  */
 export interface CatalogToolCallResult {
