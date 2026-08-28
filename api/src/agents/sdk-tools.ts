@@ -120,6 +120,21 @@ function emptyListing(rawQuery: unknown, kind: string): string {
   return query ? `Nada em ${kind} corresponde a "${query}".` : `Não há ${kind} disponíveis para este utilizador.`;
 }
 
+/**
+ * One user-authored field (a name / description) rendered into a listing line, as DATA not
+ * structure (Codex checkpoint fix). Automation and action descriptions are author-controlled and
+ * reach the model verbatim; a description carrying newlines, list markers or a fake heading could
+ * forge extra rows or inject an instruction that reads as the prompt's own. Collapsing all
+ * whitespace to single spaces and capping the length removes the STRUCTURAL vector - the model
+ * still sees the text, but it can no longer break out of its one line. (The residual
+ * confused-deputy risk - a description telling the model to act - is bounded by the write gate and
+ * ledgered; this is the cheap structural floor.)
+ */
+function safeField(value: string, max = 200): string {
+  const flat = value.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
 function listingText(header: string, lines: string[], total: number): string {
   const out = [`${header} (${total}${total > lines.length ? `, a mostrar ${lines.length}` : ''}):`, ...lines];
   if (total > lines.length) out.push(`… e mais ${total - lines.length}. Restringe com o argumento query.`);
@@ -182,7 +197,7 @@ export function catalogToolSpecs(actor: ToolActor): SdkToolSpec[] {
           const trigger = a.trigger
             ? ` [gatilho ${a.trigger.kind}: ${a.trigger.integrationKey}/${a.trigger.eventName} - corre sozinha]`
             : '';
-          return `- ${a.name} (id: ${a.id}): ${a.description}${inputs}${trigger}`;
+          return `- ${safeField(a.name, 80)} (id: ${a.id}): ${safeField(a.description)}${inputs}${trigger}`;
         });
         return listingText('Sequências', lines, total);
       },
@@ -200,7 +215,7 @@ export function catalogToolSpecs(actor: ToolActor): SdkToolSpec[] {
         if (!total) return emptyListing(args.query, 'ações de integração');
         const lines = shown.map(
           (a) =>
-            `- ${a.integrationKey}.${a.actionName}(${a.argsSummary}): ${a.description}${a.mutates ? ' [escrita]' : ''}`,
+            `- ${a.integrationKey}.${a.actionName}(${a.argsSummary}): ${safeField(a.description)}${a.mutates ? ' [escrita]' : ''}`,
         );
         return listingText('Ações de integração', lines, total);
       },
@@ -223,7 +238,7 @@ export function catalogToolSpecs(actor: ToolActor): SdkToolSpec[] {
         if (!total) return emptyListing(args.query, 'ações Ekoa');
         const lines = shown.map(
           (e) =>
-            `- ${e.artifactSlug}.${e.capabilityName}(${e.argsSummary}): ${e.description} [app: ${e.artifactName}]${e.mutates ? ' [escrita]' : ''}`,
+            `- ${e.artifactSlug}.${e.capabilityName}(${e.argsSummary}): ${safeField(e.description)} [app: ${safeField(e.artifactName, 80)}]${e.mutates ? ' [escrita]' : ''}`,
         );
         return listingText('Ações Ekoa', lines, total);
       },

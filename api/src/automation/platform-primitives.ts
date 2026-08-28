@@ -69,6 +69,36 @@ export type PlatformPrimitive =
   | { op: 'flow.fail'; message: string }
   | { op: 'flow.if'; condition: ConditionExpr; then: PlatformPrimitive[]; else?: PlatformPrimitive[] };
 
+/** The primitive ops that CHANGE state - a write to the app store or the host filesystem. */
+const MUTATING_PRIMITIVE_OPS: ReadonlySet<string> = new Set([
+  'store.create', 'store.update', 'store.delete', 'file.write',
+]);
+
+/**
+ * Does this recipe WRITE - by its own primitives, not by a self-declared flag (Codex checkpoint
+ * fix, K5). A manifest's `mutates` defaults to false when absent or non-literal-true, so a
+ * capability with a `store.delete` recipe and no `mutates` reads as a read; the chat door
+ * (`call_ekoa_action`) must judge the EFFECT, exactly the "prove it is a read" discipline
+ * `action-consent.ts` applies to integration actions.
+ *
+ * Recurses `flow.if` branches (a write hidden in a conditional still writes) and `integration.call`
+ * is treated as mutating on the same conservative footing - it reaches an outside system whose
+ * effect this scan cannot see, so it may not be auto-run consent-free from the chat surface.
+ * `artifact.invoke` cannot be judged here (the inner recipe lives in another artifact), so it too
+ * is conservatively mutating for the purpose of this gate.
+ */
+export function recipeMutates(recipe: PlatformPrimitive[]): boolean {
+  for (const p of recipe) {
+    if (MUTATING_PRIMITIVE_OPS.has(p.op)) return true;
+    if (p.op === 'integration.call' || p.op === 'artifact.invoke') return true;
+    if (p.op === 'flow.if') {
+      if (recipeMutates(p.then)) return true;
+      if (p.else && recipeMutates(p.else)) return true;
+    }
+  }
+  return false;
+}
+
 export interface EkoaActionContext {
   userId: string;
   /** The RUN's org — used to org-scope artifact resolution (ekoa_action target + artifact.invoke). */

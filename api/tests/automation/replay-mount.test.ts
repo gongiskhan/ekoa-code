@@ -322,6 +322,32 @@ describe('runAutomationForAction - the replay-first mount', () => {
     expect(row?.actionRetry).toEqual({ integrationKey: 'portal', actionName: 'list_cases', args: { ref: '2024-1' } });
   });
 
+  it('K3 (Codex fix): a secret-shaped ARG never survives verbatim in actionRetry.args', async () => {
+    await automationRuns.insert({
+      _id: 'r-halt-s', id: 'r-halt-s', automationId: AUTOMATION_ID, startedAt: new Date().toISOString(),
+      status: 'needs_credentials', steps: [], ownerUserId: OWNER, orgId: 'o1',
+    } as never);
+    const replay = vi.fn<Replay>(async () => ({ outcome: 'no-recipe' }) as never);
+    const run = vi.fn<Run>(async () => ({ runId: 'r-halt-s', status: 'needs_credentials' }) as never);
+    // A caller passing a token as an arg, plus a live credential value in the bag: BOTH must be
+    // gone from the persisted row - the secret-NAMED key dropped, and the credential VALUE redacted
+    // even under an innocuous key.
+    // The "secret" values are obvious non-secrets (gitleaks-safe): what is under test is that the
+    // secret-NAMED KEY is dropped and the credential-VALUE is redacted, not the strings themselves.
+    const credValue = 'REDACT-ME-cred';
+    const result = await runAutomationForAction({
+      ...base,
+      args: { ref: '2024-1', apiToken: 'NOT-A-REAL-token', note: credValue },
+      credentialFields: { pw: credValue },
+    }, { replay, run });
+    expect(result.code).toBe('needs_credentials');
+    const row = (await automationRuns.get('r-halt-s')) as { actionRetry?: { args?: Record<string, unknown> } } | null;
+    const args = row?.actionRetry?.args ?? {};
+    expect(args.ref).toBe('2024-1');
+    expect(args.apiToken).toBeUndefined(); // secret-NAMED key dropped
+    expect(JSON.stringify(args)).not.toContain(credValue); // credential VALUE redacted
+  });
+
   it('a MUTATING action\'s credential halt stamps NO retry identity (never re-executed unasked)', async () => {
     await automationRuns.insert({
       _id: 'r-halt-w', id: 'r-halt-w', automationId: AUTOMATION_ID, startedAt: new Date().toISOString(),

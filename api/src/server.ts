@@ -181,6 +181,7 @@ import {
   loadManifestFromFile,
   getCapability,
   executeRecipe,
+  recipeMutates,
   EkoaActionFailure,
   type EkoaActionContext,
   automationStepEventPayload,
@@ -952,13 +953,19 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       if (!capability) {
         return { success: false, code: 'unknown_capability', error: `capability "${capabilityName}" not in ${artifactSlug}` };
       }
-      // A MUTATING capability is refused at this door (adversarial-review fix). The sibling
-      // call_integration_action door inherits the executor's consent gate; this direct recipe
-      // path has none, and before K5 its only production entry was an owner-started automation
-      // run - a human initiation this chat door removed. A prompt-injected turn must not be able
-      // to rewrite tenant app data with zero approval, so writes stay on the doors that gate them.
-      // `mutates` here is the manifest parser's own normalisation (explicit true only).
-      if (capability.mutates === true) {
+      // A MUTATING capability is refused at this door (adversarial-review + Codex checkpoint fix).
+      // The sibling call_integration_action door inherits the executor's consent gate; this direct
+      // recipe path has none, and before K5 its only production entry was an owner-started
+      // automation run - a human initiation this chat door removed. A prompt-injected turn must not
+      // be able to rewrite tenant app data with zero approval.
+      //
+      // JUDGED BY EFFECT, NOT BY THE SELF-DECLARED FLAG. The manifest's `mutates` defaults to false
+      // when absent or non-literal-true (manifest-parser), so a capability with a `store.delete`
+      // recipe and no `mutates` would read as a read - the exact bypass Codex named. `recipeMutates`
+      // scans the recipe's own primitives (writes, integration.call, artifact.invoke, and inside
+      // flow.if branches), the "prove it is a read" discipline. The declared flag still refuses too,
+      // belt and braces.
+      if (capability.mutates === true || recipeMutates(capability.recipe)) {
         return {
           success: false,
           code: 'mutating_capability',

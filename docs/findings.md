@@ -6,6 +6,49 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`recipe-replay-executes-before-the-automation-owner-check`** (2026-08-28, **MEDIUM**, recipe
+  spine multi-user; cornerstone Codex checkpoint). A successful recipe replay returns from
+  `runAutomationForAction` (service.ts ~1618) BEFORE the automation-owner gate (~1725) that the
+  authored-run leg enforces, so a same-org peer who can reach an org-SHARED action executes its
+  learned recipe under their own session even though they are forbidden to run the bound automation.
+  For a read that is the intended widening (the peer runs under their own credentials and sees their
+  own data). It becomes a hazard only when combined with
+  `mint-read-verdict-misclassification-...` below: a state-changing GET wrongly learned as an
+  idempotent read replays freely for the peer, so the peer triggers a mutation through a wrapper
+  they may not run. Bounded: minted definitions are PRIVATE by default (a peer sees nothing until
+  the owner deliberately org-shares), and a genuinely non-idempotent call still meets the replay
+  write-gate. CLOSE BY: gate the replay leg on the same owner/visibility check the authored leg
+  applies (a shared read may still replay per-user; a shared action whose recipe contains any
+  non-GET stays owner-only), OR drop the idempotent flag for a call whose posture is adversarial.
+  Layered today by: private-by-default, the injection-hardened classifier (below), and the
+  non-idempotent replay write-gate.
+
+- **`k3-resume-rerun-resolves-the-current-definition-not-the-halted-shape`** (2026-08-28, **LOW**,
+  K3 resume; cornerstone Codex checkpoint). The parked `actionRetry` row stores only
+  `{integrationKey, actionName, args}`, so the post-ceremony learn re-run resolves whatever action
+  now carries that key+name - if an authorised editor swapped the action while the run was parked,
+  the re-run executes the replacement under the victim's identity. Bounded hard: the re-run goes
+  through `executeUserIntegrationAction`, so a mutating replacement answers `awaiting_consent` and
+  does not run, and the re-run only fires for a storable (read) action at all; the blast radius is
+  a different READ under the owner's own credentials. CLOSE BY: pin the action-shape fingerprint on
+  `actionRetry` and refuse the re-run when the current shape differs.
+
+- **`chat-invoke-tools-are-a-confused-deputy-surface`** (2026-08-28, **MEDIUM**, K5 chat doors;
+  cornerstone Codex checkpoint). The chat agent co-mounts read surfaces (knowledge_search/read,
+  the list_* catalog tools, action results) with the three invoke tools in one loop, and none of
+  the seams carries a provenance/user-intent token. So injected text in a knowledge document, a
+  stored action description, or a tool result can instruct the model to `call_integration_action`
+  an already-`always`-approved write in the same turn - and because `action-consent` excludes the
+  description from its shape fingerprint, the standing approval stays valid. Bounded: the injection
+  can only trigger the TIMING of an action the user already blessed for that exact (shape, target);
+  it grants no new effect, cannot cross tenants (actor is bound, never an argument), and
+  `call_ekoa_action` now refuses any recipe that writes (recipeMutates). Mitigated structurally by
+  `safeField` collapsing author-controlled description text to one line (removes the fake-row /
+  fake-heading vector). CLOSE BY (larger work, out of this cornerstone): a provenance token on
+  tool-output-derived text plus a quarantine that forbids an invoke whose justification traces to
+  untrusted content, or a per-turn re-confirmation for a write triggered without a direct user ask.
+  This is the standing trust-model limit of giving a chat agent invoke tools; recorded as such.
+
 - **`mint-read-verdict-misclassification-enables-unattended-re-execution`** (2026-08-28, **MEDIUM**,
   mint classifier; cornerstone adversarial review). D-CORNERSTONE-MUTATES-CLASS accepts that the
   mint's read verdict on a BROWSER-step flow rests on the model confirmation alone (the

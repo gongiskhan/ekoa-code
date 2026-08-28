@@ -32,7 +32,7 @@ import type {
 import { automations, automationRuns, automationRunIdempotency } from '../data/stores.js';
 import { logActivity } from '../data/activity.js';
 import { createMemory } from '../memory/index.js';
-import { runAutomation, rehearseAutomation, scrubCredentials, type RunContext } from './engine.js';
+import { runAutomation, rehearseAutomation, scrubCredentials, SECRET_SHAPED_INPUT_NAME, type RunContext } from './engine.js';
 import { HEAL_BUDGET, REPLAY_BUDGET } from './budgets.js';
 import { planFromGoal as plannerPlanFromGoal } from './planner.js';
 import { buildAutomationCatalog } from './catalog.js';
@@ -1829,7 +1829,17 @@ export async function runAutomationForAction(
     // unnamed caller has nothing to learn for. Best-effort - a failed stamp costs the first-contact
     // learning latency, never the halt.
     if (storable && input.integrationKey && input.actionName) {
-      const actionRetry = { integrationKey: input.integrationKey, actionName: input.actionName, args: input.args };
+      // CREDENTIALS ARE REFERENCES, NEVER VALUES - even on this parked row (Codex checkpoint fix).
+      // `input.args` is caller-supplied and could carry a secret-shaped value; the persisted `inputs`
+      // already go through `scrubCredentials`, and this stamp must not be the one place a raw token
+      // survives in `automation_runs`. Two layers, the run's own: drop secret-NAMED keys
+      // (SECRET_SHAPED_INPUT_NAME), then redact any value matching a live credential
+      // (`secrets.redactDeep`). The re-run re-resolves its credentials from the Cofre, so nothing
+      // load-bearing is lost.
+      const scrubbedArgs = secrets.redactDeep(
+        Object.fromEntries(Object.entries(input.args).filter(([k]) => !SECRET_SHAPED_INPUT_NAME.test(k))),
+      ) as Record<string, unknown>;
+      const actionRetry = { integrationKey: input.integrationKey, actionName: input.actionName, args: scrubbedArgs };
       await automationRuns.update(result.runId, (doc) => ({ ...(doc as object), actionRetry } as never)).catch(() => undefined);
     }
     return {

@@ -148,7 +148,7 @@ export {
 // These four re-exports let the composition root assemble the same path; the follow-up that
 // removes the duplication is to give that hook a name here and have both callers use it.
 export { resolveArtifactProjectDir, type ResolveArtifactResult } from './executors/ekoa-action.js';
-export { executeRecipe, EkoaActionFailure, type EkoaActionContext } from './platform-primitives.js';
+export { executeRecipe, recipeMutates, EkoaActionFailure, type EkoaActionContext } from './platform-primitives.js';
 export { loadManifestFromFile, getCapability } from './manifest-parser.js';
 
 // --- Persistence (routes read runs; the plan endpoint saves automations) ----
