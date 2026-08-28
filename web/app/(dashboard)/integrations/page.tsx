@@ -83,9 +83,15 @@ const CATEGORY_LABELS: Record<string, string> = {
   payments: "Pagamentos",
   productivity: "Produtividade",
   messaging: "Mensagens",
+  // The category a mint-on-plan site integration carries (a per-site automation).
+  sites: "Sites",
 };
 
-function categoryLabel(slug: string): string {
+function categoryLabel(slug: string | undefined | null): string {
+  // A definition may carry no category at all (a JSON import, or a mint-on-plan site integration
+  // before its category defaulted). An undefined slug must never crash the whole grid - the card
+  // just shows a neutral label.
+  if (!slug) return "Outras";
   if (CATEGORY_LABELS[slug]) return CATEGORY_LABELS[slug];
   const pretty = slug.replace(/-/g, " ");
   return pretty.charAt(0).toUpperCase() + pretty.slice(1);

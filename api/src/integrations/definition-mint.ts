@@ -409,6 +409,9 @@ export async function mintSiteIntegrationForAutomation(
         key,
         displayName: host,
         description: `Integração criada automaticamente a partir de uma sequência de passos contra ${host}.`,
+        // A category so the "Minhas" card renders a human label rather than nothing (the web
+        // grid's `categoryLabel` maps 'sites' -> "Sites"); the card guards an absent one too.
+        category: 'sites',
         configSchema: [],
         actions,
         skillMd: '',
