@@ -198,6 +198,53 @@ describe('runAutomationForAction - the replay-first mount', () => {
     expect(clearRecipe).toHaveBeenCalledWith('o1', 'portal', 'list_cases');
   });
 
+  /**
+   * K2: A CREDENTIAL HALT IS PARKED, NOT FAILED. The engine persisted `needs_credentials`,
+   * registered the waiter and emitted the SSE frame - this envelope must say the SAME thing to the
+   * action caller. It used to flatten to `automation_failed`, which read as "the action broke"
+   * while the run was actually waiting for the owner's ceremony - and on the schedules rail that
+   * flattening burned the failure ceiling with no notification (the ledgered finding
+   * `needs-credentials-halt-flattens-to-automation-failed-at-the-action-surface`).
+   */
+  it('a needs_credentials halt answers its OWN code, never automation_failed (K2)', async () => {
+    // A real parked row, so the K3 identity stamp below has a document to land on.
+    await automationRuns.insert({
+      _id: 'r-halt', id: 'r-halt', automationId: AUTOMATION_ID, startedAt: new Date().toISOString(),
+      status: 'needs_credentials', steps: [], ownerUserId: OWNER, orgId: 'o1',
+    } as never);
+    const replay = vi.fn<Replay>(async () => ({ outcome: 'no-recipe' }) as never);
+    const run = vi.fn<Run>(async () => ({ runId: 'r-halt', status: 'needs_credentials', summary: 'paused: no usable credential for https://portal.example' }) as never);
+    const result = await runAutomationForAction(base, { replay, run });
+
+    expect(result.success).toBe(false);
+    expect(result.code).toBe('needs_credentials');
+    // The parked run's identity travels, so a caller (or the schedules supervisor) can follow the
+    // run/SSE plane where the ceremony UX lives.
+    expect(result.data).toEqual({ runId: 'r-halt', status: 'needs_credentials' });
+    // And the error prose never claims failure.
+    expect(result.error).not.toMatch(/did not complete/);
+    // K3: the parked row carries the STORABLE action's identity, which is what lets the
+    // post-ceremony resume fire the one background learn-armed re-execution.
+    const row = (await automationRuns.get('r-halt')) as { actionRetry?: unknown } | null;
+    expect(row?.actionRetry).toEqual({ integrationKey: 'portal', actionName: 'list_cases', args: { ref: '2024-1' } });
+  });
+
+  it('a MUTATING action\'s credential halt stamps NO retry identity (never re-executed unasked)', async () => {
+    await automationRuns.insert({
+      _id: 'r-halt-w', id: 'r-halt-w', automationId: AUTOMATION_ID, startedAt: new Date().toISOString(),
+      status: 'needs_credentials', steps: [], ownerUserId: OWNER, orgId: 'o1',
+    } as never);
+    const replay = vi.fn<Replay>(async () => ({ outcome: 'no-recipe' }) as never);
+    const run = vi.fn<Run>(async () => ({ runId: 'r-halt-w', status: 'needs_credentials' }) as never);
+    // mutates omitted = WRITE (fail-closed reading), so storable is false and nothing is stamped.
+    const { mutates: _drop, ...rest } = base;
+    void _drop;
+    const result = await runAutomationForAction({ ...rest, writeAssent: true }, { replay, run });
+    expect(result.code).toBe('needs_credentials');
+    const row = (await automationRuns.get('r-halt-w')) as { actionRetry?: unknown } | null;
+    expect(row?.actionRetry).toBeUndefined();
+  });
+
   it('write-gate does not brick the action even when the recipe cannot be cleared', async () => {
     // A store that refuses the clear must not resurrect the permanent failure by another route.
     const replay = vi.fn<Replay>(async () => ({ outcome: 'write-gate', blocked: 'POST /x', recipeVersion: 2 }));

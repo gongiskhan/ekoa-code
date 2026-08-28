@@ -610,6 +610,39 @@ export async function integrationFeedbackSections(ownerUserId: string): Promise<
 }
 
 // ============================================================================
+// Resume-learn driver (cornerstone K3, D-CORNERSTONE-LEARN-ON-RESUME)
+// ============================================================================
+
+/**
+ * ONE background learn-armed re-execution of an integration action, fired when a run that halted
+ * `needs_credentials` completes after its ceremony resume. The resumed engine pass itself cannot
+ * learn (the engine has no learn concept - `learnFromRun` lives on the action rail), so this seam
+ * routes the SAME action back through the full executor rail (`executeUserIntegrationAction` at the
+ * composition root), where the consent gate, credential resolution, capture and `learnFromRun` all
+ * run exactly as on any other action execution. Fired only for a run whose row carries an
+ * `actionRetry` stamp - which `runAutomationForAction` writes only for STORABLE (named, read)
+ * actions, so a mutating action is never re-executed by this path.
+ *
+ * HONEST DEFAULT: no driver, no re-run. An unbound seam costs only the first-contact learning
+ * latency (the recipe appears on the next natural run instead).
+ */
+export type ResumeLearnDriver = (input: {
+  orgId: string;
+  ownerUserId: string;
+  integrationKey: string;
+  actionName: string;
+  args: Record<string, unknown>;
+}) => Promise<void>;
+const defaultResumeLearnDriver: ResumeLearnDriver | null = null;
+let resumeLearnDriverFn: ResumeLearnDriver | null = defaultResumeLearnDriver;
+export function setResumeLearnDriver(fn: ResumeLearnDriver): void {
+  resumeLearnDriverFn = fn;
+}
+export function resumeLearnDriver(): ResumeLearnDriver | null {
+  return resumeLearnDriverFn;
+}
+
+// ============================================================================
 // Reset (tests)
 // ============================================================================
 
@@ -630,4 +663,5 @@ export function __resetAutomationSeamsForTests(): void {
   egressCandidateResolver = defaultEgressCandidateResolver;
   automationContentFn = defaultAutomationContent;
   integrationFeedbackFn = defaultIntegrationFeedback;
+  resumeLearnDriverFn = defaultResumeLearnDriver;
 }

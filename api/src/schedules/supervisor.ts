@@ -601,8 +601,11 @@ export function mapAutomationOutcome(o: {
   };
 }
 
-/** executeUserIntegrationAction's result → a fire outcome. `awaiting_consent` is BLOCKED —
- *  needs the owner, never a failure to retry and never a thing to approve from here. */
+/** executeUserIntegrationAction's result → a fire outcome. `awaiting_consent` and
+ *  `needs_credentials` are BLOCKED — both need the owner (an approval, a credential ceremony),
+ *  never a failure to retry and never a thing to resolve from here. Before K2 the credential halt
+ *  arrived flattened as `automation_failed`, so an integration_action schedule burned the failure
+ *  ceiling and auto-paused with no notification (the ledgered finding). */
 export function mapIntegrationOutcome(r: {
   success: boolean;
   code?: string;
@@ -610,7 +613,7 @@ export function mapIntegrationOutcome(r: {
 }): ScheduleFireOutcome {
   if (r.success) return { status: 'ok' };
   return {
-    status: r.code === 'awaiting_consent' ? 'blocked' : 'failed',
+    status: r.code === 'awaiting_consent' || r.code === 'needs_credentials' ? 'blocked' : 'failed',
     ...(r.code ? { code: r.code } : {}),
     ...(r.error ? { message: r.error } : {}),
   };

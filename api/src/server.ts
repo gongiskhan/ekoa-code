@@ -162,6 +162,7 @@ import {
   localBrowserContextProviderUsing,
   setEgressCandidateResolver,
   setDaemonConnectionResolver,
+  setResumeLearnDriver,
   setAutomationContentSections,
   startRunForTrigger,
   automationBackedActionHandler,
@@ -845,6 +846,17 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
     onCredentialEstablished(event);
   });
   setCredentialResumeDriver(redispatchRunAwaitingCredentials);
+  // K3 (D-CORNERSTONE-LEARN-ON-RESUME): when a ceremony-resumed run completes, ONE background
+  // learn-armed re-execution goes back through the one executor rail - same binding as the
+  // schedules supervisor's integration_action lambda below, so replay-first, consent, capture and
+  // learnFromRun all answer exactly as on any other execution. The service fires this only for a
+  // run whose parked row carries a STORABLE (read) action's identity.
+  setResumeLearnDriver(async ({ orgId, ownerUserId, integrationKey, actionName, args }) => {
+    await executeUserIntegrationAction(
+      { orgId, ownerUserId, integrationKey, actionName, args },
+      executorDeps,
+    );
+  });
 
   // G8 — trigger delivery targets (ch02 §2.8: injected callbacks, never upward imports).
   setDeliveryTargets({

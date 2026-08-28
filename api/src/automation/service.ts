@@ -37,7 +37,7 @@ import { planFromGoal as plannerPlanFromGoal } from './planner.js';
 import { buildAutomationCatalog } from './catalog.js';
 import { evictCacheForFingerprint } from './cache.js';
 import { approveCommandShape, revokeCommandShape, listApprovedShapes, listApprovedCommandRecords } from './consent.js';
-import { runEventEmitterFactory } from './seams.js';
+import { runEventEmitterFactory, resumeLearnDriver } from './seams.js';
 import { clearCredentialWaiter } from './credential-waiters.js';
 import { replayIntegrationAction } from './replay-action.js';
 import { classifyReplayDrift, healDriftedRecipe, writesIn, type HealDeps } from './self-heal.js';
@@ -85,7 +85,19 @@ export class AutomationServiceError extends Error {
 // ============================================================================
 
 type StoredAutomation = Automation & { orgId: string; visibility?: 'private' | 'org' };
-type StoredRun = RunRecord & { ownerUserId?: string; orgId?: string };
+type StoredRun = RunRecord & {
+  ownerUserId?: string;
+  orgId?: string;
+  /**
+   * K3 (D-CORNERSTONE-LEARN-ON-RESUME): the integration-action identity of a STORABLE (named,
+   * read) action run that halted `needs_credentials` - what the post-ceremony learn re-run needs
+   * to route the same action back through the executor rail. Written only by
+   * `runAutomationForAction`'s halt branch; never projected to the wire (`toWireRun` is an
+   * explicit field list). `args` are the action args (never credentials - those live only under
+   * `inputs.credentials`, which is scrubbed before persist).
+   */
+  actionRetry?: { integrationKey: string; actionName: string; args: Record<string, unknown> };
+};
 
 const VALID_STEP_TYPES: ReadonlySet<string> = new Set([
   'browser', 'verify', 'integration', 'sub_automation', 'navigate', 'wait', 'local_command', 'api_call', 'ekoa_action',
@@ -982,7 +994,33 @@ async function dispatchCredentialResume(run: StoredRun): Promise<boolean> {
     ...(emit ? { emit } : {}),
     ...(run.inputs ? { inputs: run.inputs } : {}),
   });
-  void started.catch(() => undefined).finally(() => signals.delete(run.id));
+  // K3 (D-CORNERSTONE-LEARN-ON-RESUME): the resumed pass runs UNINSTRUMENTED - the engine has no
+  // learn concept, and threading capture through the resume was rejected as the riskiest surface.
+  // Instead, when the resumed pass COMPLETES and the parked row carried the storable action's
+  // identity, one background learn-armed re-execution goes back through the full executor rail
+  // (the seam is `executeUserIntegrationAction` at the composition root), where replay-first,
+  // consent, capture and learnFromRun run exactly as on any other execution. Reads only by
+  // construction (`actionRetry` is stamped only for storable actions). Every failure is swallowed:
+  // this is a learning by-product riding a fire-and-forget resume, never a second failure mode.
+  void started
+    .then(async (result) => {
+      // Widened like runAutomationForAction's own gate: engine RunStatus has no 'succeeded', but
+      // the action rail accepts both spellings, and this gate must not be narrower than that one.
+      const finalStatus: string = result.status;
+      if (finalStatus !== 'completed' && finalStatus !== 'succeeded') return;
+      const retry = run.actionRetry;
+      const driver = resumeLearnDriver();
+      if (!retry || !driver) return;
+      await driver({
+        orgId,
+        ownerUserId: owner,
+        integrationKey: retry.integrationKey,
+        actionName: retry.actionName,
+        args: retry.args ?? {},
+      });
+    })
+    .catch(() => undefined)
+    .finally(() => signals.delete(run.id));
   return true;
 }
 
@@ -1326,7 +1364,12 @@ export interface ActionRunInput {
 
 export interface ActionRunResult {
   success: boolean;
-  code?: 'unknown_automation' | 'forbidden' | 'automation_failed' | 'awaiting_consent';
+  /** `needs_credentials` (additive, cornerstone K2): the engine run is PARKED awaiting a credential
+   *  ceremony, not failed - the run/SSE plane carries the ceremony UX; this code lets the ACTION
+   *  surface and the schedules supervisor tell the two apart (the old flattening to
+   *  `automation_failed` is the ledgered finding
+   *  `needs-credentials-halt-flattens-to-automation-failed-at-the-action-surface`). */
+  code?: 'unknown_automation' | 'forbidden' | 'automation_failed' | 'awaiting_consent' | 'needs_credentials';
   error?: string;
   data?: unknown;
 }
@@ -1731,6 +1774,26 @@ export async function runAutomationForAction(
     return {
       success: true,
       data: actionRunEnvelope({ runId: result.runId, status: result.status, summary: result.summary, output }),
+    };
+  }
+  // A CREDENTIAL HALT IS PARKED, NOT FAILED (K2). The run row persists `needs_credentials`, the
+  // waiter is registered, the SSE frame is out - this envelope must say the same thing to the
+  // action caller instead of the misleading `automation_failed` it used to flatten to.
+  if (status === 'needs_credentials') {
+    // K3: stamp the action identity onto the parked row so the post-ceremony resume can fire the
+    // ONE background learn-armed re-execution (the resumed engine pass itself cannot learn).
+    // STORABLE only: a mutating action must never be re-executed behind its owner's back, and an
+    // unnamed caller has nothing to learn for. Best-effort - a failed stamp costs the first-contact
+    // learning latency, never the halt.
+    if (storable && input.integrationKey && input.actionName) {
+      const actionRetry = { integrationKey: input.integrationKey, actionName: input.actionName, args: input.args };
+      await automationRuns.update(result.runId, (doc) => ({ ...(doc as object), actionRetry } as never)).catch(() => undefined);
+    }
+    return {
+      success: false,
+      code: 'needs_credentials',
+      error: `A sequência de passos está à espera de uma credencial para continuar (run ${result.runId}).`,
+      data: { runId: result.runId, status: result.status },
     };
   }
   return {

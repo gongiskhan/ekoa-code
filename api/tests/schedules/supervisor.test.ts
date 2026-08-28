@@ -202,6 +202,31 @@ describe('ScheduleSupervisor', () => {
     ]);
   });
 
+  it('needs_credentials on an integration_action target records BLOCKED and notifies (K2)', async () => {
+    // Before K2 the credential halt arrived flattened as `automation_failed`, so the schedule
+    // burned the ceiling silently: no blocked status, no notice, auto-pause with nothing surfaced
+    // (finding `needs-credentials-halt-flattens-to-automation-failed-at-the-action-surface`).
+    const deps = makeDeps({
+      runIntegrationAction: async () => mapIntegrationOutcome({ success: false, code: 'needs_credentials', error: 'à espera de credencial' }),
+    });
+    const sup = new ScheduleSupervisor(deps);
+    const s = await seedSchedule({
+      target: { kind: 'integration_action', integrationKey: 'portal-acme', actionName: 'listar', args: {} },
+    });
+    await sup.tick();
+    await sup.stop();
+    const runs = (await scheduleRuns.find({ scheduleId: s._id })) as unknown as ScheduleRunDoc[];
+    expect(runs[0]!.status).toBe('blocked');
+    expect(runs[0]!.detail?.code).toBe('needs_credentials');
+    const after = (await schedules.get(s._id)) as unknown as ScheduleDoc;
+    // Still counts toward the ceiling (a human must act - see the NEUTRAL note below)...
+    expect(after.consecutiveFailures).toBe(1);
+    // ...and the owner is TOLD, which is the whole point of the channel.
+    expect(deps.blockedNotices).toEqual([
+      { ownerUserId: 'usr1', scheduleId: s._id, runId: runs[0]!._id, code: 'needs_credentials' },
+    ]);
+  });
+
   /**
    * P4.1 - WHICH BLOCK IS NEUTRAL, and why it is not all of them.
    *

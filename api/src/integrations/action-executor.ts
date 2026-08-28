@@ -145,6 +145,10 @@ export type IntegrationErrorCode =
   | 'unknown_automation'
   | 'forbidden'
   | 'automation_failed'
+  // K2: the bound automation run is PARKED awaiting a credential ceremony (needs_credentials run
+  // status) - the run/SSE plane drives the ceremony; this code stops the halt masquerading as a
+  // failure at the action surface, and is what the schedules supervisor maps to `blocked`.
+  | 'needs_credentials'
   | 'unknown';
 
 export interface IntegrationErrorDetails {

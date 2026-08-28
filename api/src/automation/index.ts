@@ -186,6 +186,8 @@ export {
   localBrowserContextProviderUsing,
   setEgressCandidateResolver,
   setRunEventEmitterFactory,
+  // K3 - the post-ceremony learn re-run (D-CORNERSTONE-LEARN-ON-RESUME).
+  setResumeLearnDriver,
   __resetAutomationSeamsForTests,
   type RunEventEmitterFactory,
   type DaemonConnection,
@@ -209,6 +211,7 @@ export {
   type ConnectedAccount,
   type LocalBrowserContextProvider,
   type EgressCandidateResolver,
+  type ResumeLearnDriver,
 } from './seams.js';
 
 // --- Egress / locality (Cofre WS-I, P4.1) ----------------------------------
