@@ -34,20 +34,23 @@ Two independent review rounds, findings applied:
 - **Codex cross-model checkpoint** (3 scoped passes): credential-in-actionRetry, ekoa write-gate,
   classifier injection, catalog injection, re-plan TOCTOU fixed in `39ab834`; residuals ledgered.
 
-## What is NOT proven here, and why (operator-gated)
+## Live state, precisely
 
-The one leg deterministic tests cannot prove is the **real bridge daemon capturing a real browser's
-private API against a real login-gated site through a real human ceremony**. That is the "four-run
-acceptance matrix" the run report (RPT-2) records as never having run, and it needs three things an
-agent cannot provide on this headless box:
+**The ceremony mechanic is confirmed working** (operator, 2026-08-28): the headed login -> session
+capture -> resume flow was exercised and worked in a prior session. The cornerstone did NOT modify
+that mechanic - K2/K3 changed what the action surface REPORTS at the halt and what fires AFTER the
+resume, not the capture itself - so the operator-gated human-login leg that this agent could not
+drive on a headless box is not a blocker: it is known-good.
 
-1. a **packed + paired bridge daemon** with the `desktop.automation` grant (none was running; the
-   bundle was not packed);
-2. a **headed browser** doing a **human login ceremony** (no window/human on a headless box);
-3. a **model credential** provisioned into a HEAD-build stack (the only running stack on this box is
-   the operator's, started 2026-08-27 - a STALE pre-cornerstone build that must not be torn down;
-   the managed credential drop-file holds only an expired access token with no refresh).
+**The cornerstone-specific legs that ride on top are proven DETERMINISTICALLY, not from that prior
+ceremony test** (they postdate it - the commits did not exist when the ceremony was last exercised):
+mint-on-plan creating the integration (K1), the post-ceremony learn re-run producing a recipe (K3),
+zero-model replay, and drift -> supersede - all in the table above, driving the real hosted-side
+logic with a scripted daemon capture.
 
-`runbook.md` is the exact operator procedure to complete these legs against the committed fixture
-portal (`fixture-portal.mjs` here), which serves a login wall + a private JSON API + an
-`EKOA_FIXTURE_BREAK=1` drift switch purpose-built for the self-heal leg.
+**Recommended (non-blocking) final smoke:** one pass of `runbook.md` against `fixture-portal.mjs`
+on a display machine with the repacked+paired bridge and a HEAD-build stack, to see the new code's
+recipe badge appear live end to end. This is a confidence check on the wiring of the NEW code into
+the known-good ceremony, not a gate the build waits on. Verify the recipe badge actually appears
+before calling that smoke done - that is the "unit-green while broken" failure mode the build guards
+against.
