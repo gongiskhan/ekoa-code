@@ -6878,3 +6878,51 @@ a wrong one would discard good sessions. The residual is stated in the finding.
 - 2026-08-27 - D-CEREMONY-STREAM-NO-STREAM-OPTOUT: gating the screenshot poll to headless changed nothing on the headed same-machine loop - proving the SCREENCAST itself is the driver, not the poll. On macOS, to screencast an OCCLUDED window Chrome force-composites it to the FRONT, so as long as the dashboard panel streams a headed window on the SAME machine, that window keeps yanking itself over the dashboard/terminal and cannot be escaped. No flag/position stops it - it is inherent to screencasting a visible window. The clean resolution, and the one I should have reached sooner: on ONE machine you do not NEED the stream - you are AT the window - so `EKOA_CEREMONY_NO_STREAM=1` drops `attended.livestream` from the daemon's advertised capabilities (`resolveCapabilities`, `serve.ts`); the dashboard then returns no streaming triple and shows the window-direct flow ("log in the janela, then Concluir e capturar"), no viewer connects, no screencast runs, and the headed window is calm (it raises only on its own login redirects, which the human is on the window for). The stream stays the DEFAULT because it is exactly right for a SEPARATE bridge machine, where nothing is force-composited over the viewer's desktop. So the three same-machine modes are now coherent: default (headed + stream) for a remote bridge; `EKOA_CEREMONY_NO_STREAM=1` (headed + no stream, log in the window) for a same-machine bridge; `EKOA_CEREMONY_HEADLESS=1` (headless + stream, panel-driven, more detectable) for same-machine panel work on a tolerant site. Bridge-only change.
 
 - 2026-08-28 - D-CEREMONY-STREAM-FOCUS: found and fixed the REAL cause of the ceremony window "capturing focus" continuously on a same-machine macOS bridge (a multi-agent investigation with web research, after screenshot-poll/screencast/off-screen/minimize/headless all failed). ROOT CAUSE, verified in `playwright-core@1.62.1` source: `context.storageState()` opens a hidden FOREGROUND `about:blank` target (`Target.createTarget` WITHOUT `background:true`) for every FOREIGN origin it has visited - and creating a target ACTIVATES Chrome on macOS, stealing the operator's keyboard focus. These storageState pages are excluded from `context.pages()`, which is exactly why the earlier single-origin page-count test saw nothing (single origin -> no extra target -> no theft). The ceremony snapshotted with a FULL `storageState()` on open, every navigation AND every 2s tick (`attended/ceremony.ts`); a real login crosses several origins (ubereats.com -> auth.uber.com -> back), so from the 2nd origin on every tick and every redirect minted+killed a foreground target -> continuous focus theft, so aggressive the operator could barely type or Ctrl-C. It survived streaming-off because it is a separate CDP path. FIX: the recurring poll now reads COOKIES ONLY (`context.cookies()` -> CDP `Storage.getCookies`, browser-level, creates no page, no activation); the ONE full `storageState()` (localStorage included) is taken only at the Done capture, when the human has finished and a single activation is harmless. New `cookies()` member on the `CeremonyContext`/`HeadedChromeContext` seams. Portals this rail serves are cookie-session based, so the live window losing localStorage costs nothing; the close-fallback pushes the freshest cookie poll. This is a HEADED-DEFAULT fix - no detection change, no screencast change, OS-agnostic (a no-op win on the production separate-machine path too). REJECTED by the same investigation: `open -g`+`connectOverCDP` background launch (fixes only the one-time launch flash, not the continuous per-target activation, and breaks addInitScript timing -> re-exposes navigator.webdriver -> WORSE detection); any window-position/`--no-activate`/off-screen trick (confirmed useless - it is app-activation, not position). The three same-machine modes remain, but the DEFAULT (headed) should now be calm. Bridge-only change. LIVE-VERIFY: run a real multi-origin login and confirm the window no longer yanks focus; if it still does with cookies-only polling, the residual is OS-level and the honest fallback is `EKOA_CEREMONY_HEADLESS=1` or a separate bridge machine.
+
+- 2026-08-28 - D-CORNERSTONE-MINT-SHAPE: free-text automations become integrations by MINT-ON-PLAN,
+  per-site. The cornerstone (a free-text run turns into a per-user integration carrying a learned
+  recipe) does NOT resurrect a goal->recipe discovery driver - the P2 RE-CUT argument stands (one
+  driving loop; learning hangs off `runAutomationForAction`'s observeNetwork seam and nowhere else).
+  Instead the PLAN path (`planFromGoal`) gains a deterministic post-stage that resolves-or-creates a
+  per-SITE tenant IntegrationDefinition (key derived from the target origin) and mints a wrapper
+  action (`automationBinding`) over the planned automation, stamping `source.integrationKey`
+  provenance. Per-site (not per-automation) because the integration IS the outside system: actions,
+  runs, evidence, and recipes for one site accumulate on one card, which is the surface story
+  ("Minha Integração for X getting faster"). Minted rows are ordinary tenant Mongo definition docs, so
+  they appear under "Minhas Integrações" with zero surface changes (`definition-registry.ts`
+  projects `userCreated:true` for the whole Mongo tier). Verified ground: the audited chain breaks and
+  wiring facts in CORNERSTONE_PLAN.md (repo root).
+
+- 2026-08-28 - D-CORNERSTONE-DOORS: two doors, UI first. Today NO user-facing door can author or run a
+  free-text automation (/automations/new is a 410, `planFromGoal` has zero web callers, chat mounts
+  only knowledge_search/knowledge_read/delegate_to_local). Door 1: a goal affordance on the
+  Integrations surface driving plan -> mint -> run with the existing live run-viewer stack. Door 2:
+  implement the agent tools the injected catalog ALREADY teaches by name (`catalog.ts` instructs
+  models to use call_automation / call_integration_action / call_ekoa_action / list_* - tools defined
+  nowhere; the prompt half of the wiring shipped without the tool half). Chat action calls route
+  through `executeIntegrationCapabilityAction` so consent and the write gate are inherited, not
+  re-implemented (Rule 8 / lock reuse).
+
+- 2026-08-28 - D-CORNERSTONE-LEARN-ON-RESUME: first-contact learning survives the ceremony via ONE
+  background re-run, not by re-arming capture on resume. Verified defect: a first run that halts
+  `needs_credentials` can never learn - `dispatchCredentialResume` calls the ENGINE directly with no
+  observeNetwork and no action identity, and `learnFromRun`'s only call site is inside
+  `runAutomationForAction`; the resumed pass completes uninstrumented, so the canonical login-gated
+  first contact produces no recipe. Chosen fix: StoredRun additively carries
+  `{integrationKey, actionName}`; when the credential-resumed run completes, the background promise
+  (today discarded fire-and-forget) fires one learn-armed re-execution through
+  `runAutomationForAction`. Safe because recipes exist only for non-mutating actions (`storable =
+  named && !mutating`), so the re-run is a read. REJECTED: threading observeNetwork + SecretRegistry
+  rebuild through the resume path (would stitch pre-halt captures around the login-wall exchanges -
+  the riskiest surface for a marginal saving), and accepting two-run latency (falsifies the
+  cornerstone exactly on the login-gated case it showcases).
+
+- 2026-08-28 - D-CORNERSTONE-MUTATES-CLASS: minted wrapper actions get a read/write verdict at plan
+  time - deterministic floor first, model verdict second, user-flippable after. Fail-closed
+  `mutates:true` alone would mean minted actions never learn (capture arms only for `!mutating`), and
+  a manual-only toggle means most integrations silently never get faster. The floor forces `mutating`
+  on write-shaped signals (form submits, write-verb goals, non-GET api_call steps); only when the
+  floor is silent does a model classification (through the llm chokepoint, `classifier`-tagged)
+  confirm read. A wrong read verdict is bounded by the execute-time write gate + consent (the same
+  locks every action run already passes). The verdict lands on the minted action's `mutates` field and
+  the detail page exposes the flip.
