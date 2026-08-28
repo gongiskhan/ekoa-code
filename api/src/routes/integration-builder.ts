@@ -340,8 +340,23 @@ export function integrationBuilderRouter(deps: { now: () => number; genId: () =>
 
     const config = session.currentPackage as IntegrationPackageConfig;
     const action = (config.actions ?? []).find((a) => a.actionName === body.actionKey);
-    if (!action || !action.httpConfig) {
-      res.status(200).json({ actionKey: body.actionKey, success: false, error: `Ação "${body.actionKey}" não encontrada ou sem httpConfig.` });
+    // TWO REFUSALS, NOT ONE DISJUNCTION. This rail is HTTP-only by construction
+    // (`executeActionForTest` takes an `IntegrationActionHttpConfig` and nothing else), so an
+    // action of any other backing can never be tested here. Reporting "não encontrada OU sem
+    // httpConfig" for an action that plainly EXISTS - a browser-steps action bound to an
+    // automation, which correctly has no httpConfig - named an ambiguity the caller could not
+    // resolve and pointed at an internal field they cannot supply (found live, 2026-08-28).
+    if (!action) {
+      res.status(200).json({ actionKey: body.actionKey, success: false, error: `Ação "${body.actionKey}" não encontrada neste pacote.` });
+      return;
+    }
+    if (!action.httpConfig) {
+      const backing = action.automationBinding ? 'uma sequência de passos no navegador' : 'outro tipo de execução';
+      res.status(200).json({
+        actionKey: body.actionKey,
+        success: false,
+        error: `A ação "${body.actionKey}" corre ${backing}, não um pedido HTTP. Este painel só testa ações HTTP - execute-a na página da integração.`,
+      });
       return;
     }
 

@@ -384,9 +384,15 @@ export async function mintSiteIntegrationForAutomation(
           ...(existing.displayName !== undefined ? { displayName: existing.displayName } : {}),
           ...(existing.description !== undefined ? { description: existing.description } : {}),
           ...(existing.version !== undefined ? { version: existing.version } : {}),
-          ...(existing.authType !== undefined ? { authType: existing.authType } : {}),
+          // SELF-HEALS A ROW MINTED BEFORE `authType` WAS SET. Carrying an undefined forward left
+          // pre-fix rows permanently unrunnable (`!config && authType !== 'none'` -> not_connected)
+          // with no path back: a re-plan replayed the same undefined. Defaulting on the way through
+          // repairs the row the next time it is minted onto. A row that carries a REAL authType
+          // keeps it.
+          authType: existing.authType ?? 'none',
           ...(existing.provider !== undefined ? { provider: existing.provider } : {}),
-          ...(existing.category !== undefined ? { category: existing.category } : {}),
+          // Same reasoning for the card's label (see the create branch below).
+          category: existing.category ?? 'sites',
           configSchema: existing.configSchema ?? [],
           actions,
           ...(existing.credentialGuide !== undefined ? { credentialGuide: existing.credentialGuide } : {}),

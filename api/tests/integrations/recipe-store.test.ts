@@ -295,6 +295,68 @@ describe('a recipe is not caller content', () => {
   });
 
   /**
+   * THE BINDING SURVIVES AN EDITOR THAT DOES NOT MODEL IT (found live, 2026-08-28).
+   *
+   * The integration-builder edit dialog maps a stored action onto an HTTP-shaped draft, so a
+   * re-save of a definition holding a browser-steps action posted it back with the
+   * `automationBinding` DROPPED and an empty `httpConfig` in its place: one "Guardar" converted a
+   * working automation-backed action into an unrunnable api-call one and orphaned its recipe onto
+   * the wrong backing. A binding is no more caller content than a recipe is.
+   */
+  it('an ordinary save cannot DESTROY an action\'s automationBinding (the builder data-loss trap)', async () => {
+    await integrationDefinitions.deleteMany({});
+    const bound = definitionDraft();
+    bound.actions = [
+      { actionName: 'listar_pedidos', description: 'lista', mutates: false, automationBinding: { automationId: 'auto-7' } },
+    ];
+    await definitions.create(bound, { actor: author });
+    await recipes.putRecipe('orgA', 'citius', 'listar_pedidos', recipeDraft('learned'));
+
+    // What the builder dialog posts back: the binding gone, an EMPTY httpConfig synthesized.
+    const lossy = definitionDraft();
+    lossy.actions = [
+      {
+        actionName: 'listar_pedidos',
+        description: 'lista (revisto)',
+        mutates: false,
+        httpConfig: { method: 'GET', baseUrl: '', path: '' },
+      },
+    ];
+    await definitions.create(lossy, { actor: author, onConflict: 'replace' });
+
+    const saved = (await row()).actions[0];
+    expect(saved?.automationBinding).toEqual({ automationId: 'auto-7' }); // survived
+    expect(saved?.httpConfig).toBeUndefined();                            // the placeholder is gone
+    expect(saved?.description).toBe('lista (revisto)');                   // the real edit landed
+    // …and the learning is still attached to the action it belongs to.
+    expect((await recipes.getRecipe('orgA', 'citius', 'listar_pedidos'))?.goal).toBe('learned');
+  });
+
+  it('a DELIBERATE re-backing to a real http action is still allowed', async () => {
+    await integrationDefinitions.deleteMany({});
+    const bound = definitionDraft();
+    bound.actions = [
+      { actionName: 'listar_pedidos', description: 'lista', mutates: false, automationBinding: { automationId: 'auto-7' } },
+    ];
+    await definitions.create(bound, { actor: author });
+
+    const rebacked = definitionDraft();
+    rebacked.actions = [
+      {
+        actionName: 'listar_pedidos',
+        description: 'agora por API',
+        mutates: false,
+        httpConfig: { method: 'GET', baseUrl: 'https://api.example.pt', path: '/pedidos' },
+      },
+    ];
+    await definitions.create(rebacked, { actor: author, onConflict: 'replace' });
+
+    const saved = (await row()).actions[0];
+    expect(saved?.httpConfig?.baseUrl).toBe('https://api.example.pt');
+    expect(saved?.automationBinding).toBeUndefined();
+  });
+
+  /**
    * THE FOURTH REMOVAL PATH (see `integrations/recipe-lifecycle.ts`'s enumeration).
    *
    * `carryRecipesForward` re-attaches per action NAME, so an action the incoming set no longer

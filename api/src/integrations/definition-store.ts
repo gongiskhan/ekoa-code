@@ -279,6 +279,47 @@ function carryRecipesForward(
 }
 
 /**
+ * Re-attach each stored `automationBinding` to the incoming action of the same name that arrived
+ * WITHOUT one - the same carry-forward discipline as the recipe above, for the same reason.
+ *
+ * FOUND LIVE (2026-08-28): the integration-builder edit dialog maps a stored action onto its own
+ * HTTP-shaped draft, so a re-save of a definition holding a browser-steps action posted that action
+ * back with its `automationBinding` DROPPED and an empty `httpConfig` synthesized in its place. One
+ * "Guardar" silently converted a working automation-backed action into an unrunnable api-call one
+ * and orphaned its compiled recipe onto the wrong backing. The client mapping is being fixed too,
+ * but a binding is not client content any more than a recipe is: it is the identity of the
+ * automation this action RUNS, minted server-side (mint-on-plan, the provisioner), and no
+ * round-trip through an editor that does not model it may destroy it.
+ *
+ * DELIBERATE RE-BACKING IS STILL POSSIBLE, and that is why this is not an unconditional overwrite:
+ * an incoming action that names its OWN binding keeps it (a re-point), and one that carries a real
+ * `httpConfig` is a deliberate authoring of an api-call action and is left alone. Only the lossy
+ * shape - no binding and no usable http config - is repaired.
+ */
+function carryBindingsForward(
+  incoming: IntegrationAction[],
+  existing: IntegrationAction[] | undefined,
+): IntegrationAction[] {
+  if (!existing || existing.length === 0) return incoming;
+  const stored = new Map(
+    existing.filter((a) => a.automationBinding !== undefined).map((a) => [a.actionName, a.automationBinding]),
+  );
+  if (stored.size === 0) return incoming;
+  return incoming.map((action) => {
+    if (action.automationBinding !== undefined) return action;
+    const binding = stored.get(action.actionName);
+    if (binding === undefined) return action;
+    // A real http config means the author genuinely re-backed this action; an EMPTY one is the
+    // editor's synthesized placeholder and is what the drop looks like on the wire.
+    const http = action.httpConfig;
+    const hasRealHttp = http !== undefined && typeof http.baseUrl === 'string' && http.baseUrl.trim() !== '';
+    if (hasRealHttp) return action;
+    const { httpConfig: _dropped, ...rest } = action;
+    return { ...rest, automationBinding: binding };
+  });
+}
+
+/**
  * The stored recipes `carryRecipesForward` could NOT re-attach - i.e. the ones this replace REMOVES.
  *
  * A REMOVAL PATH, and it took three rounds to be counted as one (`integrations/recipe-lifecycle.ts`
@@ -586,7 +627,9 @@ export class IntegrationDefinitionStore {
       // expensive discovery pass and quietly return the action to re-deriving its flow every run.
       // Carried per action NAME - a save that removes an action drops its recipe with it, which is
       // correct: the recipe describes that action and nothing else.
-      actions: carryRecipesForward(doc.actions, existing?.actions),
+      // …and the automation a bound action RUNS survives a rewrite for the same reason its learning
+      // does: an editor that does not model the binding must not be able to delete it.
+      actions: carryRecipesForward(carryBindingsForward(doc.actions, existing?.actions), existing?.actions),
       ...(doc.publishedSnapshot === undefined && existing?.publishedSnapshot !== undefined
         ? { publishedSnapshot: existing.publishedSnapshot } : {}),
       ...(doc.publishRequest === undefined && existing?.publishRequest !== undefined
