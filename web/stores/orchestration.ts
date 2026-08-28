@@ -1927,6 +1927,26 @@ export const useOrchestrationStore = create<OrchestrationState>()(
     {
       name: 'ekoa_orchestration',
       version: 4,
+      // A version bump with NO migrate makes zustand DISCARD the persisted state and log
+      // "State loaded from storage couldn't be migrated since no migrate function was provided"
+      // to the console on every load of a browser that still holds an older version - which the
+      // dashboard's zero-console-error QA bar forbids. This makes the existing behaviour explicit:
+      // the persisted subset is a CACHE of backend-owned state (`sessions` re-fetch on init) plus
+      // cosmetics (side-panel tab, retry contexts), so an older, structurally-untrusted version is
+      // dropped to defaults rather than loaded blind. `migrate` runs only on a version MISMATCH
+      // (and the version only climbs), so this always answers "an older version": return the empty
+      // persisted subset, which merges over the initial state - identical outcome to the no-migrate
+      // path, minus the console error.
+      migrate: () => ({
+        sessionSidePanelStates: {},
+        sessions: [],
+        activeSessionId: null,
+        sessionJobs: {},
+        sessionPreviews: {},
+        sessionFiles: {},
+        sidePanelTab: 'preview' as const,
+        retryContexts: {},
+      }),
       partialize: (state) => ({
         sessionSidePanelStates: state.sessionSidePanelStates,
         sessions: state.sessions,
