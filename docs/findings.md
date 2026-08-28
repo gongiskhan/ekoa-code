@@ -6,6 +6,23 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`the-rehearsal-fixer-may-relocate-a-run-to-any-origin`** (2026-08-28, **MEDIUM**, engine
+  self-correction; found tracing a live wrong-origin run). `proposePatch` may author a replacement
+  `navigate` step with ANY url (`rehearsal.ts` accepts any non-empty string; `VALID_STEP_TYPES_FOR_
+  PATCH` admits `navigate`), and its own prompt teaches origin-changing recovery ("navigate_failed
+  usually wants replace_current with a different URL", plus worked examples that navigate to a
+  search engine). So a model can move a run from the origin its owner approved onto another one -
+  while the run may hold a Cofre session established for the FIRST origin. Related and already
+  ledgered: `posture-drift-check-cannot-stop-the-act-that-navigates`. Now partly bounded: the
+  engine fails a navigate whose landed ORIGIN differs from the requested one (this commit), so a
+  relocation at least cannot be silent, and the session is injected per resolved origin by the
+  credential gate. NOT closed, because the fixer may still legitimately author a navigate to a
+  different origin and have it succeed. CLOSE BY (needs a product decision, not a unilateral
+  change): either constrain fixer-authored navigate origins to the automation's own declared/
+  visited origins and refuse the rest - which would contradict the documented search-engine
+  recovery pattern and should therefore be a deliberate decision - or keep the freedom and require
+  a re-established session per origin with an explicit run event when the run relocates.
+
 - **`recipe-replay-executes-before-the-automation-owner-check`** (2026-08-28, **MEDIUM**, recipe
   spine multi-user; cornerstone Codex checkpoint). A successful recipe replay returns from
   `runAutomationForAction` (service.ts ~1618) BEFORE the automation-owner gate (~1725) that the

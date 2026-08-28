@@ -224,12 +224,17 @@ const RESOLVER_ANSWER = JSON.stringify({
  */
 function daemon(failStepId: string, failMessage = SIGN_IN_WALL): DaemonLog {
   const log: DaemonLog = { requests: [], leaseOps: [] };
+  // WHERE THE FAKE BROWSER IS. It used to report `HOST/orders` however it had been navigated, which
+  // made it unable to exercise the engine's landed-where-we-asked check (added 2026-08-28) and, in
+  // the two-portal case below, actively contradicted the scenario the test describes.
+  let at = `https://${HOST}/orders`;
   setDaemonConnectionResolver(() => ({
     pairingId: 'p-1',
     runStep: async (req: DaemonStepRequest) => {
       log.requests.push(req);
-      const input = req.input as { leaseOp?: string; action?: { action?: string } } | null;
+      const input = req.input as { leaseOp?: string; action?: { action?: string; url?: string } } | null;
       if (input?.leaseOp) log.leaseOps.push(input.leaseOp);
+      if (input?.action?.action === 'navigate' && typeof input.action.url === 'string') at = input.action.url;
       if (req.stepId === failStepId && input?.action?.action !== 'screenshot') {
         return { ok: false, error: { message: failMessage } } as never;
       }
@@ -238,7 +243,7 @@ function daemon(failStepId: string, failMessage = SIGN_IN_WALL): DaemonLog {
         observation: {
           screenshotB64: PNG_1X1,
           data: {
-            url: `https://${HOST}/orders`,
+            url: at,
             title: 'Orders',
             domShapeSketch: 'tags:|roles:|landmarks:0',
             viewport: { w: 1280, h: 800 },

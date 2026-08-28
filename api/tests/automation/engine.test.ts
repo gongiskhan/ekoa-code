@@ -120,15 +120,22 @@ vi.mock('../../src/automation/persistence.js', async (importOriginal) => ({
 vi.mock('../../src/automation/browser-session.js', () => ({
   DaemonBrowserSession: class {
     private observed = true;
+    /** Where the last navigate took this fake. A stub that reports a FIXED url however it was
+     *  navigated cannot exercise the engine's landed-where-we-asked check (added 2026-08-28). */
+    private at = 'https://x.com/';
     constructor(_opts: unknown) {}
-    act(action: unknown) { return hoisted.act(action); }
+    act(action: unknown) {
+      const a = action as { kind?: string; url?: string };
+      if (a?.kind === 'navigate' && typeof a.url === 'string') this.at = a.url;
+      return hoisted.act(action);
+    }
     assert(assertion: unknown) { return hoisted.assert(assertion); }
     async observe() { this.observed = true; }
     async ensureObserved() { this.observed = true; }
     hasObservation() { return this.observed; }
     screenshotPng() { return hoisted.screenshotBytes; }
     screenshotB64() { return Buffer.from('png').toString('base64'); }
-    url() { return 'https://x.com/'; }
+    url() { return this.at; }
     fingerprint() { return hoisted.computePageFingerprint(); }
     accessibilitySnapshot() { return hoisted.accessibilitySnapshot(); }
   },
@@ -140,15 +147,20 @@ vi.mock('../../src/automation/browser-session.js', () => ({
 vi.mock('../../src/automation/local-browser-session.js', () => ({
   LocalBrowserSession: class {
     private observed = true;
+    private at = 'https://x.com/';
     constructor(opts: unknown) { hoisted.localSessionOpts.push(opts); }
-    act(action: unknown) { return hoisted.act(action); }
+    act(action: unknown) {
+      const a = action as { kind?: string; url?: string };
+      if (a?.kind === 'navigate' && typeof a.url === 'string') this.at = a.url;
+      return hoisted.act(action);
+    }
     assert(assertion: unknown) { return hoisted.assert(assertion); }
     async observe() { this.observed = true; }
     async ensureObserved() { this.observed = true; }
     hasObservation() { return this.observed; }
     screenshotPng() { return hoisted.screenshotBytes; }
     screenshotB64() { return Buffer.from('png').toString('base64'); }
-    url() { return 'https://x.com/'; }
+    url() { return this.at; }
     fingerprint() { return hoisted.computePageFingerprint(); }
     accessibilitySnapshot() { return hoisted.accessibilitySnapshot(); }
     async dispose() {}

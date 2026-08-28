@@ -66,7 +66,7 @@ import {
   type IntegrationActionDeclaration,
 } from './seams.js';
 import { LocalBrowserSession } from './local-browser-session.js';
-import { rebaseSelfUrl } from './self-url.js';
+import { rebaseSelfUrlWithProvenance, originOf } from './self-url.js';
 import { isCredentialAdjacentFailure } from './human-action-routing.js';
 import {
   DaemonBrowserSession,
@@ -2224,17 +2224,45 @@ async function executeStep(args: ExecuteStepArgs): Promise<StepRecord> {
       case 'navigate': {
         if (!step.url) throw new Error(`navigate step ${step.id} missing url`);
         if (!browser) return awaitingDaemonRecord(baseRecord, stepStart, index, 'browser');
-        // Auto-adjust a self-targeting URL (a stale localhost port the planner
-        // guessed) to the running Ekoa frontend origin.
-        const navUrl = rebaseSelfUrl(step.url);
+        // Auto-adjust a URL the planner guessed at a local port for EKOA'S OWN frontend. Narrow by
+        // construction now (`self-url.ts`), and no longer silent: a rewrite is reported in the step
+        // record, because one that vanished is what made a live run unexplainable.
+        const rebase = rebaseSelfUrlWithProvenance(step.url);
+        const navUrl = rebase.url;
         await browser.act({ kind: 'navigate', url: navUrl }, { stepId: step.id });
         const screenshotPath = await snap(browser, automation.id, runId, index);
         const fingerprint = browser.fingerprint();
+        // DID WE LAND WHERE WE ASKED? `page.goto` resolves on ANY response, a 404 from a different
+        // application included, so without this a wrong-origin landing was recorded `completed` and
+        // the run walked on - the divergence surfacing steps later as an inexplicable failure
+        // (found live, 2026-08-28). Compared on ORIGIN only: a redirect inside the target site is
+        // ordinary and must not fail the step, while ending up on a different host is never what
+        // the step asked for.
+        const landed = browser.url();
+        const wanted = originOf(navUrl);
+        // The page's OWN url is the direct observation of where we ended up; the fingerprint's
+        // origin is a derived cache key and only stands in when the url is unavailable.
+        const actual = originOf(landed) ?? fingerprint?.origin ?? null;
+        if (wanted !== null && actual !== null && actual !== '' && wanted !== actual) {
+          return finishRecord(baseRecord, 'failed', stepStart, {
+            tier: 'cache',
+            fingerprint,
+            screenshotPath,
+            resolvedAction: { kind: 'navigate', url: navUrl },
+            error: {
+              message:
+                `navigate landed on ${actual} instead of ${wanted} (asked for ${navUrl}, browser is at ${landed})` +
+                (rebase.rebasedFrom ? `; the step's URL ${rebase.rebasedFrom} was rebased onto the Ekoa origin` : ''),
+              recoverable: true,
+            },
+          });
+        }
         return finishRecord(baseRecord, 'completed', stepStart, {
           tier: 'cache',
           fingerprint,
           screenshotPath,
           resolvedAction: { kind: 'navigate', url: navUrl },
+          ...(rebase.rebasedFrom ? { note: `URL rebased from ${rebase.rebasedFrom} onto the Ekoa origin` } : {}),
         });
       }
 
