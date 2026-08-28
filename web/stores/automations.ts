@@ -116,6 +116,8 @@ interface AutomationsActions {
     automation?: Automation;
     traceId?: string;
     rehearsing?: boolean;
+    /** Mint-on-plan (cornerstone K1): the per-site integration + wrapper action the plan minted. */
+    integration?: { key: string; actionName: string };
     error?: string;
   }>;
   start: (id: string, inputs?: Record<string, unknown>) => Promise<string | null>;
@@ -308,7 +310,13 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
         ? { ...INITIAL_RUN, automationId: automation.id, runId, status: 'running', kind: 'rehearsal' }
         : s.activeRun,
     }));
-    return { ok: true, automation, traceId: runId, rehearsing: !!res.data.rehearsing };
+    return {
+      ok: true,
+      automation,
+      traceId: runId,
+      rehearsing: !!res.data.rehearsing,
+      ...(res.data.integration ? { integration: res.data.integration } : {}),
+    };
   },
 
   async start(id, inputs) {

@@ -36,6 +36,7 @@ import { PlatformIntegrationCard } from "@/components/integrations/PlatformInteg
 import { PipedreamSection } from "@/components/integrations/PipedreamSection";
 import { WebhooksSection } from "@/components/integrations/WebhooksSection";
 import ActionConsentDialog, { type ActionConsentSubject } from "@/components/integrations/action-consent-dialog";
+import { AutomateGoalBox } from "@/components/integrations/automate-goal-box";
 import { SyncOutcomePanel } from "@/components/sync/sync-outcome-panel";
 import type {
   IntegrationSkill,
@@ -1151,6 +1152,10 @@ export default function IntegrationsPage() {
               </Button>
             </div>
           </div>
+
+          {/* Cornerstone K5: the free-text door - plan, mint the per-site integration, land on
+              its detail page. Sits above the grid so it is the first affordance of "Minhas". */}
+          <AutomateGoalBox />
 
           {mySkills.length === 0 ? (
             <div data-testid="my-integrations-empty" className="rounded-lg border border-dashed border-neutral-200">

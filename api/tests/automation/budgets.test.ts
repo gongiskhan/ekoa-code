@@ -9,6 +9,8 @@
 import { describe, it, expect } from 'vitest';
 
 import {
+  HEAL_BUDGET,
+  REPLAY_BUDGET,
   REHEARSAL_BUDGET,
   STEP_RETRY_BUDGET,
   NORMAL_RUN_BUDGET,
@@ -77,5 +79,12 @@ describe('createStepRetryLedger', () => {
     // Index 1 is untouched: the budget is "getting past position N", not "this run's total".
     expect(ledger.visionRegrounds(1)).toBe(0);
     expect(ledger.claimVisionReground(1)).toBe(true);
+  });
+});
+
+describe('HEAL_BUDGET + REPLAY_BUDGET (K6)', () => {
+  it('pins the heal ceiling and the replay attempt cap - an edit must be intentional', () => {
+    expect(HEAL_BUDGET.maxConsecutiveDriftHeals).toBe(3);
+    expect(REPLAY_BUDGET.maxWallClockMs).toBe(60 * 1000);
   });
 });

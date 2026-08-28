@@ -475,4 +475,30 @@ describe('capabilityWireOutcome: which executor result becomes which wire answer
     expect(JSON.stringify(out)).not.toContain('authorization');
     expect((out as { body: Record<string, unknown> }).body.details).toBeUndefined();
   });
+
+  it('K4: a REPLAYED envelope earns the typed replay block; a plain api-call result does not', () => {
+    // The automation-backed envelope: string runId + string status is the one-envelope shape.
+    const replayed = capabilityWireOutcome({
+      success: true,
+      data: { runId: 'replay-abc', status: 'completed', output: { rows: [] }, replayed: true, recipeVersion: 3, replayMs: 850 },
+    });
+    expect(replayed.kind).toBe('result');
+    expect((replayed as { body: { replay?: unknown } }).body.replay).toEqual({
+      replayed: true,
+      runId: 'replay-abc',
+      recipeVersion: 3,
+      durationMs: 850,
+    });
+
+    // The authored-run leg of the same envelope: replay block present, replayed false.
+    const authored = capabilityWireOutcome({
+      success: true,
+      data: { runId: 'run-1', status: 'completed', output: undefined },
+    });
+    expect((authored as { body: { replay?: unknown } }).body.replay).toEqual({ replayed: false, runId: 'run-1' });
+
+    // An api-call action's data is the upstream body, not the envelope: no replay block invented.
+    const apiCall = capabilityWireOutcome({ success: true, status: 200, data: { runId: 42, items: [] } });
+    expect((apiCall as { body: { replay?: unknown } }).body.replay).toBeUndefined();
+  });
 });

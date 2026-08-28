@@ -255,6 +255,16 @@ export const pt: Translations = {
       tabPlatform: 'Integrações da Plataforma',
       tabMine: 'Minhas Integrações',
       tabWebhooks: 'Webhooks',
+      goalBoxTitle: 'Automatizar um site',
+      goalBoxSubtitle:
+        'Descreva o que quer fazer num site externo. A plataforma cria a sequência de passos, valida-a e transforma-a numa integração sua que aprende a cada execução.',
+      goalBoxPlaceholder: 'Ex.: listar as notificações pendentes no portal da minha ordem profissional',
+      goalBoxSubmit: 'Automatizar',
+      goalBoxPlanning: 'A planear a sequência de passos...',
+      goalBoxMinted: (key: string) => `Integração "${key}" criada. A validação está a correr.`,
+      goalBoxPlannedNoMint: 'Sequência criada e em validação. Não foi possível associá-la a um site.',
+      goalBoxAwaitingIntegration: (service: string) =>
+        `Este objetivo precisa da integração "${service}" ligada primeiro.`,
       sessionChecking: 'A verificar a sessão...',
       sessionConnectDefaultGuide:
         'Esta integração autentica-se com uma sessão de navegador. Abra a janela de início de sessão e autentique-se no portal; a sessão é capturada automaticamente.',
@@ -316,6 +326,14 @@ export const pt: Translations = {
         trusted: 'Confirmada',
         stepsTitle: 'O que faz',
         requestTitle: 'Pedido',
+        recipeTitle: 'Aprendizagem',
+        recipeBadge: (version: number) => `Receita v${version}`,
+        recipeLearnedAt: (when: string) => `Aprendida ${when}. As próximas execuções repetem as chamadas aprendidas, sem modelo.`,
+        recipeCallsCount: (count: number) => count === 1 ? '1 chamada aprendida' : `${count} chamadas aprendidas`,
+        recipeSupersededNote: (version: number, reason: string) => `Substituiu a v${version} (${reason}).`,
+        recipeForget: 'Esquecer receita',
+        recipeForgetting: 'A esquecer...',
+        recipeError: 'Não foi possível carregar as receitas aprendidas.',
         evidenceTitle: 'Última execução com sucesso',
         evidenceAt: (when: string) => `Última execução com sucesso ${when}`,
         evidenceLoading: 'A carregar a última execução...',
@@ -364,6 +382,14 @@ export const pt: Translations = {
         runNow: 'Executar agora',
         running: 'A executar...',
         runStarted: 'Ação concluída.',
+        runReplayed: (seconds?: number) =>
+          seconds !== undefined ? `Respondida pela receita aprendida em ${seconds}s.` : 'Respondida pela receita aprendida, sem correr os passos.',
+        recipeReplayStats: (count: number, lastSeconds?: number, learnedSeconds?: number) => {
+          const reps = count === 1 ? '1 repetição' : `${count} repetições`;
+          if (lastSeconds !== undefined && learnedSeconds !== undefined) return `${reps}. Última em ${lastSeconds}s (a aprendizagem demorou ${learnedSeconds}s).`;
+          if (lastSeconds !== undefined) return `${reps}. Última em ${lastSeconds}s.`;
+          return `${reps}.`;
+        },
         runFailed: 'Não foi possível concluir a ação.',
         runCodes: {
           not_connected: 'Esta integração não está ligada para a sua conta.',

@@ -507,6 +507,15 @@ export const IntegrationActionRecipeSummary = z.object({
   lessons: z.array(z.string()),
   /** One-hop lineage: which version this replaced and why (a drift the self-heal acted on). */
   supersedes: z.object({ version: z.number().int().positive(), reason: z.string() }).optional(),
+  /**
+   * Replay usage (cornerstone K4, additive): the numbers behind "this integration got faster".
+   * `learnedRunMs` is the authored run the recipe was distilled from (the before); `lastReplayMs`
+   * is the latest replay (the after). Absent on recipes learned before the fields existed.
+   */
+  replayCount: z.number().int().nonnegative().optional(),
+  lastReplayedAt: IsoTimestamp.optional(),
+  lastReplayMs: z.number().nonnegative().optional(),
+  learnedRunMs: z.number().nonnegative().optional(),
 });
 export type IntegrationActionRecipeSummary = z.infer<typeof IntegrationActionRecipeSummary>;
 
@@ -964,6 +973,21 @@ export const ExecuteIntegrationActionResponse = z.object({
   code: z.string().optional(),
   /** Human-readable failure message, credential-redacted. */
   error: z.string().optional(),
+  /**
+   * HOW an automation-backed action answered (cornerstone K4, additive): by replaying its learned
+   * recipe, or by running its authored steps. Typed here because the same facts used to ride
+   * untyped inside `data`, where no client could rely on them. Absent on api-call/tenant-read
+   * actions and on responses written before the field existed.
+   */
+  replay: z
+    .object({
+      replayed: z.boolean(),
+      recipeVersion: z.number().int().positive().optional(),
+      /** The execution's own id: a `replay-…` ledger id, or the automation run's id. */
+      runId: z.string().optional(),
+      durationMs: z.number().nonnegative().optional(),
+    })
+    .optional(),
 });
 export type ExecuteIntegrationActionResponse = z.infer<typeof ExecuteIntegrationActionResponse>;
 

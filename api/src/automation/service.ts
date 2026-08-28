@@ -33,6 +33,7 @@ import { automations, automationRuns, automationRunIdempotency } from '../data/s
 import { logActivity } from '../data/activity.js';
 import { createMemory } from '../memory/index.js';
 import { runAutomation, rehearseAutomation, scrubCredentials, type RunContext } from './engine.js';
+import { HEAL_BUDGET, REPLAY_BUDGET } from './budgets.js';
 import { planFromGoal as plannerPlanFromGoal } from './planner.js';
 import { buildAutomationCatalog } from './catalog.js';
 import { evictCacheForFingerprint } from './cache.js';
@@ -1406,6 +1407,8 @@ export interface ActionRunEnvelope {
   replayed?: boolean;
   /** Which compiled recipe answered. Present only on the replay leg. */
   recipeVersion?: number;
+  /** Replay wall-clock (K4). Present only on the replay leg. */
+  replayMs?: number;
 }
 
 function actionRunEnvelope(e: ActionRunEnvelope): ActionRunEnvelope {
@@ -1416,6 +1419,7 @@ function actionRunEnvelope(e: ActionRunEnvelope): ActionRunEnvelope {
     output: e.output,
     ...(e.replayed !== undefined ? { replayed: e.replayed } : {}),
     ...(e.recipeVersion !== undefined ? { recipeVersion: e.recipeVersion } : {}),
+    ...(e.replayMs !== undefined ? { replayMs: e.replayMs } : {}),
   };
 }
 
@@ -1425,10 +1429,12 @@ export interface ActionRunDeps {
   /** The engine entry. Injected only so the learn/heal wiring can be driven deterministically. */
   run?: typeof runAutomation;
   /** The org-scoped recipe writes. Default: the real store. */
-  putRecipe?: (orgId: string, key: string, actionName: string, draft: RecipeDraft, opts: { secrets?: SecretRegistry }) => Promise<RecipeWriteResult>;
+  putRecipe?: (orgId: string, key: string, actionName: string, draft: RecipeDraft, opts: { secrets?: SecretRegistry; learnedRunMs?: number }) => Promise<RecipeWriteResult>;
   supersedeRecipe?: HealDeps['supersedeRecipe'];
-  /** The recipe read, used only to find the evidence a new recipe supersedes. Default: the store. */
-  getRecipe?: (orgId: string, key: string, actionName: string) => Promise<{ capturedCallsRef?: string } | null>;
+  /** K4: the replay usage bump. Best-effort; default: the real store. */
+  recordReplay?: (orgId: string, key: string, actionName: string, input: { ms?: number }) => Promise<void>;
+  /** The recipe read: the evidence a new recipe supersedes, plus the heal streak (K6). Default: the store. */
+  getRecipe?: (orgId: string, key: string, actionName: string) => Promise<{ capturedCallsRef?: string; stats?: { driftStreak?: number } } | null>;
   /**
    * Drop an action's recipe. The escape hatch for a recipe the replay's write gate refuses.
    *
@@ -1610,24 +1616,45 @@ export async function runAutomationForAction(
     // `runId` of the envelope below. One id for one execution - a second one invented at the
     // envelope would name nothing an operator could look up.
     const replayRunId = `replay-${randomUUID()}`;
-    const result = await replay({
-      orgId: input.orgId,
-      ownerUserId: input.ownerUserId,
-      integrationKey: input.integrationKey!,
-      actionName: input.actionName!,
-      args: input.args,
-      runId: replayRunId,
-      secrets,
-      ...(input.writeAssent !== undefined ? { writeAssent: input.writeAssent } : {}),
-      mutates: mutating,
-    }).catch((err: unknown) => {
-      // A replay that THREW is a fall-through like any other. It is an optimisation on the hot
-      // path of every automation-backed action; a defect in it must not be able to break actions
-      // that worked before it existed.
-      console.warn(`[automation] recipe replay failed for ${input.integrationKey}/${input.actionName}: ${err instanceof Error ? err.message : String(err)}`);
-      return { outcome: 'no-recipe', reason: 'replay threw' } as const;
+    const replayStartedAt = Date.now();
+    // K6 (REPLAY_BUDGET): the ATTEMPT is bounded, not only its per-call transports. On the ceiling
+    // the race resolves to a fall-through and the authored run answers - the abandoned attempt's
+    // promise is left to settle on its own (its own timeouts end it; nothing reads its result).
+    let replayTimer: NodeJS.Timeout | undefined;
+    const replayTimeout = new Promise<{ outcome: 'no-recipe'; reason: string }>((resolve) => {
+      replayTimer = setTimeout(
+        () => resolve({ outcome: 'no-recipe', reason: `replay exceeded ${REPLAY_BUDGET.maxWallClockMs}ms` }),
+        REPLAY_BUDGET.maxWallClockMs,
+      );
     });
+    const result = await Promise.race([
+      replay({
+        orgId: input.orgId,
+        ownerUserId: input.ownerUserId,
+        integrationKey: input.integrationKey!,
+        actionName: input.actionName!,
+        args: input.args,
+        runId: replayRunId,
+        secrets,
+        ...(input.writeAssent !== undefined ? { writeAssent: input.writeAssent } : {}),
+        mutates: mutating,
+      }).catch((err: unknown) => {
+        // A replay that THREW is a fall-through like any other. It is an optimisation on the hot
+        // path of every automation-backed action; a defect in it must not be able to break actions
+        // that worked before it existed.
+        console.warn(`[automation] recipe replay failed for ${input.integrationKey}/${input.actionName}: ${err instanceof Error ? err.message : String(err)}`);
+        return { outcome: 'no-recipe', reason: 'replay threw' } as const;
+      }),
+      replayTimeout,
+    ]).finally(() => clearTimeout(replayTimer));
     if (result.outcome === 'ok') {
+      const replayMs = Date.now() - replayStartedAt;
+      // K4: bump the recipe's usage stats. Best-effort AFTER the answer is decided - a stats write
+      // must never turn a replay that worked into a failure.
+      const recordReplay = deps.recordReplay
+        ?? ((o: string, k: string, a: string, i: { ms?: number }) => integrationRecipeStore.recordReplay(o, k, a, i));
+      void recordReplay(input.orgId, input.integrationKey!, input.actionName!, { ms: replayMs })
+        .catch(() => undefined);
       return {
         success: true,
         // THE SAME ENVELOPE THE AUTOMATION LEG ANSWERS IN. See `ActionRunEnvelope`: a consumer that
@@ -1639,6 +1666,7 @@ export async function runAutomationForAction(
           output: result.data,
           replayed: true,
           recipeVersion: result.recipeVersion,
+          replayMs,
         }),
       };
     }
@@ -1738,6 +1766,7 @@ export async function runAutomationForAction(
   // drives toward an outcome, and the calls that matter are the ones nearest it.
   const captured: LocalBrowserCapture[] = [];
   const run = deps.run ?? runAutomation;
+  const runStartedAt = Date.now();
   const result = await run(input.binding.automationId, ctx, {
     runId,
     inputs,
@@ -1753,6 +1782,9 @@ export async function runAutomationForAction(
       }
       : {}),
   });
+  // K4: the authored run's wall-clock - the "before" the recipe's replay stats compare against.
+  // Includes any human-pause time, honestly: that is the cost the user experienced.
+  const runMs = Date.now() - runStartedAt;
   const status: string = result.status;
   if (status === 'completed' || status === 'succeeded') {
     // ── 3. COMPILE WHAT THE PASS SAW ─────────────────────────────────────────────────────────
@@ -1766,7 +1798,7 @@ export async function runAutomationForAction(
     // `extractActionRunOutput` moved above the learn rather than below it.
     const output = await extractActionRunOutput(result.runId);
     if (storable) {
-      await learnFromRun({ input, secrets, captured, runOutput: output, driftReason, deps }).catch((err: unknown) => {
+      await learnFromRun({ input, secrets, captured, runOutput: output, driftReason, runMs, deps }).catch((err: unknown) => {
         // Learning is a by-product. A store hiccup must not turn a run that WORKED into a failure.
         console.warn(`[automation] could not compile a recipe for ${input.integrationKey}/${input.actionName}: ${err instanceof Error ? err.message : String(err)}`);
       });
@@ -1835,9 +1867,11 @@ async function learnFromRun(args: {
    *  can give the SAME answer; `undefined` means the run answered nothing, and so will the replay. */
   runOutput: unknown;
   driftReason?: string;
+  /** The authored run's wall-clock (K4) - stored as the recipe's `learnedRunMs`, the "before". */
+  runMs?: number;
   deps: ActionRunDeps;
 }): Promise<void> {
-  const { input, secrets, captured, runOutput, driftReason, deps } = args;
+  const { input, secrets, captured, runOutput, driftReason, runMs, deps } = args;
   const integrationKey = input.integrationKey!;
   const actionName = input.actionName!;
   if (captured.length === 0) return;
@@ -1941,13 +1975,36 @@ async function learnFromRun(args: {
   // cannot reach them), no TTL, and no collector left that can.
   let stored = false;
   try {
-    // What the recipe about to be replaced was distilled from - read BEFORE the write, because after
-    // it the pointer is the new one. This is the head of the supersede discard below.
-    const supersededCaptureRef = await priorCaptureRef(input, deps);
+    // The recipe about to be replaced - read BEFORE the write, because after it the pointer is the
+    // new one. Carries the head of the supersede discard AND the heal streak (K6).
+    const getRecipe = deps.getRecipe ?? ((o, k, a) => integrationRecipeStore.getRecipe(o, k, a));
+    const prior = await getRecipe(input.orgId, integrationKey, actionName).catch(() => null);
+    const supersededCaptureRef = prior?.capturedCallsRef;
 
     if (driftReason !== undefined) {
+      // ── THE HEAL CEILING (K6, HEAL_BUDGET) ──────────────────────────────────────────────────
+      //
+      // The streak on the CURRENT recipe counts its lineage's consecutive heals with no successful
+      // replay between them. At the ceiling this heal does not supersede: it CLEARS. A site that
+      // drifts on every single visit is not learnable, and the honest steady state is the authored
+      // run at full cost - not a version counter climbing forever while every replay is doomed.
+      // The clear is the same lifecycle path every other refusal takes (evidence goes with it), and
+      // a LATER pass may still learn a fresh recipe that sticks - `putRecipe` starts a clean v1.
+      const streak = prior?.stats?.driftStreak ?? 0;
+      if (streak >= HEAL_BUDGET.maxConsecutiveDriftHeals) {
+        console.warn(
+          `[automation] not healing ${integrationKey}/${actionName}: ${streak} consecutive heals ` +
+            'never replayed once (HEAL_BUDGET). The recipe is cleared; the action runs its authored steps.',
+        );
+        await clearRefusedRecipe(input, `heal ceiling: ${streak} consecutive drift-heals with no successful replay`, deps);
+        return;
+      }
       const supersedeRecipe = deps.supersedeRecipe
-        ?? ((orgId, key, action, next, opts) => integrationRecipeStore.supersedeRecipe(orgId, key, action, next, opts ?? {}));
+        ?? ((orgId, key, action, next, opts) =>
+          integrationRecipeStore.supersedeRecipe(orgId, key, action, next, {
+            ...(opts ?? {}),
+            ...(runMs !== undefined ? { learnedRunMs: runMs } : {}),
+          }));
       const healed = await healDriftedRecipe(
         {
           orgId: input.orgId,
@@ -1972,7 +2029,10 @@ async function learnFromRun(args: {
     } else {
       const putRecipe = deps.putRecipe
         ?? ((orgId, key, action, d, opts) => integrationRecipeStore.putRecipe(orgId, key, action, d, opts));
-      const written = await putRecipe(input.orgId, integrationKey, actionName, draft, { secrets });
+      const written = await putRecipe(input.orgId, integrationKey, actionName, draft, {
+        secrets,
+        ...(runMs !== undefined ? { learnedRunMs: runMs } : {}),
+      });
       if (written.verdict === 'notfound') {
         // NOT SILENT (the `global`-definition case). A recipe is tenant data and is written onto the
         // org's OWN definition row, so an org running an action off somebody else's published/global
@@ -2008,13 +2068,6 @@ async function learnFromRun(args: {
     // and logs its own failures, so this can never replace the exception on its way past.
     if (!stored) await discardEvidence(evidenceKey, deps);
   }
-}
-
-/** The captureId the action's CURRENT recipe was distilled from, if it has one. */
-async function priorCaptureRef(input: ActionRunInput, deps: ActionRunDeps): Promise<string | undefined> {
-  const getRecipe = deps.getRecipe ?? ((o, k, a) => integrationRecipeStore.getRecipe(o, k, a));
-  const current = await getRecipe(input.orgId, input.integrationKey!, input.actionName!).catch(() => null);
-  return current?.capturedCallsRef;
 }
 
 /**
@@ -2062,6 +2115,24 @@ async function discardEvidence(key: CaptureKey, deps: ActionRunDeps): Promise<nu
  */
 async function clearRefusedRecipe(input: ActionRunInput, reason: string, deps: ActionRunDeps): Promise<void> {
   try {
+    // ── OWNERSHIP (K6, closing `clear-refused-recipe-is-ownership-ungated`) ────────────────────
+    //
+    // Recipe WRITES are single-writer by construction - only the bound automation's owner reaches
+    // `learnFromRun` (the owner check sits between the replay and the learn) - but this clear used
+    // to run BEFORE that check, so a same-org peer whose replay refused (`arguments-uncovered` on
+    // an argument shape the recipe has no hole for is the ordinary case) destroyed the OWNER's
+    // recipe and its evidence, and the next learn restarted at v1 with the lineage erased: a
+    // clear/relearn thrash cycle between two users that also destroyed the drift history. The one
+    // writer rule now covers the destructive path too: a non-owner's refusal falls through to the
+    // automation leg (where `forbidden` answers them), and the recipe stands.
+    const automation = (await automations.get(input.binding.automationId)) as { ownerUserId?: string } | null;
+    if (!automation || automation.ownerUserId !== input.ownerUserId) {
+      console.warn(
+        `[automation] not discarding the recipe for ${input.integrationKey}/${input.actionName}: ` +
+          `the caller does not own its bound automation (${reason}).`,
+      );
+      return;
+    }
     const { dropped } = await forgetRecipe(
       { orgId: input.orgId, integrationKey: input.integrationKey!, actionName: input.actionName! },
       {

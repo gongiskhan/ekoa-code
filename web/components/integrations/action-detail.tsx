@@ -223,6 +223,9 @@ export function ActionDetail({
   const runs = useIntegrationDetailStore((s) => s.runs[action.actionName]);
   const runsError = useIntegrationDetailStore((s) => s.runsError[action.actionName]);
   const running = useIntegrationDetailStore((s) => Boolean(s.running[action.actionName]));
+  const recipe = useIntegrationDetailStore((s) => s.recipes[action.actionName]);
+  const recipeForgetting = useIntegrationDetailStore((s) => Boolean(s.recipeForgetting[action.actionName]));
+  const forgetRecipe = useIntegrationDetailStore((s) => s.forgetRecipe);
   const fetchSteps = useIntegrationDetailStore((s) => s.fetchSteps);
   const fetchRuns = useIntegrationDetailStore((s) => s.fetchRuns);
   const fetchEvidence = useIntegrationDetailStore((s) => s.fetchEvidence);
@@ -272,6 +275,11 @@ export function ActionDetail({
             </Badge>
             {action.authoringState === 'provisional' && <Badge tone="warning">{t.provisional}</Badge>}
             {action.authoringState === 'trusted' && <Badge tone="brand">{t.trusted}</Badge>}
+            {recipe && (
+              <Badge tone="success" data-testid={`integration-action-recipe-${action.actionName}`}>
+                {t.recipeBadge(recipe.version)}
+              </Badge>
+            )}
           </div>
           <p className="text-sm text-neutral-600">{action.description}</p>
           <p className="truncate font-mono text-[11px] text-neutral-400" title={action.target}>
@@ -347,6 +355,50 @@ export function ActionDetail({
               />
             )}
           </section>
+
+          {/* --- THE LEARNED RECIPE (cornerstone K4): what replays instead of re-driving ------- */}
+          {recipe && (
+            <section className="space-y-2" data-testid={`integration-action-recipe-detail-${action.actionName}`}>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-500">{t.recipeTitle}</h3>
+              <p className="text-[11px] text-neutral-500">
+                {t.recipeLearnedAt(formatStamp(recipe.compiledAt, language))} {t.recipeCallsCount(recipe.calls.length)}.
+              </p>
+              {recipe.replayCount !== undefined && recipe.replayCount > 0 && (
+                <p className="text-[11px] text-neutral-600" data-testid={`integration-action-recipe-stats-${action.actionName}`}>
+                  {t.recipeReplayStats(
+                    recipe.replayCount,
+                    recipe.lastReplayMs !== undefined ? Math.round(recipe.lastReplayMs / 100) / 10 : undefined,
+                    recipe.learnedRunMs !== undefined ? Math.round(recipe.learnedRunMs / 100) / 10 : undefined,
+                  )}
+                </p>
+              )}
+              {recipe.supersedes && (
+                <p className="text-[11px] text-neutral-500" data-testid={`integration-action-recipe-lineage-${action.actionName}`}>
+                  {t.recipeSupersededNote(recipe.supersedes.version, recipe.supersedes.reason)}
+                </p>
+              )}
+              {recipe.calls.length > 0 && (
+                <ul className="space-y-1">
+                  {recipe.calls.map((call, i) => (
+                    <li key={i} className="overflow-x-auto rounded-lg bg-neutral-50 p-2 font-mono text-xs text-neutral-700">
+                      {call}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  loading={recipeForgetting}
+                  onClick={() => integrationKey && void forgetRecipe(integrationKey, action.actionName)}
+                  data-testid={`integration-action-recipe-forget-${action.actionName}`}
+                >
+                  {recipeForgetting ? t.recipeForgetting : t.recipeForget}
+                </Button>
+              </div>
+            </section>
+          )}
 
           {/* --- MY NOTES about this action and the steps of its plan (slice S3) --------------- */}
           <ActionNotes actionName={action.actionName} planSteps={steps?.plan?.steps ?? []} t={t} common={common} />

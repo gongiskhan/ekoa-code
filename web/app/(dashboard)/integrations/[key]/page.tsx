@@ -116,7 +116,14 @@ export default function IntegrationDetailPage() {
     async (actionName: string) => {
       const outcome = await runNow(key, actionName);
       if (outcome.ok) {
-        toast.success(t.runStarted);
+        // K4: a run that was answered by the learned recipe says so - the moment the user actually
+        // FEELS the integration having gotten faster deserves its own sentence.
+        const replay = outcome.result?.replay;
+        if (replay?.replayed) {
+          toast.success(t.runReplayed(replay.durationMs !== undefined ? Math.round(replay.durationMs / 100) / 10 : undefined));
+        } else {
+          toast.success(t.runStarted);
+        }
         return;
       }
       // Every failure reaches the user, including the 200-with-success-false one - and it reaches

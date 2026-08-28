@@ -268,6 +268,28 @@ export interface IntegrationActionScriptedStep {
  * `recipe-store.ts`, which also owns `version` - a monotonic counter a caller must not be able to
  * fake, since it is what the supersede lineage is read from.
  */
+/**
+ * REPLAY USAGE of one recipe, store-owned (cornerstone K4): the numbers that make "this
+ * integration is getting faster" a visible fact instead of a silent server-side one. Written only
+ * by `recipe-store.ts` (`recordReplay` on each replayed execution; `learnedRunMs` at compile time),
+ * never by a caller - `RecipeDraft` excludes it exactly as it excludes `version`.
+ */
+export interface IntegrationActionRecipeStats {
+  /** How many executions this recipe answered without running the automation. */
+  replayCount: number;
+  lastReplayedAt?: string;
+  /** Wall-clock of the last replay - the "after" of the speed story. */
+  lastReplayMs?: number;
+  /** Wall-clock of the authored run this recipe was learned from - the "before". */
+  learnedRunMs?: number;
+  /**
+   * Consecutive drift-heals with NO successful replay between them (K6): bumped by a supersede,
+   * zeroed by `recordReplay`. The heal loop reads it against `HEAL_BUDGET.maxConsecutiveDriftHeals`
+   * and CLEARS an unhealable recipe instead of superseding it forever.
+   */
+  driftStreak?: number;
+}
+
 export interface IntegrationActionRecipe {
   /** Monotonic per (orgId, integrationKey, actionName). Stamped by the store; a supersede bumps it. */
   version: number;
@@ -303,6 +325,8 @@ export interface IntegrationActionRecipe {
   compiledAt: string;
   /** One-hop lineage of the recipe this one replaced (the `publishSnapshot` shape, tenant-scoped). */
   supersedes?: { version: number; reason: string };
+  /** Replay usage, store-owned (K4). Absent on rows written before it existed. */
+  stats?: IntegrationActionRecipeStats;
 }
 
 export interface IntegrationAction {

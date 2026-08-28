@@ -101,6 +101,39 @@ export const DISCOVERY_BUDGET = {
 } as const;
 
 /**
+ * What the drift-heal loop may spend before it gives up on a recipe (cornerstone K6, closing the
+ * ledgered finding `recipe-drift-heal-cycles-are-unbounded`).
+ *
+ * A heal is a full authored run at model cost plus a supersede, and nothing bounded how often one
+ * action could go around that loop: a scheduled action against a site that drifts on every visit
+ * (rotating shapes, per-session URLs, an A/B test) paid a doomed replay attempt AND a full
+ * vision-priced re-learn AND a version bump per tick, forever - and the schedules supervisor
+ * cannot see it, because every thrash tick SUCCEEDS.
+ *
+ * `maxConsecutiveDriftHeals` counts SUPERSEDES WITH NO SUCCESSFUL REPLAY BETWEEN THEM: the streak
+ * lives on the recipe's own stats (`driftStreak`, bumped by `supersedeRecipe`, zeroed by
+ * `recordReplay`), so a recipe that drifts once a month and replays daily never approaches it.
+ * Three consecutive heals that never replayed once means the site does not hold still long enough
+ * for a recipe to be worth compiling - the loop CLEARS the recipe instead of superseding again,
+ * and the action goes back to its authored steps at full cost, correctly, until a later pass
+ * learns a recipe that sticks.
+ */
+export const HEAL_BUDGET = {
+  maxConsecutiveDriftHeals: 3,
+} as const;
+
+/**
+ * What ONE replay attempt may spend (K6). The replay is a pre-flight optimisation on the hot path
+ * of every automation-backed action; its per-call transport timeouts bound each call, but nothing
+ * bounded the ATTEMPT - a recipe of several calls against a slow site could hold the action longer
+ * than the authored run it was supposed to beat. On the ceiling the attempt is abandoned and the
+ * run falls through to the authored steps, exactly as any other non-ok replay outcome does.
+ */
+export const REPLAY_BUDGET = {
+  maxWallClockMs: 60 * 1000,
+} as const;
+
+/**
  * Per-run ledger of what `STEP_RETRY_BUDGET` has already been spent on, keyed by step INDEX.
  *
  * Indexed by position rather than step id because the rehearsal fixer can replace the step at an

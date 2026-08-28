@@ -272,6 +272,16 @@ export interface Translations {
       tabPlatform: string;
       tabMine: string;
       tabWebhooks: string;
+      // Cornerstone K5 - the free-text door: a goal box that plans, mints the per-site
+      // integration, and lands on its detail page.
+      goalBoxTitle: string;
+      goalBoxSubtitle: string;
+      goalBoxPlaceholder: string;
+      goalBoxSubmit: string;
+      goalBoxPlanning: string;
+      goalBoxMinted: (key: string) => string;
+      goalBoxPlannedNoMint: string;
+      goalBoxAwaitingIntegration: (service: string) => string;
       sessionChecking: string;
       sessionConnectDefaultGuide: string;
       sessionOpenLogin: string;
@@ -356,6 +366,15 @@ export interface Translations {
         /** The api-call request the definition declares, placeholders and all. */
         requestTitle: string;
         /** The sample of the last validated run. */
+        // Cornerstone K4 - the learned recipe (replay) surface.
+        recipeTitle: string;
+        recipeBadge: (version: number) => string;
+        recipeLearnedAt: (when: string) => string;
+        recipeCallsCount: (count: number) => string;
+        recipeSupersededNote: (version: number, reason: string) => string;
+        recipeForget: string;
+        recipeForgetting: string;
+        recipeError: string;
         evidenceTitle: string;
         evidenceAt: (when: string) => string;
         /** The samples read is still OUTSTANDING - not the same as "there is none". */
@@ -435,6 +454,9 @@ export interface Translations {
         runNow: string;
         running: string;
         runStarted: string;
+        /** K4: the run was answered by the learned recipe; seconds absent when unmeasured. */
+        runReplayed: (seconds?: number) => string;
+        recipeReplayStats: (count: number, lastSeconds?: number, learnedSeconds?: number) => string;
         runFailed: string;
         /**
          * A failed run the server named with a CODE and no prose, in words a person can act on.

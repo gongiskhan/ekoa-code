@@ -194,6 +194,38 @@ describe('version + supersede', () => {
     expect(await recipes.getRecipe('orgA', 'citius', 'nao_existe')).toBeNull();
   });
 
+  it('replay stats are store-owned (K4): learnedRunMs at compile, recordReplay bumps, supersede resets', async () => {
+    await recipes.putRecipe('orgA', 'citius', 'list_processos', recipeDraft('v1'), { learnedRunMs: 45_000 });
+    const learned = await recipes.getRecipe('orgA', 'citius', 'list_processos');
+    expect(learned?.stats).toEqual({ replayCount: 0, learnedRunMs: 45_000 });
+
+    await recipes.recordReplay('orgA', 'citius', 'list_processos', { ms: 900 });
+    await recipes.recordReplay('orgA', 'citius', 'list_processos', { ms: 700 });
+    const used = await recipes.getRecipe('orgA', 'citius', 'list_processos');
+    expect(used?.stats?.replayCount).toBe(2);
+    expect(used?.stats?.lastReplayMs).toBe(700);
+    expect(typeof used?.stats?.lastReplayedAt).toBe('string');
+    expect(used?.stats?.learnedRunMs).toBe(45_000);
+
+    // A supersede starts the count over: the NEW recipe has replayed nothing, and its "before" is
+    // the healing run, not the original learn. The DRIFT STREAK is the one field that carries
+    // ACROSS (K6): every supersede is a heal, so it grows here...
+    await recipes.supersedeRecipe('orgA', 'citius', 'list_processos', { ...recipeDraft('v2'), reason: 'drift' }, { learnedRunMs: 30_000 });
+    const healed = await recipes.getRecipe('orgA', 'citius', 'list_processos');
+    expect(healed?.stats).toEqual({ replayCount: 0, learnedRunMs: 30_000, driftStreak: 1 });
+
+    // ...and only a successful replay zeroes it - the signal HEAL_BUDGET is read against.
+    await recipes.supersedeRecipe('orgA', 'citius', 'list_processos', { ...recipeDraft('v3'), reason: 'drift again' });
+    expect((await recipes.getRecipe('orgA', 'citius', 'list_processos'))?.stats?.driftStreak).toBe(2);
+    await recipes.recordReplay('orgA', 'citius', 'list_processos', { ms: 400 });
+    expect((await recipes.getRecipe('orgA', 'citius', 'list_processos'))?.stats?.driftStreak).toBe(0);
+  });
+
+  it('recordReplay on a recipe-less action is a silent no-op, never an error (K4)', async () => {
+    await expect(recipes.recordReplay('orgA', 'citius', 'list_processos', { ms: 500 })).resolves.toBeUndefined();
+    expect(await recipes.getRecipe('orgA', 'citius', 'list_processos')).toBeNull();
+  });
+
   it('the version is store-owned: a caller cannot state it', async () => {
     // `RecipeDraft` omits `version`/`compiledAt`/`supersedes` at the type level; a caller who casts
     // past that still cannot influence what is written, because the store rebuilds the record.

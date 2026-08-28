@@ -487,6 +487,11 @@ async function auditExecute(
         ms: Date.now() - t0,
         ...(ctx.principal ? { keyId: ctx.principal.keyId } : {}),
         ...(ctx.principal?.xClient ? { xClient: ctx.principal.xClient } : {}),
+        // K4: HOW an automation-backed action answered - by recipe replay or by its authored run.
+        // Before this the row could not tell the two apart, so a replayed execution (which writes
+        // no automation_runs document) was unfindable after the fact. Facts only, never payload:
+        // the envelope's ids and version, read off the leg markers the one envelope carries.
+        ...(replayAuditFieldsOf(result.data) ?? {}),
       },
     );
   } catch (err) {
@@ -517,6 +522,36 @@ export type CapabilityWireOutcome =
   | { kind: 'awaiting_consent'; consentRequest: NonNullable<ExecuteIntegrationActionResult['consentRequest']> }
   | { kind: 'result'; body: { success: boolean; status?: number; data?: unknown; code?: string; error?: string } };
 
+/**
+ * The automation-backed envelope's LEG MARKERS, read structurally (K4). The envelope is
+ * `ActionRunEnvelope` (automation/service.ts) riding `data` as `unknown` - a lower tier this
+ * module does not import, so the read is a narrow structural probe: a `data` carrying a string
+ * `runId` AND a string `status` is the one-envelope shape (the exact discriminator
+ * `user-defined-poll.ts` unwraps by), and only that shape yields replay facts.
+ */
+function envelopeMarkersOf(data: unknown): { runId: string; replayed?: boolean; recipeVersion?: number; replayMs?: number } | null {
+  if (typeof data !== 'object' || data === null) return null;
+  const d = data as { runId?: unknown; status?: unknown; replayed?: unknown; recipeVersion?: unknown; replayMs?: unknown };
+  if (typeof d.runId !== 'string' || typeof d.status !== 'string') return null;
+  return {
+    runId: d.runId,
+    ...(d.replayed === true ? { replayed: true } : {}),
+    ...(typeof d.recipeVersion === 'number' ? { recipeVersion: d.recipeVersion } : {}),
+    ...(typeof d.replayMs === 'number' ? { replayMs: d.replayMs } : {}),
+  };
+}
+
+/** The audit-row slice of the markers: present only when the data IS the one envelope. */
+function replayAuditFieldsOf(data: unknown): Record<string, unknown> | null {
+  const m = envelopeMarkersOf(data);
+  if (!m) return null;
+  return {
+    runId: m.runId,
+    replayed: m.replayed === true,
+    ...(m.recipeVersion !== undefined ? { recipeVersion: m.recipeVersion } : {}),
+  };
+}
+
 export function capabilityWireOutcome(result: ExecuteIntegrationActionResult): CapabilityWireOutcome {
   if (result.code === 'unknown_integration' || result.code === 'unknown_action') return { kind: 'not_found' };
   if (result.code === 'awaiting_consent') {
@@ -526,6 +561,10 @@ export function capabilityWireOutcome(result: ExecuteIntegrationActionResult): C
       ?? { integrationKey: '', actionName: '', description: '', target: 'destino indeterminado', shape: '' };
     return { kind: 'awaiting_consent', consentRequest };
   }
+  // K4: the typed replay block. The same facts used to ride only inside `data` (z.unknown on the
+  // wire), where no client could rely on them; the block is attached exactly when `data` is the
+  // one automation-backed envelope, so api-call/tenant-read responses are unchanged.
+  const markers = envelopeMarkersOf(result.data);
   return {
     kind: 'result',
     body: {
@@ -534,6 +573,16 @@ export function capabilityWireOutcome(result: ExecuteIntegrationActionResult): C
       ...(result.data !== undefined ? { data: result.data } : {}),
       ...(result.code ? { code: result.code } : {}),
       ...(result.error ? { error: result.error } : {}),
+      ...(markers
+        ? {
+            replay: {
+              replayed: markers.replayed === true,
+              runId: markers.runId,
+              ...(markers.recipeVersion !== undefined ? { recipeVersion: markers.recipeVersion } : {}),
+              ...(markers.replayMs !== undefined ? { durationMs: markers.replayMs } : {}),
+            },
+          }
+        : {}),
     },
   };
 }

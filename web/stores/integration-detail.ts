@@ -76,6 +76,7 @@ import type {
   ExecuteIntegrationActionResponse,
   IntegrationActionEvidence,
   IntegrationActionFeedback,
+  IntegrationActionRecipeSummary,
   IntegrationCapability,
   RunRecord,
 } from '@ekoa/shared';
@@ -155,6 +156,14 @@ interface IntegrationDetailState {
   /** A failed WRITE, by slot, in the SERVER's own prose. Cleared by the next attempt at that slot. */
   feedbackWriteError: Record<string, ReadFailure>;
 
+  /** The learned recipe per action name (cornerstone K4). Unset ⇒ this action holds none. */
+  recipes: Record<string, IntegrationActionRecipeSummary>;
+  /** Set exactly once the recipes read has come back; `false` while it is outstanding. */
+  recipesLoaded: boolean;
+  recipesError?: ReadFailure;
+  /** Action names with a forget in flight, so one badge's spinner is one badge's. */
+  recipeForgetting: Record<string, boolean>;
+
   /** The bound automation per action name. `null` ⇒ the fetch came back with nothing. */
   steps: Record<string, Automation | null>;
   stepsError: Record<string, ReadFailure>;
@@ -182,6 +191,9 @@ interface IntegrationDetailActions {
   saveFeedback: (key: string, actionName: string, stepRef: string | undefined, note: string) => Promise<boolean>;
   /** Erase one note. Idempotent on the server: nothing there is `ok`, not a 404. */
   removeFeedback: (key: string, actionName: string, stepRef: string | undefined) => Promise<boolean>;
+  fetchRecipes: (key: string) => Promise<void>;
+  /** Forget one action's learned recipe (idempotent server-side; evidence goes with it). */
+  forgetRecipe: (key: string, actionName: string) => Promise<boolean>;
   fetchSteps: (actionName: string, automationId: string) => Promise<void>;
   fetchRuns: (actionName: string, automationId: string) => Promise<void>;
   runNow: (key: string, actionName: string) => Promise<RunNowOutcome>;
@@ -200,6 +212,9 @@ const EMPTY: Omit<IntegrationDetailState, 'key' | 'requestedKey'> = {
   feedbackLoaded: false,
   feedbackSaving: {},
   feedbackWriteError: {},
+  recipes: {},
+  recipesLoaded: false,
+  recipeForgetting: {},
   steps: {},
   stepsError: {},
   runs: {},
@@ -240,6 +255,7 @@ export const useIntegrationDetailStore = create<IntegrationDetailState & Integra
     // all three are done, which is what lets a caller (and a test) await the page's full settle.
     const evidence = get().fetchEvidence(key);
     const feedback = get().fetchFeedback(key);
+    const recipes = get().fetchRecipes(key);
     const capability = await tryCall(() => api.integrations.getIntegration<IntegrationCapability>({ key }));
     // A key change mid-flight: the answer is about an integration the page is no longer showing.
     if (get().requestedKey !== key) return;
@@ -248,7 +264,7 @@ export const useIntegrationDetailStore = create<IntegrationDetailState & Integra
     } else {
       set({ loading: false, capability: null, capabilityError: capability.error });
     }
-    await Promise.all([evidence, feedback]);
+    await Promise.all([evidence, feedback, recipes]);
   },
 
   /**
@@ -358,6 +374,40 @@ export const useIntegrationDetailStore = create<IntegrationDetailState & Integra
       feedbackSaving: without(s.feedbackSaving, slot),
       feedbackWriteError: { ...s.feedbackWriteError, [slot]: failureOf(res.error) },
     }));
+    return false;
+  },
+
+  /**
+   * The learned recipes (cornerstone K4). The endpoint lists every recipe the caller's org holds;
+   * this page keeps only the rows naming ITS integration. A failure here is a section's, never the
+   * page's - an action without a visible recipe badge still runs.
+   */
+  async fetchRecipes(key) {
+    set({ recipesError: undefined });
+    const res = await tryCall(() => api.integrations.listRecipes());
+    if (get().requestedKey !== key) return;
+    if (res.ok) {
+      const recipes: Record<string, IntegrationActionRecipeSummary> = {};
+      for (const row of res.data.items) if (row.key === key) recipes[row.actionName] = row;
+      set({ recipes, recipesLoaded: true, recipesError: undefined });
+    } else {
+      set({ recipesError: failureOf(res.error) });
+    }
+  },
+
+  /** FORGET one recipe. The row leaves the map only on a confirmed answer - never optimistically. */
+  async forgetRecipe(key, actionName) {
+    set((s) => ({ recipeForgetting: { ...s.recipeForgetting, [actionName]: true } }));
+    const res = await tryCall(() => api.integrations.forgetRecipe({ key, actionName }));
+    if (get().requestedKey !== key) return res.ok;
+    if (res.ok) {
+      set((s) => ({
+        recipes: without(s.recipes, actionName),
+        recipeForgetting: without(s.recipeForgetting, actionName),
+      }));
+      return true;
+    }
+    set((s) => ({ recipeForgetting: without(s.recipeForgetting, actionName) }));
     return false;
   },
 

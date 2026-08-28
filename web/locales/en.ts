@@ -255,6 +255,16 @@ export const en: Translations = {
       tabPlatform: 'Platform Integrations',
       tabMine: 'My Integrations',
       tabWebhooks: 'Webhooks',
+      goalBoxTitle: 'Automate a site',
+      goalBoxSubtitle:
+        'Describe what you want done on an outside site. The platform plans the step sequence, validates it, and turns it into an integration of yours that learns with every run.',
+      goalBoxPlaceholder: 'E.g.: list the pending notifications on my professional portal',
+      goalBoxSubmit: 'Automate',
+      goalBoxPlanning: 'Planning the step sequence...',
+      goalBoxMinted: (key: string) => `Integration "${key}" created. Validation is running.`,
+      goalBoxPlannedNoMint: 'Sequence created and validating. It could not be tied to a site.',
+      goalBoxAwaitingIntegration: (service: string) =>
+        `This goal needs the "${service}" integration connected first.`,
       sessionChecking: 'Checking session...',
       sessionConnectDefaultGuide:
         'This integration authenticates with a browser session. Open the sign-in window and sign in on the portal; the session is captured automatically.',
@@ -316,6 +326,14 @@ export const en: Translations = {
         trusted: 'Confirmed',
         stepsTitle: 'What it does',
         requestTitle: 'Request',
+        recipeTitle: 'Learning',
+        recipeBadge: (version: number) => `Recipe v${version}`,
+        recipeLearnedAt: (when: string) => `Learned ${when}. Later runs replay the learned calls, no model involved.`,
+        recipeCallsCount: (count: number) => count === 1 ? '1 learned call' : `${count} learned calls`,
+        recipeSupersededNote: (version: number, reason: string) => `Replaced v${version} (${reason}).`,
+        recipeForget: 'Forget recipe',
+        recipeForgetting: 'Forgetting...',
+        recipeError: 'The learned recipes could not be loaded.',
         evidenceTitle: 'Last successful run',
         evidenceAt: (when: string) => `Last succeeded ${when}`,
         evidenceLoading: 'Loading the last run...',
@@ -364,6 +382,14 @@ export const en: Translations = {
         runNow: 'Run now',
         running: 'Running...',
         runStarted: 'Action completed.',
+        runReplayed: (seconds?: number) =>
+          seconds !== undefined ? `Answered by the learned recipe in ${seconds}s.` : 'Answered by the learned recipe, without running the steps.',
+        recipeReplayStats: (count: number, lastSeconds?: number, learnedSeconds?: number) => {
+          const reps = count === 1 ? '1 replay' : `${count} replays`;
+          if (lastSeconds !== undefined && learnedSeconds !== undefined) return `${reps}. Last one took ${lastSeconds}s (learning took ${learnedSeconds}s).`;
+          if (lastSeconds !== undefined) return `${reps}. Last one took ${lastSeconds}s.`;
+          return `${reps}.`;
+        },
         runFailed: 'The action could not be completed.',
         runCodes: {
           not_connected: 'This integration is not connected for your account.',

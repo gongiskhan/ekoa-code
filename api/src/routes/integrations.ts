@@ -163,6 +163,16 @@ function recipeSummary(key: string, actionName: string, recipe: IntegrationActio
     ...(recipe.supersedes !== undefined
       ? { supersedes: { version: recipe.supersedes.version, reason: recipe.supersedes.reason } }
       : {}),
+    // K4 - the speed story, opted in field by field (never a spread of `stats`): how often this
+    // recipe answered, when it last did, and last-replay vs learned-run wall-clock.
+    ...(recipe.stats !== undefined
+      ? {
+          replayCount: recipe.stats.replayCount,
+          ...(recipe.stats.lastReplayedAt !== undefined ? { lastReplayedAt: recipe.stats.lastReplayedAt } : {}),
+          ...(recipe.stats.lastReplayMs !== undefined ? { lastReplayMs: recipe.stats.lastReplayMs } : {}),
+          ...(recipe.stats.learnedRunMs !== undefined ? { learnedRunMs: recipe.stats.learnedRunMs } : {}),
+        }
+      : {}),
   };
 }
 

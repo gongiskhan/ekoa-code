@@ -40,6 +40,7 @@ import { IntegrationRecipeStore, RecipeStoreError } from '../../src/integrations
 import { CapturedCallsStore } from '../../src/integrations/captured-calls-store.js';
 import { IntegrationDefinitionStore } from '../../src/integrations/definition-store.js';
 import { bootAgentTestDb, shutdownAgentTestDb, resetAgentState } from '../agents/_setup.js';
+import { REPLAY_BUDGET } from '../../src/automation/budgets.js';
 import { __resetAutomationSeamsForTests, setDaemonConnectionResolver } from '../../src/automation/seams.js';
 
 type Replay = typeof replayIntegrationAction;
@@ -150,7 +151,7 @@ describe('runAutomationForAction - the replay-first mount', () => {
     // sees BOTH a string `runId` and a string `status`, so a replayed poll resolved its field paths
     // against the envelope and read `undefined` on every tick, forever. Asserted whole (`toEqual`,
     // never `toMatchObject`) because the defect was a MISSING key, which a partial match cannot see.
-    const envelope = result.data as { runId: string };
+    const envelope = result.data as { runId: string; replayMs: number };
     expect(result.data).toEqual({
       runId: envelope.runId,
       status: 'completed',
@@ -158,7 +159,10 @@ describe('runAutomationForAction - the replay-first mount', () => {
       output: { items: [{ id: 41 }] },
       replayed: true,
       recipeVersion: 7,
+      // K4: the replay's own wall-clock, measured by the mount.
+      replayMs: envelope.replayMs,
     });
+    expect(typeof envelope.replayMs).toBe('number');
     // …and the id names THIS replay rather than an automation run that never happened: it is the
     // same string the replay's browser lease and its daemon frames are ledgered under.
     expect(envelope.runId).toMatch(/^replay-/);
@@ -166,6 +170,95 @@ describe('runAutomationForAction - the replay-first mount', () => {
     expect(run).not.toHaveBeenCalled();
     expect(replay).toHaveBeenCalledOnce();
     expect(replay.mock.calls[0]![0]).toMatchObject({ orgId: 'o1', integrationKey: 'portal', actionName: 'list_cases', args: { ref: '2024-1' } });
+  });
+
+  /**
+   * K6 - THE ONE-WRITER RULE COVERS THE DESTRUCTIVE PATH TOO (finding
+   * `clear-refused-recipe-is-ownership-ungated`). A same-org PEER whose replay refuses
+   * (`arguments-uncovered` on an argument the recipe has no hole for is the everyday case: the
+   * listener's establishing tick calls with `{}`) used to CLEAR the owner's org-wide recipe and
+   * discard its evidence, restarting the lineage at v1 - a two-user clear/relearn thrash cycle.
+   * The clear now runs only for the bound automation's owner; the peer still falls through to the
+   * automation leg, where `forbidden` answers them exactly as before.
+   */
+  it('K6: a NON-OWNER peer\'s refused replay does NOT clear the recipe; the owner\'s does', async () => {
+    const replay = vi.fn<Replay>(async () => ({ outcome: 'arguments-uncovered', reason: 'no hole for {q}', recipeVersion: 1 }) as never);
+    const run = vi.fn<Run>(async () => ({ runId: 'r-1', status: 'completed', summary: 'ok' }) as never);
+    const clearRecipe = vi.fn(async () => ({ version: 1 }));
+
+    // The peer: same org, not the automation's owner. The replay refuses, the clear is withheld,
+    // and the automation leg answers `forbidden` - so nothing the OWNER built was destroyed.
+    const peer = await runAutomationForAction({ ...base, ownerUserId: 'peer' }, { replay, run, clearRecipe });
+    expect(peer).toMatchObject({ success: false, code: 'forbidden' });
+    expect(clearRecipe).not.toHaveBeenCalled();
+
+    // The owner: the same refusal clears, exactly as it always did.
+    const owner = await runAutomationForAction(base, { replay, run, clearRecipe });
+    expect(owner.success).toBe(true);
+    expect(clearRecipe).toHaveBeenCalledWith('o1', 'portal', 'list_cases');
+  });
+
+  /**
+   * K6 - THE HEAL CEILING (HEAL_BUDGET, finding `recipe-drift-heal-cycles-are-unbounded`). A
+   * recipe whose lineage shows N consecutive heals with no successful replay between them is not
+   * healable: the site does not hold still long enough for a recipe to be worth compiling. The
+   * drift branch then CLEARS instead of superseding forever - and a streak below the ceiling
+   * supersedes exactly as before.
+   */
+  it('K6: drift at the heal ceiling CLEARS the recipe instead of superseding again', async () => {
+    const { put, supersede, deps } = storeSpies();
+    const clearRecipe = vi.fn(async () => ({ version: 4, capturedCallsRef: 'cap-old' }));
+    const getRecipe = vi.fn(async () => ({ capturedCallsRef: 'cap-old', stats: { driftStreak: 3 } }));
+    const replay = vi.fn<Replay>(async () => ({ outcome: 'drift', reason: 'shape moved', recipeVersion: 4 }) as never);
+    const run = runObserving([EXCHANGE]);
+
+    const result = await runAutomationForAction(base, { ...deps, replay, run, clearRecipe, getRecipe });
+    expect(result.success).toBe(true);
+    expect(clearRecipe).toHaveBeenCalledWith('o1', 'portal', 'list_cases');
+    expect(supersede).not.toHaveBeenCalled();
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it('K6: drift BELOW the ceiling still heals (supersede), and the streak is the store\'s to keep', async () => {
+    const { put, supersede, deps } = storeSpies();
+    const getRecipe = vi.fn(async () => ({ capturedCallsRef: 'cap-old', stats: { driftStreak: 2 } }));
+    const replay = vi.fn<Replay>(async () => ({ outcome: 'drift', reason: 'shape moved', recipeVersion: 4 }) as never);
+    const run = runObserving([EXCHANGE]);
+
+    const result = await runAutomationForAction(base, { ...deps, replay, run, getRecipe });
+    expect(result.success).toBe(true);
+    expect(supersede).toHaveBeenCalledOnce();
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it('K6: a replay attempt past REPLAY_BUDGET is abandoned - the authored run answers', async () => {
+    vi.useFakeTimers();
+    try {
+      // A replay that never settles: the budget race is the only thing that can end the attempt.
+      const replay = vi.fn<Replay>(() => new Promise(() => undefined));
+      const run = vi.fn<Run>(async () => ({ runId: 'r-1', status: 'completed', summary: 'ok' }) as never);
+      const pending = runAutomationForAction(base, { replay, run });
+      await vi.advanceTimersByTimeAsync(REPLAY_BUDGET.maxWallClockMs + 1);
+      const result = await pending;
+      expect(result.success).toBe(true);
+      expect(run).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('K4: a replay that answered bumps the usage stats; a fall-through does not', async () => {
+    const recordReplay = vi.fn(async () => undefined);
+    const replayOk = vi.fn<Replay>(async () => ({ outcome: 'ok', calls: [], data: {}, recipeVersion: 1 }));
+    await runAutomationForAction(base, { replay: replayOk, run: vi.fn<Run>(), recordReplay });
+    expect(recordReplay).toHaveBeenCalledOnce();
+    expect(recordReplay).toHaveBeenCalledWith('o1', 'portal', 'list_cases', { ms: expect.any(Number) });
+
+    recordReplay.mockClear();
+    const replayMiss = vi.fn<Replay>(async () => ({ outcome: 'no-recipe' }) as never);
+    const run = vi.fn<Run>(async () => ({ runId: 'r-1', status: 'completed', summary: 'ok' }) as never);
+    await runAutomationForAction(base, { replay: replayMiss, run, recordReplay });
+    expect(recordReplay).not.toHaveBeenCalled();
   });
 
   /**

@@ -49,7 +49,7 @@ import { looksLikeLiteralSecret } from './publish-scrub.js';
 
 /** What a caller may author: everything except the two fields the store owns (`version`) or stamps
  *  (`compiledAt`, `supersedes`). Discovery describes what it learned; the store dates and numbers it. */
-export type RecipeDraft = Omit<IntegrationActionRecipe, 'version' | 'compiledAt' | 'supersedes'>;
+export type RecipeDraft = Omit<IntegrationActionRecipe, 'version' | 'compiledAt' | 'supersedes' | 'stats'>;
 
 /** A supersede additionally states WHY the previous recipe stopped working - the lineage's payload. */
 export type RecipeSupersedeInput = RecipeDraft & { reason: string };
@@ -164,13 +164,22 @@ export class IntegrationRecipeStore {
     key: string,
     actionName: string,
     draft: RecipeDraft,
-    opts: { secrets?: SecretRegistry } = {},
+    opts: { secrets?: SecretRegistry; learnedRunMs?: number } = {},
   ): Promise<RecipeWriteResult> {
     assertCarriesNoValues(draft, opts.secrets);
     assertAnswerPointsAtACall(draft);
     return this.writeRecipe(orgId, key, actionName, (current) => {
       if (current) return { refuse: { verdict: 'exists', recipe: current } };
-      return { recipe: { ...cloneDraft(draft), version: 1, compiledAt: this.nowIso() } };
+      return {
+        recipe: {
+          ...cloneDraft(draft),
+          version: 1,
+          compiledAt: this.nowIso(),
+          // K4: the "before" of the speed story, from the learning run itself. Store-owned with
+          // the rest of `stats` - `RecipeDraft` excludes the field, so a caller cannot fake it.
+          stats: { replayCount: 0, ...(opts.learnedRunMs !== undefined ? { learnedRunMs: opts.learnedRunMs } : {}) },
+        },
+      };
     });
   }
 
@@ -189,7 +198,7 @@ export class IntegrationRecipeStore {
     key: string,
     actionName: string,
     next: RecipeSupersedeInput,
-    opts: { secrets?: SecretRegistry } = {},
+    opts: { secrets?: SecretRegistry; learnedRunMs?: number } = {},
   ): Promise<RecipeWriteResult> {
     const { reason, ...draft } = next;
     if (typeof reason !== 'string' || reason.trim() === '') {
@@ -215,6 +224,47 @@ export class IntegrationRecipeStore {
           version: current.version + 1,
           compiledAt: this.nowIso(),
           supersedes: { version: current.version, reason },
+          // Fresh stats: the superseding recipe has replayed nothing yet, and its "before" is the
+          // healing run that compiled it, not the original learn. `driftStreak` is the one field
+          // that carries ACROSS the supersede (K6): every supersede is a heal, so the streak of
+          // heals-without-a-replay-between grows here and is zeroed only by `recordReplay`.
+          stats: {
+            replayCount: 0,
+            ...(opts.learnedRunMs !== undefined ? { learnedRunMs: opts.learnedRunMs } : {}),
+            driftStreak: (current.stats?.driftStreak ?? 0) + 1,
+          },
+        },
+      };
+    });
+  }
+
+  /**
+   * RECORD one successful replay (cornerstone K4): bump the counter, stamp when and how fast.
+   *
+   * Deliberately NOT `putRecipe`-shaped: this touches nothing a caller authors - no templates, no
+   * strings - so the write asserts run against nothing new. Best-effort by contract: the replay
+   * already ANSWERED, and a stats row that lost a CAS race or found the recipe superseded
+   * mid-flight must never turn that answer into a failure, so a missing row is a silent no-op.
+   */
+  async recordReplay(
+    orgId: string,
+    key: string,
+    actionName: string,
+    input: { ms?: number } = {},
+  ): Promise<void> {
+    await this.writeRecipe(orgId, key, actionName, (current) => {
+      if (!current) return { refuse: { verdict: 'notfound' } };
+      return {
+        recipe: {
+          ...current,
+          stats: {
+            ...(current.stats ?? {}),
+            replayCount: (current.stats?.replayCount ?? 0) + 1,
+            lastReplayedAt: this.nowIso(),
+            ...(input.ms !== undefined ? { lastReplayMs: input.ms } : {}),
+            // K6: a replay that answered proves the recipe holds - the heal streak starts over.
+            driftStreak: 0,
+          },
         },
       };
     });
