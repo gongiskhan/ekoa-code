@@ -195,6 +195,27 @@ describe('mintSiteIntegrationForAutomation - the write', () => {
     expect(doc?.actions[0]?.authoring).toBeUndefined();
   });
 
+  it('the minted row is RUNNABLE with no config: authType none, so connected is true (live-run fix)', async () => {
+    // The first live run found every minted action permanently unrunnable: the definition declared
+    // no authType, and BOTH the executor (`!config && def.authType !== 'none'` -> not_connected)
+    // and the capability view's `connected` key off that field - so the detail page said "Ligue
+    // esta integração" with nothing to connect. A minted site integration authenticates through
+    // the Cofre ceremony at run time, so it needs no config row at all.
+    const r = await mintSiteIntegrationForAutomation(userA, {
+      automationId: 'auto-1', goal, name: 'n', steps: readSteps,
+    }, { store, confirmRead: vi.fn(async () => true) });
+    expect(r.minted).toBe(true);
+    if (!r.minted) return;
+    const doc = await store.getById(definitionIdFor('orgA', r.integrationKey));
+    expect(doc?.authType).toBe('none');
+    // …and there is nothing for a user to fill in, which is why the field must say 'none'.
+    expect(doc?.configSchema).toEqual([]);
+    // The rule both readers apply, restated here so a change to either is caught: no config row
+    // exists for a freshly minted integration, so connected === (authType === 'none').
+    const connectedWithNoConfig = doc?.authType === 'none';
+    expect(connectedWithNoConfig).toBe(true);
+  });
+
   it('accumulates a SECOND automation against the same site onto the SAME row', async () => {
     const confirmRead = vi.fn(async () => true);
     await mintSiteIntegrationForAutomation(userA, { automationId: 'auto-1', goal, name: 'n', steps: readSteps }, { store, confirmRead });

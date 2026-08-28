@@ -412,6 +412,15 @@ export async function mintSiteIntegrationForAutomation(
         // A category so the "Minhas" card renders a human label rather than nothing (the web
         // grid's `categoryLabel` maps 'sites' -> "Sites"); the card guards an absent one too.
         category: 'sites',
+        // NEEDS NO STORED CREDENTIAL, AND MUST SAY SO. A minted site integration authenticates
+        // through the Cofre ceremony at RUN time (the credential gate establishes/injects the
+        // session), not through a config row - it has no configSchema to fill in. Both the
+        // executor (`!config && def.authType !== 'none'` -> not_connected, action-executor.ts) and
+        // the capability view's `connected` (integration-capability.ts) key off exactly this
+        // field, so leaving it undefined made every minted action permanently unrunnable: the
+        // detail page said "Ligue esta integração para executar as suas ações" with nothing to
+        // connect, and a direct execute answered `not_connected`. Found on the first live run.
+        authType: 'none',
         configSchema: [],
         actions,
         skillMd: '',
