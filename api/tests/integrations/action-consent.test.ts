@@ -407,18 +407,24 @@ describe('entry path: every rail still routes through the gated executor', () =>
   const serverSrc = readFileSync(join(__dirname, '..', '..', 'src', 'server.ts'), 'utf-8');
   const capabilitySrc = readFileSync(join(__dirname, '..', '..', 'src', 'integrations', 'integration-capability.ts'), 'utf-8');
 
-  it('the executor has exactly FOUR named call sites, each an inventoried rail', () => {
-    // Three in the composition root: setIntegrationActionExecutor (the agent tool + the
-    // automation `integration` step), callUserIntegration (the listener supervisor), and
+  it('the executor has exactly SIX named call sites, each an inventoried rail', () => {
+    // Five in the composition root: setIntegrationActionExecutor (the agent tool + the
+    // automation `integration` step), callUserIntegration (the listener supervisor),
     // runIntegrationAction (the SCHEDULES supervisor, 2026-08-17 — a timer fire runs as the
     // schedule's stored owner and treats `awaiting_consent` as a BLOCKED run; pinned by
-    // tests/schedules/supervisor.test.ts). One in the D1 capability core, the HTTP rail.
-    // A FIFTH appearing without joining this inventory is exactly the drift this asserts
-    // against — and a rail that grew its own gate is caught by the next case.
-    expect(serverSrc.split('executeUserIntegrationAction(').length - 1, 'server.ts executor call sites').toBe(3);
+    // tests/schedules/supervisor.test.ts), setResumeLearnDriver (cornerstone K3, 2026-08-28 —
+    // the post-ceremony learn re-run, fired only for a STORABLE action the owner already ran;
+    // pinned by tests/automation/resume-learn.test.ts), and setCallIntegrationActionTool
+    // (cornerstone K5 — the chat catalog door; pinned by tests/agents/catalog-tools.test.ts).
+    // One in the D1 capability core, the HTTP rail. A SEVENTH appearing without joining this
+    // inventory is exactly the drift this asserts against — and a rail that grew its own gate
+    // is caught by the next case.
+    expect(serverSrc.split('executeUserIntegrationAction(').length - 1, 'server.ts executor call sites').toBe(5);
     expect(serverSrc).toContain('setIntegrationActionExecutor(');
     expect(serverSrc).toContain('callUserIntegration:');
     expect(serverSrc).toContain('runIntegrationAction: (s, t) =>');
+    expect(serverSrc).toContain('setResumeLearnDriver(');
+    expect(serverSrc).toContain('setCallIntegrationActionTool(');
     expect(capabilitySrc.split('executeUserIntegrationAction(').length - 1, 'integration-capability.ts executor call sites').toBe(1);
   });
 

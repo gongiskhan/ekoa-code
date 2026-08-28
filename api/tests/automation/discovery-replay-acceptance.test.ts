@@ -521,7 +521,9 @@ describe('ACCEPTANCE: learned on the run that was going to happen, replayed dete
     const envelope1 = first.data as Record<string, unknown>;
     const envelope2 = second.data as Record<string, unknown>;
     expect(Object.keys(envelope1).sort()).toEqual(['output', 'runId', 'status', 'summary']);
-    expect(Object.keys(envelope2).sort()).toEqual(['output', 'recipeVersion', 'replayed', 'runId', 'status', 'summary']);
+    // `replayMs` joined the replay leg with K4 (the replay's own wall-clock, feeding the recipe's
+    // usage stats and the typed wire replay block).
+    expect(Object.keys(envelope2).sort()).toEqual(['output', 'recipeVersion', 'replayMs', 'replayed', 'runId', 'status', 'summary']);
     expect(typeof envelope2.runId).toBe('string');
     expect(typeof envelope2.status).toBe('string');
 
