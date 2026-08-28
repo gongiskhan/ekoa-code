@@ -630,7 +630,11 @@ export async function planFromGoal(
     automation: toWireAutomation(doc),
     runId,
     rehearsing: true,
-    ...(minted?.minted ? { integration: { key: minted.integrationKey, actionName: minted.actionName } } : {}),
+    ...(minted?.minted
+      ? { integration: { key: minted.integrationKey, actionName: minted.actionName } }
+      : minted
+        ? { integrationSkipped: minted.reason }
+        : {}),
   };
 }
 

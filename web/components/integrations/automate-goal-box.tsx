@@ -49,9 +49,14 @@ export function AutomateGoalBox() {
         toast.success(t.goalBoxMinted(result.integration.key));
         router.push(`/integrations/${encodeURIComponent(result.integration.key)}?action=${encodeURIComponent(result.integration.actionName)}`);
       } else {
-        // Planned but not minted (no outside origin, or the mint refused): the sequence still
-        // exists and rehearses; there is just no integration card to land on.
-        toast.success(t.goalBoxPlannedNoMint);
+        // Planned but NOT minted: the sequence exists and rehearses, but there is no integration
+        // card to land on - and the user needs to know WHICH reason, because one of them is
+        // actionable by them (no site address in the goal) and the others are not. A live run
+        // hit the generic sentence and read it as "nothing happened".
+        const reason = result.integrationSkipped;
+        if (reason === 'no-origin' || reason === 'no-key') toast.error(t.goalBoxNoOrigin);
+        else if (reason) toast.error(t.goalBoxMintRefused);
+        else toast.success(t.goalBoxPlannedNoMint);
       }
     } finally {
       setPlanning(false);

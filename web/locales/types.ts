@@ -281,6 +281,8 @@ export interface Translations {
       goalBoxPlanning: string;
       goalBoxMinted: (key: string) => string;
       goalBoxPlannedNoMint: string;
+      goalBoxNoOrigin: string;
+      goalBoxMintRefused: string;
       goalBoxAwaitingIntegration: (service: string) => string;
       sessionChecking: string;
       sessionConnectDefaultGuide: string;

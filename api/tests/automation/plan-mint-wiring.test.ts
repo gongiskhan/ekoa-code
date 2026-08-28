@@ -120,6 +120,26 @@ describe('planFromGoal - mint-on-plan wiring', () => {
     expect(doc?.actions).toHaveLength(1);
   });
 
+  it('a mint refusal names its REASON on the wire, so the surface can say which (live-run fix)', async () => {
+    // A live run hit "Sequência criada ... não foi possível associá-la a um site" and read it as
+    // "nothing happened": the plan succeeded, the mint declined, and the only way to tell WHICH
+    // reason was a server log. One of the reasons (no site address in the goal) is actionable by
+    // the user, so it has to reach them.
+    hoisted.responses.push(
+      JSON.stringify({
+        status: 'ok',
+        name: 'Sem navegação',
+        description: 'd',
+        steps: [{ id: 'b', description: 'faz algo na página atual', type: 'browser' }],
+        reasoning: 'r',
+      }),
+    );
+    const res = await planFromGoal(admin, { goal: 'fazer algo sem indicar o site' });
+    expect(res.plan.status).toBe('ok');
+    expect(res.integration).toBeUndefined();
+    expect(res.integrationSkipped).toBe('no-origin');
+  });
+
   it('a mint refusal never fails the plan (no navigate step -> plan ok, no integration field)', async () => {
     hoisted.responses.push(
       JSON.stringify({

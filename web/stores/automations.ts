@@ -118,6 +118,8 @@ interface AutomationsActions {
     rehearsing?: boolean;
     /** Mint-on-plan (cornerstone K1): the per-site integration + wrapper action the plan minted. */
     integration?: { key: string; actionName: string };
+    /** Why nothing was minted, when nothing was - so the surface can say which, not just "no". */
+    integrationSkipped?: string;
     error?: string;
   }>;
   start: (id: string, inputs?: Record<string, unknown>) => Promise<string | null>;
@@ -316,6 +318,7 @@ export const useAutomationsStore = create<AutomationsState & AutomationsActions>
       traceId: runId,
       rehearsing: !!res.data.rehearsing,
       ...(res.data.integration ? { integration: res.data.integration } : {}),
+      ...(res.data.integrationSkipped ? { integrationSkipped: res.data.integrationSkipped } : {}),
     };
   },
 

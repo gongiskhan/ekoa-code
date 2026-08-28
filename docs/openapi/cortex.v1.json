@@ -5755,6 +5755,16 @@
               "actionName"
             ],
             "additionalProperties": false
+          },
+          "integrationSkipped": {
+            "type": "string",
+            "enum": [
+              "no-origin",
+              "no-key",
+              "row-not-writable",
+              "published-row",
+              "store-error"
+            ]
           }
         },
         "required": [

@@ -257,12 +257,16 @@ export const en: Translations = {
       tabWebhooks: 'Webhooks',
       goalBoxTitle: 'Automate a site',
       goalBoxSubtitle:
-        'Describe what you want done on an outside site. The platform plans the step sequence, validates it, and turns it into an integration of yours that learns with every run.',
-      goalBoxPlaceholder: 'E.g.: list the pending notifications on my professional portal',
+        'Describe what you want done on an outside site, including the site address. The platform plans the step sequence, validates it, and turns it into an integration of yours that learns with every run.',
+      goalBoxPlaceholder: 'E.g.: list the pending orders at https://portal.example.com/panel',
       goalBoxSubmit: 'Automate',
       goalBoxPlanning: 'Planning the step sequence...',
       goalBoxMinted: (key: string) => `Integration "${key}" created. Validation is running.`,
       goalBoxPlannedNoMint: 'Sequence created and validating. It could not be tied to a site.',
+      goalBoxNoOrigin:
+        'Sequence created, but without a site address the integration cannot be created. Include the address (e.g. https://portal.example.com/panel) and try again.',
+      goalBoxMintRefused:
+        'Sequence created, but this site\'s integration could not be written (one is already published, or it is not writable by you).',
       goalBoxAwaitingIntegration: (service: string) =>
         `This goal needs the "${service}" integration connected first.`,
       sessionChecking: 'Checking session...',

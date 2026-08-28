@@ -131,6 +131,15 @@ export const PlanResponse = z.object({
   runId: Id.optional(),
   rehearsing: z.boolean().optional(),
   integration: z.object({ key: z.string(), actionName: z.string() }).optional(),
+  /**
+   * WHY no integration was minted, when none was (additive). Absent on a successful mint. A coded
+   * reason rather than prose: the surface owns the wording, and "nothing happened" with no reason
+   * was the first thing a live run stumbled on - the plan succeeded, the mint declined, and the
+   * user had only a generic sentence and a server log to tell them apart.
+   */
+  integrationSkipped: z
+    .enum(['no-origin', 'no-key', 'row-not-writable', 'published-row', 'store-error'])
+    .optional(),
 });
 export type PlanResponse = z.infer<typeof PlanResponse>;
 

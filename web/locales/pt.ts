@@ -257,12 +257,16 @@ export const pt: Translations = {
       tabWebhooks: 'Webhooks',
       goalBoxTitle: 'Automatizar um site',
       goalBoxSubtitle:
-        'Descreva o que quer fazer num site externo. A plataforma cria a sequência de passos, valida-a e transforma-a numa integração sua que aprende a cada execução.',
-      goalBoxPlaceholder: 'Ex.: listar as notificações pendentes no portal da minha ordem profissional',
+        'Descreva o que quer fazer num site externo, incluindo o endereço do site. A plataforma cria a sequência de passos, valida-a e transforma-a numa integração sua que aprende a cada execução.',
+      goalBoxPlaceholder: 'Ex.: listar os pedidos pendentes em https://portal.exemplo.pt/painel',
       goalBoxSubmit: 'Automatizar',
       goalBoxPlanning: 'A planear a sequência de passos...',
       goalBoxMinted: (key: string) => `Integração "${key}" criada. A validação está a correr.`,
       goalBoxPlannedNoMint: 'Sequência criada e em validação. Não foi possível associá-la a um site.',
+      goalBoxNoOrigin:
+        'Sequência criada, mas sem o endereço de um site não é possível criar a integração. Inclua o endereço (ex.: https://portal.exemplo.pt/painel) e tente de novo.',
+      goalBoxMintRefused:
+        'Sequência criada, mas a integração deste site não pôde ser escrita (já existe uma publicada, ou não tem permissão de escrita).',
       goalBoxAwaitingIntegration: (service: string) =>
         `Este objetivo precisa da integração "${service}" ligada primeiro.`,
       sessionChecking: 'A verificar a sessão...',
