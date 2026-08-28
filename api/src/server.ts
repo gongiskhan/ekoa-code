@@ -10,7 +10,8 @@
  */
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import express, { type Express, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import { loadConfig, type Config } from './config.js';
@@ -119,6 +120,11 @@ import {
   setKnowledgeToolSearch,
   setKnowledgeToolRead,
   setLoadContextContent,
+  // K5 — the four seams behind the six chat catalog tools.
+  setCatalogToolList,
+  setCallIntegrationActionTool,
+  setCallEkoaActionTool,
+  setStartAutomationTool,
   setDelegateToLocal,
   setLocalActivitySources,
   setVerifyRunner,
@@ -168,6 +174,15 @@ import {
   automationBackedActionHandler,
   buildAutomationCatalog,
   formatCatalogForPrompt,
+  // K5 — the owner-scoped run start and the ekoa_action rail behind two of the chat catalog tools.
+  startRun,
+  AutomationServiceError,
+  resolveArtifactProjectDir,
+  loadManifestFromFile,
+  getCapability,
+  executeRecipe,
+  EkoaActionFailure,
+  type EkoaActionContext,
   automationStepEventPayload,
   automationRunsRoot,
   screenshotPlaneRouter,
@@ -856,6 +871,104 @@ export function buildApp(config: Config, deps: RuntimeDeps = defaultDeps): Expre
       { orgId, ownerUserId, integrationKey, actionName, args },
       executorDeps,
     );
+  });
+
+  // K5 (D-CORNERSTONE-DOORS) — the six chat catalog TOOLS. The layer-4 catalog prompt bound above
+  // (`setCatalog`) has named all six to the model since it shipped; these four seams are what makes
+  // them exist. Each is a one-liner onto a rail that already enforces its own policy, which is the
+  // point: a chat turn is just another caller, never a second implementation (Rule 1) and never a
+  // special case (Rule 3). The ACTOR is the run's own — `agents/` passes it, no tool argument
+  // reaches these lambdas.
+  //
+  // 1. The listing the three `list_*` tools search, projected from the SAME `buildAutomationCatalog`
+  //    the prompt is rendered from, so the inventory the agent is told about and the inventory it
+  //    can search cannot drift apart.
+  //    NOT wrapped in the `setCatalog` binding's try/catch, and the difference is deliberate: a
+  //    failed PROMPT catalog degrades to an empty section (the agent simply is not told), but a
+  //    failed LISTING must not degrade to "you have no automations" — that is a lie the model would
+  //    act on. The throw reaches the chokepoint's handler wrapper and comes back as an is_error
+  //    tool result, which is the honest answer and never crashes the run.
+  setCatalogToolList(async ({ userId, orgId }) => {
+    const catalog = await buildAutomationCatalog({ userId, orgId, role: 'user' });
+    return {
+      automations: catalog.automations.map((a) => ({
+        id: a.id,
+        name: a.name,
+        description: a.description,
+        inputs: a.inputs,
+        ...(a.trigger ? { trigger: a.trigger } : {}),
+      })),
+      integrationActions: catalog.integrationActions,
+      ekoaActions: catalog.ekoaActions,
+    };
+  });
+  // 2. `call_integration_action` — the ONE executor rail, same shape as the K3 driver above and the
+  //    schedules supervisor below. Consent (`awaiting_consent`), the credential halt
+  //    (`needs_credentials`) and tenancy therefore answer a chat turn exactly as they answer a
+  //    schedule; the tool only translates those codes into a sentence the model can act on.
+  setCallIntegrationActionTool(async ({ userId, orgId }, { integrationKey, actionName, args }) => {
+    const r = await executeUserIntegrationAction(
+      { orgId, ownerUserId: userId, integrationKey, actionName, args },
+      executorDeps,
+    );
+    return {
+      success: r.success,
+      ...(r.data !== undefined ? { data: r.data } : {}),
+      ...(r.code ? { code: r.code } : {}),
+      ...(r.error ? { error: r.error } : {}),
+    };
+  });
+  // 3. `call_automation` — the owner-scoped `startRun` the REST route uses, so a chat-started run is
+  //    ownership-checked, audited and idempotency-shaped identically. FIRE-AND-FORGET by design: the
+  //    tool hands back the run id and the run's own surface owns the outcome.
+  setStartAutomationTool(async ({ userId, orgId }, { automationId, inputs }) => {
+    try {
+      const outcome = await startRun(
+        { userId, orgId, role: 'user' },
+        automationId,
+        Object.keys(inputs).length ? { inputs } : {},
+      );
+      return { success: true, runId: outcome.runId };
+    } catch (err) {
+      if (err instanceof AutomationServiceError) return { success: false, code: err.code, error: err.message };
+      return { success: false, code: 'unknown', error: err instanceof Error ? err.message : 'failed to start the run' };
+    }
+  });
+  // 4. `call_ekoa_action` — an artifact capability invoked directly (no run record). The artifact is
+  //    resolved ORG-SCOPED to the caller, so a slug argument naming another tenant's app resolves to
+  //    nothing; the recipe then runs through the same interpreter an `ekoa_action` step uses, and a
+  //    nested `artifact.invoke` inside it still goes through the engine's own registered hook.
+  //    This assembly duplicates that hook's body because the hook is anonymous — see the re-export
+  //    block in automation/index.ts for the follow-up that removes the duplication.
+  setCallEkoaActionTool(async ({ userId, orgId }, { artifactSlug, capabilityName, args }) => {
+    try {
+      const resolution = await resolveArtifactProjectDir(artifactSlug, orgId);
+      if (!resolution) return { success: false, code: 'unknown_artifact', error: `artifact "${artifactSlug}" not found` };
+      const manifestPath = join(resolution.projectDir, 'MANIFEST.md');
+      if (!existsSync(manifestPath)) {
+        return { success: false, code: 'no_manifest', error: `MANIFEST.md missing for ${artifactSlug}` };
+      }
+      const capability = getCapability(loadManifestFromFile(manifestPath), capabilityName);
+      if (!capability) {
+        return { success: false, code: 'unknown_capability', error: `capability "${capabilityName}" not in ${artifactSlug}` };
+      }
+      const ctx: EkoaActionContext = {
+        userId,
+        orgId,
+        artifactId: resolution.artifactId,
+        inputs: args,
+        captured: {},
+        trace: [],
+      };
+      await executeRecipe(capability.recipe, ctx);
+      return { success: true, data: ctx.captured };
+    } catch (err) {
+      return {
+        success: false,
+        code: err instanceof EkoaActionFailure ? 'ekoa_action_failed' : 'unknown',
+        error: err instanceof Error ? err.message : 'the Ekoa action failed',
+      };
+    }
   });
 
   // G8 — trigger delivery targets (ch02 §2.8: injected callbacks, never upward imports).

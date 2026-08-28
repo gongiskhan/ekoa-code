@@ -25,7 +25,7 @@ import { classifyRunFailure } from './run-failure.js';
 import { MarkerProcessor, scanProviderError } from './markers.js';
 import { StreamingIdentityRedactor } from './branding.js';
 import { toolPolicyFor } from './tools.js';
-import { knowledgeToolSpecs, delegateToolSpec } from './sdk-tools.js';
+import { knowledgeToolSpecs, delegateToolSpec, catalogToolSpecs } from './sdk-tools.js';
 import { getLocalActivitySources, type DelegationToolResult } from './seams.js';
 import { assembleRunContext, renderPrompt, referencesContextLine } from './context.js';
 import { persistUserMessage, persistAssistantMessage, persistSessionContext } from './persistence.js';
@@ -176,15 +176,19 @@ export async function executeChatRun(runId: string, input: StartChatRunInput): P
     const hasAttachments = !!input.attachments?.length;
     const decision = decideForTask(input.message, hasAttachments ? { complexityHint: 'high' } : undefined, 'WORKHORSE');
     const policy = hasAttachments ? toolPolicyFor('text-attachments') : toolPolicyFor('chat');
-    // Chat runs mount the two knowledge tools + the §5.4.8 local-bridge delegation tool as
-    // in-process MCP (§5.4.4; ch18 §18.2); the attachments variant is Read/Glob/Grep only and
-    // mounts nothing. The delegation collector feeds the FC-402 trust chip: results carry the
-    // citations + ledgerRefs the per-turn `local_activity` join reads (run s5, D3).
+    // Chat runs mount the two knowledge tools, the six K5 catalog tools and the §5.4.8
+    // local-bridge delegation tool as in-process MCP (§5.4.4; ch18 §18.2); the attachments
+    // variant is Read/Glob/Grep only and mounts nothing. The delegation collector feeds the
+    // FC-402 trust chip: results carry the citations + ledgerRefs the per-turn `local_activity`
+    // join reads (run s5, D3).
     const delegations: DelegationToolResult[] = [];
     const sdkTools = hasAttachments
       ? undefined
       : [
           ...knowledgeToolSpecs(input.actor),
+          // K5 (D-CORNERSTONE-DOORS): the layer-4 catalog prompt assembled just above has always
+          // told the agent to call these six by name; this is where they actually exist.
+          ...catalogToolSpecs(input.actor),
           delegateToolSpec(input.actor, input.sessionId, (r) => delegations.push(r)),
         ];
 

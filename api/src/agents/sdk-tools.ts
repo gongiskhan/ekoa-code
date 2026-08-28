@@ -22,8 +22,20 @@ import { z } from 'zod/v4';
 import type { SdkToolSpec } from '../llm/index.js';
 import { isCloudProvider } from '../integrations/app-cloud-files.js';
 import type { RedlineOp, RedlineOpFailure } from '../services/docx-redline.js';
-import { KNOWLEDGE_TOOLS, CONTEXT_LOADING_TOOL, DELEGATION_TOOL, DOCX_TOOLS } from './tools.js';
-import { knowledgeToolSearch, knowledgeToolRead, loadContextContent, delegateToLocalTool, getDocxToolSeams, type DelegationToolResult } from './seams.js';
+import { KNOWLEDGE_TOOLS, CONTEXT_LOADING_TOOL, DELEGATION_TOOL, DOCX_TOOLS, CATALOG_TOOLS } from './tools.js';
+import {
+  knowledgeToolSearch,
+  knowledgeToolRead,
+  loadContextContent,
+  delegateToLocalTool,
+  getDocxToolSeams,
+  catalogToolList,
+  callIntegrationActionTool,
+  callEkoaActionTool,
+  startAutomationTool,
+  type CatalogToolActor,
+  type DelegationToolResult,
+} from './seams.js';
 
 /** The actor identity a tool run is bound to (a subset of the route Actor). */
 export interface ToolActor {
@@ -76,6 +88,230 @@ export function knowledgeToolSpecs(actor: ToolActor): SdkToolSpec[] {
       },
     },
   ];
+}
+
+// --- The six cross-agent catalog tools (K5, D-CORNERSTONE-DOORS) ---------------------------
+
+/** Rows per listing. The layer-4 prompt already describes the top 25 of each kind; the tools exist
+ *  for the tail, so they list wider than the prompt does and still stay a bounded tool result. */
+const CATALOG_LIST_LIMIT = 40;
+
+/** Cap on a call result's JSON body. A capability can return a whole collection; the model needs
+ *  the shape and the head of it, not a megabyte. */
+const CALL_RESULT_MAX_CHARS = 4000;
+
+/** Accent- and case-insensitive haystack: `pagamento` must match `Pagamentos` and `Pagaménto`. */
+function foldForSearch(text: string): string {
+  return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+}
+
+/** Optional substring filter over each row's searchable fields, then the listing cap. */
+function narrowRows<T>(rows: T[], rawQuery: unknown, fields: (row: T) => string[]): { shown: T[]; total: number } {
+  const query = typeof rawQuery === 'string' ? rawQuery.trim() : '';
+  const matched = query
+    ? rows.filter((row) => fields(row).some((f) => foldForSearch(f).includes(foldForSearch(query))))
+    : rows;
+  return { shown: matched.slice(0, CATALOG_LIST_LIMIT), total: matched.length };
+}
+
+/** The honest empty: "nothing matched your query" and "you have none at all" are different facts. */
+function emptyListing(rawQuery: unknown, kind: string): string {
+  const query = typeof rawQuery === 'string' ? rawQuery.trim() : '';
+  return query ? `Nada em ${kind} corresponde a "${query}".` : `Não há ${kind} disponíveis para este utilizador.`;
+}
+
+function listingText(header: string, lines: string[], total: number): string {
+  const out = [`${header} (${total}${total > lines.length ? `, a mostrar ${lines.length}` : ''}):`, ...lines];
+  if (total > lines.length) out.push(`… e mais ${total - lines.length}. Restringe com o argumento query.`);
+  return out.join('\n');
+}
+
+/** Compact JSON for a tool result, truncated honestly (the model must not read a cut body as whole). */
+function compactResultJson(data: unknown): string {
+  if (data === undefined) return '(sem dados)';
+  let text: string;
+  try {
+    text = JSON.stringify(data) ?? String(data);
+  } catch {
+    text = String(data);
+  }
+  return text.length > CALL_RESULT_MAX_CHARS ? `${text.slice(0, CALL_RESULT_MAX_CHARS)}… (resultado truncado)` : text;
+}
+
+/**
+ * The six tools the layer-4 catalog prompt (automation/catalog.ts) has always named: three that
+ * SEARCH the actor's catalog and three that INVOKE an entry from it.
+ *
+ * Every handler runs under the bound `actor` and passes it to the seam itself: an argument naming
+ * another user or org is not read, so a prompt-injected message cannot run another tenant's
+ * automation (the same construction the knowledge tools use for `orgId`).
+ *
+ * The invoking three own NO policy. `call_integration_action` goes through the ONE integration
+ * executor, so the write-consent gate and the credential halt answer for a chat turn exactly as
+ * they do for a schedule; `call_automation` goes through the owner-scoped `startRun`;
+ * `call_ekoa_action` through the org-scoped recipe interpreter. What the tools add is the
+ * TRANSLATION of those coded outcomes into something a model can act on — above all that
+ * `awaiting_consent` and `needs_credentials` are waiting on a human, not failures to retry.
+ */
+export function catalogToolSpecs(actor: ToolActor): SdkToolSpec[] {
+  const bound: CatalogToolActor = { userId: actor.userId, orgId: actor.orgId };
+  const [listAutomations, listIntegrationActions, listEkoaActions, callAutomation, callIntegrationAction, callEkoaAction] =
+    CATALOG_TOOLS;
+  const queryArg = z.string().optional().describe('Termos de pesquisa (opcional) — filtra por nome, chave ou descrição');
+  const argsArg = z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe('Argumentos da chamada, tal como descritos no catálogo');
+
+  return [
+    {
+      name: listAutomations,
+      description:
+        'Lista as sequências (automations) do utilizador, opcionalmente filtradas por termos de ' +
+        'pesquisa. Devolve nome, id, descrição e entradas de cada uma. As que têm gatilho correm ' +
+        'sozinhas — não as invoques sem o utilizador o pedir explicitamente.',
+      inputSchema: { query: queryArg },
+      handler: async (args) => {
+        const rows = (await catalogToolList(bound)).automations;
+        const { shown, total } = narrowRows(rows, args.query, (a) => [a.name, a.id, a.description]);
+        if (!total) return emptyListing(args.query, 'sequências');
+        const lines = shown.map((a) => {
+          const inputs = a.inputs.length
+            ? ` [entradas: ${a.inputs.map((i) => `${i.name}${i.required ? '*' : ''}`).join(', ')}]`
+            : '';
+          const trigger = a.trigger
+            ? ` [gatilho ${a.trigger.kind}: ${a.trigger.integrationKey}/${a.trigger.eventName} — corre sozinha]`
+            : '';
+          return `- ${a.name} (id: ${a.id}): ${a.description}${inputs}${trigger}`;
+        });
+        return listingText('Sequências', lines, total);
+      },
+    },
+    {
+      name: listIntegrationActions,
+      description:
+        'Lista as ações de integração disponíveis para o utilizador, opcionalmente filtradas por ' +
+        'termos de pesquisa. Devolve a chave da integração, o nome da ação, o que faz e os ' +
+        'argumentos. As ações marcadas [escrita] precisam da aprovação do dono antes de correr.',
+      inputSchema: { query: queryArg },
+      handler: async (args) => {
+        const rows = (await catalogToolList(bound)).integrationActions;
+        const { shown, total } = narrowRows(rows, args.query, (a) => [a.integrationKey, a.actionName, a.description]);
+        if (!total) return emptyListing(args.query, 'ações de integração');
+        const lines = shown.map(
+          (a) =>
+            `- ${a.integrationKey}.${a.actionName}(${a.argsSummary}): ${a.description}${a.mutates ? ' [escrita]' : ''}`,
+        );
+        return listingText('Ações de integração', lines, total);
+      },
+    },
+    {
+      name: listEkoaActions,
+      description:
+        'Lista as capacidades das aplicações Ekoa do utilizador (ações Ekoa), opcionalmente ' +
+        'filtradas por termos de pesquisa. Devolve o slug da aplicação, o nome da capacidade, o ' +
+        'que faz e os argumentos.',
+      inputSchema: { query: queryArg },
+      handler: async (args) => {
+        const rows = (await catalogToolList(bound)).ekoaActions;
+        const { shown, total } = narrowRows(rows, args.query, (e) => [
+          e.artifactSlug,
+          e.artifactName,
+          e.capabilityName,
+          e.description,
+        ]);
+        if (!total) return emptyListing(args.query, 'ações Ekoa');
+        const lines = shown.map(
+          (e) =>
+            `- ${e.artifactSlug}.${e.capabilityName}(${e.argsSummary}): ${e.description} [app: ${e.artifactName}]${e.mutates ? ' [escrita]' : ''}`,
+        );
+        return listingText('Ações Ekoa', lines, total);
+      },
+    },
+    {
+      name: callAutomation,
+      description:
+        'Inicia uma sequência (automation) do utilizador pelo seu id, com as entradas que ela ' +
+        'declara. NÃO espera pelo fim: devolve o id da execução e a execução continua em segundo ' +
+        'plano. Não invoques sequências com gatilho (correm sozinhas) sem o utilizador o pedir.',
+      inputSchema: {
+        automationId: z.string().min(1).describe('Id da sequência (tal como listado por list_automations)'),
+        inputs: z.record(z.string(), z.unknown()).optional().describe('Entradas declaradas pela sequência'),
+      },
+      handler: async (args) => {
+        const automationId = String(args.automationId ?? '');
+        const inputs = isPlainRecord(args.inputs) ? args.inputs : {};
+        const result = await startAutomationTool(bound, { automationId, inputs });
+        if (!result.success || !result.runId) {
+          return `Não foi possível iniciar a sequência ${automationId} (${result.code ?? 'desconhecido'}): ${result.error ?? 'sem detalhe'}.`;
+        }
+        return (
+          `Sequência ${automationId} iniciada (execução ${result.runId}). Está a correr em segundo plano — ` +
+          'não esperes por ela nesta resposta; o progresso e o resultado aparecem na página da automação.'
+        );
+      },
+    },
+    {
+      name: callIntegrationAction,
+      description:
+        'Executa uma ação de integração do utilizador (tal como listada por ' +
+        'list_integration_actions). Uma ação de escrita só corre depois de o dono a aprovar; se ' +
+        'faltarem credenciais, a execução fica em espera da cerimónia de credenciais.',
+      inputSchema: {
+        integrationKey: z.string().min(1).describe('Chave da integração (ex.: slack)'),
+        actionName: z.string().min(1).describe('Nome da ação'),
+        args: argsArg,
+      },
+      handler: async (args) => {
+        const integrationKey = String(args.integrationKey ?? '');
+        const actionName = String(args.actionName ?? '');
+        const callArgs = isPlainRecord(args.args) ? args.args : {};
+        const result = await callIntegrationActionTool(bound, { integrationKey, actionName, args: callArgs });
+        const what = `${integrationKey}.${actionName}`;
+        if (result.success) return `Ação ${what} executada.\n${compactResultJson(result.data)}`;
+        if (result.code === 'awaiting_consent') {
+          return (
+            `A ação ${what} escreve e precisa da aprovação do dono antes de correr. NÃO foi executada e ` +
+            'não deve ser repetida já: diz ao utilizador para a aprovar na página da integração ' +
+            `(Integrações → ${integrationKey}) e volta a tentar depois de ele confirmar.`
+          );
+        }
+        if (result.code === 'needs_credentials') {
+          return (
+            `A execução de ${what} ficou EM ESPERA: faltam credenciais e a execução parou para a ` +
+            'cerimónia de credenciais. Nada falhou — diz ao utilizador para completar a ligação ' +
+            `(Integrações → ${integrationKey}); a execução retoma a partir daí.`
+          );
+        }
+        return `A ação ${what} falhou (${result.code ?? 'desconhecido'}): ${result.error ?? 'sem detalhe'}.`;
+      },
+    },
+    {
+      name: callEkoaAction,
+      description:
+        'Executa uma capacidade de uma aplicação Ekoa do utilizador (tal como listada por ' +
+        'list_ekoa_actions), identificada pelo slug da aplicação e pelo nome da capacidade.',
+      inputSchema: {
+        artifactSlug: z.string().min(1).describe('Slug da aplicação Ekoa'),
+        capabilityName: z.string().min(1).describe('Nome da capacidade'),
+        args: argsArg,
+      },
+      handler: async (args) => {
+        const artifactSlug = String(args.artifactSlug ?? '');
+        const capabilityName = String(args.capabilityName ?? '');
+        const callArgs = isPlainRecord(args.args) ? args.args : {};
+        const result = await callEkoaActionTool(bound, { artifactSlug, capabilityName, args: callArgs });
+        const what = `${artifactSlug}.${capabilityName}`;
+        if (result.success) return `Ação Ekoa ${what} executada.\n${compactResultJson(result.data)}`;
+        return `A ação Ekoa ${what} falhou (${result.code ?? 'desconhecido'}): ${result.error ?? 'sem detalhe'}.`;
+      },
+    },
+  ];
+}
+
+/** A tool argument is whatever the model sent: only a plain object is usable as an args bag. */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** Egress budget when the model omits one; the daemon still caps per session (§18.2.1, S3). */

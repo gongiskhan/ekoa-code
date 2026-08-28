@@ -138,6 +138,19 @@ export {
   type EkoaActionCatalogEntry,
 } from './catalog.js';
 
+// --- The ekoa_action rail, for a caller that is not a run step (K5, D-CORNERSTONE-DOORS) -------
+//
+// The chat agent's `call_ekoa_action` tool invokes an artifact capability directly: no automation,
+// no run record, just resolve the artifact org-scoped, read its MANIFEST, and interpret the named
+// capability's recipe. That is exactly what the `artifact.invoke` primitive does, but its
+// implementation is an ANONYMOUS hook registered into `platform-primitives.ts` at module load
+// (`setInvokeArtifactCapability`, executors/ekoa-action.ts), so it cannot be called by name.
+// These four re-exports let the composition root assemble the same path; the follow-up that
+// removes the duplication is to give that hook a name here and have both callers use it.
+export { resolveArtifactProjectDir, type ResolveArtifactResult } from './executors/ekoa-action.js';
+export { executeRecipe, EkoaActionFailure, type EkoaActionContext } from './platform-primitives.js';
+export { loadManifestFromFile, getCapability } from './manifest-parser.js';
+
 // --- Persistence (routes read runs; the plan endpoint saves automations) ----
 export { automationStore, automationRunStore, automationRunsRoot, screenshotUrlFromPath } from './persistence.js';
 

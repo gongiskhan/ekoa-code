@@ -176,6 +176,147 @@ export function catalog(input: { userId: string; orgId: string }): Promise<strin
   return catalogFn(input);
 }
 
+// --- Cross-agent catalog TOOLS (K5, D-CORNERSTONE-DOORS; ch05 §5.4.4 chat row) -------------
+
+/** The identity every catalog tool runs under: the run's actor, bound at spec-build time. A tool
+ *  ARGUMENT naming another user or org changes nothing — the same rule the knowledge tools apply. */
+export interface CatalogToolActor {
+  userId: string;
+  orgId: string;
+}
+
+/** An automation row the `list_automations` tool renders. Structurally a projection of
+ *  `automation/catalog.ts`'s `AutomationCatalogEntry`; declared here because `agents/` may not
+ *  import `automation/` (ch02 §2.7) and the composition root owns the mapping. */
+export interface CatalogToolAutomation {
+  id: string;
+  name: string;
+  description: string;
+  inputs: Array<{ name: string; required: boolean; description: string }>;
+  /** Present when the automation runs ITSELF on a webhook/listener. The listing marks it and the
+   *  layer-4 prompt already tells the agent not to invoke a triggered automation unasked. */
+  trigger?: { kind: string; integrationKey: string; eventName: string };
+}
+
+/** An integration action row (`list_integration_actions`). */
+export interface CatalogToolIntegrationAction {
+  integrationKey: string;
+  actionName: string;
+  description: string;
+  argsSummary: string;
+  mutates: boolean;
+}
+
+/** An artifact-capability row (`list_ekoa_actions`). */
+export interface CatalogToolEkoaAction {
+  artifactSlug: string;
+  artifactName: string;
+  capabilityName: string;
+  description: string;
+  argsSummary: string;
+  mutates: boolean;
+}
+
+export interface CatalogToolListing {
+  automations: CatalogToolAutomation[];
+  integrationActions: CatalogToolIntegrationAction[];
+  ekoaActions: CatalogToolEkoaAction[];
+}
+
+/**
+ * The listing behind the three `list_*` tools. The root binds it to the SAME
+ * `buildAutomationCatalog` the layer-4 prompt is rendered from, so what the model is told exists
+ * and what it can list can never drift apart. Query filtering and formatting are the tools' own
+ * (sdk-tools.ts) — this seam answers the whole visible catalog for the bound actor.
+ */
+export type CatalogToolListFn = (actor: CatalogToolActor) => Promise<CatalogToolListing>;
+const emptyCatalogToolListing = (): CatalogToolListing => ({ automations: [], integrationActions: [], ekoaActions: [] });
+const defaultCatalogToolList: CatalogToolListFn = async () => emptyCatalogToolListing();
+let catalogToolListFn: CatalogToolListFn = defaultCatalogToolList;
+export function setCatalogToolList(fn: CatalogToolListFn): void {
+  catalogToolListFn = fn;
+}
+export function catalogToolList(actor: CatalogToolActor): Promise<CatalogToolListing> {
+  return catalogToolListFn(actor);
+}
+
+/**
+ * What an invoking catalog tool gets back. `code` is the underlying rail's OWN code kept verbatim
+ * — `awaiting_consent` and `needs_credentials` are the two the tool turns into a specific sentence
+ * for the model, because both mean "a human has to act", not "this failed".
+ */
+export interface CatalogToolCallResult {
+  success: boolean;
+  data?: unknown;
+  code?: string;
+  error?: string;
+}
+
+/** `call_integration_action` → the ONE integration executor. The consent/write gate, the credential
+ *  halt and tenancy all answer inside it exactly as they do for a schedule or a listener tick. */
+export type CallIntegrationActionToolFn = (
+  actor: CatalogToolActor,
+  input: { integrationKey: string; actionName: string; args: Record<string, unknown> },
+) => Promise<CatalogToolCallResult>;
+
+/** `call_ekoa_action` → the ekoa_action recipe interpreter, org-scoped to the actor. */
+export type CallEkoaActionToolFn = (
+  actor: CatalogToolActor,
+  input: { artifactSlug: string; capabilityName: string; args: Record<string, unknown> },
+) => Promise<CatalogToolCallResult>;
+
+/** `call_automation` → the owner-scoped `startRun`. FIRE-AND-FORGET: the tool returns the run id,
+ *  never a result, because a run can take minutes and park on a human. */
+export interface CatalogToolRunStarted {
+  success: boolean;
+  runId?: string;
+  code?: string;
+  error?: string;
+}
+export type StartAutomationToolFn = (
+  actor: CatalogToolActor,
+  input: { automationId: string; inputs: Record<string, unknown> },
+) => Promise<CatalogToolRunStarted>;
+
+/** Honest defaults: an unwired root can invoke nothing, and says so as a coded refusal rather than
+ *  pretending an action ran. The tools render the sentence; nothing fabricates a success. */
+const UNWIRED_CALL = 'esta capacidade não está disponível nesta instalação';
+const defaultCallIntegrationActionTool: CallIntegrationActionToolFn = async () => ({ success: false, code: 'unavailable', error: UNWIRED_CALL });
+let callIntegrationActionToolFn: CallIntegrationActionToolFn = defaultCallIntegrationActionTool;
+export function setCallIntegrationActionTool(fn: CallIntegrationActionToolFn): void {
+  callIntegrationActionToolFn = fn;
+}
+export function callIntegrationActionTool(
+  actor: CatalogToolActor,
+  input: { integrationKey: string; actionName: string; args: Record<string, unknown> },
+): Promise<CatalogToolCallResult> {
+  return callIntegrationActionToolFn(actor, input);
+}
+
+const defaultCallEkoaActionTool: CallEkoaActionToolFn = async () => ({ success: false, code: 'unavailable', error: UNWIRED_CALL });
+let callEkoaActionToolFn: CallEkoaActionToolFn = defaultCallEkoaActionTool;
+export function setCallEkoaActionTool(fn: CallEkoaActionToolFn): void {
+  callEkoaActionToolFn = fn;
+}
+export function callEkoaActionTool(
+  actor: CatalogToolActor,
+  input: { artifactSlug: string; capabilityName: string; args: Record<string, unknown> },
+): Promise<CatalogToolCallResult> {
+  return callEkoaActionToolFn(actor, input);
+}
+
+const defaultStartAutomationTool: StartAutomationToolFn = async () => ({ success: false, code: 'unavailable', error: UNWIRED_CALL });
+let startAutomationToolFn: StartAutomationToolFn = defaultStartAutomationTool;
+export function setStartAutomationTool(fn: StartAutomationToolFn): void {
+  startAutomationToolFn = fn;
+}
+export function startAutomationTool(
+  actor: CatalogToolActor,
+  input: { automationId: string; inputs: Record<string, unknown> },
+): Promise<CatalogToolRunStarted> {
+  return startAutomationToolFn(actor, input);
+}
+
 // --- Local-bridge delegation tool (ch05 §5.4.8; ch18 §18.2) --------------------------------
 
 /** The delegating principal: the run's owner + the hosted conversation id (ch18 §18.4.3 vault
@@ -481,6 +622,10 @@ export function __resetAgentSeamsForTests(): void {
   loadContextContentFn = defaultLoadContextContent;
   integrationPrefetchFn = defaultIntegrationPrefetch;
   catalogFn = defaultCatalog;
+  catalogToolListFn = defaultCatalogToolList;
+  callIntegrationActionToolFn = defaultCallIntegrationActionTool;
+  callEkoaActionToolFn = defaultCallEkoaActionTool;
+  startAutomationToolFn = defaultStartAutomationTool;
   delegateToLocalFn = defaultDelegateToLocal;
   localActivitySources = defaultLocalActivitySources;
   docxToolSeams = defaultDocxToolSeams;

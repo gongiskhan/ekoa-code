@@ -6,6 +6,7 @@ import { getRun } from '../../src/agents/registry.js';
 import { messages, sessions, activityLogs } from '../../src/data/stores.js';
 import { listSessionSheets, findSessionSheet } from '../../src/data/session-sheets.js';
 import { BUILD_MARKER, INTEGRATION_MARKER } from '../../src/agents/markers.js';
+import { CATALOG_TOOLS } from '../../src/agents/tools.js';
 import { logActivity } from '../../src/data/activity.js';
 import { bootAgentTestDb, shutdownAgentTestDb, resetAgentState, restoreTransport, seedUser } from './_setup.js';
 import type { FakeTransportScript } from './_fake-transport.js';
@@ -225,11 +226,24 @@ describe('chat run pipeline + streaming contract', () => {
     expect(events.some((e) => e.stream === 'notifications' && e.type === 'integration_build_intent')).toBe(true);
   });
 
-  it('mounts the §5.4.4 knowledge tools + the §5.4.8 delegation tool as in-process MCP and allowlists their wire names', async () => {
+  it('mounts the §5.4.4 knowledge tools, the six K5 catalog tools and the §5.4.8 delegation tool as in-process MCP and allowlists their wire names', async () => {
     const { transport } = await runChatT({ finalText: 'ok' });
     const call = transport.streamCalls[0]!;
-    expect((call.sdkTools ?? []).map((s) => s.name)).toEqual(['knowledge_search', 'knowledge_read', 'delegate_to_local']);
-    expect(call.allowedTools).toEqual(['mcp__ekoa__knowledge_search', 'mcp__ekoa__knowledge_read', 'mcp__ekoa__delegate_to_local']);
+    // K5 (D-CORNERSTONE-DOORS): the six tools the layer-4 catalog prompt already names are mounted
+    // on the same in-process MCP server, so the allowlist carries their wire names too — the
+    // policy list and the mounted specs have to agree or the SDK allowlists a tool that is absent.
+    expect((call.sdkTools ?? []).map((s) => s.name)).toEqual([
+      'knowledge_search',
+      'knowledge_read',
+      ...CATALOG_TOOLS,
+      'delegate_to_local',
+    ]);
+    expect(call.allowedTools).toEqual([
+      'mcp__ekoa__knowledge_search',
+      'mcp__ekoa__knowledge_read',
+      'mcp__ekoa__delegate_to_local',
+      ...CATALOG_TOOLS.map((t) => `mcp__ekoa__${t}`),
+    ]);
   });
 
   it('a voice-sourced run (input.source==="voice") carries the voice-context note in the system prompt; the paired voice.turn activity row carries source:voice (C7 seam close)', async () => {

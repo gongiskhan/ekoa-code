@@ -31,6 +31,28 @@ export const DELEGATION_TOOL = 'delegate_to_local';
 export const ATTACHMENT_TOOLS = ['Read', 'Glob', 'Grep'] as const;
 
 /**
+ * The six cross-agent catalog tools (K5, D-CORNERSTONE-DOORS): discover, then invoke, the actor's
+ * OWN automations, integration actions and Ekoa actions. CHAT ONLY.
+ *
+ * These names are not new vocabulary — the layer-4 catalog prompt (automation/catalog.ts) has
+ * named all six to the model since it shipped, listing the concrete rows and telling the agent to
+ * "use the call_… tools to invoke these". The prompt half landed without the tool half, so a chat
+ * agent read an inventory of capabilities and had nothing to call. This closes that.
+ *
+ * NOT on the text-attachments run class (which mounts no in-process tools at all) and not on brand
+ * research (deliberately tool-less, §5.6.4 — a prompt-injected page must not be able to reach a
+ * user's automations). Builds keep their own rails and are not widened here.
+ */
+export const CATALOG_TOOLS = [
+  'list_automations',
+  'list_integration_actions',
+  'list_ekoa_actions',
+  'call_automation',
+  'call_integration_action',
+  'call_ekoa_action',
+] as const;
+
+/**
  * The three ekoa-docx tools (2C-S5, ch07 document base v2): read the CriticMarkup projection of
  * a Word document, link a source .docx to the artifact, and apply an atomic native-track-changes
  * batch to it. BUILD RUNS ONLY - they are artifact-bound (appId = the artifact being built), so
@@ -51,9 +73,10 @@ export interface ToolPolicy {
 }
 
 /**
- * Resolve the tool policy for a run class. Chat is locked to the two knowledge tools plus the
- * §5.4.8 local-bridge delegation tool — never Bash/Write/Edit on the hosted machine (§5.4.4,
- * acceptance criterion 5; delegation runs on the USER's machine inside their grants, ch18).
+ * Resolve the tool policy for a run class. Chat is locked to the two knowledge tools, the §5.4.8
+ * local-bridge delegation tool and the six K5 catalog tools — never Bash/Write/Edit on the hosted
+ * machine (§5.4.4, acceptance criterion 5; delegation runs on the USER's machine inside their
+ * grants, ch18, and the catalog tools reach only the actor's own automations/actions).
  * Builds get the coding preset plus the knowledge + delegation + docx tools. Brand research is
  * deliberately tool-less so a prompt-injected page cannot launder server config back as "the
  * brand" (§5.6.4).
@@ -62,7 +85,7 @@ export function toolPolicyFor(runClass: RunToolClass): ToolPolicy {
   const cfg = loadAgentsConfig();
   switch (runClass) {
     case 'chat':
-      return { allowedTools: [...KNOWLEDGE_TOOLS, DELEGATION_TOOL], maxTurns: cfg.maxTurnsText };
+      return { allowedTools: [...KNOWLEDGE_TOOLS, DELEGATION_TOOL, ...CATALOG_TOOLS], maxTurns: cfg.maxTurnsText };
     case 'build':
       return {
         allowedTools: [...CODING_PRESET, CONTEXT_LOADING_TOOL, ...KNOWLEDGE_TOOLS, DELEGATION_TOOL, ...DOCX_TOOLS],
