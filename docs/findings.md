@@ -6,47 +6,6 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
-- **`needs-credentials-halt-flattens-to-automation-failed-at-the-action-surface`** (2026-08-28,
-  **MEDIUM**, action rail + schedules; found by the cornerstone adversarial audit). A
-  `needs_credentials` engine halt inside an automation-backed action run is flattened by
-  `runAutomationForAction`'s success gate (`api/src/automation/service.ts:1677`, accepts only
-  completed/succeeded) into `{success:false, code:'automation_failed'}` (`service.ts:1699-1705`); the
-  `IntegrationErrorCode` union (`api/src/integrations/action-executor.ts:122-148`) has no
-  needs_credentials member, so the true status travels only in untyped `data.status`. Two
-  manifestations: (1) an API/capability caller is told the action FAILED while the run is actually
-  parked awaiting the ceremony (the run/SSE plane tells the truth; the action envelope lies); (2) a
-  SCHEDULED `integration_action` target records failed/automation_failed each fire -
-  `mapIntegrationOutcome` (`schedules/supervisor.ts:606-617`) maps only awaiting_consent to blocked -
-  so the schedule burns the FAILURE_CEILING (20) and auto-pauses with NO owner notification, ever
-  (notifyBlocked fires only for status 'blocked'; auto-pause only console.warns). Automation-target
-  schedules on the same halt report blocked verbatim with per-fire SSE - the two target kinds diverge
-  silently. CLOSE BY: additive needs_credentials member on the ActionRunResult/IntegrationErrorCode
-  unions + mapIntegrationOutcome mapping to blocked + the schedule notify path (cornerstone K2).
-
-- **`recipe-drift-heal-cycles-are-unbounded`** (2026-08-28, **MEDIUM**, recipe spine; cornerstone
-  audit). No budget caps the drift -> full authored re-run -> re-learn -> supersede cycle across
-  invocations: budgets.ts bounds one run's interior only, `supersedeRecipe` bumps version with no
-  ceiling, and DISCOVERY_BUDGET is declared but consumed by nothing. A scheduled action whose recipe
-  drifts every tick pays a doomed replay + a full vision/LLM authored run + a supersede per tick,
-  indefinitely - and the schedules supervisor cannot see it because thrash ticks SUCCEED. The
-  supersedes lineage (version N with `supersedes.reason: drift` K deep) is a free drift-streak signal
-  with the (orgId, integrationKey, actionName) key already at the natural enforcement point
-  (`service.ts` learnFromRun drift branch). CLOSE BY: HEAL_BUDGET in budgets.ts (pinned) + streak
-  enforcement + clearRecipe on cap (cornerstone K6).
-
-- **`clear-refused-recipe-is-ownership-ungated`** (2026-08-28, **MEDIUM**, recipe spine multi-user;
-  cornerstone audit). Recipe WRITES are single-writer (the bound automation's owner - non-owners die
-  at `forbidden`, `service.ts:1610`, before learnFromRun), but `clearRefusedRecipe`
-  (`service.ts:1565-1597`) executes BEFORE the owner gate with no ownership check: a same-org peer
-  whose replay classifies arguments-uncovered/write-gate/does-not-cover CLEARS the org-wide recipe and
-  discards its captured evidence; the owner's next run re-learns at version 1 with the supersedes
-  lineage erased - a clear/relearn thrash cycle that also destroys drift history. Related asymmetries,
-  same audit: a lower-permission peer pays a doomed replay (403 -> drift) on every run then fails
-  forbidden; a SUCCESSFUL replay returns before the owner check, so recipes widen who can execute an
-  automation-backed action relative to the automation leg. No suite drives two users of one org
-  against one recipe. CLOSE BY: ownership (or per-user keying) on the clear path + a two-user
-  isolation suite (cornerstone K6).
-
 - **`action-cache-persists-resolved-fill-values-verbatim`** (2026-08-28, **MEDIUM**, security triage;
   cornerstone audit incidental). The per-step action cache stores the resolved PlaywrightAction
   verbatim, including `fill` values (`api/src/automation/cache.ts:259-289` - only the term-scored
@@ -4101,6 +4060,29 @@ silently absorbed into a ledger note):
   `m365proxy-manifest-flag-stripped`, `P4.2-was-dead-code-in-production`) was code that LOOKED like
   coverage: a correct, tested function kept plausible by a docblock describing a caller it never got.
   Nothing here claims to be reachable, and this entry is the record that it is not.
+
+## Recently fixed - 2026-08-28 the cornerstone hardening (K2 honest halt, K6 heal budget + one-writer clear)
+
+Fixed the same day they were ledgered, inside the cornerstone build (commits 7725145, f438948),
+each with a committed suite. Kept here with their original text for the record.
+
+- FIXED (K2): **`needs-credentials-halt-flattens-to-automation-failed-at-the-action-surface`** -
+  `needs_credentials` is now a typed member of the ActionRunResult/IntegrationErrorCode unions,
+  `mapIntegrationOutcome` maps it to `blocked`, and a scheduled integration_action credential halt
+  notifies the owner per fire instead of silently burning the ceiling. Suites:
+  `replay-mount.test.ts` (the envelope), `schedules/supervisor.test.ts` (blocked + notified).
+
+- FIXED (K6): **`recipe-drift-heal-cycles-are-unbounded`** - `HEAL_BUDGET.maxConsecutiveDriftHeals`
+  (pinned) reads the recipe's `driftStreak` (bumped by every supersede, zeroed by a successful
+  replay via `recordReplay`); at the ceiling the heal CLEARS the recipe instead of superseding
+  forever. `REPLAY_BUDGET.maxWallClockMs` bounds the replay attempt itself. Suites:
+  `replay-mount.test.ts` (both sides of the ceiling + the attempt cap), `recipe-store.test.ts`
+  (streak lifecycle), `budgets.test.ts` (pins).
+
+- FIXED (K6): **`clear-refused-recipe-is-ownership-ungated`** - `clearRefusedRecipe` now verifies
+  the caller owns the bound automation before discarding; a non-owner peer's refused replay falls
+  through to the automation leg (`forbidden`) with the owner's recipe and lineage intact. Suite:
+  `replay-mount.test.ts` (peer withheld / owner clears).
 
 ## Recently fixed - 2026-08-26 the ceremony stream lifecycle + the multi-domain capture refusal
 
