@@ -60,6 +60,7 @@ import {
   type RecipeWriteResult,
 } from '../integrations/recipe-store.js';
 import { forgetRecipe } from '../integrations/recipe-lifecycle.js';
+import { mintSiteIntegrationForAutomation, type MintResult } from '../integrations/definition-mint.js';
 import { secretRegistryFromValues, type SecretRegistry } from '../security/redaction.js';
 import { screenshotUrlFromPath, runLogsFromSteps } from './persistence.js';
 import type { Automation, Step, StepType, RunRecord, StepRecord } from './types.js';
@@ -573,6 +574,41 @@ export async function planFromGoal(
     await automations.insert({ _id: id, ...doc } as never);
   }
 
+  // MINT-ON-PLAN (D-CORNERSTONE-MINT-SHAPE): the planned automation becomes a wrapper action on a
+  // per-site tenant integration, so the ordinary action rail can learn a recipe for it. Contained:
+  // a mint refusal or error never fails the plan (the plan is the primary contract). A row whose
+  // provenance names a TEMPLATE (`source.templateKey` not `plan:`-stamped) is integration-managed
+  // and is never re-minted from here - its wrapper belongs to the provisioner.
+  let minted: MintResult | null = null;
+  const planStamp = `plan:${doc.id}`;
+  const managedByTemplate = doc.source !== undefined && doc.source.templateKey !== planStamp;
+  if (!managedByTemplate) {
+    try {
+      minted = await mintSiteIntegrationForAutomation(actor, {
+        automationId: doc.id,
+        goal: input.goal,
+        name: doc.name,
+        ...(doc.description !== undefined ? { description: doc.description } : {}),
+        steps: doc.steps,
+        ...(doc.source?.templateKey === planStamp
+          ? { existingSource: doc.source }
+          : {}),
+      });
+      if (minted.minted) {
+        console.warn(`[automation] mint-on-plan: ${minted.integrationKey}/${minted.actionName} (${minted.basis}${minted.createdDefinition ? ', new definition' : ''})`);
+        if (doc.source?.integrationKey !== minted.integrationKey || doc.source?.templateKey !== planStamp) {
+          doc = { ...doc, source: { integrationKey: minted.integrationKey, templateKey: planStamp }, updatedAt: new Date().toISOString() };
+          await automations.update(doc.id, () => ({ _id: doc.id, ...doc } as never));
+        }
+      } else {
+        console.warn(`[automation] mint-on-plan skipped: ${minted.reason}`);
+      }
+    } catch (err) {
+      console.warn(`[automation] mint-on-plan errored (plan unaffected): ${err instanceof Error ? err.message : String(err)}`);
+      minted = null;
+    }
+  }
+
   // Start a REHEARSAL run (the plan endpoint's documented double side effect) and respond early.
   const runId = await startRunInternal(doc.id, { userId: actor.userId, orgId: actor.orgId }, { kind: 'rehearsal', goal: input.goal });
 
@@ -581,6 +617,7 @@ export async function planFromGoal(
     automation: toWireAutomation(doc),
     runId,
     rehearsing: true,
+    ...(minted?.minted ? { integration: { key: minted.integrationKey, actionName: minted.actionName } } : {}),
   };
 }
 

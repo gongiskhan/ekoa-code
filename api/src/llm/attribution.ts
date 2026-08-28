@@ -51,7 +51,8 @@ export type ClassifierAgentType =
   | 'select-base-template'
   | 'classify-in-build-intent'
   | 'classify-tui-turn'
-  | 'vision-classify-human-action';
+  | 'vision-classify-human-action'
+  | 'classify-mint-mutates';
 
 /**
  * The attribution union, exactly as speced (§6.3):

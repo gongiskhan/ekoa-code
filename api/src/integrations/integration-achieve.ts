@@ -412,7 +412,9 @@ const GOAL_STOPWORDS = new Set([
   'quero', 'preciso', 'pode', 'podes', 'sobre', 'este', 'esta', 'isso', 'todos', 'todas',
 ]);
 
-function goalTokens(text: string): string[] {
+/** Exported for `definition-mint.ts`: a minted action's NAME must be produced by THIS tokenizer,
+ *  or the mint's "the creating goal names its own action exactly" property silently breaks. */
+export function goalTokens(text: string): string[] {
   return text
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
@@ -461,7 +463,7 @@ export type GoalMatch =
  * the read and invites the caller to ask for it directly; a false negative is the false success
  * above. The asymmetry is why the list errs small rather than empty.
  */
-const MUTATING_GOAL_VERBS: ReadonlySet<string> = new Set([
+export const MUTATING_GOAL_VERBS: ReadonlySet<string> = new Set([
   // Portuguese
   'apagar', 'apague', 'eliminar', 'elimine', 'remover', 'remova', 'arquivar', 'arquive',
   'cancelar', 'cancele', 'anular', 'anule', 'revogar', 'revogue', 'extinguir',

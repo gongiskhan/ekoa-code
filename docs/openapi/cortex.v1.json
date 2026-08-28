@@ -5716,6 +5716,22 @@
           },
           "rehearsing": {
             "type": "boolean"
+          },
+          "integration": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "actionName": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "actionName"
+            ],
+            "additionalProperties": false
           }
         },
         "required": [

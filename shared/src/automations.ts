@@ -120,12 +120,17 @@ export type PlanRequest = z.infer<typeof PlanRequest>;
 /**
  * Landmine 9: plan-from-goal is not pure planning - it persists the automation
  * and starts a rehearsal run, so the response names both side effects.
+ *
+ * `integration` (additive, mint-on-plan): the per-site integration + wrapper action the plan
+ * minted for this automation, when it did. Absent on plans that mint nothing (no outside origin,
+ * unwritable row, mint refusal) - the plan itself is unaffected either way.
  */
 export const PlanResponse = z.object({
   plan: Plan,
   automation: Automation.optional(),
   runId: Id.optional(),
   rehearsing: z.boolean().optional(),
+  integration: z.object({ key: z.string(), actionName: z.string() }).optional(),
 });
 export type PlanResponse = z.infer<typeof PlanResponse>;
 
