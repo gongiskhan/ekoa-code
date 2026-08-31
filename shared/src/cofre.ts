@@ -69,6 +69,35 @@ export const BoundOrigin = z.string().min(1).max(253);
 export type BoundOrigin = z.infer<typeof BoundOrigin>;
 
 /**
+ * WHERE THE CEREMONY WINDOW ACTUALLY OPENS - scheme + host + optional port, and nothing after the
+ * authority.
+ *
+ * A BINDING AND AN ADDRESS ARE NOT THE SAME FACT, and conflating them is what this schema separates.
+ * `BareHostname` above is right for the binding: a credential is bound to a HOST, and every matcher
+ * on the way back (`hostMatchesOrigin`) compares hosts. But the ceremony has to NAVIGATE somewhere,
+ * and a bare host cannot say which scheme or which port - so the daemon prepended `https://` and
+ * opened `:443`. That silently excluded every portal not served on https default port: an http-only
+ * intranet portal, any portal on a non-standard port, and this repo's own committed acceptance
+ * fixture (`http://127.0.0.1:45180`), whose ceremony leg could therefore never complete. Found live
+ * 2026-08-31, ERR_CONNECTION_TIMED_OUT at `https://127.0.0.1/`.
+ *
+ * THE SECURITY RATIONALE THAT NARROWED IT IS KEPT IN FULL. The reason a full URL was refused is that
+ * a login link's path and query routinely carry a token, and that value ends up in a browser a human
+ * is sitting in front of. Scheme and port are not secrets and carry no token, so this admits exactly
+ * those two and refuses everything else: no path (beyond a bare `/`), no query, no fragment, no
+ * userinfo. `http` and `https` only - a `javascript:` or `file:` target is not a portal.
+ */
+export const CeremonySiteUrl = z
+  .string()
+  .min(1)
+  .max(300)
+  .regex(
+    /^https?:\/\/(?!.*@)[a-z0-9.-]+(:\d{1,5})?\/?$/i,
+    'siteUrl must be scheme + host + optional port only (no path, no query, no fragment, no userinfo)',
+  );
+export type CeremonySiteUrl = z.infer<typeof CeremonySiteUrl>;
+
+/**
  * The item as the API returns it. There is NO value field and there never may be one — the item
  * view is what the dashboard and every host UI render, and a value here would defeat I1/I2 at the
  * contract layer rather than at a call site.
@@ -224,6 +253,9 @@ export const RelayLoginPrompt = z.object({
   relayId: z.string(),
   automationName: z.string(),
   siteOrigin: z.string(),
+  /** The openable address behind `siteOrigin` when it differs from `https://<siteOrigin>`; the
+   *  portal renders it so the human can see which address the window is going to. Additive. */
+  siteUrl: CeremonySiteUrl.optional(),
   reason: z.string(),
   expiresAt: z.string(),
 });
@@ -307,6 +339,12 @@ export const RunCredentialRequest = z.object({
   resumeFromStepIndex: z.number().int().nonnegative().optional(),
   /** The portal origin the step could not reach. A HOST or scheme+host, never a URL with secrets. */
   origin: BoundOrigin,
+  /**
+   * WHERE A CEREMONY WOULD OPEN, when the run resolved a scheme and a port that `origin` cannot
+   * carry. Additive (Rule 7): absent means "the bare host on https", which is what every pre-existing
+   * row means and what the daemon defaulted to before this field existed. See `CeremonySiteUrl`.
+   */
+  siteUrl: CeremonySiteUrl.optional(),
   /** Which integration the step was running. Trace + label only; never branched on (Rule 3). */
   integrationKey: z.string().min(1).max(128),
   /** Relative deep link into the Cofre portal where this credential is established. */
@@ -535,7 +573,7 @@ export type CofreDeleteResponse = z.infer<typeof CofreDeleteResponse>;
 
 /** A bare hostname and nothing else, shared by the two ceremony requests so the flow's two halves
  *  cannot disagree about what an origin is. See `CofreSessionEstablishRequest` for why it is this
- *  narrow: the value becomes the address a headed browser opens on the caller's own machine. */
+ *  narrow: the value is the Cofre BINDING key, and a binding is a statement about a host. */
 const BareHostname = BoundOrigin.regex(
   /^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/i,
   'origin must be a bare hostname (no scheme, no port, no path, no query)',
@@ -567,6 +605,13 @@ const BareHostname = BoundOrigin.regex(
  */
 export const CofreSessionEstablishRequest = z.object({
   origin: BareHostname,
+  /**
+   * The address the window opens at, when the halt resolved one. The ORIGIN still decides which
+   * ceremony this is and what the capture binds to; this only says which scheme and port to open,
+   * and the server refuses it when its host disagrees with `origin` - so it can widen the address
+   * but never redirect the ceremony at a different site.
+   */
+  siteUrl: CeremonySiteUrl.optional(),
 });
 export type CofreSessionEstablishRequest = z.infer<typeof CofreSessionEstablishRequest>;
 

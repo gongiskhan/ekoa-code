@@ -209,7 +209,8 @@ browser that must use one fixed API origin; tailnet mode does not need it.
 
 `EKOA_API_PORT` (4211) · `EKOA_WEB_PORT` (3000) · `EKOA_ADMIN_USERNAME` (admin) ·
 `EKOA_ADMIN_PASSWORD` (tmp12345) · `EKOA_SHOT_DIR` (.ekoa-run) ·
-`EKOA_API_MODE` (`built` | `dev`) · `EKOA_TAILNET` (expose on tailscale addresses) ·
+`EKOA_API_MODE` (`built` | `dev`) · `EKOA_API_HEALTH_TIMEOUT_MS` (180000) ·
+`EKOA_TAILNET` (expose on tailscale addresses) ·
 `EKOA_PUBLIC_WEB_HOST` (comma-separated extra hosts) · `EKOA_PUBLIC_API_URL`
 (verbatim API origin for the bundle).
 
@@ -249,6 +250,12 @@ committed harness never provided.
 
 - **`api/dist/server.js missing`** → run the build step above, or use
   `EKOA_API_MODE=dev`.
+- **`API did not answer /health on :4211 within 180000ms`** → not a broken stack. The
+  API registers every app under `~/.ekoa` before `/health` answers, so boot time scales
+  with that directory: ~90s on a lean box, **186s measured on a Mac carrying a 38G data
+  dir with 374 registered apps** (2026-08-31). Raise the ceiling:
+  `EKOA_API_HEALTH_TIMEOUT_MS=420000 npm run dev -- --built`. Built mode also beats the
+  ts-node `dev` default here, which did not answer inside the harness's own 120s window.
 - **`EADDRINUSE` on 3000/4111/4211** → a previous run is still up. Kill it:
   `pkill -f "driver.mjs"; pkill -f "next dev"; pkill -f "dev-api.mjs"`.
 - **`web /login never became reachable`** → `next dev` failed to compile; check

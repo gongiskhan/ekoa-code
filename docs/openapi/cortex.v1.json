@@ -4917,6 +4917,12 @@
         ],
         "additionalProperties": false
       },
+      "CeremonySiteUrl": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300,
+        "pattern": "^https?:\\/\\/(?!.*@)[a-z0-9.-]+(:\\d{1,5})?\\/?$"
+      },
       "CollectionsResponse": {
         "type": "object",
         "properties": {
@@ -5894,6 +5900,9 @@
           "siteOrigin": {
             "type": "string"
           },
+          "siteUrl": {
+            "$ref": "#/components/schemas/CeremonySiteUrl"
+          },
           "reason": {
             "type": "string"
           },
@@ -6009,6 +6018,9 @@
           },
           "origin": {
             "$ref": "#/components/schemas/BoundOrigin"
+          },
+          "siteUrl": {
+            "$ref": "#/components/schemas/CeremonySiteUrl"
           },
           "integrationKey": {
             "type": "string",

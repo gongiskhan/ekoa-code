@@ -183,6 +183,18 @@ export interface ReplayInput {
   /** The authenticated session. Absent ⇒ only a permissive origin can be replayed at all. */
   browser?: BrowserSession;
   /**
+   * WHETHER A STORED SESSION WAS ACTUALLY DELIVERED INTO `browser`, as opposed to a lease merely
+   * having been opened.
+   *
+   * The two are not the same and this layer could not previously tell them apart: it read the
+   * PRESENCE of `browser` as "authenticated", so a replay driving an empty jar issued its calls,
+   * collected the portal's 401, and classified that as the site having DRIFTED. Observed live
+   * 2026-08-31 superseding a recipe v1 -> v2 on every run against a fixture that had not changed,
+   * burning HEAL_BUDGET on what was only a missing cookie. Absent/false keeps the old reading for
+   * every caller that never had a session to speak of.
+   */
+  sessionDelivered?: boolean;
+  /**
    * Resolve ONE origin's posture. A FUNCTION, and asked once per call: see the module header - a
    * recipe spans origins and a single verdict for the list is a verdict for the wrong unit.
    */
@@ -364,6 +376,21 @@ export async function replayCompiledAction(input: ReplayInput, deps: ReplayDeps)
     }
 
     if (status < 200 || status >= 300) {
+      // AN AUTH REFUSAL IS NOT A SITE CHANGE. 401/403 means "you are not signed in", and when no
+      // stored session was delivered that is a statement about THIS ATTEMPT, not about the recipe:
+      // the endpoint may be exactly where it always was. Calling it drift supersedes a correct
+      // recipe, and repeating that consumes the heal budget until the recipe is cleared - a
+      // credential problem quietly destroying a working compile. `unavailable` is the existing
+      // outcome for "there is a recipe but no route that may carry it", and the caller falls
+      // through to the authored run, which CAN re-authenticate. With a session delivered, a 401 is
+      // still genuine drift (the site changed how it authorises) and still supersedes.
+      if ((status === 401 || status === 403) && input.sessionDelivered !== true) {
+        return {
+          outcome: 'unavailable',
+          reason: `replayed call ${index + 1} answered ${status} and no stored session was delivered`,
+          recipeVersion: recipe.version,
+        };
+      }
       return {
         outcome: 'drift',
         reason: `replayed call ${index + 1} answered ${status}`,

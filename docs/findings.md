@@ -6,6 +6,72 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
+- **`a-recipe-replay-carries-no-cofre-session-so-a-401-is-misread-as-drift`** (2026-08-31, **HIGH**,
+  replay spine; found running the cornerstone acceptance runbook live, after the three fixes below
+  got the authored run through the login wall). `replayIntegrationAction` mints its own execution id
+  (`replay-<uuid>`, service.ts ~1628) and opens a daemon browser through
+  `openOwnerBrowserSession` (`replay-action.ts:185`), which constructs `DaemonBrowserSession`
+  WITHOUT the `sessionState` option that class already accepts (`browser-session.ts:302`). The
+  hosted step seam only delivers a session when `req.sessionState !== undefined`
+  (`bridge/daemon-step-seam.ts:172`), so no `session.deliver` is ever sent for a replay - VERIFIED
+  LIVE: two authored runs produced exactly two `session.deliver` frames and the replay leg produced
+  none. The run profile is wiped on lease release, so the replay drives a signed-out jar.
+  THE CONSEQUENCE IS WORSE THAN A MISS. `injected-call.ts` treats the presence of a `browser` as
+  "the authenticated session" (`browser?: BrowserSession`, "Absent ⇒ only a permissive origin can be
+  replayed at all"); it cannot distinguish a browser lease from an AUTHENTICATED one. So the replay
+  proceeds, the portal answers 401, and the 401 is classified as SITE DRIFT: observed live, the
+  recipe superseded v1 -> v2 with `supersedes.reason = "replayed call 1 answered 401"` on the very
+  next run, against a fixture that had not changed at all. Every run therefore re-learns, the
+  promised zero-model replay never happens for a session-gated portal - which is exactly the case
+  the cornerstone showcases - and the thrash burns HEAL_BUDGET until the recipe is cleared. CLOSE BY
+  resolving the Cofre session for the recipe's origin on the replay leg (through the SAME checkout
+  the authored run uses, per Rule 1) and passing it as `sessionState`, AND distinguishing "no
+  authenticated session" from "the site moved" before `supersedeRecipe` is called - a 401/403 on a
+  replay whose session was never delivered is not drift and must not consume the heal budget.
+
+- **`a-ceremony-session-is-unusable-on-the-machine-that-established-it`** (2026-08-31, **HIGH**,
+  cofre session checkout / bridge egress; found running the cornerstone acceptance runbook live on a
+  Mac). The attended ceremony captures a session, stamps it
+  `establishedBy:{kind:'machine',pairingId:M}` + `boundEgress:{kind:'residential',pairingId:M}`
+  (`bridge/attended.ts`, the only writer of `establishedBy: machine`), and `checkoutSession`
+  (`cofre/session-checkout.ts:108`) then releases it ONLY when M appears in `residentialAvailable`.
+  That list is `residentialEgressPairings` (`automation/egress-policy.ts:87`), which requires the
+  daemon to advertise `egress.residential` AND carry an `egressEndpoint` - a real proxy address
+  (Tailscale in production, `docs/decisions.md` 2026-07-28 E-3). A bridge that has no proxy endpoint
+  configured - which is every local/dev bridge, and the one the committed acceptance runbook tells
+  the operator to start - therefore advertises no residential egress, so its OWN freshly captured
+  session is refused `egress-unavailable` on the very machine that established it and on which the
+  automation is already running via `desktop.automation`. VERIFIED LIVE end to end: ceremony
+  completed, item `itm_...` minted `boundOrigins:['127.0.0.1']`, `healthy:true`, unlocked; the
+  parked run resumed, re-navigated, and the page was still the login wall; a fresh run-now halted
+  `needs_credentials` again. THE LOOP IS THE HARM: `adhocSessionReuse`
+  (`automation/credential-gate.ts`) maps every non-`reused` verdict - including `needs-egress` - to
+  `not-applicable`, so no session is injected and the run halts with "answered with a sign-in wall",
+  which sends the user back to the ceremony that just succeeded. Indefinitely, with no surface
+  anywhere saying the session was found and withheld for want of an egress route. CLOSE BY (needs a
+  product decision): either treat a step already routed to machine M as satisfying M's own
+  residential binding (the traffic does leave from M, so the binding is met by construction), or
+  keep the requirement and make the refusal legible - surface `needs-egress` distinctly at the
+  action surface instead of collapsing it into the sign-in-wall halt, so the user is told the
+  session exists and what is missing. The silent collapse is the part that must not survive either
+  way.
+
+- **`the-needs_credentials-halt-has-no-door-on-the-integration-detail-page`** (2026-08-31,
+  **MEDIUM**, K2/K5 surface; found running the runbook live). The API answers a complete
+  `credentialRequest` - `portalDeepLink`, `reason`, and the `ceremony` relay prompt - but
+  `/integrations/[key]` renders only flat text plus the run id ("A sequência de passos está à espera
+  de uma credencial para continuar (run <uuid>)"). There is no link, no button, nothing that reaches
+  `/cofre`. The K2 halt is honest and then dead-ends: the user is told a credential is needed and
+  given no way to supply one, and the run id is the only thing on offer. Reaching the ceremony
+  required pasting the deep link by hand. CLOSE BY rendering `credentialRequest.portalDeepLink` as
+  the primary action of that banner, with `reason` as its text - both are already on the wire.
+
+- **`integrations-grid-logs-two-console-404s-for-a-citius-sync-state`** (2026-08-31, **LOW**,
+  dashboard; found running the runbook live). Loading `/integrations` emits two console errors,
+  `GET /api/v1/sync/citius/notificacoes/state 404`, on a workspace with no Citius integration
+  configured. Violates the standing zero-console-error bar for dashboard specs (CLAUDE.md QA
+  process). Unrelated to the cornerstone; surfaced by driving the surface it ships on.
+
 - **`the-rehearsal-fixer-may-relocate-a-run-to-any-origin`** (2026-08-28, **MEDIUM**, engine
   self-correction; found tracing a live wrong-origin run). `proposePatch` may author a replacement
   `navigate` step with ANY url (`rehearsal.ts` accepts any non-empty string; `VALID_STEP_TYPES_FOR_

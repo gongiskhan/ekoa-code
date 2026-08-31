@@ -8,9 +8,35 @@
 // simulating the site drift the self-heal must survive.
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const PORT = Number(process.env.PORT ?? 45180);
-const sessions = new Set();
+
+// SESSIONS SURVIVE A RESTART, and that is what makes step 5 of the runbook mean anything.
+//
+// The drift step says "restart the fixture with EKOA_FIXTURE_BREAK=1". With the session set held
+// only in memory, that restart also destroys the session the ceremony captured - so the next run
+// meets a LOGIN WALL rather than a moved endpoint, and what gets exercised is re-authentication
+// instead of self-heal. Two variables move at once and the step tests the wrong one. Persisting the
+// ids keeps the break flag isolated to the single thing it is meant to change: where the API lives.
+const STORE = join(tmpdir(), 'ekoa-fixture-portal-sessions.json');
+function loadSessions() {
+  try {
+    return new Set(JSON.parse(readFileSync(STORE, 'utf8')));
+  } catch {
+    return new Set();
+  }
+}
+const sessions = loadSessions();
+function persist() {
+  try {
+    writeFileSync(STORE, JSON.stringify([...sessions]));
+  } catch {
+    /* a fixture that cannot persist still serves; it just forgets across restarts. */
+  }
+}
 const BROKEN = process.env.EKOA_FIXTURE_BREAK === '1';
 const API_PATH = BROKEN ? '/api/v2/pedidos' : '/api/pedidos';
 
@@ -41,6 +67,7 @@ const server = createServer((req, res) => {
       if (params.get('user') === 'demo' && params.get('pass') === 'demo123') {
         const sid = randomUUID();
         sessions.add(sid);
+        persist();
         res.writeHead(302, { 'Set-Cookie': `fixture_session=${sid}; HttpOnly; Path=/`, Location: '/painel' });
         return res.end();
       }
@@ -96,5 +123,5 @@ const server = createServer((req, res) => {
 });
 
 server.listen(PORT, '127.0.0.1', () => {
-  console.log(`fixture portal on http://127.0.0.1:${PORT} (api at ${API_PATH})`);
+  console.log(`fixture portal on http://127.0.0.1:${PORT} (api at ${API_PATH}, ${sessions.size} session(s) restored)`);
 });

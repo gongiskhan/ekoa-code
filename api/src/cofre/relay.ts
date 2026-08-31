@@ -41,6 +41,9 @@ export interface IssueLoginRelayInput {
   automationName: string;
   /** The portal origin the ceremony is against. */
   siteOrigin: string;
+  /** The address the window opens at, when it is not `https://<siteOrigin>` (an http-only portal or
+   *  a non-default port). Shown to the human so the prompt names the address they will land on. */
+  siteUrl?: string;
   /** Why a human is needed, composed from the host and the route - never a failure body. */
   reason: string;
 }
@@ -61,6 +64,7 @@ export function issueLoginRelayPrompt(
     relayId: deps.genId?.() ?? `rly_${randomUUID().replace(/-/g, '').slice(0, 20)}`,
     automationName: input.automationName,
     siteOrigin: input.siteOrigin,
+    ...(input.siteUrl ? { siteUrl: input.siteUrl } : {}),
     reason: input.reason,
     expiresAt: new Date(nowMs + LOGIN_RELAY_TTL_MS).toISOString(),
   });

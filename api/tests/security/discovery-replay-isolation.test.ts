@@ -47,7 +47,10 @@ const recipes = new IntegrationRecipeStore(integrationDefinitions, () => new Dat
 const KEY = 'portal';
 const ACTION = 'list_cases';
 
-function definition(actor: Actor, opts: { posture?: 'permissive' | 'adversarial' } = {}): IntegrationDefinitionCreate {
+function definition(
+  actor: Actor,
+  opts: { posture?: 'permissive' | 'adversarial'; withHttpConfig?: boolean } = {},
+): IntegrationDefinitionCreate {
   return {
     orgId: actor.orgId,
     userId: actor.userId,
@@ -59,7 +62,11 @@ function definition(actor: Actor, opts: { posture?: 'permissive' | 'adversarial'
       description: 'lista',
       mutates: false,
       ...(opts.posture ? { posture: opts.posture } : {}),
-      httpConfig: { baseUrl: 'https://portal.example', path: '/api/cases', method: 'GET' },
+      // A BROWSER-STEPS action has none - it is bound to an automation, not to an HTTP endpoint,
+      // and every minted cornerstone action is this shape. Default keeps the existing fixtures.
+      ...(opts.withHttpConfig === false
+        ? {}
+        : { httpConfig: { baseUrl: 'https://portal.example', path: '/api/cases', method: 'GET' } }),
     }],
     skillMd: `# ${KEY}\n`,
   };
@@ -89,6 +96,14 @@ const twoOriginDraft: RecipeDraft = {
 
 /** A session whose injected call always succeeds, so the only thing that can stop a replay is the
  *  tenancy gate or the posture gate - never the transport. */
+/** A session whose in-page call is REFUSED by the portal - the shape a signed-out replay meets. */
+function refusingSession(status: number): BrowserSession {
+  return {
+    ...(workingSession() as unknown as Record<string, unknown>),
+    injectCall: async () => ({ status, ok: false, bodyText: '{"error":"sessao necessaria"}', responseHeaderNames: [] }),
+  } as unknown as BrowserSession;
+}
+
 function workingSession(): BrowserSession {
   return {
     act: async () => undefined,
@@ -182,6 +197,98 @@ describe('replay: one org\'s learning never runs for another', () => {
     expect(closed.outcome).toBe('unavailable');
     expect((closed as { reason: string }).reason).toContain('adversarial');
   });
+});
+
+/**
+ * THE REPLAY'S OWN SESSION - the leg that made a missing cookie look like a moved website.
+ *
+ * A replay mints its own execution id (`replay-<uuid>`), and the daemon holds delivered sessions
+ * keyed by runId - so the authored run's delivery, made under a different id, was never found and
+ * the replay drove a signed-out jar. `replayCompiledAction` cannot tell a browser LEASE from an
+ * authenticated one, so it issued the call anyway, took the portal's 401, and superseded the recipe
+ * as DRIFT. Observed live 2026-08-31 against a fixture that had not changed, on every run.
+ */
+describe('replay: the session the recipe needs travels with it', () => {
+  it('checks out the stored session for the recipe origin and hands it to the browser', async () => {
+    await createRow(definition(userA));
+    await recipes.putRecipe('orgA', KEY, ACTION, recipeDraft);
+
+    let handed: unknown = 'not-called';
+    const resolved = { cookies: [{ name: 'sid', value: 'v', domain: 'portal.example' }] };
+    await replayIntegrationAction(
+      { orgId: 'orgA', ownerUserId: userA.userId, integrationKey: KEY, actionName: ACTION, args: {}, mutates: false },
+      {
+        ...replayDeps,
+        // The origin comes off the recipe's own compiled call, which for a browser-steps action is
+        // the only statement of where it goes.
+        resolveSession: async (_input, origin) => (origin === 'https://portal.example' ? resolved : null),
+        openSession: async (_input, sessionState) => {
+          handed = sessionState;
+          return { browser: workingSession(), close: async () => undefined };
+        },
+      },
+    );
+    expect(handed).toEqual(resolved);
+  });
+
+  it("reads the origin off the recipe's OWN calls when the action declares no baseUrl", async () => {
+    // THE BROWSER-STEPS SHAPE, which is the only shape a minted cornerstone action has - and the
+    // one the first version of this code got wrong by reading the wire projection's `calls` instead
+    // of the stored `injectedCalls`. The suite passed anyway because every other fixture here
+    // declares an `httpConfig.baseUrl`, so the fallback branch was never taken. Live, it was the
+    // only branch: no origin was resolved, no session was looked up, and the replay ran signed out.
+    await createRow(definition(userA, { withHttpConfig: false }));
+    await recipes.putRecipe('orgA', KEY, ACTION, recipeDraft);
+
+    const seen: string[] = [];
+    await replayIntegrationAction(
+      { orgId: 'orgA', ownerUserId: userA.userId, integrationKey: KEY, actionName: ACTION, args: {}, mutates: false },
+      {
+        ...replayDeps,
+        resolveSession: async (_input, origin) => {
+          seen.push(origin);
+          return { cookies: [] };
+        },
+      },
+    );
+    expect(seen).toEqual(['https://portal.example']);
+  });
+
+  it('reads a 401 with NO delivered session as unavailable, never as drift', async () => {
+    // The recipe must SURVIVE a credential problem. Superseding on a 401 destroyed a correct
+    // compile - and repeating it every run consumed the heal budget until the recipe was cleared.
+    await createRow(definition(userA));
+    await recipes.putRecipe('orgA', KEY, ACTION, recipeDraft);
+
+    const res = await replayIntegrationAction(
+      { orgId: 'orgA', ownerUserId: userA.userId, integrationKey: KEY, actionName: ACTION, args: {}, mutates: false },
+      {
+        ...replayDeps,
+        resolveSession: async () => null,
+        openSession: async () => ({ browser: refusingSession(401), close: async () => undefined }),
+      },
+    );
+    expect(res.outcome).toBe('unavailable');
+    expect((res as { reason: string }).reason).toContain('no stored session was delivered');
+    // Untouched: still v1, so the next authored run re-authenticates and the recipe still applies.
+    expect((await recipes.getRecipe('orgA', KEY, ACTION) as { version: number }).version).toBe(1);
+  });
+
+  it('still reads a 401 as DRIFT once a session WAS delivered - then the site really did change', async () => {
+    await createRow(definition(userA));
+    await recipes.putRecipe('orgA', KEY, ACTION, recipeDraft);
+
+    const res = await replayIntegrationAction(
+      { orgId: 'orgA', ownerUserId: userA.userId, integrationKey: KEY, actionName: ACTION, args: {}, mutates: false },
+      {
+        ...replayDeps,
+        resolveSession: async () => ({ cookies: [{ name: 'sid', value: 'v', domain: 'portal.example' }] }),
+        openSession: async () => ({ browser: refusingSession(401), close: async () => undefined }),
+      },
+    );
+    expect(res.outcome).toBe('drift');
+  });
+
 });
 
 describe('replay: posture does not travel from one origin to the next', () => {

@@ -117,6 +117,11 @@ function makePage(): FakePage {
     locator: (s: string) => fakeLocator(page, `css:${s}`),
     isClosed: () => page.closed,
     close: async () => void (page.closed = true),
+    // The network recorder attaches listeners to the page when capture is armed. Stubbed rather
+    // than modelled: these tests assert the LEASE and the jar, not what the recorder collects.
+    on: () => undefined,
+    off: () => undefined,
+    removeListener: () => undefined,
   } as unknown as FakePage;
   return page;
 }
@@ -658,6 +663,44 @@ describe('THE RUN-SCOPED LEASE - a run is a sequence of steps, not a sequence of
       expect(res.ok, JSON.stringify(action)).toBe(true);
     }
     // Injected once, at the start of the run; never cleared while the run is still going.
+    expect(jar.cookiesAdded).toEqual([1]);
+    expect(jar.cleared).toBe(0);
+  });
+
+  /**
+   * ARMING CAPTURE MUST NOT SIGN THE RUN OUT.
+   *
+   * `holdForRun` resolves the injected session ONLY when it CREATES the lease, and a learning run's
+   * first op is `captureOp:'start'` - before any navigate. That call site passed no session thunk,
+   * so it took the lease with an empty jar; every later act found the existing lease and never
+   * consulted its own thunk. The run then drove a signed-out browser with the delivered Cofre
+   * session sitting unused in RAM, and the engine reported the resulting login page as "the site
+   * answered with a sign-in wall" - sending the user back to the ceremony that had just succeeded.
+   * Found live 2026-08-31 running the cornerstone acceptance runbook.
+   *
+   * The ordering is the whole test: capture FIRST, navigate second.
+   */
+  it('injects the session when capture is armed BEFORE the first navigate', async () => {
+    const runtime = buildRuntime({
+      sessionStateFor: () => ({ cookies: [{ name: 'sid', value: 'v', domain: 'portal.test' }] }),
+    });
+
+    await invoke(runtime, {
+      invocationId: 'i0',
+      capability: 'desktop.automation',
+      input: { capability: 'browser', input: { owner: 'u1', captureOp: 'start' }, runId: 'r1' },
+    });
+    // The jar is authenticated from the moment the lease exists, not from the first navigation.
+    expect(jar.cookiesAdded).toEqual([1]);
+
+    sent = [];
+    const res = await invoke(runtime, {
+      invocationId: 'i1',
+      capability: 'desktop.automation',
+      input: browserStep({ action: 'navigate', url: 'https://portal.test/inbox' }),
+    });
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+    // Still exactly one injection: the lease is shared, so the session is not re-applied per step.
     expect(jar.cookiesAdded).toEqual([1]);
     expect(jar.cleared).toBe(0);
   });

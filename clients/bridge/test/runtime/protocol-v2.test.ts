@@ -132,6 +132,16 @@ describe('attended.request — the frame that used to vanish', () => {
     const context = {
       newPage: () => Promise.resolve(page),
       storageState: () => Promise.resolve(state),
+      // REQUIRED by `CeremonyContext`: the ceremony's live poll reads cookies only, because
+      // `storageState()` opens a foreground target and steals the operator's focus
+      // (D-CEREMONY-STREAM-FOCUS). The close fallback pushes the freshest poll, so a fake without
+      // this member makes the ceremony throw and push nothing - which is what left these two specs
+      // red on main. Mirrors `test/attended/fake-browser.ts`: the current state's cookies, no
+      // origins, exactly as the real `context.cookies()` returns.
+      cookies: () => {
+        const s = state as { cookies?: unknown[] } | null;
+        return Promise.resolve(Array.isArray(s?.cookies) ? s.cookies : []);
+      },
       close: () => Promise.resolve(),
       on: () => undefined,
     };

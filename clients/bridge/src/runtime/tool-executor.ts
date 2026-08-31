@@ -198,7 +198,9 @@ async function runBrowserStep(
   if ('leaseOp' in parsed.data) {
     return await runLeaseOp(parsed.data.leaseOp, leaseId, envelope.runId, profileId, ctx, deps);
   }
-  if ('captureOp' in parsed.data) return await runCaptureOp(parsed.data.captureOp, leaseId, profileId, ctx, deps);
+  if ('captureOp' in parsed.data) {
+    return await runCaptureOp(parsed.data.captureOp, leaseId, profileId, envelope.runId, ctx, deps);
+  }
   if ('injectedCall' in parsed.data) {
     return await runInjectedCallOp(parsed.data.injectedCall, leaseId, profileId, envelope.runId, ctx, deps);
   }
@@ -443,6 +445,7 @@ async function runCaptureOp(
   op: LocalBrowserCaptureOp,
   leaseId: string,
   profileId: string,
+  runId: string,
   ctx: Tier2Context,
   deps: ToolExecutorDeps,
 ): Promise<ToolExecutionResult> {
@@ -452,7 +455,23 @@ async function runCaptureOp(
     return { ok: true, output: {} };
   }
   try {
-    return await deps.profiles.withRunLease({ leaseId, profileId }, async (lease) => {
+    return await deps.profiles.withRunLease(
+      {
+        leaseId,
+        profileId,
+        // THE SAME SESSION THUNK THE OTHER TWO CALL SITES PASS, and omitting it here was a silent
+        // sign-out. `holdForRun` resolves the session ONLY when it creates the lease, and arming
+        // network capture is the FIRST op of a learning run - before the first navigate. So a
+        // capture:start with no thunk took the lease with an empty jar, every later act found that
+        // lease and never consulted its own thunk, and the run drove a signed-out browser while the
+        // delivered Cofre session sat in RAM unused. Found live 2026-08-31: `session.deliver`
+        // arrived with a cookie, the thunk was never invoked, and the page showed the login wall -
+        // which the engine then reported as "the site answered with a sign-in wall", sending the
+        // user back to the ceremony that had just succeeded. Capture is armed exactly when a run is
+        // LEARNING, so this disabled session injection on the cornerstone's own learn path.
+        session: () => parseSessionState(deps.sessionStateFor?.(runId)),
+      },
+      async (lease) => {
       const page = await lease.page();
       // `buffer: true` - this caller is the one that wants the exchanges themselves. It also
       // UPGRADES a values-only recorder a replay armed earlier on the same lease.
@@ -460,7 +479,8 @@ async function runCaptureOp(
       recorder.attach(page as unknown as CapturePage);
       ledgerAutomation(ctx, 'browser', 'capture:start', 'ran');
       return { ok: true, output: {} };
-    });
+      },
+    );
   } catch (err) {
     const reason = errorText(err);
     ledgerAutomation(ctx, 'browser', 'capture:start', 'error', undefined, reason);

@@ -43,6 +43,8 @@
  *   EKOA_API_PORT (4211) EKOA_WEB_PORT (3000) EKOA_ADMIN_USERNAME (admin)
  *   EKOA_ADMIN_PASSWORD (tmp12345) EKOA_SHOT_DIR (.ekoa-run)
  *   EKOA_API_MODE (built|dev, default built — --built needs api/dist, run `npm run build` first)
+ *   EKOA_API_HEALTH_TIMEOUT_MS (180000) how long to wait for the API's /health; raise it on a
+ *                           machine whose ~/.ekoa data dir registers hundreds of apps at boot
  *   EKOA_TAILNET=1          expose the stack on this machine's tailscale name + IP (auto-resolved)
  *   EKOA_PUBLIC_WEB_HOST    comma-separated extra hosts the stack is reached on (what
  *                           EKOA_TAILNET resolves into; drives next allowedDevOrigins,
@@ -75,6 +77,11 @@ const WEB_PORT = process.env.EKOA_WEB_PORT || '3000';
 const USER = process.env.EKOA_ADMIN_USERNAME || 'admin';
 const PASS = process.env.EKOA_ADMIN_PASSWORD || 'tmp12345';
 const API_MODE = process.env.EKOA_API_MODE || 'built';
+// The API registers every app under the data dir before /health answers, so the ceiling is a
+// property of the MACHINE, not the code: a lean box boots in ~90s, a box whose ~/.ekoa has
+// accumulated hundreds of sandboxes takes far longer (374 apps -> 186s measured on a Mac,
+// 2026-08-31, where the fixed 180s read as a broken stack). Overridable, default unchanged.
+const API_HEALTH_TIMEOUT_MS = Number(process.env.EKOA_API_HEALTH_TIMEOUT_MS) || 180_000;
 const SHOT_DIR = process.env.EKOA_SHOT_DIR || join(ROOT, '.ekoa-run');
 const WEB_BASE = `http://localhost:${WEB_PORT}`;
 
@@ -329,9 +336,14 @@ async function bootWeb() {
 // ---- Bring the whole stack up ---------------------------------------------
 async function bootStack() {
   bootApi();
-  // Cold boots register ~200 featured apps before /health answers (~90s observed 2026-07-11).
-  if (!(await waitForHttp(`http://127.0.0.1:${API_PORT}/health`, { timeoutMs: 180_000 }))) {
-    throw new Error(`API did not answer /health on :${API_PORT}`);
+  // Cold boots register every app under the data dir before /health answers (~90s observed
+  // 2026-07-11 on a lean box; 186s with a 38G data dir, 2026-08-31). Raise the ceiling with
+  // EKOA_API_HEALTH_TIMEOUT_MS rather than reading a slow data dir as a dead API.
+  if (!(await waitForHttp(`http://127.0.0.1:${API_PORT}/health`, { timeoutMs: API_HEALTH_TIMEOUT_MS }))) {
+    throw new Error(
+      `API did not answer /health on :${API_PORT} within ${API_HEALTH_TIMEOUT_MS}ms `
+      + '(a large ~/.ekoa data dir slows boot - raise EKOA_API_HEALTH_TIMEOUT_MS)',
+    );
   }
   log('API healthy');
   await startProxy();

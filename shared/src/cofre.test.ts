@@ -9,6 +9,8 @@ import {
   StepDeclaration,
   assertGrantAllowedForItemType,
   CREDENTIAL_REF_PATTERN,
+  CeremonySiteUrl,
+  CofreSessionEstablishRequest,
 } from './cofre.js';
 
 /**
@@ -212,5 +214,63 @@ describe('StepDeclaration defaults', () => {
 
   it('rejects a credentialRef that is actually a value', () => {
     expect(StepDeclaration.safeParse({ credentialRefs: ['sk-live-abcdef'] }).success).toBe(false);
+  });
+});
+
+/**
+ * THE CEREMONY'S ADDRESS - as narrow as the bare hostname it widens, in every direction that
+ * mattered.
+ *
+ * The reason a full URL was refused here is real: a login link's path and query routinely carry a
+ * token, and this value becomes the address a headed browser opens in front of a human. What the
+ * refusal ALSO threw away was the scheme and the port, which are not secrets - and without them the
+ * daemon could only guess `https://` on :443, so an http-only portal, a portal on a non-standard
+ * port, and this repo's own acceptance fixture were all unreachable. This schema admits exactly
+ * those two facts back and nothing else.
+ */
+describe('CeremonySiteUrl', () => {
+  it('accepts scheme + host + optional port', () => {
+    for (const ok of [
+      'http://127.0.0.1:45180',
+      'https://portal.example',
+      'https://portal.example:8443',
+      'http://intranet.local',
+      'https://portal.example/',
+    ]) {
+      expect(CeremonySiteUrl.safeParse(ok).success).toBe(true);
+    }
+  });
+
+  it('refuses everything after the authority - the token-in-a-login-link case', () => {
+    for (const bad of [
+      'https://portal.example/login',
+      'https://portal.example/?token=SECRET',
+      'https://portal.example#frag',
+      'https://portal.example/a/b',
+    ]) {
+      expect(CeremonySiteUrl.safeParse(bad).success).toBe(false);
+    }
+  });
+
+  it('refuses userinfo, so a credential cannot ride in the address', () => {
+    expect(CeremonySiteUrl.safeParse('https://user:pass@portal.example').success).toBe(false);
+    expect(CeremonySiteUrl.safeParse('https://user@portal.example').success).toBe(false);
+  });
+
+  it('refuses a scheme that is not http(s) - a headed window is not pointed at those', () => {
+    for (const bad of ['file:///etc/passwd', 'javascript:alert(1)', 'ftp://portal.example', 'portal.example']) {
+      expect(CeremonySiteUrl.safeParse(bad).success).toBe(false);
+    }
+  });
+
+  it('is OPTIONAL on the establish request, so a caller that sends only an origin is unchanged', () => {
+    expect(CofreSessionEstablishRequest.safeParse({ origin: 'portal.example' }).success).toBe(true);
+    expect(
+      CofreSessionEstablishRequest.safeParse({ origin: '127.0.0.1', siteUrl: 'http://127.0.0.1:45180' }).success,
+    ).toBe(true);
+    expect(
+      CofreSessionEstablishRequest.safeParse({ origin: '127.0.0.1', siteUrl: 'http://127.0.0.1:45180/painel' })
+        .success,
+    ).toBe(false);
   });
 });

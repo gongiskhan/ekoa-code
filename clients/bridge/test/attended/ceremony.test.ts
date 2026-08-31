@@ -265,6 +265,53 @@ describe('attended ceremony — the machine half of J-5', () => {
     await runAttendedCeremony({ ...REQ, origin: 'portal.tribunais.org.pt' }, h.deps);
     expect(h.page.gotoCalls).toEqual(['https://portal.tribunais.org.pt']);
   });
+
+  /**
+   * THE GUESS THE BARE HOST FORCED, and what replaces it.
+   *
+   * `https://<host>` is the right assumption for a public portal and a wrong one for everything
+   * else: an http-only intranet portal, a portal on a non-standard port, and this repo's own
+   * acceptance fixture at `http://127.0.0.1:45180` were all opened at `https://<host>:443` and timed
+   * out (found live 2026-08-31). Cortex now sends the address it actually resolved.
+   */
+  describe('siteUrl - the address Cortex resolved', () => {
+    it('opens the declared address instead of guessing https, keeping the port', async () => {
+      const h = harness();
+      closeSoon(h);
+      await runAttendedCeremony(
+        { ...REQ, origin: '127.0.0.1', siteUrl: 'http://127.0.0.1:45180' },
+        h.deps,
+      );
+      expect(h.page.gotoCalls).toEqual(['http://127.0.0.1:45180']);
+    });
+
+    it('falls back to the https guess when Cortex sends none (an older halt, unchanged)', async () => {
+      const h = harness();
+      closeSoon(h);
+      await runAttendedCeremony({ ...REQ, origin: 'portal.tribunais.org.pt', siteUrl: undefined }, h.deps);
+      expect(h.page.gotoCalls).toEqual(['https://portal.tribunais.org.pt']);
+    });
+
+    it('reduces the address to an origin, so a path or query can never reach the window', async () => {
+      // Defence in depth: `CeremonySiteUrl` already refuses these at the wire boundary. The daemon
+      // is the thing that actually opens a window in front of a human, so it does not rely on that.
+      const h = harness();
+      closeSoon(h);
+      await runAttendedCeremony(
+        { ...REQ, origin: 'portal.example', siteUrl: 'http://portal.example:8080/login?token=SECRET' },
+        h.deps,
+      );
+      expect(h.page.gotoCalls).toEqual(['http://portal.example:8080']);
+      expect(h.page.gotoCalls[0]).not.toContain('SECRET');
+    });
+
+    it('falls back rather than opening a malformed address', async () => {
+      const h = harness();
+      closeSoon(h);
+      await runAttendedCeremony({ ...REQ, origin: 'portal.example', siteUrl: 'not a url' }, h.deps);
+      expect(h.page.gotoCalls).toEqual(['https://portal.example']);
+    });
+  });
 });
 
 /**

@@ -145,6 +145,28 @@ function ItemRow({ item }: { item: CofreItem }) {
 }
 
 /**
+ * A link-supplied address, accepted ONLY as scheme + host + port on the host we already accepted.
+ *
+ * Returns the normalised origin, or null for anything else. Null is a refusal, not a repair: a
+ * "cleaned up" address is a guess about where someone should type their password, which is the same
+ * reason the origin parameter above is dropped rather than sanitised.
+ */
+function sameHostOrigin(raw: string, host: string | null): string | null {
+  if (!raw || !host) return null;
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    if (u.username || u.password) return null;
+    if (u.search || u.hash) return null;
+    if (u.pathname !== '' && u.pathname !== '/') return null;
+    if (u.hostname.toLowerCase() !== host) return null;
+    return u.origin.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * THE OTHER END OF A RUN'S `needs_credentials` DEEP LINK.
  *
  * A run that walked into a sign-in wall on a site nobody declared halts and sends the person here
@@ -156,7 +178,7 @@ function ItemRow({ item }: { item: CofreItem }) {
  * vantage point it will be replayed from, and the Ponte Ekoa is what has one - so this button only
  * ever ASKS, and the outcome shows up as the run continuing, minutes later, on its own page.
  */
-function EstablishSessionCard({ origin }: { origin: string }) {
+function EstablishSessionCard({ origin, siteUrl }: { origin: string; siteUrl: string | null }) {
   const { establishSession, captureSession } = useCofreStore();
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<{
@@ -174,7 +196,7 @@ function EstablishSessionCard({ origin }: { origin: string }) {
   async function doEstablish() {
     setBusy(true);
     setCapture(null);
-    setOutcome(await establishSession(origin));
+    setOutcome(await establishSession(origin, siteUrl ?? undefined));
     setBusy(false);
   }
 
@@ -193,7 +215,7 @@ function EstablishSessionCard({ origin }: { origin: string }) {
         </div>
         <div className="min-w-0 flex-1 space-y-2">
           <div>
-            <h2 className="text-sm font-semibold">Iniciar sessão em {origin}</h2>
+            <h2 className="text-sm font-semibold">Iniciar sessão em {siteUrl ?? origin}</h2>
             <p className="text-sm text-muted-foreground">
               Uma execução parou porque este site pediu autenticação. Abrimos uma janela na sua máquina para
               iniciar sessão; a sessão fica cifrada no cofre e a execução continua sozinha.
@@ -324,6 +346,9 @@ export default function CofrePage() {
    * boundary on the route, and one query parameter is not worth restructuring the page for.
    */
   const [halterOrigin, setHalterOrigin] = useState<string | null>(null);
+  /** The openable address behind `halterOrigin` when the halt resolved one (an http-only portal or a
+   *  non-default port). Only ever widens the address of the SAME host - see the validation below. */
+  const [halterSiteUrl, setHalterSiteUrl] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchItems();
@@ -335,7 +360,16 @@ export default function CofrePage() {
     // gets rendered and then sent back as the ceremony's target: anything that is not a plain
     // hostname is dropped rather than cleaned up, because a "cleaned up" hostname is a guess about
     // where someone should type their password.
-    setHalterOrigin(/^[a-z0-9.-]{1,253}$/i.test(raw) && raw.includes('.') ? raw.toLowerCase() : null);
+    const host = /^[a-z0-9.-]{1,253}$/i.test(raw) && raw.includes('.') ? raw.toLowerCase() : null;
+    setHalterOrigin(host);
+
+    // SAME TREATMENT, ONE STEP WIDER. `siteUrl` carries the scheme and port a bare host cannot, and
+    // it is caller-supplied text on the same link - so it is accepted only as scheme + host + port
+    // (no path, no query, no fragment, no userinfo, http/https only) AND only when its host is the
+    // origin already accepted above. Anything else is dropped, never repaired: the ceremony then
+    // falls back to `https://<origin>`, which is what it did before this parameter existed.
+    const rawUrl = new URLSearchParams(window.location.search).get('siteUrl')?.trim() ?? '';
+    setHalterSiteUrl(sameHostOrigin(rawUrl, host));
   }, []);
 
   const anyUnlocked = items.some((i) => i.state !== 'locked');
@@ -367,7 +401,7 @@ export default function CofrePage() {
           ) : null
         }
       />
-      {halterOrigin ? <EstablishSessionCard origin={halterOrigin} /> : null}
+      {halterOrigin ? <EstablishSessionCard origin={halterOrigin} siteUrl={halterSiteUrl} /> : null}
       {error ? (
         <Card className="border-destructive/40 p-4 text-sm text-destructive">{error}</Card>
       ) : null}

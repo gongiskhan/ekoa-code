@@ -62,8 +62,11 @@ import type { RunCredentialRequest } from '@ekoa/shared';
  * host, and an absolute URL composed server-side would be one more place a wrong origin could be
  * introduced into something a user is invited to click.
  */
-export function cofrePortalDeepLink(origin: string): string {
-  return `/cofre?origin=${encodeURIComponent(origin)}`;
+export function cofrePortalDeepLink(origin: string, siteUrl?: string | null): string {
+  const base = `/cofre?origin=${encodeURIComponent(origin)}`;
+  // The portal needs the openable address to hand back on establish; the ORIGIN still identifies the
+  // ceremony, so a link carrying only the origin (every pre-existing one) keeps working unchanged.
+  return siteUrl ? `${base}&siteUrl=${encodeURIComponent(siteUrl)}` : base;
 }
 
 export interface CredentialGateInput {
@@ -202,7 +205,7 @@ export async function evaluateCredentialGate(
 
   const resolved = await resolveStepOrigin(input.steps, input.index, input.actor, d.loadActionDeclaration);
   if (!resolved) return { kind: 'not-applicable' };
-  const { origin, action, integrationKey } = resolved;
+  const { origin, siteUrl, action, integrationKey } = resolved;
 
   const classification = classifyOrigin(`https://${origin}`, action ?? undefined);
 
@@ -249,6 +252,7 @@ export async function evaluateCredentialGate(
         request: buildRequest({
           input,
           origin,
+          siteUrl,
           integrationKey,
           classification,
           mode: 'ceremony',
@@ -297,6 +301,7 @@ export async function evaluateCredentialGate(
     request: buildRequest({
       input,
       origin,
+      siteUrl,
       integrationKey,
       classification,
       mode: credentialEstablishmentMode({
@@ -388,7 +393,7 @@ async function adhocSessionReuse(
 
   const resolved = await resolveStepOrigin(input.steps, input.index, input.actor, d.loadActionDeclaration);
   if (!resolved) return { kind: 'not-applicable' };
-  const { origin, action, integrationKey } = resolved;
+  const { origin, siteUrl, action, integrationKey } = resolved;
 
   const classification = classifyOrigin(`https://${origin}`, action ?? undefined);
   if (classification.posture !== 'adversarial') return { kind: 'not-applicable' };
@@ -485,18 +490,26 @@ export function credentialEstablishmentMode(input: {
 function buildRequest(args: {
   input: CredentialGateInput;
   origin: string;
+  /** Scheme + host + port for the ceremony to open, when the step's URL gave one. See
+   *  `ResolvedStepOrigin.siteUrl`; `origin` stays the binding key either way. */
+  siteUrl: string | null;
   integrationKey: string;
   classification: OriginClassification;
   mode: 'typist' | 'ceremony';
   reason: string;
   issueRelay: typeof issueLoginRelayPrompt;
 }): RunCredentialRequest {
-  const { input, origin, integrationKey, mode, reason } = args;
+  const { input, origin, siteUrl, integrationKey, mode, reason } = args;
+  // Carried only when it says something `origin` does not. `https://<host>` is exactly what the
+  // daemon assumes on its own, so emitting it would add a field with no information and a second
+  // place for the two to disagree.
+  const openable = siteUrl && siteUrl !== `https://${origin}` ? siteUrl : null;
   return {
     stepIndex: input.index,
     origin,
+    ...(openable ? { siteUrl: openable } : {}),
     integrationKey,
-    portalDeepLink: cofrePortalDeepLink(origin),
+    portalDeepLink: cofrePortalDeepLink(origin, openable),
     mode,
     reason: reason.slice(0, 500),
     // A ceremony request gets the login relay prompt so the portal can say WHERE to log in; a
@@ -506,6 +519,7 @@ function buildRequest(args: {
           ceremony: args.issueRelay({
             automationName: input.automationName,
             siteOrigin: origin,
+            ...(openable ? { siteUrl: openable } : {}),
             reason: reason.slice(0, 500),
           }),
         }
@@ -527,6 +541,17 @@ function isMissingLoginRecipe(err: unknown): boolean {
 interface ResolvedStepOrigin {
   /** Bare host, lower-cased - what the Cofre binds on. */
   origin: string;
+  /**
+   * THE SAME PLACE, AS AN ADDRESS RATHER THAN A BINDING - scheme + host + port, from the very URL
+   * this origin was derived from.
+   *
+   * `origin` is a bare host because that is what a credential binds to. But a ceremony has to open a
+   * window somewhere, and a bare host cannot say http-vs-https or name a port, so the daemon
+   * prepended `https://` and went to :443 - unreachable for an http-only or non-default-port portal.
+   * Both facts come from the same parse, so carrying the second costs one field and removes the
+   * guess. Absent when the step's URL was templated (see `hostOfUrl`).
+   */
+  siteUrl: string | null;
   /** The action declaration behind it, when one was found. Feeds `classifyOrigin`. */
   action: IntegrationActionDeclaration | null;
   /** Label for the halt payload. Trace only; never branched on (Rule 3). */
@@ -550,15 +575,28 @@ export async function resolveStepOrigin(
 
     if (step.type === 'integration' && step.integrationKey && step.integrationAction) {
       const action = await loadDeclaration(step.integrationKey, step.integrationAction, actor);
-      const host = hostOfUrl(action?.httpConfig?.baseUrl);
-      if (host) return { origin: host, action: action ?? null, integrationKey: step.integrationKey };
+      const baseUrl = action?.httpConfig?.baseUrl;
+      const host = hostOfUrl(baseUrl);
+      if (host) {
+        return {
+          origin: host,
+          siteUrl: siteUrlOf(baseUrl),
+          action: action ?? null,
+          integrationKey: step.integrationKey,
+        };
+      }
       continue;
     }
 
     const literal = step.type === 'navigate' ? step.url : urlOfApiCall(step);
     const host = hostOfUrl(literal);
     if (host) {
-      return { origin: host, action: null, integrationKey: step.integrationKey ?? 'browser' };
+      return {
+        origin: host,
+        siteUrl: siteUrlOf(literal),
+        action: null,
+        integrationKey: step.integrationKey ?? 'browser',
+      };
     }
   }
   return null;
@@ -580,6 +618,26 @@ function hostOfUrl(raw: string | undefined): string | null {
   if (!raw || raw.includes('{{')) return null;
   try {
     return new URL(raw).hostname.toLowerCase() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The openable origin of the same URL `hostOfUrl` took the host from: scheme + host + port, and
+ * nothing after the authority.
+ *
+ * `URL.origin` is exactly that and drops path, query, fragment and userinfo for us, which is the
+ * property `CeremonySiteUrl` validates on the wire. Restricted to http/https here as well as there:
+ * a `file:` or `javascript:` step URL is not a portal a human logs in to, and it must not become the
+ * address a headed window is pointed at.
+ */
+function siteUrlOf(raw: string | undefined): string | null {
+  if (!raw || raw.includes('{{')) return null;
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return u.origin.toLowerCase() || null;
   } catch {
     return null;
   }

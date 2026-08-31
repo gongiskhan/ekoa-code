@@ -78,6 +78,76 @@ describe('where the origin comes from', () => {
     expect(verdict.kind === 'needs-credentials' && verdict.request.origin).toBe('portal.example');
   });
 
+  /**
+   * THE ADDRESS AND THE BINDING ARE TWO FACTS, and this block is what stops them being one again.
+   *
+   * `origin` is a bare host because a credential binds to a host. But a ceremony has to OPEN a
+   * window, and a bare host cannot say http-vs-https or name a port - so the daemon prepended
+   * `https://` and went to :443. That made every portal not on https default port unreachable,
+   * including this repo's own acceptance fixture at `http://127.0.0.1:45180`, whose ceremony leg
+   * could therefore never complete (found live 2026-08-31: ERR_CONNECTION_TIMED_OUT at
+   * `https://127.0.0.1/`). `siteUrl` carries scheme + host + port and nothing else.
+   */
+  describe('the openable address (siteUrl)', () => {
+    it('carries the scheme and port a bare host cannot, for an http portal on a non-default port', async () => {
+      const verdict = await gate([declared({ type: 'navigate', url: 'http://127.0.0.1:45180/painel' })], 0);
+      expect(verdict.kind === 'needs-credentials' && verdict.request.origin).toBe('127.0.0.1');
+      expect(verdict.kind === 'needs-credentials' && verdict.request.siteUrl).toBe('http://127.0.0.1:45180');
+    });
+
+    it('is absent when it would only repeat the daemon\'s own default', async () => {
+      // `https://<origin>` is exactly what the daemon assumes unaided, so emitting it would add a
+      // field carrying no information and a second place for the two to disagree.
+      const verdict = await gate([declared({ type: 'navigate', url: 'https://portal.example/login' })], 0);
+      expect(verdict.kind === 'needs-credentials' && verdict.request.siteUrl).toBeUndefined();
+    });
+
+    it('keeps a non-default port even on https', async () => {
+      const verdict = await gate([declared({ type: 'navigate', url: 'https://portal.example:8443/login' })], 0);
+      expect(verdict.kind === 'needs-credentials' && verdict.request.siteUrl).toBe('https://portal.example:8443');
+    });
+
+    it('drops the path and the query, which is the whole reason a full URL was refused', async () => {
+      // A login link's query routinely carries a token, and this value ends up in a window a human
+      // is sitting in front of. Scheme and port are not secrets; everything after the authority is.
+      const verdict = await gate(
+        [declared({ type: 'navigate', url: 'http://portal.example:8080/login?token=SECRET#frag' })],
+        0,
+      );
+      expect(verdict.kind === 'needs-credentials' && verdict.request.siteUrl).toBe('http://portal.example:8080');
+    });
+
+    it('refuses a non-http scheme rather than pointing a headed window at it', async () => {
+      const verdict = await gate([declared({ type: 'navigate', url: 'file:///etc/passwd' })], 0);
+      // No host to bind to either, so the gate declines the step outright.
+      expect(verdict).toEqual({ kind: 'not-applicable' });
+    });
+
+    it('rides the deep link so the portal can hand it back on establish', async () => {
+      const verdict = await gate([declared({ type: 'navigate', url: 'http://127.0.0.1:45180/painel' })], 0);
+      expect(verdict.kind === 'needs-credentials' && verdict.request.portalDeepLink).toBe(
+        cofrePortalDeepLink('127.0.0.1', 'http://127.0.0.1:45180'),
+      );
+      expect(cofrePortalDeepLink('127.0.0.1', 'http://127.0.0.1:45180')).toBe(
+        '/cofre?origin=127.0.0.1&siteUrl=http%3A%2F%2F127.0.0.1%3A45180',
+      );
+    });
+
+    it('leaves the deep link exactly as it was when there is no widening to carry', async () => {
+      expect(cofrePortalDeepLink('portal.example')).toBe('/cofre?origin=portal.example');
+      expect(cofrePortalDeepLink('portal.example', null)).toBe('/cofre?origin=portal.example');
+    });
+
+    it('reaches the ceremony prompt the portal renders', async () => {
+      const verdict = await gate([declared({ type: 'navigate', url: 'http://127.0.0.1:45180/painel' })], 0);
+      expect(verdict.kind === 'needs-credentials' && verdict.request.ceremony?.siteUrl).toBe(
+        'http://127.0.0.1:45180',
+      );
+      // The binding half is untouched: the prompt still names the host the capture binds to.
+      expect(verdict.kind === 'needs-credentials' && verdict.request.ceremony?.siteOrigin).toBe('127.0.0.1');
+    });
+  });
+
   it("an integration step's resolved httpConfig.baseUrl, through the seam", async () => {
     const loadActionDeclaration = vi.fn(async () => ({ httpConfig: { baseUrl: 'https://api.acme.example/v2' } }));
     const verdict = await gate(

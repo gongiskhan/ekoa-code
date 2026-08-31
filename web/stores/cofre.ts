@@ -33,7 +33,7 @@ interface CofreState {
    * credential-waiter path the moment the session lands, and the ceremony happens minutes later in
    * another window - so a resume fired from here would fire before there was anything to resume.
    */
-  establishSession: (origin: string) => Promise<{
+  establishSession: (origin: string, siteUrl?: string) => Promise<{
     started: boolean;
     message: string;
     /** Present when the machine can live-stream its ceremony window (D-CEREMONY-STREAM): the login
@@ -186,9 +186,13 @@ export const useCofreStore = create<CofreState>()((set, get) => ({
     return { success: true };
   },
 
-  establishSession: async (origin) => {
+  establishSession: async (origin, siteUrl) => {
     set({ error: null });
-    const response = await tryCall(() => api.cofre.cofreSessionEstablish({ origin }));
+    // `origin` still names the ceremony and is what the capture binds to; `siteUrl` only says which
+    // scheme and port to open, and the server refuses one whose host disagrees with `origin`.
+    const response = await tryCall(() =>
+      api.cofre.cofreSessionEstablish({ origin, ...(siteUrl ? { siteUrl } : {}) }),
+    );
     if (!response.ok) {
       const message = response.error.message || 'Não foi possível iniciar a autenticação.';
       set({ error: message });

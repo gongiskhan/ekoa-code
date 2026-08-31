@@ -424,7 +424,7 @@ export class DaemonRuntime {
     this.ceremonyInFlight = { requestId, finishNow, stream: null };
     try {
       await runAttendedCeremony(
-        { requestId, kind: frame.kind, origin: frame.origin, reason: frame.reason },
+        { requestId, kind: frame.kind, origin: frame.origin, siteUrl: frame.siteUrl, reason: frame.reason },
         {
           send: (f) => this.send(f),
           log,

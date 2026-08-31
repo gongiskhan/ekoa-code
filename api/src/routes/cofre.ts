@@ -158,6 +158,28 @@ export function cofreRouter(deps: { now: () => number; genId: () => string }): R
     // streaming block below re-mint the viewer token against it; `openCeremonyStream` already
     // closes+replaces any prior stream session for the id, so the reconnect, the attachSocket
     // 4000-takeover and the daemon's kept window all line up on the one ceremony.
+    // The address widening, checked against the origin BEFORE anything is opened (see the note at
+    // the `requestAttendedCeremony` call). `CeremonySiteUrl` already refused a path, a query and a
+    // userinfo at the schema boundary; what is left to check is that it is the same site.
+    let openableSiteUrl: string | undefined;
+    if (body.siteUrl) {
+      let host: string | null = null;
+      try {
+        host = new URL(body.siteUrl).hostname.toLowerCase();
+      } catch {
+        host = null;
+      }
+      if (host !== body.origin.toLowerCase()) {
+        return res.status(400).json({
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'siteUrl must name the same host as origin.',
+          },
+        });
+      }
+      openableSiteUrl = body.siteUrl;
+    }
+
     let requestId: string;
     const open = findOpenCeremony(actor, machine.pairingId, body.origin);
     if (open) {
@@ -168,6 +190,12 @@ export function cofreRouter(deps: { now: () => number; genId: () => string }): R
           pairingId: machine.pairingId,
           kind: 'login',
           origin: body.origin,
+          // WIDEN THE ADDRESS, NEVER REDIRECT THE CEREMONY. `siteUrl` may add the scheme and port
+          // that a bare host cannot carry, but its HOST must be the origin the caller already named
+          // - otherwise a caller could name one portal and open a window at another. Refused rather
+          // than silently ignored, because a mismatch means the client is confused about which
+          // ceremony this is, and opening the fallback would hide that.
+          ...(openableSiteUrl ? { siteUrl: openableSiteUrl } : {}),
           reason: `Iniciar sessão em ${body.origin} para continuar a automação`,
           label: `${body.origin} session`,
           // D-ADHOC-2. The one field that differs from the declared ceremony, and it is set HERE - by

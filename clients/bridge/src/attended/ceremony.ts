@@ -66,6 +66,14 @@ export interface CeremonyRequest {
    */
   kind: 'card_login' | 'relay_code' | 'login';
   origin: string;
+  /**
+   * WHERE TO OPEN, when `origin` cannot say it. A bare host forces a guess, and the guess was
+   * `https://` on :443 - so an http-only portal, a portal on a non-default port, and the repo's own
+   * acceptance fixture were all unreachable (found live 2026-08-31: ERR_CONNECTION_TIMED_OUT at
+   * `https://127.0.0.1/`). Cortex sends scheme + host + port here, already checked to be the same
+   * host as `origin`. Absent means the old behaviour exactly.
+   */
+  siteUrl?: string | undefined;
   reason: string;
 }
 
@@ -157,7 +165,9 @@ export class CeremonyError extends Error {
  */
 export async function runAttendedCeremony(req: CeremonyRequest, deps: CeremonyDeps): Promise<boolean> {
   const now = deps.now ?? Date.now;
-  const target = normaliseOrigin(req.origin);
+  // The address Cortex resolved wins over a guess derived from the bare host; `originOf` keeps it to
+  // scheme + host + port so a malformed value can never smuggle a path or query into the window.
+  const target = originOf(req.siteUrl ?? '') ?? normaliseOrigin(req.origin);
   // A dedicated, persistent profile PER ORIGIN. Persistent so the login is remembered for next time;
   // per-origin so two adversarial targets never share a cookie jar (the same rule the run executor
   // follows). It is a normal Chrome profile the daemon owns — never the user's own Chrome directory.

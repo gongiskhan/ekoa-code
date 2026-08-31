@@ -28,6 +28,7 @@ import { DAEMON_VERSION } from '../../version.js';
 import { DEFAULT_SURFACE_PORT, startLocalSurface } from '../../surface/index.js';
 import { GrantTable, NonceCache, EgressAccounting } from '../../session/index.js';
 import { EgressLedger } from '../../ledger/index.js';
+import { startEgressProxy, type EgressProxy } from '../../egress/proxy.js';
 import { pt } from '../../i18n/pt.js';
 import { EXIT, flagStr, parseFlags, type CliContext } from '../context.js';
 import { isProcessAlive, readDaemonPid, removeDaemonPid, writeDaemonPid } from '../pidfile.js';
@@ -216,7 +217,30 @@ export async function serve(args: string[], ctx: CliContext): Promise<number> {
   // "what is implemented and validated here", with the rest opt-in via config. Resolved BEFORE the
   // runtime because it is also the executor's first gate: the runtime must know what this machine
   // claims in order to refuse anything it does not.
-  const capabilities = resolveCapabilities(cfg.extraCapabilities, cfg.egressEndpoint);
+  // RESIDENTIAL EGRESS, SERVED HERE (see `egress/proxy.ts` for why this must be possible at all).
+  // An explicit `egressEndpoint` wins - an operator who wrote an address meant it - so the daemon
+  // only becomes the endpoint when it was asked to AND nobody named another one. Failure to bind is
+  // NOT fatal: the daemon runs on without residential egress, which is exactly the state it was in
+  // before this existed. What it must never do is advertise the capability with nowhere to serve it.
+  let egressProxy: EgressProxy | undefined;
+  let egressEndpoint = cfg.egressEndpoint;
+  if (cfg.egressProxy && !egressEndpoint) {
+    const wanted = cfg.egressProxy === true ? {} : cfg.egressProxy;
+    try {
+      egressProxy = await startEgressProxy({
+        ...(wanted.port !== undefined ? { port: wanted.port } : {}),
+        ...(wanted.host !== undefined ? { host: wanted.host } : {}),
+        log: (message) => ctx.io.out(message),
+      });
+      egressEndpoint = egressProxy.address;
+    } catch (error) {
+      ctx.io.err(
+        `${pt.errPrefix} a saída residencial local não arrancou (${error instanceof Error ? error.message : String(error)}); `
+        + 'a ponte continua sem oferecer egresso.',
+      );
+    }
+  }
+  const capabilities = resolveCapabilities(cfg.extraCapabilities, egressEndpoint);
   const machineName = cfg.machineName ?? hostname();
 
   // The local execution plane (P1.2). Persistent headed profiles live under the daemon's OWN home,
@@ -306,7 +330,7 @@ export async function serve(args: string[], ctx: CliContext): Promise<number> {
             machineName,
             capabilities,
             daemonVersion: DAEMON_VERSION,
-            ...(cfg.egressEndpoint ? { egressEndpoint: cfg.egressEndpoint } : {}),
+            ...(egressEndpoint ? { egressEndpoint } : {}),
           }),
         );
         ctx.io.out(pt.serveAdvertised(capabilities));
@@ -358,7 +382,12 @@ export async function serve(args: string[], ctx: CliContext): Promise<number> {
     runtime,
     profiles,
     surface: () => surface,
-    onExit: () => removeDaemonPid(home),
+    // The proxy is a listener like the surface, and stops the same way. Closing it first means a
+    // daemon that is going away stops accepting egress before it stops answering Cortex.
+    onExit: () => {
+      void egressProxy?.close();
+      removeDaemonPid(home);
+    },
   });
   void socket.connect();
   return await stopped;

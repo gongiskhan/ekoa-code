@@ -101,6 +101,9 @@ export async function requestAttendedCeremony(
     pairingId: string;
     kind: AttendedKind;
     origin: string;
+    /** Scheme + host + port for the daemon to open, when `origin` alone cannot say it. The caller
+     *  has already checked its host against `origin`; this rail forwards, it does not re-decide. */
+    siteUrl?: string;
     reason: string;
     label: string;
     /** See `PendingCeremony.grant`. Omitted by the declared rail; `ADHOC_SESSION_GRANT` for the
@@ -116,6 +119,7 @@ export async function requestAttendedCeremony(
     requestId,
     kind: input.kind,
     origin: input.origin,
+    ...(input.siteUrl ? { siteUrl: input.siteUrl } : {}),
     reason: input.reason,
   });
   if (!sent) {

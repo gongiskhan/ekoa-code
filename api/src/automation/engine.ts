@@ -622,6 +622,7 @@ async function runOrRehearse(
    * for a ceremony" and answers with a plain terminal failure rather than a halt naming nowhere.
    */
   let stepOrigin: string | null = null;
+  let stepSiteUrl: string | null = null;
   /**
    * THE POSTURE OF `stepOrigin`, kept beside it rather than re-derived where it is read.
    *
@@ -894,6 +895,11 @@ async function runOrRehearse(
     // An origin that cannot be resolved is not a licence: `classifyOrigin('')` is CLOSED, which is
     // what an unknown destination has to be.
     stepOrigin = resolvedOrigin?.origin ?? null;
+    // THE SAME PLACE AS AN ADDRESS. `stepOrigin` is a bare host because that is the Cofre's binding
+    // key, but a ceremony has to OPEN a window and a bare host cannot say the scheme or the port -
+    // so a halt carrying only the host sent the daemon to `https://<host>:443`. See
+    // `ResolvedStepOrigin.siteUrl`.
+    stepSiteUrl = resolvedOrigin?.siteUrl ?? null;
     const classification = classifyOrigin(
       resolvedOrigin ? `https://${resolvedOrigin.origin}` : '',
       resolvedOrigin?.action ?? undefined,
@@ -972,7 +978,7 @@ async function runOrRehearse(
       // is worse than an honest general one - the same reasoning the blocked badge follows.
       const wantsCredential = resolveStepDeclaration(step).credentialRefs.length > 0;
       return stepOrigin && wantsCredential
-        ? localityNeedsCeremonyRecord(step, index, verdict.reason, stepOrigin, automation.name)
+        ? localityNeedsCeremonyRecord(step, index, verdict.reason, stepOrigin, automation.name, stepSiteUrl)
         : localityTerminalFailureRecord(step, index, verdict.reason);
     }
     // `edit-the-automation`, and every future non-neutral act until one argues for something else:
@@ -1682,6 +1688,7 @@ async function runOrRehearse(
                   step,
                   index: i,
                   origin: stepOrigin,
+                  siteUrl: stepSiteUrl,
                   automationName: automation.name,
                   reason: adhocCeremonyReason(detectedKind, stepOrigin),
                   // The page is gone the moment this returns, so the resume restarts at the step
@@ -3152,9 +3159,10 @@ function localityNeedsCeremonyRecord(
   reason: string,
   origin: string,
   automationName: string,
+  siteUrl: string | null = null,
 ): StepRecord {
   const base: StepRecord = { stepId: step.id, index, status: 'running', tier: 'cache', durationMs: 0 };
-  const request = ceremonyCredentialRequest({ step, index, reason, origin, automationName });
+  const request = ceremonyCredentialRequest({ step, index, reason, origin, siteUrl, automationName });
   return finishRecord(base, 'failed', Date.now(), {
     tier: 'cache',
     error: {
@@ -3184,22 +3192,32 @@ function ceremonyCredentialRequest(args: {
   index: number;
   reason: string;
   origin: string;
+  /**
+   * Scheme + host + port for the ceremony to OPEN, when the run resolved one that `origin` cannot
+   * carry. `origin` remains the binding key and the ceremony's identity; this only decides which
+   * address the headed window goes to, and is dropped when it merely repeats the daemon's own
+   * `https://<origin>` default.
+   */
+  siteUrl?: string | null;
   automationName: string;
   /** Where the re-dispatch picks up, when that is not the blocked step. See `RunCredentialRequest`. */
   resumeFromStepIndex?: number;
 }): RunCredentialRequest {
   const reason = args.reason.slice(0, 500);
+  const openable = args.siteUrl && args.siteUrl !== `https://${args.origin}` ? args.siteUrl : null;
   return {
     stepIndex: args.index,
     ...(args.resumeFromStepIndex !== undefined ? { resumeFromStepIndex: args.resumeFromStepIndex } : {}),
     origin: args.origin,
+    ...(openable ? { siteUrl: openable } : {}),
     integrationKey: args.step.integrationKey ?? 'browser',
-    portalDeepLink: cofrePortalDeepLink(args.origin),
+    portalDeepLink: cofrePortalDeepLink(args.origin, openable),
     mode: 'ceremony',
     reason,
     ceremony: issueLoginRelayPrompt({
       automationName: args.automationName,
       siteOrigin: args.origin,
+      ...(openable ? { siteUrl: openable } : {}),
       reason,
     }),
   };

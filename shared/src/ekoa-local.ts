@@ -484,6 +484,14 @@ export const BridgeFrame = z.discriminatedUnion('type', [
     requestId: z.string(),
     kind: z.enum(['card_login', 'relay_code', 'login']),
     origin: z.string(),
+    /**
+     * WHERE TO OPEN, when the bare `origin` cannot say it. ADDITIVE (Rule 7): a daemon predating
+     * this field ignores it and keeps prepending `https://` to `origin`, which is the behaviour
+     * every existing ceremony already has. Cortex still DECLARES the origin - this only carries the
+     * scheme and port the run actually resolved, so a portal on http or on a non-default port can be
+     * reached at all. Constrained to scheme + host + port by `CeremonySiteUrl` at both ends.
+     */
+    siteUrl: z.string().max(300).optional(),
     reason: z.string().max(500),
   }),
   /**

@@ -52,6 +52,26 @@ export const BridgeConfig = z.object({
   extraCapabilities: z.array(z.string()).optional(),
   /** Tailnet address offered for residential egress. Absent = this machine offers no egress. */
   egressEndpoint: z.string().optional(),
+  /**
+   * SERVE THE RESIDENTIAL EGRESS FROM THIS DAEMON instead of naming someone else's proxy.
+   *
+   * `egressEndpoint` above assumes the operator already runs a proxy on this machine and can write
+   * down its address. Almost nobody does, so almost no bridge advertised `egress.residential` - and
+   * a machine that offers no egress cannot check out the sessions its OWN ceremonies captured
+   * (`egress/proxy.ts` names the live defect). Setting this starts a forward proxy in the daemon and
+   * uses its address as the endpoint.
+   *
+   * OPT-IN, like `local.bash` and `desktop.automation`, and for the same reason: a forward proxy is
+   * an exfiltration surface. `true` binds loopback on a FIXED port (8792), which is all a Cortex on
+   * this machine needs - fixed because an `egress.residential` grant names the endpoint it
+   * authorises and Cortex matches it by equality, so a moving address voids the grant on every
+   * restart. An object names the port and, only if the operator says so, a non-loopback
+   * host - a routable bind is an open relay for whoever can reach it, so it is never defaulted.
+   * An explicit `egressEndpoint` wins: someone who named an address meant it.
+   */
+  egressProxy: z
+    .union([z.boolean(), z.object({ port: z.number().int().min(0).max(65535).optional(), host: z.string().optional() })])
+    .optional(),
   /** Human-readable machine name shown in the Ekoa machine list; absent → the OS hostname. */
   machineName: z.string().optional(),
 });

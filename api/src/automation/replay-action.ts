@@ -42,7 +42,9 @@ import type { SecretRegistry } from '../security/redaction.js';
 import { DaemonBrowserSession, releaseBrowserLease, type BrowserLease } from './browser-session.js';
 import { replayCompiledAction, type ReplayInput, type ReplayResult } from './executors/injected-call.js';
 import { classifyOrigin, type OriginClassification } from './origin-posture.js';
-import { getDaemonConnection } from './seams.js';
+import { getDaemonConnection, loadEgressCandidates } from './seams.js';
+import { residentialEgressPairings } from './egress-policy.js';
+import { ensureSession } from './session-establishment.js';
 
 export interface ReplayActionInput {
   orgId: string;
@@ -92,7 +94,13 @@ export interface ReplayActionDeps {
   /** Injected for the unit lane; defaults resolve the real stores and the real daemon. */
   loadAction?: (actor: Actor, key: string, actionName: string) => Promise<PostureAndOrigin | null>;
   loadRecipe?: (orgId: string, key: string, actionName: string) => Promise<unknown>;
-  openSession?: (input: ReplayActionInput) => Promise<OpenedSession | null>;
+  openSession?: (input: ReplayActionInput, sessionState?: unknown) => Promise<OpenedSession | null>;
+  /**
+   * The stored session for the origin this recipe replays against, resolved through the SAME
+   * `ensureSession` the authored run uses (Rule 1). Injected only by tests; the default reads the
+   * Cofre. See `resolveReplaySession` for why a replay may only ever REUSE one.
+   */
+  resolveSession?: (input: ReplayActionInput, origin: string) => Promise<unknown | null>;
 }
 
 /** What the mount needs off an action: enough to classify its origin, and nothing else. */
@@ -131,12 +139,22 @@ export async function replayIntegrationAction(
   const action = await loadAction(actor, input.integrationKey, input.actionName);
   const classify = classifierFor(action);
 
+  // THE STORED SESSION, BEFORE THE BROWSER. A replay drives the page from inside an authenticated
+  // context or it does not run at all: opening the lease first and discovering the jar is empty is
+  // what made an unauthenticated 401 look like the site had moved (see `resolveReplaySession`).
+  const replayOrigin = originForReplay(action, stored);
+  const sessionState = replayOrigin
+    ? await (deps.resolveSession ?? resolveReplaySession)(input, replayOrigin)
+    : null;
+
   const openSession = deps.openSession ?? openOwnerBrowserSession;
   // The whole input, so the session helper reads THIS attempt's execution id off it (see `runId`).
-  const session = await openSession(input);
+  const session = await openSession(input, sessionState ?? undefined);
   try {
     return await replayCompiledAction(
       {
+        // So the executor can tell an authenticated jar from a bare lease - see `sessionDelivered`.
+        sessionDelivered: sessionState !== null && sessionState !== undefined,
         orgId: input.orgId,
         integrationKey: input.integrationKey,
         actionName: input.actionName,
@@ -182,14 +200,26 @@ async function defaultLoadAction(actor: Actor, key: string, actionName: string):
  * the `finally` releases it whatever happened. Answering `null` when no daemon is paired is not a
  * failure; the executor then decides whether a permissive origin can be reached without one.
  */
-export async function openOwnerBrowserSession(input: { ownerUserId: string; runId?: string }): Promise<OpenedSession | null> {
+export async function openOwnerBrowserSession(
+  input: { ownerUserId: string; runId?: string },
+  sessionState?: unknown,
+): Promise<OpenedSession | null> {
   const conn = getDaemonConnection(input.ownerUserId);
   if (!conn) return null;
   // The CALLER'S execution id when it has one, so the frames the machine ledgers and the `runId`
   // the caller answers with are the same string. A local one otherwise - the unit callers.
   const runId = input.runId ?? `replay-${randomUUID()}`;
   const lease: BrowserLease = { id: runId, used: false };
-  const browser = new DaemonBrowserSession({ connection: conn, runId, ownerUserId: input.ownerUserId, lease });
+  // THE SESSION TRAVELS UNDER THIS ATTEMPT'S OWN ID. The daemon holds delivered sessions keyed by
+  // runId, and a replay mints its own (`replay-<uuid>`) - so the authored run's delivery, made under
+  // a different id, was never found. Without this the replay drove a signed-out jar.
+  const browser = new DaemonBrowserSession({
+    connection: conn,
+    runId,
+    ownerUserId: input.ownerUserId,
+    lease,
+    ...(sessionState !== undefined ? { sessionState } : {}),
+  });
   return {
     browser,
     close: async () => {
@@ -199,6 +229,75 @@ export async function openOwnerBrowserSession(input: { ownerUserId: string; runI
       if (lease.used) await releaseBrowserLease(conn, { leaseId: lease.id, ownerUserId: input.ownerUserId, runId });
     },
   };
+}
+
+/**
+ * THE ORIGIN THIS RECIPE REPLAYS AGAINST, for the one purpose of finding a session for it.
+ *
+ * The action's declared base URL when it has one (an api-call action); otherwise the first call the
+ * recipe compiled, which for a browser-steps action is the only statement of where it goes. Answers
+ * null for a recipe whose first call is templated or unparseable - and a null origin means no
+ * session lookup and no adversarial refusal, i.e. exactly the behaviour before this existed.
+ */
+function originForReplay(action: PostureAndOrigin | null, stored: unknown): string | null {
+  const declared = originOfUrl(action?.httpConfig?.baseUrl);
+  if (declared) return declared;
+  // `injectedCalls` is the STORED field name (`recipe-store.ts`); the `calls` on the wire view is a
+  // display projection of `METHOD urlTemplate` strings and is not what `getRecipe` answers with.
+  // Reading the wire name here returned null for every browser-steps action - the exact shape this
+  // whole path exists for - and a null origin skipped the session lookup silently.
+  const calls = (stored as { injectedCalls?: unknown } | null)?.injectedCalls;
+  if (!Array.isArray(calls)) return null;
+  for (const call of calls) {
+    const url = (call as { urlTemplate?: unknown } | null)?.urlTemplate;
+    const origin = originOfUrl(typeof url === 'string' ? url : undefined);
+    if (origin) return origin;
+  }
+  return null;
+}
+
+/** Scheme + host + port, or null for a templated / unparseable / non-http URL. */
+function originOfUrl(raw: string | undefined): string | null {
+  if (!raw || raw.includes('{{')) return null;
+  try {
+    const u = new URL(raw);
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The stored session for `origin`, or null - and REUSE IS THE ONLY ACCEPTABLE OUTCOME.
+ *
+ * `ensureSession` is the one implementation of "what session may this actor use here" (Rule 1), so
+ * the replay asks it rather than growing a second checkout. But a replay is an OPTIMISATION on the
+ * hot path: it may not log anybody in, may not open a ceremony, and may not spend a credential. It
+ * passes no `credentialRef` and no `hostedTypist` permit, which leaves the typist route unreachable
+ * by construction, and it then accepts ONLY `reused`. Every other verdict - needs-human,
+ * needs-egress, a locked Cofre, a throw - answers null, and the caller falls through to the
+ * authored run, which is what those verdicts mean anyway.
+ *
+ * `residentialAvailable` is read from the SAME fleet predicate the engine uses. Omitting it would
+ * default to `[]`, and a ceremony session is stamped `boundEgress: residential` - so checkout would
+ * refuse every attended session and no session-gated recipe could ever replay.
+ */
+export async function resolveReplaySession(input: ReplayActionInput, origin: string): Promise<unknown | null> {
+  const actor: Actor = { userId: input.ownerUserId, orgId: input.orgId, role: 'user' };
+  try {
+    const verdict = await ensureSession({
+      actor,
+      integrationKey: input.integrationKey,
+      origin,
+      runId: input.runId ?? `replay-${randomUUID()}`,
+      residentialAvailable: residentialEgressPairings((await loadEgressCandidates(input.orgId)) ?? [], input.orgId),
+    });
+    return verdict.status === 'reused' ? verdict.storageState : null;
+  } catch {
+    // A replay must never fail an action that worked before it existed. Whatever went wrong -
+    // a locked Cofre, an origin refusal, a store outage - the authored run still answers.
+    return null;
+  }
 }
 
 /**
