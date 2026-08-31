@@ -58,16 +58,22 @@ beforeEach(() => {
 async function openTheWindow(): Promise<void> {
   const user = userEvent.setup();
   await user.click(await screen.findByRole('button', { name: /Abrir janela de autenticação/i }));
-  await waitFor(() => expect(establishMock).toHaveBeenCalledWith(ORIGIN));
+  // Two args since the ceremony learned to open a non-default scheme/port: the second is the
+  // openable address, absent on a link that carries only an origin (as here).
+  await waitFor(() => expect(establishMock).toHaveBeenCalledWith(ORIGIN, undefined));
 }
 
 describe('the Done-capture affordance on the /cofre ceremony card', () => {
-  it('is NOT offered before a window has been opened', () => {
-    // Offering it first would ask someone to finish something never started, and the server could
-    // only answer with a refusal that reads like a fault.
+  it('is offered BEFORE anything is opened, because the ceremony lives on the machine', async () => {
+    // It used to be hidden until `establishSession` had run from THIS page instance. But the window
+    // opens on the machine and the human leaves this page to go and log in, so a reload or a second
+    // tab dropped the state while the ceremony was still open - and the only control that completes
+    // it disappeared, with no way back but the TTL. Seen with an operator 2026-08-31 who logged in
+    // correctly and had nothing to click. The refusal this guarded against is one the server writes
+    // as an instruction ("Não há nenhuma janela ... Abra uma e inicie sessão antes de concluir").
     render(<CofrePage />);
-    expect(screen.queryByTestId('cofre-capture-now')).toBeNull();
-    expect(screen.queryByTestId('cofre-capture-hint')).toBeNull();
+    expect(await screen.findByTestId('cofre-capture-now')).toHaveTextContent('Concluir e capturar');
+    expect(screen.getByTestId('cofre-capture-hint')).toBeInTheDocument();
   });
 
   it('appears once the window is open, and says that closing it is not required', async () => {
@@ -82,13 +88,15 @@ describe('the Done-capture affordance on the /cofre ceremony card', () => {
     );
   });
 
-  it('is NOT offered when the window could not be opened', async () => {
+  it('still shows the refusal when the window could not be opened, and keeps the way to retry', async () => {
     establishMock.mockResolvedValue({ started: false, message: 'Nenhuma máquina ligada.' });
     render(<CofrePage />);
     await openTheWindow();
 
     expect(await screen.findByTestId('cofre-establish-outcome')).toHaveTextContent('Nenhuma máquina ligada.');
-    expect(screen.queryByTestId('cofre-capture-now')).toBeNull();
+    // The Done button stays put: a person who fixes the bridge and logs in must be able to finish
+    // without reloading their way back to a control that only existed in the old page's state.
+    expect(screen.getByTestId('cofre-capture-now')).toBeInTheDocument();
   });
 
   it('captures for the origin the card was opened for, and says so when it lands', async () => {

@@ -188,10 +188,6 @@ function EstablishSessionCard({ origin, siteUrl }: { origin: string; siteUrl: st
   } | null>(null);
   const [capturing, setCapturing] = useState(false);
   const [capture, setCapture] = useState<{ requested: boolean; captured: boolean; message: string } | null>(null);
-  /** The Done button exists only once a window has actually been opened FROM HERE. Offering it
-   *  before that would ask someone to finish something that was never started, and the server would
-   *  have to answer with a refusal that reads like a fault. */
-  const windowOpen = outcome?.started === true;
 
   async function doEstablish() {
     setBusy(true);
@@ -261,12 +257,23 @@ function EstablishSessionCard({ origin, siteUrl }: { origin: string; siteUrl: st
               fights it for focus, and nothing on screen said that closing is what captures. Live,
               the operator logged in and the ceremony expired having captured nothing.
             */}
-            {windowOpen ? (
-              <Button size="sm" variant="primary" onClick={doCapture} disabled={capturing} data-testid="cofre-capture-now">
-                {capturing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-                Concluir e capturar
-              </Button>
-            ) : null}
+            {/*
+              ALWAYS OFFERED, because the ceremony this finishes does not live in the page's state -
+              it lives on the machine. It used to appear only after `establishSession` had run FROM
+              THIS PAGE INSTANCE, to avoid asking someone to finish something never started. But the
+              window opens on the MACHINE and the human then leaves this page to go and log in, so a
+              reload, a second tab, or simply coming back later dropped the React state while the
+              ceremony was still open - and the only control that can complete it vanished. No way
+              back: the capture could not be requested, the window sat until its TTL killed it, and
+              the session was lost. Seen with an operator 2026-08-31 who logged in correctly and had
+              nothing to click. The refusal this was protecting against is one the server already
+              writes, and writes as an instruction rather than a fault ("Não há nenhuma janela de
+              autenticação aberta para <origin>. Abra uma e inicie sessão antes de concluir.").
+            */}
+            <Button size="sm" variant="primary" onClick={doCapture} disabled={capturing} data-testid="cofre-capture-now">
+              {capturing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+              Concluir e capturar
+            </Button>
             {/*
               The server states the FACT ("a window opened", or the refusal); the hint under this row
               states what to DO with it. Split that way on purpose - said in both places, it is the
@@ -295,13 +302,11 @@ function EstablishSessionCard({ origin, siteUrl }: { origin: string; siteUrl: st
               </span>
             ) : null}
           </div>
-          {windowOpen ? (
-            <p className="text-sm text-muted-foreground" data-testid="cofre-capture-hint">
-              {outcome?.streaming
-                ? 'Inicie sessão no visor abaixo, depois clique em "Concluir e capturar".'
-                : 'Inicie sessão na janela, depois clique aqui - não precisa de fechar a janela.'}
-            </p>
-          ) : null}
+          <p className="text-sm text-muted-foreground" data-testid="cofre-capture-hint">
+            {outcome?.streaming
+              ? 'Inicie sessão no visor abaixo, depois clique em "Concluir e capturar".'
+              : 'Inicie sessão na janela, depois clique aqui - não precisa de fechar a janela.'}
+          </p>
           {/*
             THE LIVE VIEW (D-CEREMONY-STREAM). Present only when the machine can stream its ceremony
             window: the login then happens right here, on whatever device the person is on, instead of
