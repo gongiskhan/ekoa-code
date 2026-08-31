@@ -26,7 +26,7 @@
       "id": "abrir-portal",
       "type": "navigate",
       "description": "Abrir o Portal dos Mandatários (eTribunal).",
-      "url": "https://portal.tribunais.org.pt"
+      "url": "{{config.portal_url}}"
     },
     {
       "id": "confirmar-autenticacao",

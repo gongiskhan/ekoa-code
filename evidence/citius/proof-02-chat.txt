@@ -1,0 +1,15 @@
+Chat probe - the conversational half, 2026-08-31.
+Asked: "Que documentos tem o processo 1234/26.0T8LSB no Citius? Mostra-me os nomes."
+
+The chat run class already carries list_integration_actions + call_integration_action
+(agents/tools.ts CATALOG_TOOLS), so nothing was wired for this: the point is that the
+assistant DISCOVERS the shipped citius package, reaches for the document action, and
+surfaces the action rail's own refusal honestly instead of inventing a document list.
+
+{
+    "id": "e272383b-826d-4ff4-8bbf-2324d5061d85",
+    "status": "complete",
+    "sessionId": "1712f13c-af79-4825-b43d-d80b1cf902e1",
+    "result": "N\u00e3o consegui aceder ao processo: n\u00e3o h\u00e1 nenhuma m\u00e1quina emparelhada \u00e0 tua conta para correr esta a\u00e7\u00e3o do CITIUS (\u00e9 preciso sess\u00e3o autenticada no Portal dos Mandat\u00e1rios a partir de uma m\u00e1quina emparelhada).\n\nEmparelha uma m\u00e1quina em `/integrations` e tenta novamente \u2014 assim que a sess\u00e3o estiver ativa, listo os documentos do processo 1234/26.0T8LSB.\n\n",
+    "durationMs": 159101
+}

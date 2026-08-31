@@ -9,6 +9,9 @@
   "sharedData": true,
   "backend": {
     "entryPoint": "backend/index.js",
-    "handlers": ["onEmail"]
+    "handlers": [
+      "onEmail",
+      "onNotificacaoCitius"
+    ]
   }
 }

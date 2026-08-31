@@ -8,7 +8,7 @@
   "provider": "Ministério da Justiça — IGFEJ (eTribunal / CITIUS)",
   "category": "legal",
   "sessionConnect": {
-    "loginUrl": "https://portal.tribunais.org.pt",
+    "loginUrl": "{{config.portal_url}}",
     "successUrlContains": "/mandatario",
     "errorUrlContains": "/error",
     "guidePt": "Abra o Portal dos Mandatários e autentique-se uma vez (certificado da Ordem dos Advogados ou Chave Móvel Digital / Cartão de Cidadão). A sessão é capturada e reutilizada até expirar. A consulta pública de distribuição não precisa de sessão."
@@ -29,6 +29,7 @@
       "type": "url",
       "required": false,
       "secret": false,
+      "defaultValue": "https://portal.tribunais.org.pt",
       "helpText": "Endereço do Portal dos Mandatários. Por omissão https://portal.tribunais.org.pt."
     },
     {
@@ -116,6 +117,73 @@
       "automationBinding": {
         "automationId": "citius-processo-template",
         "automationTemplate": "processo",
+        "passCredentials": true
+      }
+    },
+    {
+      "actionName": "listar_documentos_processo",
+      "description": "Lista os documentos/peças de um processo no Portal dos Mandatários (eTribunal) SEM os descarregar: devolve uma linha por documento com o nome, o tipo, a data e a referência que o identifica. É a ação a usar para responder \"que documentos tem este processo?\" - enumerar é barato, descarregar não. Para trazer um documento concreto use obter_documento; para sincronizar todos para o dossiê use fetch_documentos_processo. Requer sessão capturada.",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "numeroProcesso": {
+            "type": "string",
+            "description": "Número único de processo (ex.: 1234/26.0T8LSB)."
+          }
+        },
+        "required": [
+          "numeroProcesso"
+        ]
+      },
+      "returnSchema": {
+        "type": "object",
+        "description": "{ processo, documentos: [{ nome, tipo, data, referencia }], total }. Sem ficheiros: nenhum documento é aberto nem descarregado.",
+        "properties": {
+          "documentos": {
+            "type": "array",
+            "description": "Uma linha por documento, pela ordem em que o portal os lista."
+          },
+          "total": {
+            "type": "number",
+            "description": "Quantos documentos o processo tem."
+          }
+        }
+      },
+      "automationBinding": {
+        "automationId": "citius-documentos-lista-template",
+        "automationTemplate": "documentos-lista",
+        "passCredentials": true
+      }
+    },
+    {
+      "actionName": "obter_documento",
+      "description": "Vai buscar UM documento de um processo no Portal dos Mandatários (eTribunal), identificado pelo nome ou pela referência que listar_documentos_processo devolveu, e descarrega o respetivo ficheiro. É a segunda metade do fluxo de conversa: primeiro listar_documentos_processo mostra os nomes, depois esta ação traz o que o advogado escolheu. Requer sessão capturada.",
+      "mutates": false,
+      "argsSchema": {
+        "type": "object",
+        "properties": {
+          "numeroProcesso": {
+            "type": "string",
+            "description": "Número único de processo (ex.: 1234/26.0T8LSB)."
+          },
+          "documento": {
+            "type": "string",
+            "description": "O documento a trazer: a referência devolvida por listar_documentos_processo, ou o nome do documento tal como aparece na lista (ex.: \"Contestacao.pdf\", \"despacho saneador\")."
+          }
+        },
+        "required": [
+          "numeroProcesso",
+          "documento"
+        ]
+      },
+      "returnSchema": {
+        "type": "object",
+        "description": "{ processo, documento: { nome, tipo, data, referencia, url }, ficheiro }. Um só documento; se a designação for ambígua a automação devolve os candidatos em vez de escolher por si."
+      },
+      "automationBinding": {
+        "automationId": "citius-documento-template",
+        "automationTemplate": "documento",
         "passCredentials": true
       }
     },

@@ -1,0 +1,75 @@
+{
+  "templateKey": "documento",
+  "name": "CITIUS/eTribunal — obter um documento de um processo",
+  "description": "Abre o Portal dos Mandatários, garante a sessão autenticada, abre um processo pelo número, localiza UM documento pela referência ou pelo nome e descarrega esse ficheiro. É a segunda metade do fluxo de conversa: \"listar documentos\" mostra os nomes, esta traz o escolhido. Se a designação corresponder a mais do que um documento, devolve os candidatos em vez de escolher.",
+  "inputSchema": {
+    "fields": [
+      {
+        "name": "numeroProcesso",
+        "description": "Número único de processo (ex.: 1234/26.0T8LSB).",
+        "required": true
+      },
+      {
+        "name": "documento",
+        "description": "A referência do documento (tal como devolvida pela listagem) ou o seu nome (ex.: \"Contestacao.pdf\").",
+        "required": true
+      }
+    ]
+  },
+  "steps": [
+    {
+      "id": "abrir-portal",
+      "type": "navigate",
+      "description": "Abrir o Portal dos Mandatários (eTribunal).",
+      "url": "{{config.portal_url}}"
+    },
+    {
+      "id": "confirmar-autenticacao",
+      "type": "verify",
+      "description": "Confirmar que a área reservada do mandatário está aberta (o nome do mandatário e o menu do portal — notificações, os meus processos — estão visíveis, e não a página de autenticação).",
+      "expectedOutcome": "A área reservada do mandatário está aberta e autenticada. Se aparecer a página de autenticação (certificado da Ordem dos Advogados ou Chave Móvel Digital / Cartão de Cidadão via autenticacao.gov.pt), o advogado autentica-se na janela e a execução prossegue."
+    },
+    {
+      "id": "abrir-consulta",
+      "type": "browser",
+      "description": "Abrir a consulta de processos do mandatário (\"Os meus processos\" ou \"Consultar processo\").",
+      "expectedOutcome": "O formulário/lista de consulta de processos está visível."
+    },
+    {
+      "id": "pesquisar-processo",
+      "type": "browser",
+      "description": "No campo de pesquisa de processo, introduzir o número único de processo '{{input.numeroProcesso}}' e submeter a pesquisa.",
+      "expectedOutcome": "O processo '{{input.numeroProcesso}}' aparece nos resultados."
+    },
+    {
+      "id": "abrir-processo",
+      "type": "browser",
+      "description": "Abrir o registo do processo '{{input.numeroProcesso}}' a partir dos resultados.",
+      "expectedOutcome": "A ficha do processo '{{input.numeroProcesso}}' está aberta."
+    },
+    {
+      "id": "abrir-documentos",
+      "type": "browser",
+      "description": "Abrir o separador de documentos/peças do processo (\"Documentos\", \"Peças processuais\" ou equivalente).",
+      "expectedOutcome": "A lista de documentos/peças do processo está visível."
+    },
+    {
+      "id": "localizar-documento",
+      "type": "browser",
+      "description": "Na lista de documentos, localizar o documento indicado por '{{input.documento}}'. Corresponder primeiro pela referência exata; se não houver, pelo nome do documento, ignorando maiúsculas/minúsculas e acentos. Registar o nome, o tipo, a data e a referência da linha encontrada. Se mais do que uma linha corresponder, NÃO escolher: registar todas as candidatas e parar aqui.",
+      "expectedOutcome": "Está identificada uma única linha de documento correspondente a '{{input.documento}}', ou está registada a lista de candidatas quando a designação é ambígua."
+    },
+    {
+      "id": "descarregar-documento",
+      "type": "browser",
+      "description": "Descarregar o ficheiro do documento identificado no passo anterior (clicar na ligação ou no ícone de descarregar/abrir dessa linha). Se abrir num visualizador, usar a opção de descarregar/guardar. Descarregar APENAS este documento.",
+      "expectedOutcome": "O ficheiro do documento '{{input.documento}}' foi descarregado, e nenhum outro."
+    },
+    {
+      "id": "verificar-documento",
+      "type": "verify",
+      "description": "Confirmar que o documento trazido é o que foi pedido ('{{input.documento}}' do processo '{{input.numeroProcesso}}') e que traz nome, tipo, data, referência e o ficheiro.",
+      "expectedOutcome": "Um único documento, o pedido, com os seus metadados e o ficheiro descarregado."
+    }
+  ]
+}

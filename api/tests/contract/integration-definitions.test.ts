@@ -88,8 +88,11 @@ describe('integration definitions registry (ch03 §3.8.13) — list / active / r
     expect(citius!.authType).toBe('browser_session');
 
     const byName: Record<string, Action> = Object.fromEntries((citius!.actions ?? []).map((a) => [a.actionName, a]));
-    // The four portal actions bind to automations and pass the captured session; no httpConfig.
-    for (const name of ['consultar_notificacoes', 'consultar_processo', 'fetch_documentos_processo', 'submeter_peca']) {
+    // The portal actions bind to automations and pass the captured session; no httpConfig.
+    for (const name of [
+      'consultar_notificacoes', 'consultar_processo', 'fetch_documentos_processo', 'submeter_peca',
+      'listar_documentos_processo', 'obter_documento',
+    ]) {
       const a = byName[name];
       expect(a, `portal action ${name}`).toBeTruthy();
       if (!a) continue;
@@ -100,6 +103,31 @@ describe('integration definitions registry (ch03 §3.8.13) — list / active / r
     }
     expect(byName['fetch_documentos_processo']!.automationBinding?.automationId).toBe('citius-documentos-template');
     expect(byName['fetch_documentos_processo']!.mutates).toBe(false);
+
+    // ── THE LIST-THEN-FETCH PAIR, and the split is the contract ────────────────────────────────
+    //
+    // "What documents does this process have?" must not cost six PDF downloads, so enumerating and
+    // fetching are separate actions bound to separate templates. Pinned as a PAIR because the value
+    // is in the pairing: a chat turn lists, the lawyer names one, the second action brings that one.
+    expect(byName['listar_documentos_processo']!.automationBinding?.automationTemplate).toBe('documentos-lista');
+    expect(byName['obter_documento']!.automationBinding?.automationTemplate).toBe('documento');
+    expect(byName['listar_documentos_processo']!.mutates).toBe(false);
+    expect(byName['obter_documento']!.mutates).toBe(false);
+    // The fetch is BY NAME OR REFERENCE, which is what makes the conversational second turn work.
+    expect(Object.keys(byName['obter_documento']!.argsSchema?.properties ?? {}).sort())
+      .toEqual(['documento', 'numeroProcesso']);
+    expect(byName['obter_documento']!.argsSchema?.required?.sort()).toEqual(['documento', 'numeroProcesso']);
+
+    // ── THE ADDRESS IS THE TENANT'S, NOT THE PACKAGE'S ─────────────────────────────────────────
+    //
+    // `portal_url` used to be a config field nothing read: the ceremony and every template were
+    // hardcoded to one host, so a tenant on a different portal address had no way to say so and the
+    // field was decoration. Both halves must move together - a session captured at one origin
+    // cannot be checked out by a run driving another.
+    const portalField = (citius!.configSchema ?? []).find((f) => f.key === 'portal_url');
+    expect(portalField?.secret).toBe(false);
+    expect(portalField?.defaultValue).toBe('https://portal.tribunais.org.pt');
+    expect(citius!.sessionConnect?.loginUrl).toBe('{{config.portal_url}}');
     expect(byName['submeter_peca']!.mutates).toBe(true);
     expect(byName['consultar_notificacoes']!.mutates).toBe(false);
 

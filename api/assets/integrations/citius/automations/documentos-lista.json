@@ -1,7 +1,7 @@
 {
-  "templateKey": "documentos",
-  "name": "CITIUS/eTribunal — documentos de um processo",
-  "description": "Abre o Portal dos Mandatários, garante a sessão autenticada, abre um processo pelo número e ENUMERA todos os seus documentos/peças, descarregando cada ficheiro e devolvendo a lista estruturada (nome, tipo, data, referência do ficheiro). Trata paginação. Os ficheiros descarregados destinam-se ao dossiê do processo (coleção documentos, origem citius).",
+  "templateKey": "documentos-lista",
+  "name": "CITIUS/eTribunal — listar documentos de um processo",
+  "description": "Abre o Portal dos Mandatários, garante a sessão autenticada, abre um processo pelo número e ENUMERA os seus documentos/peças sem abrir nem descarregar nenhum: nome, tipo, data e referência. Trata paginação. É a metade barata do fluxo — para trazer um ficheiro concreto existe a automação \"obter documento\".",
   "inputSchema": {
     "fields": [
       {
@@ -40,7 +40,7 @@
       "id": "abrir-processo",
       "type": "browser",
       "description": "Abrir o registo do processo '{{input.numeroProcesso}}' a partir dos resultados.",
-      "expectedOutcome": "A ficha do processo está aberta."
+      "expectedOutcome": "A ficha do processo '{{input.numeroProcesso}}' está aberta."
     },
     {
       "id": "abrir-documentos",
@@ -51,26 +51,20 @@
     {
       "id": "enumerar-documentos",
       "type": "browser",
-      "description": "Percorrer a lista de documentos do processo. Para cada documento listado, registar o nome/designação, o tipo (ex.: petição inicial, contestação, despacho, sentença, requerimento), a data e a referência que identifica o ficheiro. Não saltar nenhuma linha.",
-      "expectedOutcome": "Cada documento visível na página atual foi registado com nome, tipo, data e referência."
-    },
-    {
-      "id": "descarregar-documentos",
-      "type": "browser",
-      "description": "Para cada documento enumerado na página atual, abrir/descarregar o ficheiro respetivo (clicar no ícone ou ligação de descarregar/abrir) e associar o ficheiro descarregado à referência registada para esse documento. Se abrir num visualizador, usar a opção de descarregar/guardar.",
-      "expectedOutcome": "Os ficheiros dos documentos da página atual foram descarregados e associados às suas referências."
+      "description": "Percorrer a lista de documentos do processo e, para cada linha, registar o nome/designação, o tipo (ex.: petição inicial, contestação, despacho, sentença, requerimento), a data e a referência que identifica o ficheiro. NÃO abrir e NÃO descarregar nenhum documento — esta automação só enumera. Não saltar nenhuma linha.",
+      "expectedOutcome": "Cada documento visível na página atual foi registado com nome, tipo, data e referência, sem que nenhum ficheiro tenha sido aberto."
     },
     {
       "id": "paginar-documentos",
       "type": "browser",
-      "description": "Se a lista de documentos tiver mais do que uma página, avançar para a página seguinte e repetir a enumeração e o descarregamento; continuar até não haver mais páginas de documentos.",
-      "expectedOutcome": "Todas as páginas de documentos do processo foram percorridas e todos os ficheiros descarregados."
+      "description": "Se a lista de documentos tiver mais do que uma página, avançar para a página seguinte e repetir a enumeração; continuar até não haver mais páginas.",
+      "expectedOutcome": "Todas as páginas de documentos do processo foram percorridas."
     },
     {
-      "id": "verificar-documentos",
+      "id": "verificar-lista",
       "type": "verify",
-      "description": "Confirmar que foi recolhida a lista completa de documentos do processo (nome, tipo, data, referência do ficheiro) e que cada documento tem um ficheiro descarregado associado.",
-      "expectedOutcome": "A lista estruturada de documentos do processo está completa, com um ficheiro descarregado por documento, pronta a ser escrita no dossiê (coleção documentos, origem citius)."
+      "description": "Confirmar que foi recolhida a lista completa de documentos do processo '{{input.numeroProcesso}}' (nome, tipo, data, referência) e que nenhum ficheiro foi descarregado.",
+      "expectedOutcome": "A lista estruturada de documentos do processo está completa e não há ficheiros descarregados."
     }
   ]
 }

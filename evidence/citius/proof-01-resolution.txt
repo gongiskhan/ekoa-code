@@ -1,0 +1,29 @@
+1. login: 200 token=yes
+2. connect: 201 {"id":"4b8ea2ea-232c-47ae-bef6-ac3ccc257e0f","integrationKey":"citius","name":"citius","enabled":true,"needsReauth":false,"ownerUserId":"98f58c56-a8c0-4be3-ae08-45385ca53e2c"}
+3. session.loginUrl = "http://127.0.0.1:45190" (want http://127.0.0.1:45190)
+   available=false message="Nenhuma máquina ligada. Abra a Ponte Ekoa na máquina onde tem o certificado ou o leitor de cartões."
+4. provision: 200 {"provisioned":true,"created":6,"updated":0,"actions":[{"actionName":"consultar_notificacoes","description":"Lista as notificações pendentes do mandatário no Portal dos Mandatários (eTribunal). Requer sessão capturada.","mutates":false,"automationTemplate":"notificacoes","automationId":"c07f87ce7f759c2cff253c35cec5ec8f7d879a5e75427d9b44999b615de7b45c","automationName":"CITIUS/eTribunal — consultar notificações","provisioned":true},{"actionName":"consultar_processo","description":"Consulta o estado e os movimentos de um processo no Portal dos Mandatários (eTribunal). Requer sessão capturada.","mutates":false,"automationTemplate":"processo","automationId":"588a7a43b08624bcb3d4b8982c47384910237424e9bf5951e6116e83f74c2e18","automationName":"CITIUS/eTribunal — consultar processo","provisioned":true},{"actionName":"listar_documentos_processo","description":"Lista os documentos/peças de um proc…
+5. consultar_notificacoes: 200 {"success":false,"data":{"runId":"13b88a46-e34e-4dec-acd1-492a55cb2a11","status":"failed"},"code":"automation_failed","error":"no machine is paired to your account, and this step runs only on one - pair a machine, then establish this session from it","replay":{"replayed":false,"runId":"13b88a46-e34e-4dec-acd1-492a55cb2a11"}}
+6. trigger kind=listener pollConfig={"actionName":"consultar_notificacoes","intervalMs":900000} -> onNotificacaoCitius
+
+---------------------------------------------------------------------------------------------
+Second pass, after re-pairing the bridge and granting its capabilities (2026-08-31):
+
+  bridgeConnections = 1
+  advertised : attended.card_login, desktop.automation, egress.residential, local.filesystem
+  granted    : attended.card_login, desktop.automation, egress.residential, local.filesystem
+  provision  : 6 automations (0 created, 6 updated - idempotent)
+  trigger    : kind=listener {"actionName":"consultar_notificacoes","intervalMs":900000}
+  session    : {"supported":true,"available":true,"loginUrl":"http://127.0.0.1:45190",
+                "message":"Pronto: a sessao e capturada na sua maquina."}
+
+`available: true` is the gate everything above had been stopping at. Two things had to be fixed to
+reach it, both of which the committed runbook would have hit:
+
+  - `pair` dropped `extraCapabilities` and `egressProxy` on a re-pair, so the daemon silently
+    stopped advertising `desktop.automation` and served no residential proxy;
+  - the API refuses a loopback proxy address unless EKOA_BRIDGE_ALLOW_PRIVATE_EGRESS is set, and
+    the dev driver never set it, so the `egress.residential` grant was rejected outright.
+
+What remains is the ceremony itself: a human logs into the fixture once (cedula 12345 /
+palavra-passe demo123) in the Chrome window that opens on the paired machine.

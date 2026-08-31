@@ -370,18 +370,23 @@ describe('integrations: session + provisioning (no capture infra — honest, nev
     const missing = await authed('/api/v1/integrations/gmail/provision-automations', t, { method: 'POST' });
     expect(missing.status).toBe(404);
 
-    // citius ships 4 automation-bound actions with repo-authored templates: provisioning
-    // materializes them as org automations under the deterministic, ORG-SCOPED managed id
-    // (C1 — the id used to be `citius-<template>` for every tenant, so the second org to
-    // provision the package silently got nothing).
+    // citius ships 6 automation-bound actions with repo-authored templates (the four mandatário
+    // actions plus the 2026-08-31 list-then-fetch document pair): provisioning materializes them as
+    // org automations under the deterministic, ORG-SCOPED managed id (C1 - the id used to be
+    // `citius-<template>` for every tenant, so the second org to provision the package silently got
+    // nothing). Counted off the PACKAGE rather than hardcoded, so adding a template to a shipped
+    // package is not a test edit: what this pins is that EVERY bound template materializes, which
+    // is the property, and a hardcoded 4 pinned the package's size instead.
     const res = await authed('/api/v1/integrations/citius/provision-automations', t, { method: 'POST' });
     expect(res.status).toBe(200);
     const body = await readJson(res);
     expect(ProvisionAutomationsResponse.safeParse(body).success, JSON.stringify(body)).toBe(true);
     expect(body.provisioned).toBe(true);
-    expect(body.created).toBe(4);
     const rows = body.actions as Array<{ provisioned: boolean; automationId: string | null; automationName: string | null; automationTemplate: string | null }>;
-    expect(rows.filter((row) => row.provisioned)).toHaveLength(4);
+    const bound = rows.length;
+    expect(bound).toBeGreaterThanOrEqual(4);
+    expect(body.created).toBe(bound);
+    expect(rows.filter((row) => row.provisioned)).toHaveLength(bound);
     for (const row of rows.filter((r) => r.provisioned)) {
       // The caller is u1 of orgA: the id is the tenant's own, derived from (org, key, template).
       expect(row.automationId).toBe(managedAutomationId('orgA', 'citius', String(row.automationTemplate)));
@@ -391,12 +396,12 @@ describe('integrations: session + provisioning (no capture infra — honest, nev
     // Idempotent: a re-provision refreshes in place, never duplicates.
     const again = await readJson(await authed('/api/v1/integrations/citius/provision-automations', t, { method: 'POST' }));
     expect(again.created).toBe(0);
-    expect(again.updated).toBe(4);
+    expect(again.updated).toBe(bound);
 
     // The session view reflects the materialized rows (the dashboard's card state).
     const session = await readJson(await authed('/api/v1/integrations/citius/session', t));
     const sRows = (session.actions ?? []) as Array<{ provisioned: boolean }>;
-    expect(sRows.filter((row) => row.provisioned)).toHaveLength(4);
+    expect(sRows.filter((row) => row.provisioned)).toHaveLength(bound);
   });
 
   it('all three require auth (401 envelope)', async () => {

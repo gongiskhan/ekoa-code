@@ -1,0 +1,8 @@
+[listener-supervisor] trigger 2675b8f5-94a3-4554-aa59-e174c0993d39 (citius) failed (1): poll action "consultar_notificacoes" on citius failed (automation_failed): no machine is paired to your account, and this step runs only on one - pair a machine, then establish this session from it; backoff 1000ms
+[listener-supervisor] trigger ed5eec0e-99d9-4b15-89f7-91d9b38b4d17 (citius) failed (1): poll action "consultar_notificacoes" on citius failed (automation_failed): no machine is paired to your account, and this step runs only on one - pair a machine, then establish this session from it; backoff 1000ms
+[listener-supervisor] trigger 2675b8f5-94a3-4554-aa59-e174c0993d39 (citius) failed (2): poll action "consultar_notificacoes" on citius failed (automation_failed): no machine is paired to your account, and this step runs only on one - pair a machine, then establish this session from it; backoff 2000ms
+
+The trigger created for citius/notificacao.recebida is kind:'listener' with the package's
+own poll action and 15-minute cadence, and the supervisor picks it up and polls it. Before the
+fix it was created kind:'webhook' - a row nothing polls and no endpoint calls, that every
+surface reports as connected.

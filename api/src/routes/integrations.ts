@@ -50,7 +50,8 @@ import {
 import { requireAuth, requireRole, type AuthedRequest } from '../auth/middleware.js';
 import { requireUserOrApiKey, type ApiKeyPrincipal } from '../auth/api-key-middleware.js';
 import { listConfigs, upsertConfig, updateConfig, deleteConfig, configSummary, findConfigForOwner } from '../integrations/service.js';
-import { refreshDefinitions, integrationAutomationTemplate } from '../integrations/definitions.js';
+import { interpolate } from '../automation/template-vars.js';
+import { refreshDefinitions, integrationAutomationTemplate, publicConfigWithDefaults, type IntegrationConfigField } from '../integrations/definitions.js';
 import {
   applyPublishFloor,
   previewPublish,
@@ -139,6 +140,36 @@ async function automationBindings(actor: Actor, key: string): Promise<ProvisionB
       templateKey: a.automationBinding!.automationTemplate!,
       template: integrationAutomationTemplate(key, a.automationBinding!.automationTemplate!),
     }));
+}
+
+/**
+ * The address the session ceremony actually opens, for THIS tenant.
+ *
+ * `sessionConnect.loginUrl` is package content, so a package could only ever name ONE portal. That
+ * is wrong for the same reason the automation templates were wrong: the citius package declares a
+ * `portal_url` config field precisely because a tenant may be on a different address (a staging
+ * portal, an on-premise deployment, a fixture), and hardcoding it meant the field moved nothing.
+ * With `{{config.portal_url}}` in the package, one field now moves the ceremony AND the automations
+ * together - which matters, because the captured session is BOUND to the origin the ceremony opened
+ * and a session banked against a different host is a session no run can check out.
+ *
+ * Resolved through the same `publicConfigWithDefaults` the executor uses, so the package's declared
+ * default is the answer for a tenant who left the field blank, and never a blank URL.
+ */
+async function sessionLoginUrl(
+  actor: Actor,
+  key: string,
+  definition: { configSchema?: readonly IntegrationConfigField[]; sessionConnect?: { loginUrl?: string } } | null,
+): Promise<string | undefined> {
+  const raw = definition?.sessionConnect?.loginUrl;
+  if (!raw) return undefined;
+  if (!raw.includes('{{')) return raw;
+  const cfg = await findConfigForOwner(actor.orgId, actor.userId, key);
+  const values = publicConfigWithDefaults(definition?.configSchema, cfg?.publicConfigValues);
+  const resolved = interpolate(raw, {}, undefined, undefined, undefined, values).trim();
+  // An unresolvable address is NOT a blank one. Returning '' would make `supported` false and the
+  // UI say the integration does not use session capture, which is a different (and false) claim.
+  return resolved || undefined;
 }
 
 /**
@@ -1484,11 +1515,14 @@ async function newestUsableSession(
     if (!definition) return notFound(res);
 
     const connect = definition.sessionConnect;
+    const loginUrl = await sessionLoginUrl(actor, key, definition);
     const machine = connect ? getConnectionByOwner(actor.userId, actor.orgId) : undefined;
     // `supported` is a property of the PACKAGE; `available` is a property of this MOMENT. Collapsing
     // them would tell a user with no machine online that the feature does not exist.
-    const supported = !!connect?.loginUrl && definition.authType === 'browser_session';
-    const captured = connect?.loginUrl ? await newestUsableSession(actor, connect.loginUrl) : null;
+    const supported = !!loginUrl && definition.authType === 'browser_session';
+    // Looked up by the RESOLVED address: a session is bound to the origin its ceremony opened, so
+    // asking about the package's template string would find nothing and re-prompt forever.
+    const captured = loginUrl ? await newestUsableSession(actor, loginUrl) : null;
 
     // A LIVE SOCKET IS NOT A CAPABLE MACHINE. `available` used to mean only "some daemon of this
     // user's is connected", which was a promise the connected daemon might have no way to keep: the
@@ -1504,7 +1538,7 @@ async function newestUsableSession(
       sessionConnect: {
         supported,
         available: supported && capable,
-        ...(connect?.loginUrl ? { loginUrl: connect.loginUrl } : {}),
+        ...(loginUrl ? { loginUrl } : {}),
         ...(connect?.guidePt ? { guide: connect.guidePt } : {}),
         message: !supported
           ? 'Esta integração não usa captura de sessão.'
@@ -1528,7 +1562,8 @@ async function newestUsableSession(
     if (!definition) return notFound(res);
 
     const connect = definition.sessionConnect;
-    if (!connect?.loginUrl || definition.authType !== 'browser_session') {
+    const loginUrl = await sessionLoginUrl(actor, key, definition);
+    if (!loginUrl || definition.authType !== 'browser_session') {
       return res.json({
         started: false,
         session: { status: 'failed', message: 'Esta integração não usa captura de sessão.' },
@@ -1571,7 +1606,7 @@ async function newestUsableSession(
         // The kinds this rail models are both "a human is standing at the machine"; a card in a
         // reader and a certificate in a keystore are the same ceremony from here.
         kind: 'card_login',
-        origin: connect.loginUrl,
+        origin: loginUrl,
         reason: `Autenticação para ${definition.displayName ?? key}`,
         label: `${key} session`,
       });
@@ -1588,7 +1623,7 @@ async function newestUsableSession(
     // stored item. A ceremony handle would be a second thing to correlate and nothing needs it.
     res.json({
       started: true,
-      session: { status: 'waiting_login', message: connect.guidePt ?? 'Conclua a autenticação na máquina ligada.' },
+      session: { status: 'waiting_login', message: connect?.guidePt ?? 'Conclua a autenticação na máquina ligada.' },
     });
   });
 

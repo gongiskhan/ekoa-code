@@ -39,6 +39,17 @@ Lista as notificações pendentes do mandatário (processo, data, tribunal, tipo
 Consulta o estado e a tramitação completa (movimentos: data + acto) de um processo.
 - `numeroProcesso` (string, obrigatório): número único de processo (ex.: `1234/26.0T8LSB`).
 
+### listar_documentos_processo (por automação; requer sessão)
+Enumera os documentos/peças de um processo **sem abrir nem descarregar nenhum**: nome, tipo, data e referência, por documento. É a ação que responde a "que documentos tem este processo?" - enumerar é barato, descarregar não.
+- `numeroProcesso` (string, obrigatório).
+
+### obter_documento (por automação; requer sessão)
+Traz **UM** documento, identificado pela referência que a listagem devolveu ou pelo nome tal como aparece na lista, e descarrega o ficheiro. Se a designação for ambígua devolve as candidatas em vez de escolher.
+- `numeroProcesso` (string, obrigatório)
+- `documento` (string, obrigatório): referência ou nome.
+
+Estas duas são o par que serve a conversa: o chat lista os nomes, o advogado diz qual quer, a segunda traz esse. `fetch_documentos_processo` é a variante em massa, para sincronizar o dossiê inteiro - não para responder a uma pergunta.
+
 ### fetch_documentos_processo (por automação; requer sessão)
 Vai buscar **TODOS** os documentos/peças de um processo: enumera cada documento, descarrega o ficheiro e trata a paginação. Devolve a lista estruturada `[{nome, tipo, data, ficheiroRef}]`, destinada ao **dossiê** do processo (coleção `documentos`, `origem: 'citius'`) - ver `docs/integrations-citius.md`, secção "Documentos → dossiê".
 - `numeroProcesso` (string, obrigatório).
@@ -59,9 +70,15 @@ O resultado estruturado (nº processo / tribunal / data / espécie) é produzido
 
 A skill declara um `listenerConfig` (ação de sondagem `consultar_notificacoes`). Ao ligar, o fluxo de ligação regista um **listener** (`ekoa.triggers create`, `kind: listener`) que sonda periodicamente a automação de notificações e despacha cada **NOVA** notificação para o backend do artefacto `legal-citius` (o mesmo alvo do intake de email). A deduplicação é por **marca de água** (`dedupCitiusNotificacoes`) reforçada pela restrição UNIQUE da fila durável. O **alerta IMAP** de email do tribunal (`legal-citius/onEmail`) continua a ser o sinal de **baixa latência**; a automação de notificações é o **fetcher** autoritativo. Ver `citius-connect.ts` (`buildCitiusNotificationTrigger`) e `docs/integrations-citius.md`.
 
+## Endereço do portal: uma configuração, não uma constante
+
+O endereço vive **uma vez**, no campo de configuração `portal_url` (não-secreto, com o valor por omissão `https://portal.tribunais.org.pt` declarado no `defaultValue` do próprio campo). Tanto o `sessionConnect.loginUrl` como o passo `navigate` de todas as automações o leem como `{{config.portal_url}}`.
+
+As duas metades **têm** de andar juntas: a sessão capturada fica ligada à origem que a cerimónia abriu, por isso uma sessão capturada num endereço não pode ser levantada por uma execução que conduz outro. Mudar o campo move as duas.
+
 ## Ligação ação -> automação
 
-As quatro ações do mandatário ligam-se a automações por `automationBinding`, com o marcador `automationTemplate` (`notificacoes`, `processo`, `documentos`, `submissao`). Os **modelos são conteúdo**: vivem em `automations/<templateKey>.json` nesta pasta e são carregados pelo serviço genérico (`integration-automations.ts`), com override em runtime. O provisionamento (`provision-automations`, ou `citius-connect.ts` -> `provisionCitiusAutomations`) materializa, por advogado, uma automação por modelo com id determinista `citius-<templateKey>-<utilizador>` e `source: {integrationKey, templateKey}`, grava uma **cópia por-advogado** da skill no sandbox e reescreve cada `automationId` para o da automação criada. Antes disso, as ações do mandatário devolvem `unknown_automation` - é o comportamento honesto até haver sessão e automações materializadas.
+As ações do mandatário ligam-se a automações por `automationBinding`, com o marcador `automationTemplate` (`notificacoes`, `processo`, `documentos-lista`, `documento`, `documentos`, `submissao`). Os **modelos são conteúdo**: vivem em `automations/<templateKey>.json` nesta pasta e são carregados pelo serviço genérico (`integration-automations.ts`), com override em runtime. O provisionamento (`provision-automations`, ou `citius-connect.ts` -> `provisionCitiusAutomations`) materializa, por advogado, uma automação por modelo com id determinista `citius-<templateKey>-<utilizador>` e `source: {integrationKey, templateKey}`, grava uma **cópia por-advogado** da skill no sandbox e reescreve cada `automationId` para o da automação criada. Antes disso, as ações do mandatário devolvem `unknown_automation` - é o comportamento honesto até haver sessão e automações materializadas.
 
 ## Costura para a futura API (IGFEJ)
 

@@ -6,32 +6,10 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
-- **`a-recipe-replay-carries-no-cofre-session-so-a-401-is-misread-as-drift`** (2026-08-31, **HIGH**,
-  replay spine; found running the cornerstone acceptance runbook live, after the three fixes below
-  got the authored run through the login wall). `replayIntegrationAction` mints its own execution id
-  (`replay-<uuid>`, service.ts ~1628) and opens a daemon browser through
-  `openOwnerBrowserSession` (`replay-action.ts:185`), which constructs `DaemonBrowserSession`
-  WITHOUT the `sessionState` option that class already accepts (`browser-session.ts:302`). The
-  hosted step seam only delivers a session when `req.sessionState !== undefined`
-  (`bridge/daemon-step-seam.ts:172`), so no `session.deliver` is ever sent for a replay - VERIFIED
-  LIVE: two authored runs produced exactly two `session.deliver` frames and the replay leg produced
-  none. The run profile is wiped on lease release, so the replay drives a signed-out jar.
-  THE CONSEQUENCE IS WORSE THAN A MISS. `injected-call.ts` treats the presence of a `browser` as
-  "the authenticated session" (`browser?: BrowserSession`, "Absent ⇒ only a permissive origin can be
-  replayed at all"); it cannot distinguish a browser lease from an AUTHENTICATED one. So the replay
-  proceeds, the portal answers 401, and the 401 is classified as SITE DRIFT: observed live, the
-  recipe superseded v1 -> v2 with `supersedes.reason = "replayed call 1 answered 401"` on the very
-  next run, against a fixture that had not changed at all. Every run therefore re-learns, the
-  promised zero-model replay never happens for a session-gated portal - which is exactly the case
-  the cornerstone showcases - and the thrash burns HEAL_BUDGET until the recipe is cleared. CLOSE BY
-  resolving the Cofre session for the recipe's origin on the replay leg (through the SAME checkout
-  the authored run uses, per Rule 1) and passing it as `sessionState`, AND distinguishing "no
-  authenticated session" from "the site moved" before `supersedeRecipe` is called - a 401/403 on a
-  replay whose session was never delivered is not drift and must not consume the heal budget.
-
-- **`a-ceremony-session-is-unusable-on-the-machine-that-established-it`** (2026-08-31, **HIGH**,
-  cofre session checkout / bridge egress; found running the cornerstone acceptance runbook live on a
-  Mac). The attended ceremony captures a session, stamps it
+- **`a-ceremony-session-is-unusable-on-the-machine-that-established-it`** (**EGRESS HALF FIXED
+  2026-08-31 in 975fba2a; the LEGIBILITY half is OPEN, MEDIUM**, cofre session checkout / bridge
+  egress; found running the cornerstone acceptance runbook live on a Mac). The attended ceremony
+  captures a session, stamps it
   `establishedBy:{kind:'machine',pairingId:M}` + `boundEgress:{kind:'residential',pairingId:M}`
   (`bridge/attended.ts`, the only writer of `establishedBy: machine`), and `checkoutSession`
   (`cofre/session-checkout.ts:108`) then releases it ONLY when M appears in `residentialAvailable`.
@@ -55,6 +33,22 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   action surface instead of collapsing it into the sign-in-wall halt, so the user is told the
   session exists and what is missing. The silent collapse is the part that must not survive either
   way.
+
+  **THE FIRST ROUTE IS THE ONE THAT LANDED** (975fba2a): the requirement is KEPT and the endpoint is
+  made real. `clients/bridge/src/egress/proxy.ts` is a forward proxy (CONNECT tunnels + absolute-form
+  http) the daemon serves on a FIXED `127.0.0.1:8792` when `egressProxy` is configured and no
+  external endpoint is, so a local bridge advertises `egress.residential` with a genuine
+  `egressEndpoint` and `checkoutSession` releases the session it just captured. The port is fixed
+  rather than ephemeral on purpose: a grant NAMES the endpoint it authorises and Cortex compares the
+  two by EQUALITY, so a port that moved on restart silently voided the grant.
+
+  **WHAT IS STILL OPEN is the second half, and it is the one the entry says must not survive either
+  way.** `adhocSessionReuse` still maps every non-`reused` verdict - `needs-egress` included - to
+  `not-applicable`, so a session that exists and was withheld is still reported to the user as "the
+  page answered with a sign-in wall". The loop is no longer reachable on a proxy-serving bridge, but
+  the collapse that made it unexplainable is untouched, and any other reason checkout refuses will
+  land in exactly the same silence. CLOSE BY surfacing `needs-egress` distinctly at the action
+  surface.
 
 - **`the-needs_credentials-halt-has-no-door-on-the-integration-detail-page`** (2026-08-31,
   **MEDIUM**, K2/K5 surface; found running the runbook live). The API answers a complete
@@ -3586,7 +3580,8 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   callers. Sub-3-char values are still not substituted — doing so would destroy the surrounding
   stream — but they are surfaced on `registry.unmaskable` instead of being dropped in silence.
   Pinned by `api/tests/security/redaction.test.ts` (24 cases, one per regression).
-- **`citius-listener-blocked`** (OPEN, MEDIUM, correctness — 2A-S4 review). `citius` is the one
+- **`citius-listener-blocked`** (**BLOCKER 1 FIXED 2026-08-31; what remains is OPEN, MEDIUM**,
+  correctness — 2A-S4 review). `citius` is the one
   SHIPPED user-defined listener source that is not deferred for a missing transport, and it still
   cannot poll. 2A-S4 fixed the part that belonged to the listener rail (the composition root now
   injects the automation seam into the executor the supervisor uses, guarded by a static test, and
@@ -3609,6 +3604,30 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   separate change. (2) The CITIUS captured browser session does not exist yet — `session-capture.ts`
   is track 2A slice 6 — so even a resolvable automation cannot authenticate to the Portal dos
   Mandatários. Close with 2A-S6 plus the id fix.
+
+  **BLOCKER 1 IS FIXED (2026-08-31), and NOT by re-pointing the package.** The remediation this
+  entry anticipated ("resolve the id per-org or follow the `source.{integrationKey,templateKey}`
+  provenance") is what landed: `resolveBoundAutomation` (`automation/integration-automations.ts`)
+  joins a template-bearing binding to the org's own provisioned row by its provenance stamp, falling
+  back to the literal so every binding that resolved before still does, and answering an
+  unprovisioned template with the DETERMINISTIC id rather than the placeholder (a placeholder in an
+  error message sends a human to look for a row that is not the row). `automation/service.ts` uses it
+  on the run leg AND in `clearRefusedRecipe`'s ownership gate - the gate mattered: with the literal
+  fetching nothing it read EVERY caller as the orphan case, reopening the hole K6 closed. Both
+  committed assertions that pin the placeholder value stay true, because the package is unchanged.
+  Suites: `api/tests/automation/bound-automation-resolution.test.ts` (5 cases incl. the pre-C1 legacy
+  row and the no-template builder case). VERIFIED LIVE 2026-08-31 against the committed fixture
+  (`evidence/citius/proof-01-resolution.txt`): `provision-automations` created 6 rows and
+  `consultar_notificacoes` now starts a real run under the managed id
+  `f6c8f41b7f41…` instead of answering `unknown_automation: citius-notificacoes-template`.
+
+  **WHAT IS STILL OPEN is blocker 2, and it is narrower than written above.** The captured browser
+  session DOES exist now (the Cofre + attended ceremony landed), and this package is wired to it: its
+  `sessionConnect` resolves per tenant and the ceremony banks a session bound to that origin. What
+  has NOT been done is running it: no Citius action has ever completed against a portal, real or
+  fixture, because that needs a paired machine and a human at it. The live proof above stops exactly
+  there, with the honest refusal `no machine is paired to your account`. CLOSE BY driving the fixture
+  end to end from a paired bridge (learn -> replay -> self-heal), then once against the real portal.
 - **`event-array-field-shape-drift`** (OPEN, LOW, correctness — 2A-S4 review note). Both poll
   sources treat a non-array `eventArrayField` as an empty batch (`asArray` returns `[]`), so a
   provider that changes the shape of that field advances the cursor over items that were never
@@ -4209,6 +4228,147 @@ silently absorbed into a ledger note):
   `m365proxy-manifest-flag-stripped`, `P4.2-was-dead-code-in-production`) was code that LOOKED like
   coverage: a correct, tested function kept plausible by a docblock describing a caller it never got.
   Nothing here claims to be reachable, and this entry is the record that it is not.
+
+## Recently fixed - 2026-08-31 making the shipped Citius package able to run at all
+
+Four defects found by trying to run a shipped integration package end to end for the first time.
+None was visible from the code: each needs the package, the provisioner, the engine and a portal in
+the same room. Two of them made every automation-backed action on every shipped package useless.
+
+- **`a-recipe-replay-carries-no-cofre-session-so-a-401-is-misread-as-drift`** (FIXED 2026-08-31 in
+  975fba2a, **HIGH**, replay spine; found running the cornerstone acceptance runbook live). The
+  replay leg opened a daemon browser through `openOwnerBrowserSession` WITHOUT the `sessionState`
+  the class accepts, so no `session.deliver` frame was ever sent for a replay (verified live by
+  counting frames: two authored runs produced two, the replay produced none) and the replay drove a
+  signed-out jar. Worse than a miss: `injected-call.ts` read the presence of a BROWSER as the
+  presence of an AUTHENTICATED session, so the portal's 401 was classified as SITE DRIFT and the
+  recipe superseded v1 -> v2 against a fixture that had not changed. Every run re-learned; the
+  promised zero-model replay never happened for a session-gated portal, which is the case the
+  cornerstone exists to showcase. FIXED both halves: `replay-action.ts` resolves the Cofre session
+  for the recipe's origin through the SAME `ensureSession` checkout the authored run uses (accepting
+  only `reused`) and passes it as `sessionState`; and `executors/injected-call.ts` answers
+  `unavailable` rather than drift for a 401/403 on a replay whose session was never delivered, so a
+  missing session can no longer consume the heal budget. Suites:
+  `api/tests/automation/injected-call-replay.test.ts`, `api/tests/automation/replay-*`. The
+  zero-model replay leg was then proven live at 592ms against a 5173ms authored run.
+
+- **`automation-step-text-is-never-interpolated`** (FIXED 2026-08-31, **HIGH**, correctness).
+  Nothing in the engine interpolated a step's `description`, `expectedOutcome` or `url`. `engine.ts`
+  passed `step.description` to the vision resolver and `step.url` to `browser.act` exactly as
+  authored, so the shipped citius template that says "introduzir o numero unico de processo
+  '{{input.numeroProcesso}}' e submeter a pesquisa" instructed the model to type those twenty-four
+  literal characters into the portal's search box, and a `navigate` step could not be pointed
+  anywhere but the address written in its own JSON. Every shipped template naming an input in its
+  prose was affected - all four citius ones - and so is any planner output that does the same. The
+  failure is SILENT: the run completes, the model does something plausible with the nonsense, and
+  the answer is about the wrong process. FIXED by `resolveStepTemplates` (`automation/template-vars.ts`)
+  plus a second view in the engine: `workingSteps` keeps the authored text (it is what
+  `persistRefinedSteps` writes back), `executableSteps` is what the vision prompt, the navigate URL
+  and the origin walk read. Resolving in place was rejected - it would bake one run's arguments into
+  the saved automation, so the next run searches for the previous run's process number. Pinned by
+  five cases in `api/tests/automation/engine.test.ts`, four of which a mutation (reverting the one
+  line) kills; the fifth pins that the SAVED steps keep their placeholders. The credential boundary
+  is `interpolate`'s existing redaction and is pinned too: `{{input.credentials.password}}` in a step
+  description resolves to the empty string, never to the secret.
+
+- **`integration-config-values-never-reach-an-automation`** (FIXED 2026-08-31, MEDIUM, correctness).
+  A package could declare a `configSchema` field that nothing on the automation path could read. The
+  citius package declares `portal_url` with the help text "Endereco do Portal dos Mandatarios. Por
+  omissao https://portal.tribunais.org.pt" - a default stated only in prose - while the address was
+  hardcoded in four templates AND in `sessionConnect.loginUrl`. So the field moved nothing: a tenant
+  on a staging portal, an on-premise deployment or a fixture had no way to say so. FIXED with a
+  `{{config.<key>}}` channel fed from `publicConfigValues` (the projection built by dropping every
+  secret key, so there is no secret in it by construction), a declared `defaultValue` on the config
+  field, and `publicConfigWithDefaults` applying defaults at READ time so a package upgrade can move
+  a default. `sessionConnect.loginUrl` resolves through the SAME values on purpose: a captured
+  session is bound to the origin its ceremony opened, so if the ceremony and the automations could
+  disagree about the address the result is a session banked that no run can check out. Suites:
+  `api/tests/integrations/config-defaults.test.ts` (6, incl. "a stored empty string is unanswered"
+  and "never default a secret field"), plus the contract pins in
+  `api/tests/contract/integration-definitions.test.ts`. VERIFIED LIVE: the ceremony address for a
+  tenant configured with the fixture reads `http://127.0.0.1:45190`, not the hardcoded portal.
+
+- **`knowledge-backfill-counts-a-16gb-fts-index-on-every-boot`** (FIXED 2026-08-31, **HIGH**,
+  performance/availability). `backfillKnowledgeIndex` decided "is the index already populated" with
+  `index.totalRows()`, i.e. `SELECT COUNT(*) FROM knowledge_fts` - a FULL SCAN of an FTS5 table, on
+  a path that runs BEFORE `listen()`. On this machine (`fts.db` 16 GB + a 128 MB WAL) that scan ran
+  for over twelve minutes with the API answering nothing, which reads as a hung stack; it was found
+  by sampling the process and seeing `fts5NextMethod` under `Statement::JS_get` on the main thread.
+  FIXED with `hasAnyRows()` (`SELECT 1 ... LIMIT 1`), which answers the question actually asked and
+  costs the same on an empty index and on a huge one. `totalRows()` is kept, with a docblock saying
+  never to call it on a boot path. MEASURED: boot went from >12 minutes (timing out) to **100
+  seconds** on the same data dir.
+
+- **`a-package-listener-trigger-is-created-as-a-webhook-nothing-polls`** (FIXED 2026-08-31,
+  **HIGH**, correctness). `createTrigger`'s `listenerStamp` inferred `kind: 'listener'` for platform
+  mailboxes only. Its own docblock states the reason - a provider with NO WEBHOOK INGRESS gets "a
+  webhook-kind row NOTHING polls: a silently dead mailbox watch that reports success" - and then
+  leaves the identical hole open for a user-defined package that declares its own `listenerConfig`,
+  which is polled by the SAME supervisor down the 2A-S4 branch and has no ingress either. Found live
+  creating the trigger the shipped `citius` package exists for: `POST /api/v1/triggers` with
+  `citius`/`notificacao.recebida` answered `201` with `"kind": "webhook"` and a `publicUrl` nobody
+  will ever call. Every surface would have shown it connected; no notification would ever have
+  arrived. FIXED by extending the inference to a tenant-scoped package `listenerConfig`, gated on the
+  event being one the package DECLARES - inferring for an undeclared event would be worse than the
+  default, a poll loop running forever for something that can never appear. The caller may still
+  override the cadence, never the poll action. Suite:
+  `api/tests/events/trigger-create-inference.test.ts` (+3 cases).
+  ALSO FIXED, the UI half: `web/components/artifacts/backend-trigger-card.tsx` listed only connected
+  mailboxes and hardcoded `eventName: 'email.received'`, so an artifact backend listening to
+  anything else could not be wired at all - and the one control it offered would have bound the
+  handler to an event its source never emits. It now unions the mailboxes with every ENABLED
+  integration's declared `listenerEvents` and carries the chosen source's own event name. Suite:
+  `web/__tests__/components/backend-trigger-card.test.tsx` (5 cases; the event-name assertion is
+  mutation-verified).
+
+- **`a-re-pair-silently-erases-the-operator-decisions-on-the-config`** (FIXED 2026-08-31, **HIGH**,
+  bridge tooling; found re-pairing after the ephemeral dev Mongo was wiped). `pair` carried `org` and
+  `signingSecret` forward across a re-pair and DROPPED `extraCapabilities` and `egressProxy`. Both
+  losses are silent and both misdirect:
+  (1) `desktop.automation` is a tier-2 opt-in that exists ONLY as this config edit - deliberately,
+  because it is not something a UI may switch on. Erased, the daemon stops advertising it, so Cortex
+  has nothing to grant and every attended flow refuses with "A Ponte Ekoa ligada é demasiado antiga
+  para capturar sessões" - a message about a VERSION, which sends the operator to upgrade software
+  that is already current.
+  (2) `egressProxy` erased means no residential endpoint is served, so no `egress.residential` is
+  advertised, so `checkoutSession` withholds the session THIS MACHINE just captured - i.e. a re-pair
+  re-opened the HIGH finding `a-ceremony-session-is-unusable-on-the-machine-that-established-it`
+  whose fix had already landed. FIXED by carrying both forward (by PRESENCE, so an explicit
+  `egressProxy: false` is respected as an answer), with the reasoning on the command's docblock.
+  Suite: `clients/bridge/test/cli/cli.test.ts` (+2, mutation-verified). VERIFIED IN THE WILD: a
+  re-pair on this machine minted a new pairing id and kept both settings.
+
+- **`the-dev-driver-cannot-grant-its-own-bridge-residential-egress`** (FIXED 2026-08-31, MEDIUM,
+  tooling; found granting capabilities to a freshly paired local bridge). A paired bridge serves its
+  residential egress proxy on `127.0.0.1:8792`, and `normaliseEgressEndpoint` refuses a loopback
+  address unless `EKOA_BRIDGE_ALLOW_PRIVATE_EGRESS` is set - a closed default that is right for a
+  deployment and fatal for a local loop. The dev driver never set it, so `POST
+  /bridge/pairings/:id/capabilities` rejected the `egress.residential` grant with "must be a usable
+  proxy address" and the committed acceptance runbooks could not be completed on a dev box at all:
+  without that grant the daemon's own freshly captured session is withheld from the machine that
+  captured it. The switch's own docblock says it exists for "a developer running a proxy on their
+  own machine", which is exactly this. FIXED in `.claude/skills/run-ekoa-code/driver.mjs` (an
+  explicit environment value still wins), documented as a gotcha in the skill.
+
+- **`artifact-pdf-contract-test-flakes-on-the-default-30s-timeout`** (FIXED 2026-08-31, LOW, test
+  flakiness). `artifact-family.test.ts`'s "rejects an unsafe id 400 and degrades a valid id to 302 or
+  503" had no explicit timeout, but the route it drives LAUNCHES CHROMIUM and renders a page to PDF.
+  Under the full contract suite (71 files, several driving browsers) the render exceeds vitest's 30s
+  default and the test fails with `Test timed out in 30000ms` - a red in the suite that gates every
+  PR, saying nothing at all about the code, on an assertion that deliberately accepts EITHER outcome
+  (302 rendered, 503 Chromium unavailable). The same file passes in isolation in 74s. FIXED with an
+  explicit 90s timeout, matched to what the file's other browser-driving test already uses. Not a
+  papering-over: the clock running out is not one of the two outcomes this test is about.
+
+- **`dev-api-health-watchdog-kills-a-slow-boot-as-an-epipe`** (FIXED 2026-08-31, MEDIUM,
+  tooling/diagnosability). Two independent watchdogs waited for `/health`: the driver's
+  (`EKOA_API_HEALTH_TIMEOUT_MS`, 180s, documented and overridable) and `scripts/dev-api.mjs`'s own
+  (120s, overridable only via a DIFFERENT env var the driver never set). The inner one always fired
+  first, and on expiry it tore the ephemeral Mongo down - killing a server that was still booting.
+  What the operator saw was `[ekoa-api] boot failed: Error: write EPIPE` from the mongo driver, with
+  nothing anywhere saying a timer had done it, and raising the documented override changed nothing.
+  FIXED by having the driver pass its own ceiling down as `DEV_API_HEALTH_TIMEOUT_MS` so there is ONE
+  deadline, plus a gotcha in the skill for anyone booting `dev-api.mjs` by hand.
 
 ## Recently fixed - 2026-08-28 the cornerstone hardening (K2 honest halt, K6 heal budget + one-writer clear)
 

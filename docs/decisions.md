@@ -6926,3 +6926,81 @@ a wrong one would discard good sessions. The residual is stated in the finding.
   confirm read. A wrong read verdict is bounded by the execute-time write gate + consent (the same
   locks every action run already passes). The verdict lands on the minted action's `mutates` field and
   the detail page exposes the flip.
+
+- 2026-08-31 - D-CITIUS-BINDING-BY-PROVENANCE: an integration package's
+  `automationBinding.automationId` is a PLACEHOLDER, and the execution path now resolves it the way
+  the read path already did. The shipped citius package declares `citius-notificacoes-template`; the
+  row a tenant runs is minted by `provisionIntegrationAutomations` under
+  `managedAutomationId(orgId, key, templateKey)` and joined back by `source.{integrationKey,
+  templateKey}`. `automation/service.ts` fetched the literal, so EVERY automation-backed action on
+  EVERY shipped package answered `unknown_automation` however well provisioned the org was
+  (docs/findings.md `citius-listener-blocked`, blocker 1; the read surface had already learned this,
+  which is why `managedAutomationIdsFor` exists). `resolveBoundAutomation` is now the one join, used
+  by the run leg and by the recipe-clear ownership gate. Provenance is tried FIRST and the literal
+  SECOND, so a builder-authored binding that names a real automation resolves exactly as before -
+  the change is additive, not a replacement. The shipped placeholder value is left alone: it is
+  correct as package content, and the two committed assertions that pin it stay true.
+
+- 2026-08-31 - D-AUTOMATION-STEP-TEMPLATES: an automation step's `description`, `expectedOutcome`
+  and `url` are interpolated FOR EXECUTION and never in place. Nothing interpolated them before, so
+  a template that said "introduzir o numero unico de processo '{{input.numeroProcesso}}'" handed the
+  vision model those literal characters to type, and a `navigate` step could not be parameterised at
+  all - every shipped template naming an input in its prose was affected, quietly (the run completes
+  and answers about the wrong thing). The engine now keeps two views: `workingSteps` holds the
+  AUTHORED text and is what `persistRefinedSteps` writes back and every `refinedSteps:` report
+  shows; `executableSteps` is the resolved view the vision prompt, the navigate URL and the origin
+  walk read. Resolving in place was rejected because it would bake one run's arguments into the
+  saved automation permanently. The credential boundary is unchanged and load-bearing:
+  `interpolate` redacts `{{input.credentials...}}` before any substitution, so a step description
+  can never carry a decrypted secret into a model prompt.
+
+- 2026-08-31 - D-INTEGRATION-CONFIG-CHANNEL: a package's own non-secret `configSchema` values reach
+  its automations as `{{config.<key>}}`, and a field may declare a `defaultValue`. Before this a
+  package could declare a config field that NOTHING read on the automation path - the citius
+  package's `portal_url` said "por omissao https://portal.tribunais.org.pt" in prose while the
+  address was hardcoded in four templates and in `sessionConnect.loginUrl`, so the field was
+  decoration and no tenant could be on a different portal. The channel is `RunContext.configValues`,
+  fed from `IntegrationConfig.publicConfigValues` (the plaintext projection, built by DROPPING every
+  key the schema marks secret) through `publicConfigWithDefaults`, so there is no secret in it by
+  construction. Prefixed `config.` rather than the bare `{{portal_url}}` the HTTP path uses, because
+  bare means an ARG in some packages and a CONFIG FIELD in others and this same string is fed to a
+  model as an instruction. Defaults are applied at READ time, never baked into the stored
+  projection, so a package upgrade can move a default and a row written before the default existed
+  still gets it; a stored empty string counts as unanswered, because optional inputs post `""`.
+  `sessionConnect.loginUrl` resolves through the same values, deliberately: a captured session is
+  bound to the origin its ceremony opened, so the ceremony and the automations MUST move together or
+  a session is banked that no run can check out.
+
+- 2026-08-31 - D-CITIUS-DOCUMENT-ACTIONS: enumerating a process's documents and fetching one of them
+  are TWO actions, not one. `fetch_documentos_processo` downloads every document in the process,
+  which is the right shape for a dossier sync and the wrong shape for the question "what documents
+  does this process have?" - answering that must not cost six PDF downloads, and the conversational
+  follow-up ("get me the contestacao") needs a fetch that takes a name. So the package gains
+  `listar_documentos_processo` (enumerate only, explicitly forbidden from opening anything) and
+  `obter_documento` (one document, by reference or by name, and it refuses to choose when the name
+  is ambiguous). The bulk action is KEPT rather than replaced: it does a different job (write the
+  whole dossier) and it is pinned by three committed suites, so retiring it is a separate,
+  deliberate change under Rule 7 rather than a side effect of this one.
+
+- 2026-08-31 - D-LISTENER-INFERENCE-IS-ABOUT-INGRESS: `createTrigger` infers `kind: 'listener'` for
+  ANY provider with no webhook ingress, not just a platform mailbox. The inference existed for
+  M365/Google on the argument that they cannot receive a webhook, so a `kind:'webhook'` row for them
+  is one nothing polls and no endpoint calls - connected-looking and dead. A user-defined package
+  declaring a `listenerConfig` is the same case (2A-S4 polls it with the same supervisor), and was
+  left out, so the shipped `citius` package's own trigger was created dead. The inference now reads
+  the tenant-scoped package definition, and is GATED on the event being one the package declares:
+  inferring for an undeclared event would be worse than the webhook default - a poll loop running
+  forever for an event that can never appear, reporting healthy. The caller may override the cadence,
+  never the poll action, which is the rule the platform branch already followed.
+
+- 2026-08-31 - D-REPAIR-KEEPS-OPERATOR-DECISIONS: a bridge re-pair replaces the IDENTITY half of the
+  config (pairing id, credentials, base URL) and preserves every DECISION the operator made about
+  that machine. It previously kept `org` and `signingSecret` only, silently discarding
+  `extraCapabilities` and `egressProxy` - the two settings hardest to notice missing and most
+  expensive to lose, because neither failure names itself: an erased `desktop.automation` surfaces
+  as "the bridge is too old", and an erased `egressProxy` re-opens a fixed HIGH finding by having
+  Cortex withhold the session the machine just captured. Neither is a credential and neither is tied
+  to the pairing id, so a new pairing does not make the old answer wrong. Carried by PRESENCE rather
+  than truthiness, because `egressProxy: false` is an answer. The per-org capability GRANT is
+  genuinely invalidated by a re-pair (it is keyed on the pairing id) and still has to be re-issued.
+

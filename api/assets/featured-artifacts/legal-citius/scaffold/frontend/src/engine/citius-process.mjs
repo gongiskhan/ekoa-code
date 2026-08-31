@@ -31,7 +31,26 @@ function djb2(s) {
 }
 
 export async function processarNotificacao(raw, dataApi, opts = {}) {
-  const parsed = parseCitiusNotification(raw);
+  return processarNotificacaoEstruturada(parseCitiusNotification(raw), dataApi, opts);
+}
+
+/**
+ * A MESMA triagem, a partir de campos JÁ ESTRUTURADOS em vez de prosa.
+ *
+ * PORQUÊ. O email do tribunal é prosa e tem de ser lido por `parseCitiusNotification`. O Portal dos
+ * Mandatários não é: a automação de notificações devolve o processo, a data, o tribunal e o acto em
+ * campos próprios, e voltar a serializá-los para texto só para os re-extrair perderia informação
+ * (o portal chega a declarar o prazo) e acrescentaria uma fonte de erro que não existia.
+ *
+ * O QUE NÃO MUDA, e é o ponto. Tudo o que vem depois do parse é partilhado: emparelhar o processo na
+ * espinha, exigir data explícita, exigir uma regra de prazo conhecida, escrever prazo + evento +
+ * linha na caixa, e a idempotência por `sourceRef`/`contentRef`. Duas vias de entrada, UMA triagem -
+ * senão a caixa passa a ter duas noções de "revisão" e o advogado deixa de saber qual vale.
+ *
+ * `parsed` é a forma que `parseCitiusNotification` devolve:
+ *   { numeroProcesso, ato, regra, dataExplicita, dataConflito, ok, motivo, texto, textoCompleto }
+ */
+export async function processarNotificacaoEstruturada(parsed, dataApi, opts = {}) {
   // Impressão digital do CONTEÚDO COMPLETO (não truncado) — duas notificações
   // diferentes nunca colidem; a MESMA reentregue colide sempre.
   const contentRef = `c_${djb2(parsed.textoCompleto)}`;
