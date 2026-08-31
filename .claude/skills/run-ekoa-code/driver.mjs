@@ -149,7 +149,28 @@ function bootApi() {
   // them or the artifact preview iframe is CSP-blocked with only a browser console line to
   // show for it (found live 2026-08-07 driving the stack from a phone over tailscale). An
   // explicit EKOA_DASHBOARD_ORIGINS always wins; localhost stays so a local browser keeps working.
-  const env = { ...process.env, PORT: API_PORT };
+  // TWO WATCHDOGS, ONE DEADLINE. `scripts/dev-api.mjs` runs its OWN /health wait (120s) and on
+  // expiry tears the ephemeral Mongo down - which kills a server that was still booting, and the
+  // only trace is an EPIPE from the mongo driver with no line saying a timer did it. Raising
+  // EKOA_API_HEALTH_TIMEOUT_MS here without passing it down therefore changed nothing: the inner
+  // timer still fired first and still killed the boot (observed 2026-08-31 on a 36G data dir).
+  // The driver's ceiling is the ONE deadline; the inner one is set from it, never left to differ.
+  //
+  // THE LOOPBACK-PROXY SWITCH, without which the committed acceptance runbooks cannot work. A
+  // paired bridge on THIS machine serves its residential egress proxy on 127.0.0.1:8792, and
+  // `normaliseEgressEndpoint` refuses a loopback address unless EKOA_BRIDGE_ALLOW_PRIVATE_EGRESS is
+  // set - closed by default, correct for a deployment, and fatal for a local loop: the
+  // `egress.residential` grant is REFUSED, so the daemon's own freshly captured session is withheld
+  // from the machine that captured it (docs/findings.md
+  // `a-ceremony-session-is-unusable-on-the-machine-that-established-it`). This driver only ever
+  // boots a local dev stack, which is precisely the case the switch exists for. An explicit value
+  // in the environment always wins, so it can still be turned off.
+  const env = {
+    ...process.env,
+    PORT: API_PORT,
+    DEV_API_HEALTH_TIMEOUT_MS: String(API_HEALTH_TIMEOUT_MS),
+    EKOA_BRIDGE_ALLOW_PRIVATE_EGRESS: process.env.EKOA_BRIDGE_ALLOW_PRIVATE_EGRESS ?? '1',
+  };
   if (PUBLIC_WEB_HOSTS.length && !process.env.EKOA_DASHBOARD_ORIGINS) {
     // Both schemes per host: tailscale serve terminates TLS on the same port, so the
     // dashboard origin the browser carries can be http OR https depending on how it arrived.

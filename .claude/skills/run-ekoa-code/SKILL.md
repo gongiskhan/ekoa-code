@@ -209,12 +209,30 @@ browser that must use one fixed API origin; tailnet mode does not need it.
 
 `EKOA_API_PORT` (4211) · `EKOA_WEB_PORT` (3000) · `EKOA_ADMIN_USERNAME` (admin) ·
 `EKOA_ADMIN_PASSWORD` (tmp12345) · `EKOA_SHOT_DIR` (.ekoa-run) ·
-`EKOA_API_MODE` (`built` | `dev`) · `EKOA_API_HEALTH_TIMEOUT_MS` (180000) ·
+`EKOA_API_MODE` (`built` | `dev`) · `EKOA_API_HEALTH_TIMEOUT_MS` (180000, and it is
+the ONE deadline: the driver passes it down as `DEV_API_HEALTH_TIMEOUT_MS` so
+`scripts/dev-api.mjs`'s own 120s watchdog cannot fire first) ·
 `EKOA_TAILNET` (expose on tailscale addresses) ·
 `EKOA_PUBLIC_WEB_HOST` (comma-separated extra hosts) · `EKOA_PUBLIC_API_URL`
 (verbatim API origin for the bundle).
 
 ## Gotchas
+
+- **A loopback egress proxy needs `EKOA_BRIDGE_ALLOW_PRIVATE_EGRESS`.** A paired bridge serves
+  its residential proxy on `127.0.0.1:8792`, and the API refuses a loopback proxy address by
+  default - so the `egress.residential` grant is rejected with "must be a usable proxy address",
+  and a session the daemon just captured is then withheld from the very machine that captured it.
+  This driver sets the switch for the local stack; an explicit value in the environment wins.
+
+- **A slow boot dies as an EPIPE, not as a timeout.** `scripts/dev-api.mjs` runs
+  its own `/health` wait and, on expiry, tears the ephemeral Mongo down - which
+  kills a server that was still booting. What you see is
+  `[ekoa-api] boot failed: Error: write EPIPE` from the mongo driver and nothing
+  saying a timer did it. A large `~/.ekoa/data` is the usual cause (the knowledge
+  FTS backfill and the featured-app registration both run before `listen`; 36G
+  measured 2026-08-31). The driver now passes its own ceiling down, so raising
+  `EKOA_API_HEALTH_TIMEOUT_MS` actually works - but booting `dev-api.mjs` BY HAND
+  still needs `DEV_API_HEALTH_TIMEOUT_MS` set explicitly.
 
 - **`backend.port` pins the browser's API origin.** In dev, `next.config.ts`
   reads `../backend.port` (committed `4111`) and inlines it as

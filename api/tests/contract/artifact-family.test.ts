@@ -593,7 +593,15 @@ describe('pdf: id charset guard (render degrades explicitly when Chromium is una
 
     const ok = await jwtApi('/api/v1/artifacts/pdf1/pdf', t, { redirect: 'manual' });
     expect([302, 503]).toContain(ok.status);
-  });
+    // EXPLICIT TIMEOUT, because the default one is not a product signal here. This route LAUNCHES
+    // CHROMIUM and renders a page to PDF, and the assertion deliberately accepts either outcome -
+    // 302 when the render worked, 503 when Chromium is unavailable. Under the full contract suite
+    // (71 files, several of them driving browsers) the render regularly exceeds vitest's 30s
+    // default, so the test failed with "Test timed out" while the behaviour it pins was fine: a
+    // red that says nothing about the code, in the suite that gates every PR. Observed 2026-08-31
+    // in a full-suite run; the same file passes in isolation in 74s. Matched to the 90s the file's
+    // other browser-driving test already uses.
+  }, 90_000);
 });
 
 describe('featured-update apply/ignore (ch07 §7.13)', () => {

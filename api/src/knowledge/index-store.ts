@@ -437,7 +437,21 @@ export function orgStatus(orgId: string): IndexStatus {
   return { documentCount: row.documentCount, collectionCount: row.collectionCount };
 }
 
-/** Total rows across all orgs (backfill emptiness check). */
+/**
+ * Is the index populated at all? The boot backfill's question, and the ONLY thing it asks.
+ *
+ * `SELECT COUNT(*)` ON AN FTS5 TABLE IS A FULL SCAN, and this runs before `listen()`. On a real
+ * corpus (16 GB `fts.db` + a 128 MB WAL, measured 2026-08-31) that scan takes MINUTES, during which
+ * the API answers nothing - which reads as a hung or broken stack, and on this machine was killed
+ * outright by `scripts/dev-api.mjs`'s health watchdog, leaving only an EPIPE from the mongo driver
+ * to explain it. `LIMIT 1` stops at the first row, so the check costs the same on an empty index
+ * and on a huge one, and it answers exactly the question the caller asked.
+ */
+export function hasAnyRows(): boolean {
+  return connect().prepare('SELECT 1 FROM knowledge_fts LIMIT 1').get() !== undefined;
+}
+
+/** Total rows across all orgs. A full FTS5 scan - never call it on a boot path (see `hasAnyRows`). */
 export function totalRows(): number {
   return (connect().prepare('SELECT COUNT(*) AS n FROM knowledge_fts').get() as { n: number }).n;
 }

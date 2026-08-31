@@ -871,7 +871,9 @@ async function indexOrgFromVault(orgId: string): Promise<number> {
  *  server.ts bootState (reported to the lead). */
 export async function backfillKnowledgeIndex(opts: { force?: boolean } = {}): Promise<{ indexed: number; skipped: boolean }> {
   await index.ensureIndexDir();
-  if (!opts.force && index.totalRows() > 0) return { indexed: 0, skipped: true };
+  // ASKED AS "is there anything here", not "how much". `totalRows()` is a full FTS5 scan and this
+  // is a pre-`listen()` boot path: on a 16 GB index it cost minutes of dead air every single boot.
+  if (!opts.force && index.hasAnyRows()) return { indexed: 0, skipped: true };
   let indexed = 0;
   for (const orgId of await vault.listOrgIds()) {
     indexed += await indexOrgFromVault(orgId);

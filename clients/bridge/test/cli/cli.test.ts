@@ -101,6 +101,53 @@ describe('cli — pair → status → unpair round trip', () => {
     expect(after.out.join('\n')).toContain(pt.statusNotPaired);
   });
 
+  it('a RE-PAIR carries the operator decisions forward, not just the identity', async () => {
+    // WHAT THIS PINS, and why it is not cosmetic. `extraCapabilities` and `egressProxy` were
+    // dropped on re-pair (found 2026-08-31 re-pairing after an ephemeral-Mongo wipe), and both
+    // failures are silent and misleading:
+    //   - a dropped `desktop.automation` (a tier-2 opt-in that exists ONLY as this config edit)
+    //     makes the daemon stop advertising, so Cortex refuses attended flows with a message
+    //     about the bridge being too OLD - pointing at a version instead of an erased opt-in;
+    //   - a dropped `egressProxy` means no residential endpoint is served, so `checkoutSession`
+    //     refuses to release the session this very machine just captured. A re-pair therefore
+    //     re-opened a HIGH finding that had already been fixed.
+    await run(['pair', '--url', 'https://cortex.example', '--pairing-id', 'p-one'], { fetchImpl: approvingFetch });
+    // Stand in for the operator's own edits to the config file.
+    const first = loadConfig(home)!;
+    writeFileSync(configPath(home), JSON.stringify({
+      ...first,
+      org: 'org-9',
+      signingSecret: 'sig-9',
+      extraCapabilities: ['desktop.automation'],
+      egressProxy: true,
+    }), { mode: 0o600 });
+
+    const again = await run(['pair', '--url', 'https://cortex.example', '--pairing-id', 'p-two'], {
+      fetchImpl: approvingFetch,
+    });
+    expect(again.code).toBe(EXIT.OK);
+
+    const after = loadConfig(home) as Record<string, unknown>;
+    // The IDENTITY half is replaced...
+    expect(after.pairingId).toBe('p-two');
+    // ...and every operator decision survives.
+    expect(after.org).toBe('org-9');
+    expect(after.signingSecret).toBe('sig-9');
+    expect(after.extraCapabilities).toEqual(['desktop.automation']);
+    expect(after.egressProxy).toBe(true);
+  });
+
+  it('a RE-PAIR keeps an explicit egressProxy:false rather than treating it as absent', async () => {
+    // Carried by PRESENCE, not truthiness: `false` is an answer the operator gave.
+    await run(['pair', '--url', 'https://cortex.example', '--pairing-id', 'p-one'], { fetchImpl: approvingFetch });
+    const first = loadConfig(home)!;
+    writeFileSync(configPath(home), JSON.stringify({ ...first, egressProxy: false }), { mode: 0o600 });
+
+    await run(['pair', '--url', 'https://cortex.example', '--pairing-id', 'p-two'], { fetchImpl: approvingFetch });
+    const after = loadConfig(home) as Record<string, unknown>;
+    expect(after.egressProxy).toBe(false);
+  });
+
   it('pair without --url is a usage error (exit 2)', async () => {
     const { code, err } = await run(['pair']);
     expect(code).toBe(EXIT.USAGE);
