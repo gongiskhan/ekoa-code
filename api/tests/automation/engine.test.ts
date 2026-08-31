@@ -541,6 +541,102 @@ describe('runAutomation', () => {
     });
   });
 
+  // ── STEP TEXT IS TEMPLATED, AND NOTHING USED TO RESOLVE IT ──────────────────────────────────
+  //
+  // The engine passed `step.url` to `browser.act` and `step.description` to the vision resolver
+  // exactly as authored. So a shipped automation template that said "introduzir o numero unico de
+  // processo '{{input.numeroProcesso}}'" told the model to type those literal characters into a
+  // search box, and a `navigate` step could not be pointed anywhere but the address hardcoded in
+  // its own JSON - which made the citius package's `portal_url` config field decoration. Both
+  // channels are pinned here because both were dead, and the failure was quiet in both: the run
+  // completes and answers about the wrong thing.
+
+  it('resolves {{input.*}} in a navigate url before driving the browser', async () => {
+    hoisted.automations.set('auto-1', automation([{
+      id: 's1', description: 'abrir', type: 'navigate', url: '{{input.portal}}/mandatario',
+    }]));
+
+    const result = await runAutomation('auto-1', ctx(), { inputs: { portal: 'https://portal.example.pt' } });
+
+    expect(result.status).toBe('completed');
+    expect(hoisted.act).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://portal.example.pt/mandatario' });
+  });
+
+  it('resolves {{config.*}} in a navigate url from the launching integration\'s non-secret config', async () => {
+    hoisted.automations.set('auto-1', automation([{
+      id: 's1', description: 'abrir', type: 'navigate', url: '{{config.portal_url}}',
+    }]));
+
+    const result = await runAutomation(
+      'auto-1',
+      ctx({ configValues: { portal_url: 'https://portal.tribunais.example' } }),
+    );
+
+    expect(result.status).toBe('completed');
+    expect(hoisted.act).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://portal.tribunais.example' });
+  });
+
+  it('resolves the step DESCRIPTION and expectedOutcome the vision model is given', async () => {
+    hoisted.resolvePlaywrightAction.mockResolvedValue({
+      action: { kind: 'click', selector: '#pesquisar' },
+      confidence: 'high',
+      reasoning: 'ok',
+    });
+    hoisted.automations.set('auto-1', automation([{
+      id: 's1',
+      type: 'browser',
+      description: "introduzir o numero unico de processo '{{input.numeroProcesso}}' e submeter",
+      expectedOutcome: "o processo {{input.numeroProcesso}} aparece nos resultados",
+    }]));
+
+    await runAutomation('auto-1', ctx(), { inputs: { numeroProcesso: '1234/26.0T8LSB' } });
+
+    const call = hoisted.resolvePlaywrightAction.mock.calls[0][0];
+    expect(call.stepDescription).toBe("introduzir o numero unico de processo '1234/26.0T8LSB' e submeter");
+    expect(call.expectedOutcome).toBe('o processo 1234/26.0T8LSB aparece nos resultados');
+    // The bug in one assertion: the model must never be handed the placeholder as an instruction.
+    expect(call.stepDescription).not.toContain('{{');
+  });
+
+  it('does NOT bake the resolved text back into the saved automation', async () => {
+    // Resolving in place would hardcode the first run\'s arguments into the stored steps, so the
+    // next run would search for the previous run\'s process number with nothing to explain why.
+    const authored = "abrir o processo '{{input.numeroProcesso}}'";
+    hoisted.automations.set('auto-1', automation([{
+      id: 's1', description: 'ir', type: 'navigate', url: '{{input.portal}}/x',
+    }, {
+      id: 's2', type: 'browser', description: authored,
+    }]));
+    hoisted.resolvePlaywrightAction.mockResolvedValue({
+      action: { kind: 'click', selector: '#x' }, confidence: 'high', reasoning: 'ok',
+    });
+
+    await runAutomation('auto-1', ctx(), {
+      inputs: { portal: 'https://portal.example.pt', numeroProcesso: '55/26.1T8CBR' },
+    });
+
+    const saved = hoisted.automations.get('auto-1');
+    expect(saved.steps[0].url).toBe('{{input.portal}}/x');
+    expect(saved.steps[1].description).toBe(authored);
+  });
+
+  it('never lets a credential reach a step description through the template channel', async () => {
+    hoisted.resolvePlaywrightAction.mockResolvedValue({
+      action: { kind: 'click', selector: '#x' }, confidence: 'high', reasoning: 'ok',
+    });
+    hoisted.automations.set('auto-1', automation([{
+      id: 's1', type: 'browser', description: 'entrar com {{input.credentials.password}}',
+    }]));
+
+    await runAutomation('auto-1', ctx(), {
+      inputs: { credentials: { password: 'hunter2-do-not-leak' } },
+    });
+
+    const call = hoisted.resolvePlaywrightAction.mock.calls[0][0];
+    expect(call.stepDescription).toBe('entrar com ');
+    expect(call.stepDescription).not.toContain('hunter2');
+  });
+
   it('threads inputs.credentials.storageState into the LocalBrowserSession when no daemon is connected', async () => {
     // Daemon-less path: no daemon connection resolves for this run, so the engine may fall back to
     // the in-process LocalBrowserSession.

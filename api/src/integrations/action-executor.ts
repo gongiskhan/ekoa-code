@@ -58,6 +58,7 @@
 import type { Actor } from '@ekoa/shared';
 import {
   resolveBackingType,
+  publicConfigWithDefaults,
   IntegrationActionBackingTypeError,
   type IntegrationActionBackingType,
   type IntegrationActionHttpConfig,
@@ -642,6 +643,15 @@ export async function executeUserIntegrationAction(
       binding: action.automationBinding,
       args: input.args,
       credentialFields: resolvedFields,
+      // THE NON-SECRET HALF, and it travels by a different road on purpose. `credentialFields` is
+      // the decrypted bag, redacted out of every template because it is secret; this is the
+      // plaintext projection the config row already carries, which is what a package's own
+      // `configSchema` fields are (a portal address, a cedula, a region). Without it a shipped
+      // template could not be pointed at anything but the address hardcoded in its own JSON.
+      ...((): { configValues?: Record<string, string> } => {
+        const values = publicConfigWithDefaults(def.configSchema, config?.publicConfigValues);
+        return values ? { configValues: values } : {};
+      })(),
       orgId: input.orgId,
       ownerUserId: input.ownerUserId,
       // Names the action so the seam can look for its compiled recipe (P2.3). Carries no new

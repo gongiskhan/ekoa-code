@@ -80,7 +80,7 @@ import {
   classifyHumanAction,
   type ResolveActionOutput,
 } from './vision.js';
-import { applyArgsTemplate } from './template-vars.js';
+import { applyArgsTemplate, resolveStepTemplates } from './template-vars.js';
 import { SecretRegistry } from '../security/redaction.js';
 import {
   automationStore,
@@ -220,6 +220,20 @@ export interface RunContext {
     payload: unknown;
     rawHeaders: Record<string, string>;
   };
+  /**
+   * The launching integration's NON-SECRET config values (`IntegrationConfig.publicConfigValues`),
+   * readable from step text as `{{config.<key>}}`.
+   *
+   * A package declares a `configSchema` and the tenant fills it in; until this existed nothing on
+   * the automation path read a single one of those values, so a field like the citius package's
+   * `portal_url` ("Endereco do Portal dos Mandatarios. Por omissao https://portal.tribunais.org.pt")
+   * was inert - the address was hardcoded in the template and no tenant could move it.
+   *
+   * NON-SECRET BY CONSTRUCTION, not by convention: the projection is built by dropping every key
+   * the schema marks `secret`, so there is nothing here to leak into a vision prompt. Secrets keep
+   * their own channel (`inputs.credentials`), which templates redact.
+   */
+  configValues?: Record<string, string>;
   /** Tracks the automation IDs in the current call chain to detect cycles. */
   visitedAutomationIds: Set<string>;
   parentRunId?: string;
@@ -873,6 +887,21 @@ async function runOrRehearse(
   // we persist at the end.
   const workingSteps: Step[] = automation.steps.slice();
 
+  // THE EXECUTED VIEW, and the split is the point. `workingSteps` holds the AUTHORED text with its
+  // `{{input.…}}` / `{{config.…}}` placeholders intact, because that array is what
+  // `persistRefinedSteps` writes back and what every `refinedSteps:` report shows; resolving in
+  // place would bake this run's arguments into the saved automation, so the next run would search
+  // for the previous run's process number with nothing in the UI to say why. Everything that
+  // EXECUTES reads `executableSteps` instead: the vision prompt, the navigate URL, the origin walk
+  // that decides posture. Before this existed nothing interpolated step text at all, so a template
+  // instructed the model to type the literal characters `{{input.numeroProcesso}}` into a search box
+  // (see `resolveStepTemplates`).
+  let executableSteps: Step[] = workingSteps.map((st) => resolveStepTemplates(st, inputs, ctx.configValues));
+  /** Re-derive after a rehearsal patch replaces the authored steps. */
+  const rederiveExecutableSteps = (): void => {
+    executableSteps = workingSteps.map((st) => resolveStepTemplates(st, inputs, ctx.configValues));
+  };
+
   /**
    * WHERE this step runs (P4.1). Pure joinery around `locality.ts`: gather the run's facts, ask,
    * answer. Called from the loop BEFORE the credential gate, and again if the gate hands back a
@@ -887,7 +916,7 @@ async function runOrRehearse(
     // contract `classifyOrigin` requires (the label applies only to the origin its action is
     // about; the two match by construction here). Nothing is looked up by name.
     const resolvedOrigin = await resolveStepOrigin(
-      workingSteps,
+      executableSteps,
       index,
       actorFromCtx(ctx),
       loadDeclarationOnce,
@@ -1150,7 +1179,7 @@ async function runOrRehearse(
         });
       }
 
-      const step = workingSteps[i]!;
+      const step = executableSteps[i]!;
 
       // Tell the UI we're starting this step. Without this, `liveSteps`
       // never sees a `status='running'` entry — every step transitions
@@ -1176,7 +1205,7 @@ async function runOrRehearse(
       // instead of asking vision for evidence the page can't show.
       const lastRecord = stepRecords[stepRecords.length - 1];
       const previousStep = lastRecord
-        ? { step: (workingSteps[lastRecord.index] ?? workingSteps[i - 1])!, record: lastRecord }
+        ? { step: (executableSteps[lastRecord.index] ?? executableSteps[i - 1])!, record: lastRecord }
         : undefined;
 
       // P4.1: WHERE this step runs - RESOLVED BEFORE THE CREDENTIAL GATE, and the order is the
@@ -1693,7 +1722,7 @@ async function runOrRehearse(
                   reason: adhocCeremonyReason(detectedKind, stepOrigin),
                   // The page is gone the moment this returns, so the resume restarts at the step
                   // that navigated to it rather than at this one. See `RunCredentialRequest`.
-                  resumeFromStepIndex: lastNavigationIndexAtOrBefore(workingSteps, i),
+                  resumeFromStepIndex: lastNavigationIndexAtOrBefore(executableSteps, i),
                 }),
                 i,
               );
@@ -1934,6 +1963,7 @@ async function runOrRehearse(
           const patchedSteps = applyPatch(workingSteps, i, patch);
           // Replace workingSteps in place (keep the same array ref).
           workingSteps.splice(0, workingSteps.length, ...patchedSteps);
+          rederiveExecutableSteps();
           patchesApplied += 1;
           patchesAtIndex.set(i, (patchesAtIndex.get(i) ?? 0) + 1);
 

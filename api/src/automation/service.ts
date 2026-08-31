@@ -41,6 +41,7 @@ import { approveCommandShape, revokeCommandShape, listApprovedShapes, listApprov
 import { runEventEmitterFactory, resumeLearnDriver } from './seams.js';
 import { clearCredentialWaiter } from './credential-waiters.js';
 import { replayIntegrationAction } from './replay-action.js';
+import { resolveBoundAutomation } from './integration-automations.js';
 import { classifyReplayDrift, healDriftedRecipe, writesIn, type HealDeps } from './self-heal.js';
 import {
   compileInjectedCalls,
@@ -1325,7 +1326,19 @@ export const MAX_RUN_CAPTURED_EXCHANGES = 400;
 export const MAX_PERSISTED_EVIDENCE = MAX_COMPILED_CALLS * 2;
 
 export interface ActionRunBinding {
+  /**
+   * The id the PACKAGE declares. On a shipped package this is a placeholder its author wrote
+   * (`citius-notificacoes-template`) and is not the id of anything - see `automationTemplate`.
+   */
   automationId: string;
+  /**
+   * The package template this binding names, when it names one (`IntegrationActionAutomationBinding
+   * .automationTemplate`). Present ⇒ the real row is found by PROVENANCE for this org, because the
+   * id above is a placeholder; `resolveBoundAutomation` is the one place that join happens. Absent
+   * ⇒ the binding names a real automation directly (a builder-authored action) and the id is used
+   * as-is, which is byte-for-byte the behaviour that predates this field.
+   */
+  automationTemplate?: string;
   /** Maps automationInputName -> argKey; absent = pass args through. */
   argMap?: Record<string, string>;
   /** Nest the action's decrypted credential fields under `inputs.credentials`. */
@@ -1338,6 +1351,16 @@ export interface ActionRunInput {
   credentialFields: Record<string, unknown>;
   orgId: string;
   ownerUserId: string;
+  /**
+   * The integration's NON-SECRET config projection (`IntegrationConfig.publicConfigValues`), passed
+   * to the engine as `RunContext.configValues` so a template can read `{{config.<key>}}`.
+   *
+   * A package declares a `configSchema` and the tenant fills it in; nothing on the automation path
+   * read those values, so a per-tenant address field like the citius package's `portal_url` was
+   * inert. Optional at the seam (Rule 7 additive): a caller that omits it leaves every
+   * `{{config.…}}` reference resolving to the empty string, which is what it resolved to before.
+   */
+  configValues?: Record<string, string>;
   /** Which action asked (slice P2). Present ⇒ its compiled recipe is tried before the automation
    *  runs, and the run that does happen is instrumented so the action can learn one. Absent ⇒
    *  exactly the pre-P2 behaviour: straight to the automation, learning nothing. */
@@ -1726,12 +1749,18 @@ export async function runAutomationForAction(
     }
   }
 
-  const automation = (await automations.get(input.binding.automationId)) as { ownerUserId?: string } | null;
+  // THE BINDING IS RESOLVED, NOT READ. A shipped package's `automationId` is a placeholder; the row
+  // this org runs is joined by provenance. Fetching the literal is what made every automation-backed
+  // action on every shipped package answer `unknown_automation` (docs/findings.md
+  // `citius-listener-blocked`). `bound.id` is the id from here down - the fetch, the run and the
+  // failure message must all name the same automation or the message sends a human to the wrong row.
+  const bound = await resolveBoundAutomation(input.orgId, input.integrationKey, input.binding);
+  const automation = bound.row;
   if (!automation) {
-    return { success: false, code: 'unknown_automation', error: `automation not found: ${input.binding.automationId}` };
+    return { success: false, code: 'unknown_automation', error: `automation not found: ${bound.id}` };
   }
   if (automation.ownerUserId !== input.ownerUserId) {
-    return { success: false, code: 'forbidden', error: `forbidden: not the owner of automation ${input.binding.automationId}` };
+    return { success: false, code: 'forbidden', error: `forbidden: not the owner of automation ${bound.id}` };
   }
 
   const inputs: Record<string, unknown> = {};
@@ -1748,6 +1777,7 @@ export async function runAutomationForAction(
     ownerUserId: input.ownerUserId,
     orgId: input.orgId,
     triggeredBy: 'agent',
+    ...(input.configValues ? { configValues: input.configValues } : {}),
     visitedAutomationIds: new Set(),
     traceId: randomUUID(),
     // The registry the replay above already used, handed to the engine so both legs of this
@@ -1782,7 +1812,7 @@ export async function runAutomationForAction(
   const captured: LocalBrowserCapture[] = [];
   const run = deps.run ?? runAutomation;
   const runStartedAt = Date.now();
-  const result = await run(input.binding.automationId, ctx, {
+  const result = await run(bound.id, ctx, {
     runId,
     inputs,
     ...(emit ? { emit } : {}),
@@ -1857,7 +1887,7 @@ export async function runAutomationForAction(
     success: false,
     code: 'automation_failed',
     // Engine status text only — never contains credentialFields.
-    error: result.error || result.summary || `automation ${input.binding.automationId} did not complete (status=${result.status})`,
+    error: result.error || result.summary || `automation ${bound.id} did not complete (status=${result.status})`,
     data: { runId: result.runId, status: result.status },
   };
 }
@@ -2155,7 +2185,10 @@ async function clearRefusedRecipe(input: ActionRunInput, reason: string, deps: A
     // automation was deleted would otherwise keep answering forever with no refusal path able to
     // remove it. Nothing is widened - the binding's automationId comes off the definition, never
     // the caller.
-    const automation = (await automations.get(input.binding.automationId)) as { ownerUserId?: string } | null;
+    // Resolved, not read, for the same reason the run leg resolves: on a shipped package the
+    // literal id fetches nothing, so this gate would read EVERY caller as the orphan case and let
+    // a non-owner destroy the owner's recipe - the exact hole K6 closed, reopened by a placeholder.
+    const automation = (await resolveBoundAutomation(input.orgId, input.integrationKey, input.binding)).row;
     if (automation && automation.ownerUserId !== input.ownerUserId) {
       console.warn(
         `[automation] not discarding the recipe for ${input.integrationKey}/${input.actionName}: ` +

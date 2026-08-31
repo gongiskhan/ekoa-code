@@ -62,6 +62,49 @@ describe('createTrigger listener inference (2A-S2)', () => {
     expect(await triggers.find({ kind: 'listener' })).toHaveLength(0);
   });
 
+  // ── A PACKAGE THAT DECLARES A LISTENER HAS NO INGRESS EITHER (2026-08-31) ────────────────────
+  //
+  // The inference above was written for platform mailboxes and the argument it rests on is the
+  // ABSENCE OF A WEBHOOK INGRESS, not who wrote the package. A shipped integration whose
+  // `config.json` carries a `listenerConfig` is polled by the SAME supervisor down the 2A-S4
+  // branch and has no endpoint anyone can call, so without this it got precisely the failure this
+  // suite exists to prevent: a `kind:'webhook'` row nothing polls, that every surface reports as
+  // connected. Found creating the trigger the shipped `citius` package exists for.
+
+  it('a package declaring a listenerConfig => kind listener, poll action + cadence from the package', async () => {
+    const { trigger } = await createTrigger(
+      actor,
+      { ...backendTarget, entrypoint: 'onNotificacaoCitius', integrationKey: 'citius', eventName: 'notificacao.recebida' },
+      deps,
+    );
+    expect(trigger.kind).toBe('listener');
+    expect(trigger.pollConfig).toEqual({ actionName: 'consultar_notificacoes', intervalMs: 900_000 });
+    // The supervisor discovers listeners with find({ kind: 'listener' }) - the row must MATCH.
+    const polled = (await triggers.find({ kind: 'listener' })) as TriggerDoc[];
+    expect(polled.map((t) => t._id)).toContain(trigger._id);
+  });
+
+  it('pollIntervalMs overrides a package listener cadence, never its poll action', async () => {
+    const { trigger } = await createTrigger(
+      actor,
+      { ...backendTarget, integrationKey: 'citius', eventName: 'notificacao.recebida', pollIntervalMs: 45_000 },
+      deps,
+    );
+    expect(trigger.pollConfig).toEqual({ actionName: 'consultar_notificacoes', intervalMs: 45_000 });
+  });
+
+  it('an event the package does NOT declare stays webhook-implicit', async () => {
+    // Inferring here would create a listener polling for something that can never appear, which is
+    // worse than the webhook default: it burns a poll loop forever and reports healthy.
+    const { trigger } = await createTrigger(
+      actor,
+      { ...backendTarget, integrationKey: 'citius', eventName: 'inventado.nao.declarado' },
+      deps,
+    );
+    expect(trigger.kind).toBeUndefined();
+    expect(trigger.pollConfig).toBeUndefined();
+  });
+
   it('an explicit non-platform listener keeps its caller-supplied pollConfig (2A-S1 semantics unchanged)', async () => {
     const { trigger } = await createTrigger(actor, {
       targetKind: 'automation', integrationKey: 'citius', eventName: 'notificacao', automationId: 'auto-2',

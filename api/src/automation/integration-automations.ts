@@ -85,8 +85,8 @@ export class ManagedAutomationProvisionError extends Error {
 type StoredAutomation = Automation & { orgId: string; visibility?: 'private' | 'org' };
 
 /** The org's existing managed automations for one integration, keyed by templateKey. */
-async function managedByTemplate(actor: Actor, integrationKey: string): Promise<Map<string, StoredAutomation>> {
-  const rows = (await automations.find({ orgId: actor.orgId, 'source.integrationKey': integrationKey })) as unknown as StoredAutomation[];
+async function managedByTemplate(orgId: string, integrationKey: string): Promise<Map<string, StoredAutomation>> {
+  const rows = (await automations.find({ orgId, 'source.integrationKey': integrationKey })) as unknown as StoredAutomation[];
   const map = new Map<string, StoredAutomation>();
   for (const r of rows) if (r.source?.templateKey) map.set(r.source.templateKey, r);
   return map;
@@ -111,10 +111,70 @@ async function managedByTemplate(actor: Actor, integrationKey: string): Promise<
  * Only materialised rows are reported.
  */
 export async function managedAutomationIdsFor(actor: Actor, integrationKey: string): Promise<Record<string, string>> {
-  const byTemplate = await managedByTemplate(actor, integrationKey);
+  const byTemplate = await managedByTemplate(actor.orgId, integrationKey);
   const out: Record<string, string> = {};
   for (const [templateKey, row] of byTemplate) if (row.id) out[templateKey] = row.id;
   return out;
+}
+
+/** What a package binding actually points at for one org: the id to run, and the row if it exists. */
+export interface BoundAutomation {
+  /** The id the run should use. A real row's id when one was found; otherwise the id the
+   *  provisioner WOULD mint, so a refusal names a row rather than a placeholder string. */
+  id: string;
+  /** null means nothing is provisioned for this binding yet - a real state, not an error. */
+  row: (Automation & { ownerUserId?: string; orgId?: string }) | null;
+}
+
+/**
+ * RESOLVE A PACKAGE BINDING TO THE AUTOMATION THIS ORG ACTUALLY RUNS.
+ *
+ * A shipped package's `automationBinding.automationId` is a PLACEHOLDER its author wrote
+ * (`citius-notificacoes-template`) and is not the id of anything. `managedAutomationIdsFor` already
+ * says this for the READ surface - it exists because the integration detail page fetched the
+ * declared id and got a 404. The EXECUTION surface never learned the same lesson: `service.ts`
+ * fetched `binding.automationId` verbatim, so every automation-backed action on every shipped
+ * package answered `unknown_automation: citius-notificacoes-template` and no Citius action could
+ * ever run (docs/findings.md `citius-listener-blocked`, blocker 1). This is the join it was
+ * missing, in one place both surfaces can share.
+ *
+ * THE JOIN IS PROVENANCE, NEVER THE ID. The provisioner mints under `managedAutomationId(orgId,
+ * key, templateKey)` and stamps `source.{integrationKey, templateKey}`; rows provisioned before C1
+ * carry a DIFFERENT id under the same stamp, which is exactly why `provisionIntegrationAutomations`
+ * looks itself up the same way. Recomputing the hash and fetching it would miss those rows and
+ * re-create them as duplicates.
+ *
+ * ORDER, and why the literal is still tried. A binding with no `automationTemplate` names a real
+ * automation directly - that is what a builder-authored action's binding is - so there is nothing
+ * to resolve and the literal is the answer. A binding WITH a template prefers provenance, then
+ * falls back to the literal so any binding that resolved before this function existed still
+ * resolves to the same row (this is additive; it changes no case that already worked).
+ *
+ * ABSENT IS NOT AN ERROR HERE. A binding whose template was never provisioned answers with the
+ * deterministic id and a null row, and the CALLER decides what that means - `unknown_automation`
+ * for a run, "not provisioned" for a status panel. Answering with the placeholder instead would
+ * put a string that is not an id into an error message a human has to act on.
+ */
+export async function resolveBoundAutomation(
+  orgId: string,
+  integrationKey: string | undefined,
+  binding: { automationId: string; automationTemplate?: string },
+): Promise<BoundAutomation> {
+  const literal = binding.automationId;
+  const templateKey = binding.automationTemplate;
+  const get = async (id: string) =>
+    (await automations.get(id)) as (Automation & { ownerUserId?: string; orgId?: string }) | null;
+
+  if (!templateKey || !integrationKey) return { id: literal, row: await get(literal) };
+
+  const byTemplate = await managedByTemplate(orgId, integrationKey);
+  const provisioned = byTemplate.get(templateKey);
+  if (provisioned?.id) return { id: provisioned.id, row: provisioned };
+
+  const direct = await get(literal);
+  if (direct) return { id: literal, row: direct };
+
+  return { id: managedAutomationId(orgId, integrationKey, templateKey), row: null };
 }
 
 /** Map a template's engine-native steps defensively (repo-authored, but never trust a type blindly). */
@@ -132,7 +192,7 @@ function templateSteps(t: IntegrationAutomationTemplate): Step[] {
 
 /** Project the session panel's per-action rows from the bindings + the org's managed automations. */
 export async function sessionActionRows(actor: Actor, integrationKey: string, bindings: ProvisionBinding[]): Promise<SessionActionRow[]> {
-  const existing = await managedByTemplate(actor, integrationKey);
+  const existing = await managedByTemplate(actor.orgId, integrationKey);
   return bindings.map((b) => {
     const auto = existing.get(b.templateKey);
     return {
@@ -166,7 +226,7 @@ export async function provisionIntegrationAutomations(
   integrationKey: string,
   bindings: ProvisionBinding[],
 ): Promise<{ created: number; updated: number; rows: SessionActionRow[] }> {
-  const existing = await managedByTemplate(actor, integrationKey);
+  const existing = await managedByTemplate(actor.orgId, integrationKey);
   const now = new Date().toISOString();
   let created = 0;
   let updated = 0;

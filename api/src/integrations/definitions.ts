@@ -49,6 +49,42 @@ export interface IntegrationConfigField {
   secret: boolean;
   helpText?: string;
   options?: Array<{ value: string; label: string }>;
+  /**
+   * The value a NON-SECRET field takes when the tenant leaves it blank.
+   *
+   * A package whose `helpText` says "por omissao https://portal.tribunais.org.pt" is stating a
+   * default that no code could read, so the address stayed hardcoded in the automation template and
+   * the field was decoration. Declared here it is one string, next to the field it defaults, and
+   * `publicConfigWithDefaults` is the single place it is applied.
+   *
+   * NEVER ON A SECRET FIELD. A defaulted credential is a shared credential; `publicConfigWithDefaults`
+   * skips any field the schema marks `secret`, so writing one here has no effect rather than a
+   * dangerous one.
+   */
+  defaultValue?: string;
+}
+
+/**
+ * The non-secret config an action runs with: what the tenant stored, plus each schema default for a
+ * field they left blank.
+ *
+ * APPLIED AT READ TIME, NOT AT WRITE TIME. The projection (`publicConfigValues`) is written when an
+ * integration is connected or edited, so baking defaults in there would leave every row written
+ * before a default existed - or before it changed - carrying the old answer forever, and a package
+ * upgrade could not move it. Read time means one source of truth: the shipped schema.
+ *
+ * A STORED EMPTY STRING IS BLANK. Optional text inputs post `""` rather than omitting the key, so
+ * treating "present" as "answered" would let an untouched optional field defeat its own default.
+ */
+export function publicConfigWithDefaults(
+  configSchema: readonly IntegrationConfigField[] | undefined,
+  publicConfigValues: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  const defaults = (configSchema ?? []).filter((f) => !f?.secret && typeof f?.defaultValue === 'string');
+  if (defaults.length === 0) return publicConfigValues;
+  const out: Record<string, string> = { ...(publicConfigValues ?? {}) };
+  for (const f of defaults) if (!out[f.key]) out[f.key] = f.defaultValue!;
+  return out;
 }
 
 export interface IntegrationActionHttpConfig {

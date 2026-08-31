@@ -393,7 +393,13 @@ async function adhocSessionReuse(
 
   const resolved = await resolveStepOrigin(input.steps, input.index, input.actor, d.loadActionDeclaration);
   if (!resolved) return { kind: 'not-applicable' };
-  const { origin, siteUrl, action, integrationKey } = resolved;
+  // `siteUrl` is deliberately NOT taken here: this function answers only `ready` or
+  // `not-applicable`, and neither carries an address. The openable address matters on the HALT
+  // path (`buildRequest`), which resolves the origin itself. Binding it here would be a value
+  // computed and dropped - and a reader would reasonably infer that the withheld-session case has
+  // somewhere to report itself, which is exactly the thing still missing (docs/findings.md, the
+  // legibility half of `a-ceremony-session-is-unusable-on-the-machine-that-established-it`).
+  const { origin, action, integrationKey } = resolved;
 
   const classification = classifyOrigin(`https://${origin}`, action ?? undefined);
   if (classification.posture !== 'adversarial') return { kind: 'not-applicable' };

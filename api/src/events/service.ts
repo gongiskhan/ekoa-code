@@ -97,10 +97,31 @@ export interface TriggerCreateInput {
  * triggers-handler's isPlatformProvider branch). Without the inference a product client that only
  * names the provider gets a webhook-kind row NOTHING polls: a silently dead mailbox watch that
  * reports success. The poll action always comes from the platform config, never the caller; the
- * cadence honours an explicit override, else 60s. Non-platform providers keep the migration-free
- * webhook-implicit semantics (field left off unless the caller explicitly asks for a listener).
+ * cadence honours an explicit override, else 60s.
+ *
+ * A USER-DEFINED PACKAGE THAT DECLARES A LISTENER IS THE SAME CASE, and it was left out (found
+ * 2026-08-31, creating the trigger the `citius` package exists for). The argument above is about
+ * the ABSENCE OF A WEBHOOK INGRESS, not about who wrote the package: an integration whose
+ * `config.json` carries a `listenerConfig` is polled by the SAME supervisor down the 2A-S4 branch,
+ * and has no ingress either. Without this it got exactly the failure the docblock warns about - a
+ * `kind: 'webhook'` row that nothing polls, no endpoint ever calls, and every surface reports as
+ * connected. The event name is checked against the package's DECLARED events, so a caller naming an
+ * event the package does not emit still gets the old webhook semantics rather than a listener
+ * polling for something that will never appear.
+ *
+ * ONE DELIBERATE DIFFERENCE FROM THE PLATFORM BRANCH: there the poll action comes from the platform
+ * config and NEVER from the caller, because there is exactly one right answer per provider. Here a
+ * caller-supplied `pollConfig.actionName` IS honoured, because the user-defined rail defines that
+ * field as exactly this override (`event-sources/user-defined-poll.ts`: "Trigger-level override of
+ * `listenerConfig.pollAction`"). `pollIntervalMs` overrides the cadence on both branches.
+ *
+ * Everything else keeps the migration-free webhook-implicit semantics (field left off unless the
+ * caller explicitly asks for a listener).
  */
-function listenerStamp(input: TriggerCreateInput): Partial<Pick<TriggerDoc, 'kind' | 'pollConfig'>> {
+async function listenerStamp(
+  actor: Actor,
+  input: TriggerCreateInput,
+): Promise<Partial<Pick<TriggerDoc, 'kind' | 'pollConfig'>>> {
   const platform = platformListenerConfig(input.integrationKey);
   if (platform) {
     return {
@@ -112,6 +133,26 @@ function listenerStamp(input: TriggerCreateInput): Partial<Pick<TriggerDoc, 'kin
     };
   }
   if (input.kind === 'listener') return { kind: 'listener', pollConfig: input.pollConfig };
+
+  // Resolved TENANT-SCOPED, like every other definition read: a package this actor cannot see must
+  // not be able to shape their trigger. A lookup failure is not fatal - it falls through to the
+  // webhook default, which is what the caller would have got anyway.
+  let listener: IntegrationDefinition['listenerConfig'];
+  try {
+    listener = (await resolveDefinition(actor, input.integrationKey))?.listenerConfig;
+  } catch {
+    listener = undefined;
+  }
+  const declares = (listener?.events ?? []).some((e) => e?.name === input.eventName);
+  if (listener?.pollAction && declares) {
+    return {
+      kind: 'listener',
+      pollConfig: {
+        actionName: input.pollConfig?.actionName ?? listener.pollAction,
+        intervalMs: input.pollIntervalMs ?? input.pollConfig?.intervalMs ?? listener.intervalMs ?? DEFAULT_POLL_INTERVAL_MS,
+      },
+    };
+  }
   return {};
 }
 
@@ -132,8 +173,9 @@ export async function createTrigger(actor: Actor, input: TriggerCreateInput, dep
     algorithm: input.algorithm ?? 'hmac-sha256-hex',
     disabled: false,
     // `kind` absent ⇒ persist as webhook implicitly (migration-free parity with legacy rows,
-    // 2A-S1); platform providers are ALWAYS inferred as polled listeners (2A-S2, see listenerStamp).
-    ...listenerStamp(input),
+    // 2A-S1); a provider with no webhook ingress - a platform mailbox, or a package declaring its
+    // own listenerConfig - is ALWAYS inferred as a polled listener (2A-S2, see listenerStamp).
+    ...(await listenerStamp(actor, input)),
   };
   await triggers.insert(doc as never);
   return { trigger: doc, secret }; // secret returned exactly once (landmine 2)
