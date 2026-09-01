@@ -4236,6 +4236,25 @@ silently absorbed into a ledger note):
   coverage: a correct, tested function kept plausible by a docblock describing a caller it never got.
   Nothing here claims to be reachable, and this entry is the record that it is not.
 
+- **`a-shipped-package-cannot-learn-a-recipe-because-the-org-has-no-definition-row`** (2026-09-01,
+  OPEN, **MEDIUM**, recipe spine / shipped packages; found completing the citius acceptance loop
+  live - the FIRST time the whole learn pipeline ran end to end). The pipeline now works to the
+  last step: ceremony captured, session reused across runs, the 8-step authored automation drives
+  the authenticated fixture, 4 exchanges captured, 2 compile into injectable calls, the evidence
+  lands in `integration_captured_calls` - and `putRecipe` answers `notfound`, honestly: recipes are
+  tenant data written onto the org's OWN definition row (`definitionIdFor(orgId, key)`), and an org
+  running the SHIPPED `citius` package has no row. The cornerstone mint never hit this (a minted
+  integration IS a tenant row); `evidence/citius/runbook.md`'s own leg 1 ("expect a Receita v1
+  badge") is unreachable for every shipped package until this is decided. CLOSE BY (a product
+  decision - each option changes upgrade semantics): (a) materialise a full-copy tenant row on
+  first learn (`origin.kind: 'baseline-override'` exists for exactly this provenance) - simplest,
+  but a tenant row SHADOWS the baseline in `resolveDefinition`/`listDefinitionsFor`, so the org
+  silently stops receiving shipped-package updates; (b) a thin recipe-carrier override row plus a
+  merge view (baseline actions + tenant recipes) - preserves updates, needs new resolution
+  semantics; (c) move shipped-package recipes onto the per-tenant CONFIG row - exists at connect
+  time with the right lifecycle, but creates a second recipe home against the store's own
+  one-writer argument.
+
 ## Recently fixed - 2026-09-01 the first live bridge run of a shipped Citius action (dev-madrid)
 
 The first execution of `consultar_notificacoes` with a connected bridge - the leg no machine had
