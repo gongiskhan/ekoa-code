@@ -33,6 +33,17 @@ export interface LiveCanvasViewProps {
   maxHeightClass?: string;
 }
 
+/**
+ * Live sessions handed off between an unmount and an IMMEDIATE remount of the same connection
+ * (keyed by the single-use token). React StrictMode double-invokes dev effects - connect, clean up,
+ * connect again - and the second connect used to present the SAME token to a server that consumes
+ * it on first upgrade (streaming/auth.ts, takeover landmine 8): the throwaway connect burned it and
+ * the real mount was refused `token-replayed`, a dead black canvas (found live, 2026-09-01, the
+ * first ceremony driven through the dashboard stream). The cleanup now PARKS the live session here
+ * for one tick; the re-run adopts it, and a real unmount finds it unclaimed and closes it.
+ */
+const adoptableSessions = new Map<string, CanvasSession>();
+
 export default function LiveCanvasView({ session, onStatusChange, onClose, className, maxHeightClass }: LiveCanvasViewProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasSessionRef = useRef<CanvasSession | null>(null);
@@ -109,7 +120,11 @@ export default function LiveCanvasView({ session, onStatusChange, onClose, class
     const staleCanvas = canvasRef.current;
     if (staleCanvas) staleCanvas.getContext('2d')?.clearRect(0, 0, staleCanvas.width, staleCanvas.height);
 
-    const canvas = openCanvas({ wsUrl: session.wsUrl, token: session.token, viewport: session.viewport });
+    // Adopt the still-open session an immediate predecessor parked (StrictMode double-invoke);
+    // only a genuinely new connection target opens a socket - and presents the token - itself.
+    const adopted = adoptableSessions.get(session.token);
+    if (adopted) adoptableSessions.delete(session.token);
+    const canvas = adopted ?? openCanvas({ wsUrl: session.wsUrl, token: session.token, viewport: session.viewport });
     canvasSessionRef.current = canvas;
 
     const offFrame = canvas.onFrame((frame) => handleIncomingFrame(frame));
@@ -125,7 +140,17 @@ export default function LiveCanvasView({ session, onStatusChange, onClose, class
       offViewport();
       offClose();
       canvasSessionRef.current = null;
-      canvas.close(CANVAS_CLOSE_NORMAL);
+      // PARK, don't close: the single-use token means a close here is irrevocable, and in dev this
+      // cleanup runs between StrictMode's two invocations of the SAME live mount. The token is the
+      // key: an immediate re-run adopts the session above, and if no one claims it within a tick
+      // this was a real unmount, so it closes exactly as before.
+      adoptableSessions.set(session.token, canvas);
+      setTimeout(() => {
+        if (adoptableSessions.get(session.token) === canvas) {
+          adoptableSessions.delete(session.token);
+          canvas.close(CANVAS_CLOSE_NORMAL);
+        }
+      }, 0);
       if (rafRef.current != null) {
         cancelAnimationFrame(rafRef.current);
         rafRef.current = null;

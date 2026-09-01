@@ -201,6 +201,10 @@ class LiveCanvas implements CanvasSession {
 
   onStatusChange(fn: (status: CanvasStatus) => void): Unsubscribe {
     this.statusSubs.add(fn);
+    // Replay the CURRENT status to the new subscriber. A session can be adopted after its socket
+    // already opened (live-canvas-view's StrictMode adoption), and a subscriber that only ever
+    // hears future transitions would show 'connecting' forever over a live stream.
+    fn(this._status);
     return () => {
       this.statusSubs.delete(fn);
     };
