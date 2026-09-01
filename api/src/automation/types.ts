@@ -620,6 +620,14 @@ export interface RunRecord {
    *  the owner and org-admins) without a join back to the automation (ch05 §5.6.7, Amendment 2). */
   ownerUserId?: string;
   orgId?: string;
+  /**
+   * The launching integration's NON-SECRET config projection (`RunContext.configValues`), persisted
+   * so a HALTED run can resume with its `{{config.…}}` references still meaning something. Found
+   * live (2026-09-01): the post-ceremony resume rebuilt its context without them, so the resumed
+   * `abrir-portal` navigate lost the tenant's portal address the original pass had. Never secret by
+   * construction - this is `publicConfigValues`, the plaintext half a config row already stores.
+   */
+  configValues?: Record<string, string>;
   parentRunId?: string;        // sub-automation runs link upward
   awaitingIntegration?: { service: string; reason: string };
   /** 'rehearsal' = first-time validation run that may mutate the spec. 'normal' = deterministic replay. */

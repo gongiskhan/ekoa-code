@@ -534,6 +534,10 @@ async function runOrRehearse(
     orgId: ctx.orgId,
     parentRunId: ctx.parentRunId,
     kind: options.kind,
+    // Non-secret by construction (publicConfigValues). Persisted so a halted run's resume can
+    // rebuild the context its `{{config.…}}` references resolve against - without this the
+    // post-ceremony pass lost the tenant's portal address (found live, 2026-09-01).
+    ...(ctx.configValues ? { configValues: ctx.configValues } : {}),
   };
   await automationRunStore.create(initialRecord);
   if (isResume) {

@@ -988,6 +988,10 @@ async function dispatchCredentialResume(run: StoredRun): Promise<boolean> {
   clearCredentialWaiter(run.id);
 
   const ctx = makeCtx(run.id, sig);
+  // The halted run's own non-secret config, back onto the new pass's context: `{{config.…}}` must
+  // mean on resume exactly what it meant on the pass that halted (found live, 2026-09-01 - the
+  // resumed navigate had lost the tenant's portal address and failed on the no-destination guard).
+  if (run.configValues) ctx.configValues = run.configValues;
   const emit = runEventEmitterFactory(run.id);
   // `run.inputs` is the PERSISTED copy, so it has already been through `scrubCredentials` — the
   // resumed run starts with no `inputs.credentials`. That is correct rather than lossy: the reason

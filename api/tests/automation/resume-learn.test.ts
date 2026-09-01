@@ -73,6 +73,39 @@ describe('the post-ceremony learn re-run', () => {
     expect(row?.status).toBe('completed');
   });
 
+  it('the resumed pass keeps the run\'s persisted CONFIG VALUES - {{config.*}} means on resume what it meant before the halt (found live, 2026-09-01)', async () => {
+    // The live shape: a citius run halted at the fixture's login wall, the ceremony completed, and
+    // the resumed pass rebuilt its context WITHOUT configValues - so `{{config.portal_url}}`
+    // resolved to nothing and the no-destination guard (its own 2026-09-01 fix) failed the run.
+    // With the values persisted on the row and rebuilt here, the navigate resolves its address
+    // again; without a daemon in this suite it then halts awaiting the browser, which is exactly
+    // the discriminating observation: address lost = the guard's named refusal, address kept =
+    // the step got far enough to want a browser.
+    await automations.deleteMany({});
+    await automations.insert({
+      _id: AUTOMATION_ID, id: AUTOMATION_ID, name: 'portal', description: 'd',
+      steps: [{ id: 'abrir-portal', type: 'navigate', description: 'abrir', url: '{{config.portal_url}}' }],
+      ownerUserId: 'u1', orgId: 'o1',
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    } as never);
+    await seedRun({ configValues: { portal_url: 'http://127.0.0.1:45190' } });
+
+    const r = await resumeRun(actor, 'run-parked');
+    expect(r.resumed).toBe(true);
+
+    await vi.waitFor(async () => {
+      const row = (await automationRuns.get('run-parked')) as { steps?: Array<{ stepId?: string; error?: { message?: string } }> } | null;
+      expect(row?.steps?.length).toBeGreaterThan(0);
+    }, { timeout: 5_000 });
+    const row = (await automationRuns.get('run-parked')) as { steps?: Array<{ stepId?: string; error?: { message?: string } }> } | null;
+    const step0 = row?.steps?.[0];
+    expect(step0?.stepId).toBe('abrir-portal');
+    // The address SURVIVED: the step resolved its origin and got as far as the LOCALITY decision
+    // (an adversarial 127.0.0.1 with no machine connected), never the no-destination refusal.
+    expect(step0?.error?.message ?? '').not.toContain('no destination');
+    expect(step0?.error?.message ?? '').toMatch(/adversarial|daemon/);
+  });
+
   it('a parked row WITHOUT the identity stamp resumes normally and fires nothing', async () => {
     const driver = vi.fn(async () => undefined);
     setResumeLearnDriver(driver);
