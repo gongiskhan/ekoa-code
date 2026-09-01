@@ -153,12 +153,27 @@ export const SECRET_SHAPED_INPUT_NAME =
  * Register every string in a decrypted credential bag (Cofre H-1). The bag is
  * `{ [field]: value }` or a nested `{ [key]: { [field]: value } }`; both shapes appear depending on
  * whether the credentials came from an integration action or a captured session.
+ *
+ * `publicValues` are EXEMPT (found live, 2026-09-01). The credential ciphertext encrypts the WHOLE
+ * config bag - the declared-non-secret fields included - so a package's `portal_url` was being
+ * registered as a secret, and `secrets.redact` then ate the portal's own origin out of every
+ * captured URL: the compile could parse none of them, and no config-addressed package could ever
+ * learn a recipe. A value the config row itself publishes in plaintext (`publicConfigValues`, the
+ * projection `ctx.configValues` carries) is by declaration not a secret, and masking it protects
+ * nothing while corrupting everything it appears in.
  */
-function registerCredentialBag(registry: SecretRegistry, bag: unknown): void {
+function registerCredentialBag(
+  registry: SecretRegistry,
+  bag: unknown,
+  publicValues?: Record<string, string>,
+): void {
   if (!bag || typeof bag !== 'object') return;
+  const exempt = publicValues ? new Set(Object.values(publicValues)) : undefined;
   for (const v of Object.values(bag as Record<string, unknown>)) {
-    if (typeof v === 'string') registry.register(v);
-    else if (v && typeof v === 'object') registerCredentialBag(registry, v);
+    if (typeof v === 'string') {
+      if (exempt?.has(v)) continue;
+      registry.register(v);
+    } else if (v && typeof v === 'object') registerCredentialBag(registry, v, publicValues);
   }
 }
 
@@ -513,7 +528,7 @@ async function runOrRehearse(
   // session consumes) so the values are known BEFORE the first step produces any output. Steps
   // that resolve further credentials register them as they go.
   ctx.secrets ??= new SecretRegistry();
-  registerCredentialBag(ctx.secrets, inputs.credentials);
+  registerCredentialBag(ctx.secrets, inputs.credentials, ctx.configValues);
 
   // RESUMING A HALTED RUN (P3.1). Clamped to the step list: a persisted index from an automation
   // whose steps were edited between the halt and the resume would otherwise skip past the end (or
@@ -837,7 +852,13 @@ async function runOrRehearse(
     captureArmed = true;
     try {
       await session.startCapture();
-    } catch {
+    } catch (err) {
+      // SAY SO (2026-09-01): a silently-unarmed recorder makes "the learn compiled nothing" and
+      // "the learn never saw the page" indistinguishable - it cost two live debugging rounds to
+      // tell them apart. The run still carries on uninstrumented, exactly as before.
+      console.warn(
+        `[automation] network capture did not arm on step ${index} (run continues uninstrumented): ${err instanceof Error ? err.message : String(err)}`,
+      );
       captureArmed = false;
     }
   };
@@ -2158,7 +2179,11 @@ async function runOrRehearse(
     if (captureArmed) {
       const session = browser as BrowserSession | null;
       try {
-        options.observeNetwork?.(session?.drainCaptures?.() ?? []);
+        const drained = session?.drainCaptures?.() ?? [];
+        // One line per learning pass (2026-09-01): the count is the difference between "the page
+        // made no internal calls" and "the recorder missed them", which nothing else surfaces.
+        console.log(`[automation] learning pass drained ${drained.length} captured exchange(s) for run ${runId}`);
+        options.observeNetwork?.(drained);
       } catch (err) {
         console.warn(`[automation] the network-capture sink threw: ${err instanceof Error ? err.message : String(err)}`);
       }

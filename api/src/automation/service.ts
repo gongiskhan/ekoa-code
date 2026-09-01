@@ -1602,7 +1602,18 @@ export async function runAutomationForAction(
   // The run's live credential values, as ONE registry. Built here rather than inside the replay so
   // the proof that no credential rode into a resolved URL runs against the values that actually
   // exist on this run - the check was inert until this line existed, because the mount passed none.
-  const secrets = secretRegistryFromValues(Object.values(input.credentialFields));
+  //
+  // MINUS THE VALUES THE CONFIG ROW PUBLISHES IN PLAINTEXT (found live, 2026-09-01). The
+  // credential ciphertext encrypts the WHOLE config bag - declared-non-secret fields included - so
+  // a package's `portal_url` was registered as a secret here, and `redactCaptures` then ate the
+  // portal's own origin out of every captured URL: `templateUrl` could parse none of them, the
+  // compile produced zero calls, and no config-addressed package could ever learn a recipe. A
+  // value that is simultaneously in `publicConfigValues` is by declaration not a secret; masking
+  // it protects nothing and corrupts everything it appears in.
+  const publicConfigVals = new Set(Object.values(input.configValues ?? {}));
+  const secrets = secretRegistryFromValues(
+    Object.values(input.credentialFields).filter((v) => typeof v !== 'string' || !publicConfigVals.has(v)),
+  );
   /** Named ⇒ this action can carry a recipe, so its recipe is TRIED. Unnamed callers behave exactly
    *  as they did pre-P2: straight to the automation, replaying nothing and learning nothing. */
   const named = Boolean(input.integrationKey && input.actionName);
@@ -1960,7 +1971,22 @@ async function learnFromRun(args: {
     return;
   }
   const injectedCalls = compiled.calls;
-  if (injectedCalls.length === 0) return;
+  if (injectedCalls.length === 0) {
+    // NEVER SILENT EITHER (2026-09-01): "the pass captured traffic but none of it compiled" is a
+    // different diagnosis from "the page made no internal calls", and with this exit silent the
+    // two were indistinguishable through two live debugging rounds. Names only - method, path,
+    // status, type - never a body, a query or a header value.
+    const seen = exchanges.slice(0, 8).map((x) => {
+      let path = '?';
+      try { path = new URL(x.url).pathname; } catch { /* keep the placeholder */ }
+      return `${x.method} ${path} [${x.resourceType} ${x.status} ${x.contentType ?? 'no-type'}]`;
+    });
+    console.warn(
+      `[automation] no injectable call among ${exchanges.length} captured exchange(s) for ` +
+        `${integrationKey}/${actionName}: ${seen.join('; ')}`,
+    );
+    return;
+  }
 
   const captureId = (deps.captureId ?? randomUUID)();
   const draft: RecipeDraft = {

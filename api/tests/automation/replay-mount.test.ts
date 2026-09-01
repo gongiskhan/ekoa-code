@@ -481,6 +481,30 @@ describe('runAutomationForAction - the run that DOES happen is the learning pass
     expect(draft.capturedCallsRef).toBe('cap-1');
   });
 
+  it('a config-published value in the credential bag does NOT redact the captured URLs (found live, 2026-09-01)', async () => {
+    // The credential ciphertext encrypts the WHOLE config bag, so the tenant's own portal address
+    // arrived in `credentialFields` and was registered as a secret - and the redactor then ate the
+    // origin out of every captured URL: `templateUrl` parsed none of them, the compile produced
+    // zero calls with no refusal, and no config-addressed package could ever learn a recipe. A
+    // value that `publicConfigValues` publishes in plaintext is by declaration not a secret.
+    const run = runObserving([EXCHANGE]);
+    const { deps, put } = storeSpies();
+    const result = await runAutomationForAction(
+      {
+        ...base,
+        credentialFields: { portal_url: 'https://portal.example', api_token: 'sekret-token-9911' },
+        configValues: { portal_url: 'https://portal.example' },
+      },
+      { ...deps, replay: noRecipe, run },
+    );
+
+    expect(result.success).toBe(true);
+    expect(put).toHaveBeenCalledOnce();
+    const draft = put.mock.calls[0]![3];
+    // The portal's own origin SURVIVES in the compiled template…
+    expect(draft.injectedCalls[0]!.urlTemplate).toBe('https://portal.example/api/cases?ref={{input.ref}}');
+  });
+
   it('writes NOTHING when the pass captured no internal API call', async () => {
     // A DOM-only flow, or a run that never got past a login wall. Storing a zero-call recipe would
     // be storing a permanent "this action is DOM-only" that `putRecipe` then refuses to overwrite -
