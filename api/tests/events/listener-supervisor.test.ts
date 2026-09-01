@@ -156,6 +156,49 @@ describe('listener supervisor — user-defined branch routing (2A-S4)', () => {
   });
 });
 
+describe('listener supervisor - a BLOCKED listener waits instead of hammering', () => {
+  it('polls ONCE and then waits, where a failing listener would have retried in a second', async () => {
+    // THE DEFECT THIS CATCHES (found live 2026-08-31). A poll that cannot succeed until a human acts
+    // was treated as transient and ramped from 1s. An automation-backed poll RUNS THE AUTOMATION, so
+    // with `desktop.automation` granted each retry opened a real browser window on the owner's
+    // desktop - against a live court portal, on a loop, until the daemon was killed by hand.
+    //
+    // The trigger below declares a 15ms cadence, so a healthy listener polls constantly and a
+    // fast-ramped failure would poll several times inside the window. A BLOCKED one must poll
+    // exactly once and then be quiet: its next attempt is a quarter of an hour away.
+    const calls: string[] = [];
+    const callUser = async (_t: SupervisorTrigger): Promise<UserIntegrationCallResult> => {
+      calls.push('poll');
+      // The live shape exactly: the GENERIC code, with the real state on `data.status`.
+      return {
+        success: false,
+        error: 'no machine is paired to your account, and this step runs only on one - '
+          + 'pair a machine, then establish this session from it',
+        code: 'automation_failed',
+        data: { runId: 'r1', status: 'awaiting_daemon' },
+      };
+    };
+    const trigger = mkTrigger('trg-blocked', {
+      integrationKey: 'imap',
+      eventName: 'message.received',
+      pollConfig: { actionName: 'fetch_messages', intervalMs: 15 },
+    });
+    const { sup, failures } = harness([trigger], async () => {
+      throw new Error('callPlatform must not be reached for a user-defined listener');
+    }, callUser);
+
+    await sup.start();
+    // It is still AUDITED - a blocked listener must be as visible as a failing one.
+    expect(await waitUntil(() => failures.some((f) => f.id === 'trg-blocked'))).toBe(true);
+    // Give it far longer than the 15ms cadence and longer than the old 1s first rung.
+    await new Promise((r) => setTimeout(r, 1_200));
+    await sup.stop();
+
+    // Before the fix this was several calls (t=0, 1s, ...) and each one opened a window.
+    expect(calls.length).toBe(1);
+  }, 15_000);
+});
+
 describe('listener supervisor — isolation (a failing listener never starves a healthy one)', () => {
   it('a poll that always fails backs off (bumpFailure) without throwing or blocking a sibling', async () => {
     const call = async (t: SupervisorTrigger): Promise<PlatformCallResult> =>

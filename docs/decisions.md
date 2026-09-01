@@ -7004,3 +7004,19 @@ a wrong one would discard good sessions. The residual is stated in the finding.
   than truthiness, because `egressProxy: false` is an answer. The per-org capability GRANT is
   genuinely invalidated by a re-pair (it is keyed on the pairing id) and still has to be re-issued.
 
+- 2026-09-01 - D-LISTENER-BLOCKED-IS-NOT-FAILED: a listener poll that cannot succeed until something
+  changes gets its own slow cadence, separate from the transient-failure ramp. The supervisor had one
+  backoff starting at 1s, which is right for a flaky probe and wrong for a missing session - and an
+  automation-backed poll is not a probe: each attempt runs the automation, and with
+  `desktop.automation` granted it opens a real browser window on the owner's desktop. The reason now
+  survives the throw (`ListenerPollError` carrying `code` + engine `runStatus`; it used to be
+  interpolated into prose and the type discarded, which is why only one backoff was possible), and a
+  blocked outcome waits 15min -> 30min -> 60min, floored at the listener's own healthy interval,
+  on a streak of its own. The classification reads the STATUS as well as the code because the case
+  that actually fired - a locality refusal, "no machine is paired" - arrives as the generic
+  `automation_failed` with the truth on `data.status`. This is `schedules/supervisor.ts`'s existing
+  argument applied to the sibling rail; NOT shared as one constant, because `events/` has no import
+  edge to `schedules/` and inventing one to share a small set is a worse trade than two lists that
+  cite each other. The residue is ledgered rather than hidden: a blocked poll still opens a window to
+  discover it is blocked, just 24 times a day instead of 1440.
+

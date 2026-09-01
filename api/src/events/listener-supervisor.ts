@@ -47,10 +47,62 @@ import {
 } from '../integrations/event-sources/platform-poll.js';
 import {
   pollUserDefinedSource,
+  isBlockedPollError,
   type UserIntegrationCallResult,
 } from '../integrations/event-sources/user-defined-poll.js';
 
 const RESTART_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 120_000, 300_000];
+
+/**
+ * The cadence for a poll that CANNOT succeed until something changes (`isBlockedPollError`).
+ *
+ * WHY THE FAST RAMP IS WRONG HERE, and it is not a matter of taste. `RESTART_BACKOFF_MS` starts at
+ * one second because a transient failure plausibly clears in one second. A missing session does
+ * not: it clears when a person completes a ceremony, pairs a machine, or grants an approval. And a
+ * poll is not a cheap probe - an automation-backed poll RUNS THE AUTOMATION, so with
+ * `desktop.automation` granted every attempt OPENS A REAL BROWSER WINDOW on the owner's desktop.
+ * Ramping from 1s therefore opened a window at 1, 2, 4, 8, 16, 32 and 60 seconds and then once a
+ * minute for as long as the daemon stayed up, against a live court portal (found live 2026-08-31:
+ * the owner watched a browser open and close on a loop and asked for it to be stopped).
+ *
+ * ESCALATING, NOT FLAT, and capped an hour out. Flat-at-15-minutes still costs 96 windows a day for
+ * a block nobody is clearing; the streak makes an unattended block cost 24 a day at worst while a
+ * block that IS about to be cleared still resumes within a quarter of an hour. The floor never goes
+ * below the trigger's own configured interval - a listener must not poll FASTER while blocked than
+ * it does while healthy.
+ *
+ * THIS IS THE SAME TRADE `schedules/supervisor.ts` MAKES (`NEUTRAL_BACKOFF_BASE_MS`, cap 15
+ * minutes): "the cost of the halt becomes latency, which is the honest price of waiting, instead of
+ * an unbounded write rate". The cap is longer here because the unit of cost is worse - a schedule's
+ * repetition writes a row, a listener's opens a window in front of a human.
+ */
+const BLOCKED_BACKOFF_MS = [900_000, 1_800_000, 3_600_000]; // 15min -> 30min -> 60min
+
+/**
+ * How long before the next attempt, given what just happened. PURE, and exported so the policy is
+ * pinned by its numbers rather than by racing `setTimeout` in a test.
+ *
+ * `blocks` and `failures` are separate streaks on purpose: a block must never advance the failure
+ * ramp (it would reach the 5-minute ceiling and stay there, still opening a window every 5 minutes)
+ * and a failure must never advance the blocked one (a genuinely flaky poll would be pushed out to
+ * an hour, which is the opposite mistake).
+ */
+export function nextPollDelayMs(input: {
+  blocked: boolean;
+  failures: number;
+  blocks: number;
+  intervalMs: number | undefined;
+}): number {
+  if (input.blocked) {
+    const idx = Math.min(Math.max(input.blocks, 1) - 1, BLOCKED_BACKOFF_MS.length - 1);
+    // A blocked listener must never poll FASTER than its healthy cadence: a package that declares a
+    // two-hour interval has said something about the cost of asking, and being blocked does not
+    // make asking cheaper.
+    return Math.max(BLOCKED_BACKOFF_MS[idx]!, input.intervalMs ?? DEFAULT_INTERVAL_MS);
+  }
+  const idx = Math.min(Math.max(input.failures, 1) - 1, RESTART_BACKOFF_MS.length - 1);
+  return RESTART_BACKOFF_MS[idx]!;
+}
 const DEFAULT_INTERVAL_MS = 60_000;
 const DEFAULT_RECONCILE_MS = 30_000;
 
@@ -92,6 +144,9 @@ interface ActiveListener {
   trigger: SupervisorTrigger;
   cancelled: boolean;
   consecutiveFailures: number;
+  /** Consecutive BLOCKED polls (see BLOCKED_BACKOFF_MS) - tracked apart from failures so a block
+   *  never advances the failure ramp and a failure never advances the blocked one. */
+  consecutiveBlocks: number;
   nextTimer: NodeJS.Timeout | null;
   /** In-flight tick promise, if any. Awaited by stopListener so a stale tick cannot write its
    *  cursor over a fresh listener's / after stop. */
@@ -151,6 +206,7 @@ export class ListenerSupervisor {
       trigger: t,
       cancelled: false,
       consecutiveFailures: 0,
+      consecutiveBlocks: 0,
       nextTimer: null,
       tickPromise: null,
     };
@@ -187,19 +243,35 @@ export class ListenerSupervisor {
       await this.pollOnce(state);
       if (state.cancelled) return;
       state.consecutiveFailures = 0;
+      state.consecutiveBlocks = 0;
       const interval = state.trigger.pollConfig?.intervalMs ?? DEFAULT_INTERVAL_MS;
       this.scheduleTick(state, interval);
     } catch (err) {
       if (state.cancelled) return;
       const message = msgOf(err);
-      state.consecutiveFailures += 1;
+      // BLOCKED IS NOT FAILED. A poll that cannot succeed until a person acts gets its own, slow
+      // cadence and its own streak: counting it as a failure would ramp from one second toward a
+      // state no amount of retrying reaches, and every one of those attempts opens a browser window
+      // (see BLOCKED_BACKOFF_MS). The audit row is still written - a blocked listener must be just
+      // as visible as a failing one, it must simply stop hammering.
+      const blocked = isBlockedPollError(err);
+      if (blocked) state.consecutiveBlocks += 1;
+      else state.consecutiveFailures += 1;
       try { await this.deps.bumpFailure(state.triggerId, message); } catch { /* best-effort audit */ }
       if (state.cancelled) return;
-      const idx = Math.min(state.consecutiveFailures - 1, RESTART_BACKOFF_MS.length - 1);
-      const delay = RESTART_BACKOFF_MS[idx]!; // idx is clamped in-range
+
+      const delay = nextPollDelayMs({
+        blocked,
+        failures: state.consecutiveFailures,
+        blocks: state.consecutiveBlocks,
+        intervalMs: state.trigger.pollConfig?.intervalMs,
+      });
 
       console.warn(
-        `[listener-supervisor] trigger ${state.triggerId} (${state.trigger.integrationKey}) failed (${state.consecutiveFailures}): ${message}; backoff ${delay}ms`,
+        `[listener-supervisor] trigger ${state.triggerId} (${state.trigger.integrationKey}) `
+        + (blocked
+          ? `BLOCKED (${state.consecutiveBlocks}) - waiting rather than retrying: ${message}; next attempt in ${delay}ms`
+          : `failed (${state.consecutiveFailures}): ${message}; backoff ${delay}ms`),
       );
       this.scheduleTick(state, delay);
     }

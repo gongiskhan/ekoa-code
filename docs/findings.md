@@ -4229,6 +4229,76 @@ silently absorbed into a ledger note):
   coverage: a correct, tested function kept plausible by a docblock describing a caller it never got.
   Nothing here claims to be reachable, and this entry is the record that it is not.
 
+## Recently fixed - 2026-09-01 a blocked listener opened a browser window on a loop
+
+- **`a-blocked-listener-retries-from-one-second-and-opens-a-window-every-time`** (FIXED 2026-09-01,
+  **HIGH**, correctness/safety - reported by the owner, who watched it happen). The listener
+  supervisor treated EVERY poll failure as transient and applied `RESTART_BACKOFF_MS`, which starts
+  at **one second**. That is a reasonable policy for a cheap probe and a disastrous one here: an
+  automation-backed poll RUNS THE AUTOMATION, so with `desktop.automation` granted every attempt
+  OPENS A REAL BROWSER WINDOW on the owner's desktop. A Citius listener with no captured session
+  therefore opened a window at 1s, 2s, 4s, 8s, 16s, 32s, 60s and then once a minute, **against the
+  live www.citius.mj.pt portal**, for as long as the daemon stayed up - the owner had to ask for it
+  to be stopped, and it was only stoppable by killing the daemon by hand.
+
+  **THE ROOT CAUSE IS PROSE.** `user-defined-poll.ts` knew the outcome code and interpolated it into
+  a message string before throwing a plain `Error`, so everything downstream had only text. A
+  backoff cannot be chosen from text, so there was only one backoff.
+
+  **FIXED** by making the reason survive the throw (`ListenerPollError`, carrying `code` and the
+  engine `runStatus`) and giving the supervisor a second, slow cadence for outcomes no retry can
+  change: `BLOCKED_BACKOFF_MS` = 15min -> 30min -> 60min, floored at the listener's own healthy
+  interval, with its own streak so a block never advances the failure ramp and a failure never
+  advances the blocked one. The audit row is still written - a blocked listener must stay as visible
+  as a failing one, it must simply stop hammering.
+
+  **THE CLASSIFICATION HAD TO READ THE STATUS, NOT JUST THE CODE**, and this is the part a
+  code-only fix would have missed: the live case was a locality refusal ("no machine is paired to
+  your account"), which `runAutomationForAction` returns as the GENERIC `code: 'automation_failed'`
+  with the real state on `data.status` (`awaiting_daemon`). Both are read.
+
+  This is the argument `schedules/supervisor.ts` already made for the other rail
+  (`mapIntegrationOutcome` calling `awaiting_consent`/`needs_credentials` blocked;
+  `NEUTRAL_BACKOFF_BASE_MS` existing because exempting a block from the ceiling "removed the only cap
+  on REPEATING it"), applied to the rail that never got it - the same shape as the
+  listener-kind-inference gap fixed the day before. Suites:
+  `api/tests/events/listener-blocked-backoff.test.ts` (8, the policy pinned by its numbers as a pure
+  function) and a supervisor-level case in `api/tests/events/listener-supervisor.test.ts` proving one
+  poll and then silence where the old code polled repeatedly. Both mutation-verified.
+
+  **WHAT THIS DOES NOT FIX, stated plainly.** A blocked poll still OPENS A WINDOW to discover it is
+  blocked - just 24 times a day at worst instead of ~1440, and never in the first quarter of an hour.
+  The honest fix is for an automation-backed poll to learn it has no session WITHOUT driving a
+  browser, which means the credential gate answering before the engine opens anything. That is a
+  larger change on the run loop and is NOT done: see the OPEN finding below.
+
+- **`the-ssrf-guards-dns-lookup-was-unbounded-so-the-callers-timeout-bounded-nothing`** (FIXED
+  2026-09-01, MEDIUM, robustness - found chasing a test flake in the run that verified the listener
+  fix). `guardedFetchFollow` calls `assertResolvedIpsSafe(hostname)` on every hop, which awaits
+  `dns.lookup` with NO timeout, and it does so BEFORE the `AbortController` that bounds the fetch. So
+  `opts.timeoutMs` - the only timeout a caller can express - did not bound the operation it names: a
+  slow or wedged resolver hung the whole guarded fetch for as long as the OS resolver took, and the
+  caller's timer never got the chance to fire. The visible symptom was
+  `tests/integrations/docx-fetch.test.ts` "blocks a redirect hop to a private target" timing out at
+  30s under the full parallel suite while passing in 91ms alone: it stubs `fetch` but cannot stub
+  DNS, so it makes a REAL lookup for example.com. FIXED with a 5s cap (`DNS_LOOKUP_TIMEOUT_MS`),
+  shorter than the fetch budget on purpose. A timeout is treated exactly as a resolution failure, and
+  that is safe for the reason the early `return` was always safe: it is reached only when NO address
+  was obtained, so no address goes unexamined - losing the race does not skip a check, it means there
+  was nothing to check. NOT DIRECTLY PINNED BY A TEST: `dns.lookup` has no injection seam in this
+  module, so adding one would be a larger change than the fix; what is verified is that the affected
+  suites pass and that the flake's mechanism is gone. Stated as a gap rather than claimed as covered.
+
+- **`an-automation-backed-poll-opens-a-browser-to-discover-it-has-no-session`** (OPEN 2026-09-01,
+  MEDIUM, design - the residue of the finding above). Even on the slow cadence, each blocked attempt
+  starts a real run, opens a real window and drives it as far as the locality/credential refusal
+  before halting. The window is the cost of ASKING, and asking is what we already know the answer to:
+  the Cofre knows there is no usable session for the origin, and the fleet knows there is no paired
+  machine, both before a browser is needed. CLOSE BY letting the poll path get that answer without a
+  browser - the credential gate and `resolveLocality` already compute it for the run loop, so this is
+  a matter of consulting them earlier rather than new logic. Until then a blocked listener costs at
+  most 24 windows a day and none in the first 15 minutes, which is survivable but not right.
+
 ## Recently fixed - 2026-08-31 making the shipped Citius package able to run at all
 
 Four defects found by trying to run a shipped integration package end to end for the first time.
