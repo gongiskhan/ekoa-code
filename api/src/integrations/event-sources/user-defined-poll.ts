@@ -59,6 +59,110 @@ import { type IntegrationListenerConfig } from '../definitions.js';
 import { resolveDefinition, actorForOwnedRow } from '../definition-registry.js';
 import type { EnqueueInput, EnqueueResult } from './platform-poll.js';
 
+/**
+ * The action-outcome codes for which RETRYING SOONER CANNOT HELP.
+ *
+ * ── THE DEFECT THIS EXISTS FOR (found live 2026-08-31, reported by the owner) ──────────────────
+ *
+ * Every poll failure threw a plain `Error` carrying only prose, so the supervisor could not tell a
+ * flaky network from a portal that will not let anyone in until a human acts. It treated both as
+ * transient and applied `RESTART_BACKOFF_MS`, which starts at ONE SECOND. For an automation-backed
+ * poll that is not a cheap probe: each attempt RUNS THE AUTOMATION, and with `desktop.automation`
+ * granted the automation OPENS A REAL BROWSER WINDOW on the owner's desktop. A Citius listener with
+ * no captured session therefore opened a window at 1s, 2s, 4s, 8s, 16s, 32s, 60s and then once a
+ * minute, against a live court portal, for as long as the daemon stayed up. The owner watched a
+ * browser open and close on a loop and had to ask for it to be stopped.
+ *
+ * ── THE SAME ARGUMENT THE SCHEDULES RAIL ALREADY MAKES ────────────────────────────────────────
+ *
+ * `schedules/supervisor.ts` reached this conclusion first, for the same class of cause, and its
+ * reasoning is worth not re-deriving: `mapIntegrationOutcome` calls `awaiting_consent` and
+ * `needs_credentials` BLOCKED rather than failed ("never a failure to retry and never a thing to
+ * resolve from here"), and `NEUTRAL_BACKOFF_BASE_MS` exists because exempting a block from the
+ * failure ceiling "removed the only cap on REPEATING it". This is that rule applied to the other
+ * rail, which never got it.
+ *
+ * NOT SHARED AS ONE CONSTANT, deliberately: `events/` and `integrations/event-sources/` have no
+ * import edge to `schedules/` and inventing one to share a small set would be a worse trade than
+ * two lists that cite each other. What is shared is the vocabulary itself - these are
+ * `ActionRunResult['code']` values and `RunStatus` values, and neither list may drift from those.
+ *
+ * ── WHY THE MEMBERSHIP IS WIDER THAN THE SCHEDULES SET ────────────────────────────────────────
+ *
+ * The schedules set answers "does this count against the failure ceiling", so it is narrow on
+ * purpose (only `awaiting_daemon`, because only that clears with nobody being told). THIS set
+ * answers a different and blunter question: CAN A RETRY ONE SECOND FROM NOW POSSIBLY SUCCEED. For
+ * a missing approval, a missing credential, a disconnected integration, a locked credential or a
+ * binding that resolves to nothing, the answer is no - whether it clears by itself, by a human, or
+ * by an engineer. Every one of them costs a browser window to re-discover, so every one of them
+ * belongs here even though they land in different places on the schedules rail.
+ */
+const BLOCKED_ACTION_CODES: ReadonlySet<string> = new Set([
+  'awaiting_consent',    // a human must approve the write
+  'needs_credentials',   // a human must complete a credential ceremony (K2)
+  'not_connected',       // a human must connect the integration
+  'disabled',            // a human turned it off
+  'origin_refused',      // the credential is locked or revoked
+  'unknown_automation',  // the binding resolves to nothing - broken, not flaky
+  'automation_required', // the automation seam is not wired in this deployment
+  'unsupported_transport',
+]);
+
+/**
+ * Engine run statuses that mean the same thing, reached when the action-level code is the generic
+ * `automation_failed`.
+ *
+ * THIS IS THE ONE THAT ACTUALLY FIRED. The live case was a locality refusal - "no machine is paired
+ * to your account" - which `runAutomationForAction` returns as `code: 'automation_failed'` with the
+ * real state on `data.status`. Classifying on the code alone would have missed precisely the halt
+ * that caused the storm, so the status is read too.
+ */
+const BLOCKED_RUN_STATUSES: ReadonlySet<string> = new Set([
+  'awaiting_daemon',
+  'needs_credentials',
+  'awaiting_consent',
+  'paused_for_user',
+]);
+
+/** `{ runId, status }` is what the automation-backed action leg returns as `data`. */
+function runStatusOf(data: unknown): string | undefined {
+  const status = (data as { status?: unknown } | null | undefined)?.status;
+  return typeof status === 'string' ? status : undefined;
+}
+
+/**
+ * A poll that failed, carrying WHY in a form the supervisor can branch on.
+ *
+ * The code used to be interpolated into the message and thrown away with the type. Everything
+ * downstream then had prose, and prose is not something a backoff can be chosen from.
+ */
+export class ListenerPollError extends Error {
+  constructor(
+    message: string,
+    readonly code?: string,
+    readonly runStatus?: string,
+  ) {
+    super(message);
+    this.name = 'ListenerPollError';
+  }
+
+  /**
+   * True when no retry, however soon, can change the answer - so the caller must wait on a slow
+   * cadence rather than ramp toward one. See `BLOCKED_ACTION_CODES` for the whole argument.
+   */
+  get blocked(): boolean {
+    return (
+      (this.code !== undefined && BLOCKED_ACTION_CODES.has(this.code)) ||
+      (this.runStatus !== undefined && BLOCKED_RUN_STATUSES.has(this.runStatus))
+    );
+  }
+}
+
+/** Whether a thrown value is a poll failure nothing but time-plus-an-act can clear. */
+export function isBlockedPollError(err: unknown): boolean {
+  return err instanceof ListenerPollError && err.blocked;
+}
+
 /** Minimal trigger shape the generic poller needs (decoupled from events/ TriggerDoc). */
 export interface UserDefinedPollTrigger {
   id: string;
@@ -85,22 +189,6 @@ export interface UserIntegrationCallResult {
   data?: unknown;
   error?: string;
   code?: string;
-}
-
-/**
- * A poll action that answered with a FAILURE ENVELOPE, thrown with the envelope's code intact.
- *
- * The code used to be flattened into the message text, so the supervisor could not tell
- * `needs_credentials` - a halt waiting on a PERSON, where every retry opens a browser against the
- * same sign-in wall and parks another ceremony - from an ordinary transient failure its
- * seconds-first backoff ladder exists for. Found live (2026-09-01): a citius listener retried a
- * credential halt at 1s/2s/4s…, each retry a fresh browser run against a real portal.
- */
-export class PollActionError extends Error {
-  constructor(message: string, readonly code?: string) {
-    super(message);
-    this.name = 'PollActionError';
-  }
 }
 
 export interface UserDefinedPollDeps {
@@ -159,9 +247,10 @@ export async function pollUserDefinedSource(
   // any state (or enqueuing anything) for a listener that no longer exists.
   if (deps.isCancelled?.()) return { polled: true, enqueued: 0, cursorAdvanced: false };
   if (!result.success) {
-    throw new PollActionError(
+    throw new ListenerPollError(
       `poll action "${actionName}" on ${trigger.integrationKey} failed${result.code ? ` (${result.code})` : ''}: ${result.error ?? 'unknown'}`,
       result.code,
+      runStatusOf(result.data),
     );
   }
 

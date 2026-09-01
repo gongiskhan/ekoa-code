@@ -161,8 +161,10 @@ describe('listener supervisor — a poll WAITING ON A PERSON parks instead of re
     // The live shape this pins: a citius listener whose poll action halted `needs_credentials`
     // was retried at 1s/2s/4s… - and every retry EXECUTED the action, driving a fresh headed
     // browser into the same sign-in wall and parking one more ceremony. Waiting is not failing:
-    // the next poll must come no sooner than the trigger's own cadence (floored at the ladder's
-    // slowest rung), and the failure streak must not advance.
+    // the next poll must come no sooner than the trigger's own cadence (floored at the blocked
+    // ramp), and the failure streak must not advance. The sibling case below pins the OTHER half
+    // of the same defect - the generic `automation_failed` code whose real state rides
+    // `data.status` - so together they cover both roads into `isBlockedPollError`.
     let calls = 0;
     const callUser = async (): Promise<UserIntegrationCallResult> => {
       calls += 1;
@@ -192,6 +194,49 @@ describe('listener supervisor — a poll WAITING ON A PERSON parks instead of re
     expect(inserted.size).toBe(0);
     await sup.stop();
   }, 10_000);
+});
+
+describe('listener supervisor - a BLOCKED listener waits instead of hammering', () => {
+  it('polls ONCE and then waits, where a failing listener would have retried in a second', async () => {
+    // THE DEFECT THIS CATCHES (found live 2026-08-31). A poll that cannot succeed until a human acts
+    // was treated as transient and ramped from 1s. An automation-backed poll RUNS THE AUTOMATION, so
+    // with `desktop.automation` granted each retry opened a real browser window on the owner's
+    // desktop - against a live court portal, on a loop, until the daemon was killed by hand.
+    //
+    // The trigger below declares a 15ms cadence, so a healthy listener polls constantly and a
+    // fast-ramped failure would poll several times inside the window. A BLOCKED one must poll
+    // exactly once and then be quiet: its next attempt is a quarter of an hour away.
+    const calls: string[] = [];
+    const callUser = async (_t: SupervisorTrigger): Promise<UserIntegrationCallResult> => {
+      calls.push('poll');
+      // The live shape exactly: the GENERIC code, with the real state on `data.status`.
+      return {
+        success: false,
+        error: 'no machine is paired to your account, and this step runs only on one - '
+          + 'pair a machine, then establish this session from it',
+        code: 'automation_failed',
+        data: { runId: 'r1', status: 'awaiting_daemon' },
+      };
+    };
+    const trigger = mkTrigger('trg-blocked', {
+      integrationKey: 'imap',
+      eventName: 'message.received',
+      pollConfig: { actionName: 'fetch_messages', intervalMs: 15 },
+    });
+    const { sup, failures } = harness([trigger], async () => {
+      throw new Error('callPlatform must not be reached for a user-defined listener');
+    }, callUser);
+
+    await sup.start();
+    // It is still AUDITED - a blocked listener must be as visible as a failing one.
+    expect(await waitUntil(() => failures.some((f) => f.id === 'trg-blocked'))).toBe(true);
+    // Give it far longer than the 15ms cadence and longer than the old 1s first rung.
+    await new Promise((r) => setTimeout(r, 1_200));
+    await sup.stop();
+
+    // Before the fix this was several calls (t=0, 1s, ...) and each one opened a window.
+    expect(calls.length).toBe(1);
+  }, 15_000);
 });
 
 describe('listener supervisor — isolation (a failing listener never starves a healthy one)', () => {

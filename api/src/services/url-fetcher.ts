@@ -37,16 +37,43 @@ export interface GuardedFetchOptions {
   timeoutMs?: number;
 }
 
-/** Resolve the hostname and reject if ANY resolved address is private/loopback/link-local —
+/**
+ * How long the pre-flight DNS lookup may take before it is treated as an unresolvable name.
+ *
+ * WHY IT NEEDS ONE AT ALL. `dns.lookup` has no timeout of its own, and this call happens BEFORE the
+ * `AbortController` that bounds the fetch - so the `timeoutMs` a caller asks for did not bound the
+ * operation it names: a slow or wedged resolver hung `guardedFetchFollow` for as long as the OS
+ * resolver took, with the caller's timeout never getting a chance to fire. Found 2026-09-01 as a
+ * test flake (`docx-fetch.test.ts` "blocks a redirect hop to a private target" stubs `fetch` but
+ * cannot stub DNS, so it makes a REAL lookup for example.com; alone it takes 91ms, under the full
+ * parallel suite it exceeded the 30s test timeout). The flake is the visible half; the half that
+ * matters is that a timeout which does not bound the operation is not a timeout.
+ *
+ * SHORTER THAN THE FETCH TIMEOUT ON PURPOSE: a name that cannot be resolved in five seconds is not
+ * going to serve a document, and the budget belongs to the transfer.
+ */
+const DNS_LOOKUP_TIMEOUT_MS = 5_000;
+
+/** Resolve the hostname and reject if ANY resolved address is private/loopback/link-local -
  *  defense against DNS rebinding (a public name resolving to 127.0.0.1 / 169.254.169.254).
  *  A residual TOCTOU between resolve and connect remains; true IP-pinning needs a custom
  *  socket agent (noted as a hardening follow-up), but this closes the common rebinding path. */
 async function assertResolvedIpsSafe(hostname: string): Promise<void> {
   let addrs: Array<{ address: string; family: number }>;
   try {
-    addrs = await lookup(hostname, { all: true });
+    // TIMED OUT, NEVER UNBOUNDED - see DNS_LOOKUP_TIMEOUT_MS. A timeout here is treated exactly like
+    // a resolution failure: the name is not resolved, so this guard has nothing to judge and the
+    // fetch below fails on its own terms. It must NOT be treated as "safe to proceed unchecked":
+    // the `return` in the catch is reached only when NO address was obtained, so no address has
+    // gone unexamined. Losing the race does not skip a check; it means there was nothing to check.
+    addrs = await Promise.race([
+      lookup(hostname, { all: true }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`dns lookup for ${hostname} timed out`)), DNS_LOOKUP_TIMEOUT_MS).unref?.(),
+      ),
+    ]);
   } catch {
-    return; // resolution failure surfaces as a normal fetch error downstream
+    return; // resolution failure (or timeout) surfaces as a normal fetch error downstream
   }
   for (const { address, family } of addrs) {
     if (family === 4) {
