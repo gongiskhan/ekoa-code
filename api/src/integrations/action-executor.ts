@@ -222,6 +222,14 @@ export type AutomationBackedHandler = (input: {
    * whose recipe silently dropped the write and now reports success for having done nothing.
    */
   mutates?: boolean;
+  /**
+   * The integration's NON-SECRET config projection (a portal address, a cedula, a region), the
+   * plaintext half a package's `configSchema` declares. DECLARED here and not only sent: this call
+   * site had been spreading the field into the literal while the handler's own input type never
+   * named it, and the receiving mapping dropped it without any compiler noticing (found live,
+   * 2026-09-01 - every `{{config.…}}` in a shipped template resolved empty).
+   */
+  configValues?: Record<string, string>;
 }) => Promise<ExecuteIntegrationActionResult>;
 
 /**

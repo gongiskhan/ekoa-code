@@ -1497,6 +1497,15 @@ export interface AutomationBackedCall {
   actionName?: string;
   writeAssent?: boolean;
   mutates?: boolean;
+  /**
+   * The integration's NON-SECRET config projection (`IntegrationConfig.publicConfigValues`) - the
+   * executor has sent it since the citius rebuild, and this seam DROPPED it (found live,
+   * 2026-09-01): every `{{config.…}}` in a shipped template resolved to the empty string, the
+   * empty navigate failed, and the rehearsal fixer relocated the run onto a model-invented origin
+   * (the real CITIUS portal). Declared on BOTH sides of the seam now, because the drop was
+   * invisible precisely while one side sent a field the other never named.
+   */
+  configValues?: Record<string, string>;
 }
 
 /**
@@ -1539,6 +1548,11 @@ export function automationBackedActionHandler(deps: ActionRunDeps = {}) {
       // reads as "not known to write" - the pre-P2 behaviour, and the only honest default: a caller
       // that cannot say is not a caller that said no.
       ...(b.mutates !== undefined ? { mutates: b.mutates } : {}),
+      // The non-secret config projection, forwarded onto `RunContext.configValues` so a shipped
+      // template's `{{config.…}}` resolves to the TENANT'S value. This line is the whole of the
+      // 2026-09-01 live fix: both ends existed (the executor sent it, `ActionRunInput` accepted
+      // it) and this mapping - the one place the two shapes meet - silently lost it.
+      ...(b.configValues !== undefined ? { configValues: b.configValues } : {}),
     }, deps);
     return {
       success: out.success,

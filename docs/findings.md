@@ -82,6 +82,13 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
   visited origins and refuse the rest - which would contradict the documented search-engine
   recovery pattern and should therefore be a deliberate decision - or keep the freedom and require
   a re-established session per origin with an explicit run event when the run relocates.
+  **OBSERVED LIVE 2026-09-01** (dev-madrid, the first bridge-connected run of the shipped citius
+  action): a `{{config.portal_url}}` navigate emptied by the seam drop failed, and the fixer's
+  replacement drove the REAL `citius.tribunaisnet.mj.pt` - a national court portal - exactly as
+  this entry predicted. The invented-destination ENTRY to the relocation is now closed (an empty
+  navigate halts non-recoverably naming the template; see Recently fixed 2026-09-01); a fixer
+  responding to an ordinary failed navigate with a cross-origin patch remains possible, so the
+  product decision above still stands.
 
 - **`recipe-replay-executes-before-the-automation-owner-check`** (2026-08-28, **MEDIUM**, recipe
   spine multi-user; cornerstone Codex checkpoint). A successful recipe replay returns from
@@ -4228,6 +4235,49 @@ silently absorbed into a ledger note):
   `m365proxy-manifest-flag-stripped`, `P4.2-was-dead-code-in-production`) was code that LOOKED like
   coverage: a correct, tested function kept plausible by a docblock describing a caller it never got.
   Nothing here claims to be reachable, and this entry is the record that it is not.
+
+## Recently fixed - 2026-09-01 the first live bridge run of a shipped Citius action (dev-madrid)
+
+The first execution of `consultar_notificacoes` with a connected bridge - the leg no machine had
+reached (the Mac stopped at "no machine paired") - drove a real headed browser onto the REAL
+`citius.tribunaisnet.mj.pt` instead of the tenant's configured fixture, and then retried that
+excursion at 1s/2s/4s… under the listener supervisor. Three defects in one chain, each with a
+committed test:
+
+- **`config-values-dropped-at-the-automation-backed-seam`** (**FIXED 2026-09-01**, action seam;
+  found live). `bf3c46a` built both ends of the pipe - the executor sends
+  `configValues` (`action-executor.ts`, `publicConfigWithDefaults`) and `ActionRunInput` accepts
+  them onto `RunContext.configValues` - but `automationBackedActionHandler`, the ONE mapping where
+  the two shapes meet, never forwarded the field, and NEITHER structural seam type declared it
+  (the executor spread it into the literal; the compiler had nothing to check against). Every
+  `{{config.…}}` in every shipped template resolved to the empty string. Fix: the field is
+  forwarded and DECLARED on both sides of the seam (`AutomationBackedCall`,
+  `AutomationBackedHandler`). Tests: `replay-mount.test.ts` ("carries the CONFIG VALUES onto the
+  run context" + the absent-field Rule 7 case).
+
+- **`an-empty-navigate-invited-the-fixer-to-invent-a-destination`** (**FIXED 2026-09-01**, engine;
+  found live - this is the ledgered `the-rehearsal-fixer-may-relocate-a-run-to-any-origin`
+  OBSERVED IN PRODUCTION SHAPE). With `{{config.portal_url}}` resolved to '', the navigate case
+  threw a recoverable "missing url", the fixer's prompt ("navigate_failed usually wants
+  replace_current with a different URL") did exactly what it teaches, and the model authored the
+  real CITIUS portal address from world knowledge. The run record shows the splice: step 0 carries
+  a model-vocabulary id (`open-citius-mandatarios`) beside the template's own
+  `confirmar-autenticacao`. Fix: a navigate with no destination after template resolution fails
+  NON-RECOVERABLY, naming the authored template that emptied (`authoredStep` now crosses
+  `ExecuteStepArgs`); the fixer is never consulted for a lost address, because the address of a
+  navigate is the owner's fact. Test: `engine.test.ts` ("a navigate whose template resolved to
+  NOTHING halts naming the template"). The GENERAL fixer-origin question stays OPEN below - this
+  closes only the invented-destination entry to it.
+
+- **`listener-supervisor-retries-a-credential-halt-as-if-transient`** (**FIXED 2026-09-01**,
+  events; found live). The poll's `needs_credentials` was flattened into the thrown message, so
+  the supervisor walked its seconds-first restart ladder - and every rung EXECUTED the poll action
+  again: a fresh headed browser run into the same sign-in wall, parking one more ceremony (nine
+  runs in ~10 minutes against a national court portal's public login page). Fix:
+  `PollActionError` carries the envelope code; `needs_credentials` / `awaiting_consent` /
+  `awaiting_daemon` park the listener at `max(pollInterval, 300s)` with an audit row and no
+  failure-streak advance - the schedules supervisor's K2 reading, ported. Test:
+  `listener-supervisor.test.ts` ("a poll WAITING ON A PERSON parks instead of retrying").
 
 ## Recently fixed - 2026-08-31 making the shipped Citius package able to run at all
 

@@ -47,12 +47,30 @@ import {
 } from '../integrations/event-sources/platform-poll.js';
 import {
   pollUserDefinedSource,
+  PollActionError,
   type UserIntegrationCallResult,
 } from '../integrations/event-sources/user-defined-poll.js';
 
 const RESTART_BACKOFF_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 120_000, 300_000];
 const DEFAULT_INTERVAL_MS = 60_000;
 const DEFAULT_RECONCILE_MS = 30_000;
+
+/**
+ * Poll outcomes that are WAITING ON AN ACT, not failing (the schedules supervisor's K2 reading:
+ * `needs_credentials` / `awaiting_consent` are blocked on a human, `awaiting_daemon` on a machine
+ * coming back). The seconds-first restart ladder exists for transient faults; against these codes
+ * it is a browser-run storm - each retry re-executes the poll action, walks into the same wall,
+ * and parks ANOTHER credential ceremony. Found live (2026-09-01) on the citius listener: retries at
+ * 1s/2s/4s… each drove a fresh headed browser at a real portal's sign-in page.
+ */
+const WAITING_ON_ACT_CODES: ReadonlySet<string> = new Set([
+  'needs_credentials',
+  'awaiting_consent',
+  'awaiting_daemon',
+]);
+
+/** The slowest ladder rung: a waiting poll re-checks at its own interval, never faster than this. */
+const WAITING_FLOOR_MS = 300_000;
 
 /** The trigger fields a poll loop needs — a projection of the durable TriggerDoc. */
 export type SupervisorTrigger = Pick<
@@ -192,6 +210,23 @@ export class ListenerSupervisor {
     } catch (err) {
       if (state.cancelled) return;
       const message = msgOf(err);
+      // A poll WAITING ON AN ACT is parked at its own cadence, never walked down the seconds-first
+      // ladder: retrying cannot fix it, and for `needs_credentials` every retry EXECUTES the action
+      // again - a browser run into the same sign-in wall, parking one more ceremony. The audit row
+      // is still written (the owner should see what the listener is waiting on), but the failure
+      // streak is not advanced - waiting is not failing.
+      const code = err instanceof PollActionError ? err.code : undefined;
+      if (code && WAITING_ON_ACT_CODES.has(code)) {
+        try { await this.deps.bumpFailure(state.triggerId, message); } catch { /* best-effort audit */ }
+        if (state.cancelled) return;
+        const interval = state.trigger.pollConfig?.intervalMs ?? DEFAULT_INTERVAL_MS;
+        const delay = Math.max(interval, WAITING_FLOOR_MS);
+        console.warn(
+          `[listener-supervisor] trigger ${state.triggerId} (${state.trigger.integrationKey}) is waiting on ${code} (a person or a machine must act): ${message}; next poll in ${delay}ms`,
+        );
+        this.scheduleTick(state, delay);
+        return;
+      }
       state.consecutiveFailures += 1;
       try { await this.deps.bumpFailure(state.triggerId, message); } catch { /* best-effort audit */ }
       if (state.cancelled) return;

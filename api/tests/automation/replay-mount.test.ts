@@ -413,6 +413,35 @@ describe('runAutomationForAction - the replay-first mount', () => {
     expect(put).not.toHaveBeenCalled();
     expect(result.success).toBe(true);
   });
+
+  it('carries the CONFIG VALUES onto the run context - the tenant\'s portal address is how {{config.*}} resolves (found live, 2026-09-01)', async () => {
+    // The whole citius live failure in one assertion. The executor sent `configValues` and
+    // `ActionRunInput` accepted them, but the handler's mapping - the ONE place the two shapes
+    // meet - dropped the field: `{{config.portal_url}}` resolved to the empty string, the empty
+    // navigate failed, and the rehearsal fixer relocated the run onto a model-invented origin
+    // (the real CITIUS portal). The mapping is the subject here, exactly as the seam's own
+    // docblock promises: "a field dropped here fails a test".
+    const run = runObserving([]);
+    const { deps } = storeSpies();
+    const handler = automationBackedActionHandler({ ...deps, run });
+    const out = await handler({
+      ...base,
+      configValues: { portal_url: 'http://127.0.0.1:45190', cedula_profissional: '12345' },
+    });
+
+    expect(out.success).toBe(true);
+    const ctx = run.mock.calls[0]![1];
+    expect(ctx.configValues).toEqual({ portal_url: 'http://127.0.0.1:45190', cedula_profissional: '12345' });
+  });
+
+  it('a caller with NO config values leaves the context field absent (Rule 7: the pre-fix shape)', async () => {
+    const run = runObserving([]);
+    const { deps } = storeSpies();
+    const handler = automationBackedActionHandler({ ...deps, run });
+    await handler({ ...base });
+
+    expect(run.mock.calls[0]![1].configValues).toBeUndefined();
+  });
 });
 
 describe('runAutomationForAction - the run that DOES happen is the learning pass', () => {

@@ -1315,6 +1315,9 @@ async function runOrRehearse(
         inputs,
         previousStep,
         retryLedger,
+        // The authored view of this same index, so a template that resolved to nothing can be
+        // named in the failure instead of surfacing as an inexplicable empty string.
+        authoredStep: workingSteps[i],
         // ALWAYS supplied: the accumulator needs every chunk even when no SSE emitter exists.
         // Forwarding to the stream stays exactly as before when one does.
         emitOutputChunk: (info) => {
@@ -2223,6 +2226,13 @@ interface ExecuteStepArgs {
    * commands execute. Other step types ignore this.
    */
   emitOutputChunk?: (info: { runId: string; stepIndex: number; chunk: string; stream: 'stdout' | 'stderr' }) => void;
+  /**
+   * The AUTHORED step this (template-resolved) step came from - `workingSteps[i]` at the call
+   * site, where `step` is `executableSteps[i]`. Carried so a failure can name the template the
+   * author wrote (`{{config.portal_url}}`) rather than the empty string it resolved to. Optional:
+   * a caller without the authored view loses only the message's precision, never the guard.
+   */
+  authoredStep?: Step;
 }
 
 async function executeStep(args: ExecuteStepArgs): Promise<StepRecord> {
@@ -2259,7 +2269,31 @@ async function executeStep(args: ExecuteStepArgs): Promise<StepRecord> {
   try {
     switch (step.type) {
       case 'navigate': {
-        if (!step.url) throw new Error(`navigate step ${step.id} missing url`);
+        // A NAVIGATE WITH NO DESTINATION IS NOT FIXABLE, AND MUST SAY WHY (found live, 2026-09-01).
+        // An authored `{{config.portal_url}}` whose value never crossed the action seam resolves to
+        // the empty string, and this case used to throw a recoverable "missing url" - which handed
+        // the step to the rehearsal fixer, whose own prompt teaches "navigate_failed usually wants
+        // replace_current with a different URL". The model then AUTHORED an address from world
+        // knowledge, and a run meant for a tenant's own portal address drove the real
+        // citius.tribunaisnet.mj.pt instead (the ledgered fixer-relocation finding, observed live).
+        // The address of a navigate is the OWNER'S fact - config, input, or authored text - and a
+        // step that lost it must halt naming the template that emptied, never invite a model to
+        // invent a destination.
+        if (!step.url) {
+          const authoredUrl = args.authoredStep?.url;
+          const emptied = authoredUrl && authoredUrl !== step.url;
+          return finishRecord(baseRecord, 'failed', stepStart, {
+            tier: 'cache',
+            error: {
+              message: emptied
+                ? `navigate step ${step.id} has no destination: the authored URL "${authoredUrl}" resolved to nothing - ` +
+                  `a {{config.*}} or {{input.*}} value it names was not supplied to this run. ` +
+                  `Connect the integration (or pass the input) and run again.`
+                : `navigate step ${step.id} has no url`,
+              recoverable: false,
+            },
+          });
+        }
         if (!browser) return awaitingDaemonRecord(baseRecord, stepStart, index, 'browser');
         // Auto-adjust a URL the planner guessed at a local port for EKOA'S OWN frontend. Narrow by
         // construction now (`self-url.ts`), and no longer silent: a rewrite is reported in the step

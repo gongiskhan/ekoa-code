@@ -87,6 +87,22 @@ export interface UserIntegrationCallResult {
   code?: string;
 }
 
+/**
+ * A poll action that answered with a FAILURE ENVELOPE, thrown with the envelope's code intact.
+ *
+ * The code used to be flattened into the message text, so the supervisor could not tell
+ * `needs_credentials` - a halt waiting on a PERSON, where every retry opens a browser against the
+ * same sign-in wall and parks another ceremony - from an ordinary transient failure its
+ * seconds-first backoff ladder exists for. Found live (2026-09-01): a citius listener retried a
+ * credential halt at 1s/2s/4s…, each retry a fresh browser run against a real portal.
+ */
+export class PollActionError extends Error {
+  constructor(message: string, readonly code?: string) {
+    super(message);
+    this.name = 'PollActionError';
+  }
+}
+
 export interface UserDefinedPollDeps {
   /** The user-defined integration action executor, bound to the trigger's org + owner. */
   call(input: { integrationKey: string; actionName: string; args: Record<string, unknown> }): Promise<UserIntegrationCallResult>;
@@ -143,8 +159,9 @@ export async function pollUserDefinedSource(
   // any state (or enqueuing anything) for a listener that no longer exists.
   if (deps.isCancelled?.()) return { polled: true, enqueued: 0, cursorAdvanced: false };
   if (!result.success) {
-    throw new Error(
+    throw new PollActionError(
       `poll action "${actionName}" on ${trigger.integrationKey} failed${result.code ? ` (${result.code})` : ''}: ${result.error ?? 'unknown'}`,
+      result.code,
     );
   }
 

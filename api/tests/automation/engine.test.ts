@@ -576,6 +576,27 @@ describe('runAutomation', () => {
     expect(hoisted.act).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://portal.tribunais.example' });
   });
 
+  it('a navigate whose template resolved to NOTHING halts naming the template - the fixer must not invent a destination (found live, 2026-09-01)', async () => {
+    // The live chain this pins: `{{config.portal_url}}` with no config values resolves to '', the
+    // old recoverable "missing url" throw handed the step to the rehearsal fixer, and the fixer -
+    // whose prompt teaches "navigate_failed usually wants replace_current with a different URL" -
+    // authored the REAL CITIUS portal from world knowledge and drove it. The address of a navigate
+    // is the owner's fact; a run that lost it must say which template emptied and stop.
+    hoisted.automations.set('auto-1', automation([{
+      id: 's1', description: 'abrir', type: 'navigate', url: '{{config.portal_url}}',
+    }]));
+
+    const result = await runAutomation('auto-1', ctx()); // NO configValues - the seam-drop shape
+
+    expect(result.status).toBe('failed');
+    const run = hoisted.runs.get('auto-1:' + result.runId);
+    expect(run.steps[0].error.recoverable).toBe(false);
+    expect(run.steps[0].error.message).toContain('{{config.portal_url}}');
+    // The browser was never driven anywhere, and the fixer was never asked for a patch.
+    expect(hoisted.act).not.toHaveBeenCalled();
+    expect(hoisted.proposePatch).not.toHaveBeenCalled();
+  });
+
   it('resolves the step DESCRIPTION and expectedOutcome the vision model is given', async () => {
     hoisted.resolvePlaywrightAction.mockResolvedValue({
       action: { kind: 'click', selector: '#pesquisar' },

@@ -156,6 +156,44 @@ describe('listener supervisor — user-defined branch routing (2A-S4)', () => {
   });
 });
 
+describe('listener supervisor — a poll WAITING ON A PERSON parks instead of retrying (found live, 2026-09-01)', () => {
+  it('needs_credentials never enters the seconds-first ladder: one poll, an audit row, then parked past the waiting floor', async () => {
+    // The live shape this pins: a citius listener whose poll action halted `needs_credentials`
+    // was retried at 1s/2s/4s… - and every retry EXECUTED the action, driving a fresh headed
+    // browser into the same sign-in wall and parking one more ceremony. Waiting is not failing:
+    // the next poll must come no sooner than the trigger's own cadence (floored at the ladder's
+    // slowest rung), and the failure streak must not advance.
+    let calls = 0;
+    const callUser = async (): Promise<UserIntegrationCallResult> => {
+      calls += 1;
+      return {
+        success: false,
+        code: 'needs_credentials',
+        error: 'A sequência de passos está à espera de uma credencial para continuar.',
+      };
+    };
+    const trigger = mkTrigger('trg-wait', {
+      integrationKey: 'imap',
+      eventName: 'message.received',
+      pollConfig: { actionName: 'fetch_messages', intervalMs: 15 },
+    });
+    const { sup, inserted, failures } = harness([trigger], async () => {
+      throw new Error('callPlatform must not be reached for a user-defined listener');
+    }, callUser);
+
+    await sup.start();
+    expect(await waitUntil(() => calls === 1)).toBe(true);
+    // The wait is VISIBLE (audit row), not silent…
+    expect(await waitUntil(() => failures.some((f) => f.id === 'trg-wait'))).toBe(true);
+    // …and it is a PARK, not a ladder: the first ladder rung is 1s, so a window comfortably past
+    // it seeing no second call is the discriminating observation.
+    await new Promise((r) => setTimeout(r, 1_200));
+    expect(calls).toBe(1);
+    expect(inserted.size).toBe(0);
+    await sup.stop();
+  }, 10_000);
+});
+
 describe('listener supervisor — isolation (a failing listener never starves a healthy one)', () => {
   it('a poll that always fails backs off (bumpFailure) without throwing or blocking a sibling', async () => {
     const call = async (t: SupervisorTrigger): Promise<PlatformCallResult> =>
