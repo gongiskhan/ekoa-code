@@ -79,9 +79,19 @@ export type DefinitionVisibility = 'private' | 'org' | 'global';
 export const LEGACY_RUNTIME_ORG = '__legacy_runtime__';
 export const LEGACY_RUNTIME_USER = '__legacy_runtime__';
 
-/** How a definition came to exist (provenance for A2's fork/legacy-migration flows). */
+/** How a definition came to exist (provenance for A2's fork/legacy-migration flows).
+ *
+ * `recipe-overlay` (D-RECIPE-OVERLAY, 2026-09-01): NOT a definition at all, but the tenant's
+ * RECIPE CARRIER for a key the org resolves from the shipped baseline or a foreign `global` row.
+ * Recipes are tenant data addressed at `definitionIdFor(orgId, key)` - the id this row occupies -
+ * while the PACKAGE must keep resolving from its source so shipped updates still reach the org.
+ * Every definition-resolution surface therefore SKIPS overlay rows (`isRecipeOverlay`); only the
+ * recipe store's direct-by-id reads and writes see them. A later real save at the same key
+ * upgrades the row in place through `create`'s replace path, which already carries recipes
+ * forward.
+ */
 export interface IntegrationDefinitionOrigin {
-  kind: 'authored' | 'forked' | 'legacy-runtime' | 'baseline-override';
+  kind: 'authored' | 'forked' | 'legacy-runtime' | 'baseline-override' | 'recipe-overlay';
   /** The `_id` of the definition this one was forked/derived from (may be another org's). */
   sourceDefinitionId?: string;
   /** The org that owned the source (recorded for a cross-org fork). */
@@ -244,6 +254,16 @@ export class IntegrationDefinitionStoreError extends Error {
  */
 export function definitionIdFor(orgId: string, key: string): string {
   return createHash('sha256').update(JSON.stringify([orgId, key])).digest('hex');
+}
+
+/**
+ * Is this row a tenant RECIPE CARRIER rather than a definition (D-RECIPE-OVERLAY)? Every surface
+ * that resolves, lists or publishes DEFINITIONS must skip a row this answers true for - the org's
+ * package keeps resolving from the shipped baseline / global tier, which is what lets shipped
+ * updates keep reaching an org that has learned recipes.
+ */
+export function isRecipeOverlay(doc: Pick<IntegrationDefinitionDoc, 'origin'> | null | undefined): boolean {
+  return doc?.origin?.kind === 'recipe-overlay';
 }
 
 /**
@@ -670,7 +690,11 @@ export class IntegrationDefinitionStore {
    */
   async getForActor(actor: Actor, key: string): Promise<IntegrationDefinitionDoc | null> {
     const own = await this.store.get(definitionIdFor(actor.orgId, key));
-    if (own && isDefinitionVisibleTo(own, actor)) return own;
+    // A recipe-overlay row is a RECIPE CARRIER, not a definition (D-RECIPE-OVERLAY): resolution
+    // falls through to the global tier / disk baseline exactly as if the org had no row, so the
+    // shipped package keeps answering - with its updates - while the org's recipes ride the
+    // overlay through the recipe store's own direct-by-id reads.
+    if (own && !isRecipeOverlay(own) && isDefinitionVisibleTo(own, actor)) return own;
 
     const globals = (await this.store.find({ key, visibility: 'global' })).filter(
       (g) => g.orgId !== actor.orgId, // the actor's own org row was already considered above
@@ -748,7 +772,9 @@ export class IntegrationDefinitionStore {
     const inOrg = await this.store.find({ orgId: actor.orgId });
     const globals = await this.store.find({ visibility: 'global' });
     const byId = new Map<string, IntegrationDefinitionDoc>();
-    for (const row of inOrg) if (isDefinitionVisibleTo(row, actor)) byId.set(row._id, row);
+    // Recipe overlays are carriers, not definitions (D-RECIPE-OVERLAY): listed nowhere, so the
+    // shipped baseline stays the grid entry and the builder never opens a carrier for editing.
+    for (const row of inOrg) if (!isRecipeOverlay(row) && isDefinitionVisibleTo(row, actor)) byId.set(row._id, row);
     for (const row of globals) byId.set(row._id, row); // global is visible to every actor
     if (actor.role === 'super-admin') {
       for (const row of await this.store.find({ orgId: LEGACY_RUNTIME_ORG })) {
@@ -1055,6 +1081,9 @@ export class IntegrationDefinitionStore {
   ): Promise<SetVisibilityResult> {
     const row = await this.store.get(id);
     if (!row || !isDefinitionVisibleTo(row, actor)) return { verdict: 'notfound' };
+    // A recipe carrier is not a package and must never become one org's publication of a shipped
+    // key (D-RECIPE-OVERLAY): its actions are stubs and its recipes are one tenant's session data.
+    if (isRecipeOverlay(row)) return { verdict: 'notfound' };
     const verdict = this.visibilityWriteVerdict(row, actor, 'global');
     if (verdict) return verdict;
     let raced = false;

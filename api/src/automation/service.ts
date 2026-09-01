@@ -1466,7 +1466,7 @@ export interface ActionRunDeps {
   /** The engine entry. Injected only so the learn/heal wiring can be driven deterministically. */
   run?: typeof runAutomation;
   /** The org-scoped recipe writes. Default: the real store. */
-  putRecipe?: (orgId: string, key: string, actionName: string, draft: RecipeDraft, opts: { secrets?: SecretRegistry; learnedRunMs?: number }) => Promise<RecipeWriteResult>;
+  putRecipe?: (orgId: string, key: string, actionName: string, draft: RecipeDraft, opts: { secrets?: SecretRegistry; learnedRunMs?: number; materialiseForOwner?: string }) => Promise<RecipeWriteResult>;
   supersedeRecipe?: HealDeps['supersedeRecipe'];
   /** K4: the replay usage bump. Best-effort; default: the real store. */
   recordReplay?: (orgId: string, key: string, actionName: string, input: { ms?: number }) => Promise<void>;
@@ -2131,6 +2131,9 @@ async function learnFromRun(args: {
       const written = await putRecipe(input.orgId, integrationKey, actionName, draft, {
         secrets,
         ...(runMs !== undefined ? { learnedRunMs: runMs } : {}),
+        // D-RECIPE-OVERLAY: an org learning on a SHIPPED package has no definition row; naming the
+        // run's owner lets the store materialise the org's recipe-carrier row and store anyway.
+        materialiseForOwner: input.ownerUserId,
       });
       if (written.verdict === 'notfound') {
         // NOT SILENT (the `global`-definition case). A recipe is tenant data and is written onto the

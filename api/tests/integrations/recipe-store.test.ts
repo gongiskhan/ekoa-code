@@ -520,3 +520,102 @@ describe('the compile → store → replay round trip', () => {
     expect((await recipes.getRecipe('orgA', 'citius', 'list_processos'))?.goal).toBe('v1');
   });
 });
+
+describe('D-RECIPE-OVERLAY: an org learning on a SHIPPED package stores onto a materialised carrier', () => {
+  // The live gap this closes (found 2026-09-01 completing the citius acceptance loop): recipes are
+  // tenant data on the org's OWN row, and an org running the shipped `citius` package has none -
+  // so the whole learn pipeline worked end to end and then vanished at `notfound`. The carrier row
+  // takes the recipe at the deterministic id the store already addresses, while DEFINITION
+  // resolution skips it (`isRecipeOverlay`), so the shipped package keeps answering and updating.
+  const owner = 'userA1';
+
+  it('materialises the carrier, stores version 1, and stays invisible to definition resolution', async () => {
+    await integrationDefinitions.deleteMany({}); // the org has NO row - the shipped-package shape
+    const out = await recipes.putRecipe('orgA', 'citius', 'consultar_notificacoes', recipeDraft('aprender'), {
+      materialiseForOwner: owner,
+    });
+    expect(out.verdict).toBe('ok');
+
+    const carrier = await definitions.getById(ID());
+    expect(carrier?.origin?.kind).toBe('recipe-overlay');
+    expect(carrier?.userId).toBe(owner);
+    expect(carrier?.visibility).toBe('private');
+
+    // The recipe reads back through every ordinary path…
+    expect((await recipes.getRecipe('orgA', 'citius', 'consultar_notificacoes'))?.version).toBe(1);
+    expect((await recipes.getRecipeForActor(author, 'citius', 'consultar_notificacoes'))?.version).toBe(1);
+
+    // …while DEFINITION resolution does not see the carrier: `getForActor` falls through (null
+    // here, no global row in this suite - exactly what lets the registry answer the disk
+    // baseline), and the list never shows it.
+    expect(await definitions.getForActor(author, 'citius')).toBeNull();
+    expect((await definitions.listForActor(author)).some((d) => d.key === 'citius')).toBe(false);
+  });
+
+  it('without materialiseForOwner a missing row still answers notfound - the pre-overlay contract', async () => {
+    await integrationDefinitions.deleteMany({});
+    const out = await recipes.putRecipe('orgA', 'citius', 'consultar_notificacoes', recipeDraft('aprender'));
+    expect(out.verdict).toBe('notfound');
+    expect(await definitions.getById(ID())).toBeNull();
+  });
+
+  it('refuses to materialise for an action the shipped baseline does not declare', async () => {
+    await integrationDefinitions.deleteMany({});
+    const out = await recipes.putRecipe('orgA', 'citius', 'accao_inventada', recipeDraft('x'), {
+      materialiseForOwner: owner,
+    });
+    expect(out.verdict).toBe('notfound');
+    expect(await definitions.getById(ID())).toBeNull();
+  });
+
+  it('the heal path needs no special case: a supersede on the carrier bumps and records lineage', async () => {
+    await integrationDefinitions.deleteMany({});
+    await recipes.putRecipe('orgA', 'citius', 'consultar_notificacoes', recipeDraft('v1'), { materialiseForOwner: owner });
+    const healed = await recipes.supersedeRecipe('orgA', 'citius', 'consultar_notificacoes', {
+      ...recipeDraft('v2'),
+      reason: 'endpoint moved to /api/v2',
+    });
+    expect(healed.verdict).toBe('ok');
+    const stored = await recipes.getRecipe('orgA', 'citius', 'consultar_notificacoes');
+    expect(stored?.version).toBe(2);
+    expect(stored?.supersedes?.reason).toBe('endpoint moved to /api/v2');
+  });
+
+  it('a later REAL save at the key upgrades the carrier in place and carries the recipe forward', async () => {
+    await integrationDefinitions.deleteMany({});
+    await recipes.putRecipe('orgA', 'citius', 'consultar_notificacoes', recipeDraft('learned'), { materialiseForOwner: owner });
+
+    const upgraded = await definitions.create(
+      {
+        ...definitionDraft(),
+        actions: [
+          ...definitionDraft().actions,
+          { actionName: 'consultar_notificacoes', description: 'as notificações', mutates: false },
+        ],
+      },
+      { actor: author, onConflict: 'replace' },
+    );
+
+    // The row is a definition again (the carrier provenance is gone with the caller's own input)…
+    expect(upgraded.origin?.kind).toBeUndefined();
+    // …it resolves and lists like any authored row…
+    expect((await definitions.getForActor(author, 'citius'))?._id).toBe(ID());
+    // …and the learning survived the upgrade, exactly as an ordinary re-save carries it.
+    expect((await recipes.getRecipe('orgA', 'citius', 'consultar_notificacoes'))?.goal).toBe('learned');
+  });
+
+  it('a carrier can never be published: the publish door answers notfound', async () => {
+    await integrationDefinitions.deleteMany({});
+    await recipes.putRecipe('orgA', 'citius', 'consultar_notificacoes', recipeDraft('v1'), { materialiseForOwner: owner });
+    const admin: Actor = { userId: 'root', orgId: 'orgA', role: 'super-admin' };
+    const out = await definitions.publishSnapshot(ID(), admin, {
+      publishedAt: new Date().toISOString(),
+      publishedBy: 'root',
+      configSchema: [],
+      actions: [],
+      skillMd: '',
+      contentHash: 'h',
+    } as never);
+    expect(out.verdict).toBe('notfound');
+  });
+});

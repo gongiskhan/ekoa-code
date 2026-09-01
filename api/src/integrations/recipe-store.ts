@@ -45,6 +45,7 @@ import {
   isDefinitionVisibleTo,
   type IntegrationDefinitionDoc,
 } from './definition-store.js';
+import { getBaselineDefinition } from './definitions.js';
 import { looksLikeLiteralSecret } from './publish-scrub.js';
 
 /** What a caller may author: everything except the two fields the store owns (`version`) or stamps
@@ -164,23 +165,35 @@ export class IntegrationRecipeStore {
     key: string,
     actionName: string,
     draft: RecipeDraft,
-    opts: { secrets?: SecretRegistry; learnedRunMs?: number } = {},
+    opts: { secrets?: SecretRegistry; learnedRunMs?: number; materialiseForOwner?: string } = {},
   ): Promise<RecipeWriteResult> {
     assertCarriesNoValues(draft, opts.secrets);
     assertAnswerPointsAtACall(draft);
-    return this.writeRecipe(orgId, key, actionName, (current) => {
-      if (current) return { refuse: { verdict: 'exists', recipe: current } };
-      return {
-        recipe: {
-          ...cloneDraft(draft),
-          version: 1,
-          compiledAt: this.nowIso(),
-          // K4: the "before" of the speed story, from the learning run itself. Store-owned with
-          // the rest of `stats` - `RecipeDraft` excludes the field, so a caller cannot fake it.
-          stats: { replayCount: 0, ...(opts.learnedRunMs !== undefined ? { learnedRunMs: opts.learnedRunMs } : {}) },
-        },
-      };
-    });
+    const write = (): Promise<RecipeWriteResult> =>
+      this.writeRecipe(orgId, key, actionName, (current) => {
+        if (current) return { refuse: { verdict: 'exists', recipe: current } };
+        return {
+          recipe: {
+            ...cloneDraft(draft),
+            version: 1,
+            compiledAt: this.nowIso(),
+            // K4: the "before" of the speed story, from the learning run itself. Store-owned with
+            // the rest of `stats` - `RecipeDraft` excludes the field, so a caller cannot fake it.
+            stats: { replayCount: 0, ...(opts.learnedRunMs !== undefined ? { learnedRunMs: opts.learnedRunMs } : {}) },
+          },
+        };
+      });
+    const first = await write();
+    // D-RECIPE-OVERLAY (2026-09-01): an org running a SHIPPED package has no definition row of its
+    // own, so the write above answers `notfound` - and before this existed that was terminal: no
+    // config-addressed shipped package could ever learn. When the learning caller names the run's
+    // owner, the org's RECIPE CARRIER row is materialised from the baseline package and the write
+    // retried once. Definition resolution skips carrier rows (`isRecipeOverlay`), so the shipped
+    // package keeps answering - and keeps updating - while the recipes ride the carrier.
+    if (first.verdict !== 'notfound' || !opts.materialiseForOwner) return first;
+    const materialised = await this.materialiseOverlayRow(orgId, key, actionName, opts.materialiseForOwner);
+    if (!materialised) return first;
+    return write();
   }
 
   /**
@@ -401,6 +414,47 @@ export class IntegrationRecipeStore {
     if (cleared) return { verdict: 'ok', recipe: cleared };
     if (!written) return { verdict: 'notfound' };
     return { verdict: 'ok', recipe: written };
+  }
+
+  /**
+   * Materialise the org's RECIPE CARRIER row for a shipped key (D-RECIPE-OVERLAY). Insert-only and
+   * idempotent: an existing row of ANY kind at the id wins untouched (a real definition must never
+   * be downgraded to a carrier; a concurrent learn's carrier is the same carrier - the caller
+   * simply retries its CAS against whatever row now exists).
+   *
+   * ONLY when the baseline actually ships the key AND the action: a carrier for a key the org does
+   * not resolve would be a row nothing reads, and a recipe for an action the package does not
+   * declare has no owner to describe. The action stubs are faithful copies purely so the row has a
+   * valid shape - resolution never reads them (`isRecipeOverlay` skips the row everywhere).
+   */
+  private async materialiseOverlayRow(
+    orgId: string,
+    key: string,
+    actionName: string,
+    ownerUserId: string,
+  ): Promise<boolean> {
+    if (orgId === '' || key === '' || ownerUserId === '') return false;
+    const baseline = getBaselineDefinition(key);
+    if (!baseline || !baseline.actions.some((a) => a.actionName === actionName)) return false;
+    const nowIso = this.nowIso();
+    const doc = {
+      _id: definitionIdFor(orgId, key),
+      orgId,
+      userId: ownerUserId,
+      key,
+      visibility: 'private',
+      authType: baseline.authType ?? 'none',
+      configSchema: [],
+      // Recipes stripped from the copies for the same reason `create` strips them: this store is
+      // the one author of recipes, and it writes its own next.
+      actions: baseline.actions.map((a) => (a.recipe === undefined ? a : (({ recipe: _r, ...rest }) => rest)(a))),
+      skillMd: '',
+      origin: { kind: 'recipe-overlay' },
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    } as unknown as IntegrationDefinitionDoc;
+    await this.store.insert(doc).catch(() => false);
+    return true;
   }
 
   /** The org's row for `key`, or null. The id derivation IS the tenancy gate; the `orgId` re-check

@@ -7020,3 +7020,39 @@ a wrong one would discard good sessions. The residual is stated in the finding.
   cite each other. The residue is ledgered rather than hidden: a blocked poll still opens a window to
   discover it is blocked, just 24 times a day instead of 1440.
 
+
+## 2026-09-01 - D-RECIPE-OVERLAY: a shipped package learns onto a tenant recipe-carrier row, and resolution skips it
+
+THE GAP (findings: `a-shipped-package-cannot-learn-a-recipe-because-the-org-has-no-definition-row`).
+Recipes are tenant data written onto the org's OWN definition row (`definitionIdFor(orgId, key)`,
+recipe-store's tenancy gate). An org running the SHIPPED `citius` package has no row, so the first
+complete live pass of the learn pipeline ended at an honest `notfound` and the runbook's own
+"Receita v1 badge" leg was unreachable for every shipped package.
+
+THE OPTIONS WERE PUT TO THE OWNER, WHO CHOSE THE OVERLAY (2026-09-01): (a) fork-on-learn (a
+full-copy `baseline-override` row) was rejected because a tenant row SHADOWS the baseline in
+`getForActor`/`listDefinitionsFor`, silently cutting the org off from shipped-package updates;
+(c) recipes on the config row was rejected as a second recipe home against the store's one-writer
+argument. (b) - the thin overlay - keeps both properties.
+
+THE SHAPE. A row at the deterministic id with `origin.kind: 'recipe-overlay'` is a RECIPE CARRIER,
+not a definition: `visibility: 'private'` to the learning owner (the mint's precedent), action
+stubs copied from the baseline purely for row validity, recipes stripped from the copies (the
+recipe store authors its own). Every definition-resolution surface skips it (`isRecipeOverlay` in
+`getForActor`, `listForActor`, `publishSnapshot`), so the shipped package keeps answering - and
+keeps UPDATING - while the org's recipes ride the carrier through the recipe store's existing
+direct-by-id reads and writes, which needed no change at all. Materialised inside `putRecipe`
+(`materialiseForOwner`, passed by `learnFromRun` with the run owner's id), only when the disk
+baseline actually ships the key and the action, insert-only and idempotent. A later REAL save at
+the key upgrades the carrier through `create`'s replace path, whose carry rules already preserve
+the learned recipes; the carrier provenance goes with the caller's own input.
+
+WHAT IS DEFERRED, STATED: an org learning on a FOREIGN `global` row (another tenant's publication,
+not the disk baseline) still cannot store - `materialiseOverlayRow` consults only
+`getBaselineDefinition`. That is the smaller half of the gap (every shipped package is baseline),
+and widening it means deciding whose action stubs a carrier copies when the publisher republishes;
+it stays in the findings entry as the residue.
+
+Suite: `tests/integrations/recipe-store.test.ts` (D-RECIPE-OVERLAY block - materialise + invisible
+to resolution, the pre-overlay notfound contract, undeclared-action refusal, supersede-on-carrier,
+upgrade-with-carry, publish refusal).
