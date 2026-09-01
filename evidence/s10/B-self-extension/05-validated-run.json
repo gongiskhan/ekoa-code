@@ -1,0 +1,12 @@
+{
+  "success": true,
+  "status": 200,
+  "rowCount": 100,
+  "firstRow": {
+    "userId": 1,
+    "id": 1,
+    "title": "sunt aut facere repellat provident occaecati excepturi optio reprehenderit",
+    "body": "quia et suscipit\nsuscipit recusandae consequuntur expedita et cum\nreprehenderit molestiae ut ut quas totam\nnostrum rerum est autem sunt rem eveniet architecto"
+  },
+  "note": "body truncated in this capture to the first row; the full 100-row payload is public demo data"
+}

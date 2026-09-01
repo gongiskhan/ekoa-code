@@ -1,0 +1,1 @@
+{"outcome":"refused","code":"read_only_match","message":"this goal asks to apagar, and the only action that fits it - \"processos\" - can only read. Nothing here can carry out that change; name the action directly if you meant to read.","candidates":["processos"]}
