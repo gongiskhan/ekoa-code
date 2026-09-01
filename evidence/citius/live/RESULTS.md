@@ -68,3 +68,30 @@ the StrictMode canvas token burn, resume losing {{config.*}}, the credential gat
 steps, config-published values being secret-registered (the redactor ate every captured URL), and
 D-RECIPE-OVERLAY itself. See docs/findings.md 2026-09-01 sections and docs/decisions.md
 D-RECIPE-OVERLAY.
+
+## The inbox rail (runbook section 5, first half) - ARMED live
+
+The `notificacao.recebida` listener's first poll hit the pre-ceremony wall and PARKED (the blocked
+cadence - one attempt, then 15 minutes of silence, exactly as `210c331` promises). Its second poll,
+15 minutes later, went through the captured session:
+
+    [listener-supervisor] cursor did not advance - the provider returned no "highWater" yet;
+                          the listener is armed and will deliver everything it sees from now on
+    listener_state: { cursor: { initializedAt: "2026-09-01T20:04:04Z" }, failures: 0 }
+
+The 5 pre-existing notifications were correctly NOT backfilled (the no-backfill boundary pinned at
+initialization). The remaining observation - a NEW notification flowing through the queue into
+`legal-citius`/`onNotificacaoCitius` triage - needs a notification to arrive after arming plus the
+next poll cycle; that dispatch path stays proven by the deterministic suites (the S9 reference
+schedule and the artifact handler tests).
+
+## Documents in conversation (runbook section 5, second half) - the tool flow works, the names gap is real
+
+Chat, asked "Que documentos tem o processo 1234/26.0T8LSB no Citius?", reached for
+`call_integration_action` -> `citius.listar_documentos_processo` unprompted (the K5 catalog tools
+doing their job) and the 9-step automation COMPLETED against the authenticated portal. But the
+names never reached the chat window: a browser-only vision run records no structured step output,
+so `extractActionRunOutput` answers null and the agent could only promise a follow-up. The
+structured answer arrives exactly when the action learns its recipe (an injected-call replay
+carries the response body - the notificacoes action already answers this way). Same class as the
+S9 ladder notes on `extractActionRunOutput`'s api_call/ekoa_action-only semantics.
