@@ -864,7 +864,11 @@ async function runOrRehearse(
         actor: actorFromCtx(ctx),
         runId,
         automationName: automation.name,
-        steps: workingSteps,
+        // The EXECUTED view, never the authored one (found live, 2026-09-01): the gate's origin
+        // walk parses the last navigate's URL, and an authored `{{config.portal_url}}` yields no
+        // origin at all - so a stored session could never be looked up for ANY automation whose
+        // address is a template, which is every shipped package with a portal_url config field.
+        steps: executableSteps,
         index,
         residentialAvailable: await residentialAvailableNow(),
         // TRUE BY CONSTRUCTION at this point - the guard above just proved both halves. Passing the
@@ -1264,7 +1268,10 @@ async function runOrRehearse(
             actor: actorFromCtx(ctx),
             runId,
             automationName: automation.name,
-            steps: workingSteps,
+            // The EXECUTED view (same 2026-09-01 finding as `resolveAdhocSessionBeforeLease`): the
+            // gate's origin walk must see the address the run will actually drive, not the
+            // authored `{{config.…}}` placeholder, or a session bound to that origin is invisible.
+            steps: executableSteps,
             index: i,
             // THE FLEET FACT CHECKOUT NEEDS. Withholding it is not a neutral omission: it is the
             // statement "no machine of yours can carry residential egress", which refuses every

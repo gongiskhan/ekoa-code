@@ -605,6 +605,40 @@ describe('a re-dispatched run does not ask the human to log in twice', () => {
     expect(loginStep?.visionReasoning).toMatch(/stored session/i);
   });
 
+  it('finds the session behind a {{config.*}} address too - the gate reads the EXECUTED view (found live, 2026-09-01)', async () => {
+    // The same shape with its address AUTHORED AS A TEMPLATE - which is every shipped package with
+    // a portal_url config field. The gate used to walk the AUTHORED steps, parse no origin out of
+    // the placeholder, and never look the session up at all: the run drove into the wall the
+    // ceremony had already answered, and halted asking for it again.
+    await captureSessionWithGrant(actor, {
+      label: HOST,
+      boundOrigins: [HOST],
+      storageState: STORAGE_STATE,
+      metadata: METADATA,
+    });
+    const templated: Automation = {
+      ...adversarial,
+      id: 'auto-templated',
+      steps: [
+        { id: 's_nav', description: 'open the orders page', type: 'navigate', url: '{{config.portal_url}}/orders' },
+        { id: 's_read', description: 'read the orders list', type: 'browser' },
+      ] as Step[],
+    };
+    await automations.insert({ _id: templated.id, ...templated } as never);
+    const log = daemon('s_read');
+    const emitter = recordingEmitter();
+
+    const result = await runAutomation(
+      templated.id,
+      { ...ctx, configValues: { portal_url: `https://${HOST}` } },
+      { emit: emitter.emit },
+    );
+
+    expect(emitter.credentials).toEqual([]);
+    expect(result.status).toBe('completed');
+    expect(log.requests[0]?.sessionState).toEqual(STORAGE_STATE);
+  });
+
   it('still halts when the run has NO session - the guard is about the session, not the step', async () => {
     // Same automation, same wall, nothing captured. If this passed too, the guard above would be
     // walking past every login wall rather than answering one it already had the answer to.
