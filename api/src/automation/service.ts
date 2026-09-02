@@ -1365,6 +1365,15 @@ export interface ActionRunInput {
    * `{{config.…}}` reference resolving to the empty string, which is what it resolved to before.
    */
   configValues?: Record<string, string>;
+  /**
+   * The top-level property names the action DECLARES it returns (`returnSchema.properties`).
+   *
+   * Used by the learn and ONLY when the run produced no structured answer of its own - the
+   * browser-only shape, where identity correlation is not merely absent but unreachable. Optional
+   * at the seam (Rule 7 additive): a caller that omits it gets exactly the previous behaviour, an
+   * action that answers nothing forever.
+   */
+  answerShapeKeys?: readonly string[];
   /** Which action asked (slice P2). Present ⇒ its compiled recipe is tried before the automation
    *  runs, and the run that does happen is instrumented so the action can learn one. Absent ⇒
    *  exactly the pre-P2 behaviour: straight to the automation, learning nothing. */
@@ -1510,6 +1519,15 @@ export interface AutomationBackedCall {
    * invisible precisely while one side sent a field the other never named.
    */
   configValues?: Record<string, string>;
+  /**
+   * The action's DECLARED return property names (`returnSchema.properties`), forwarded onto
+   * `ActionRunInput.answerShapeKeys` so a browser-only learn can name its answer-bearing call.
+   *
+   * Declared on BOTH sides of the seam deliberately, and for the reason written above `configValues`:
+   * the drop that cost a live day was invisible exactly while one side sent a field the other never
+   * named. This one is the same shape of thing, so it gets the same treatment before it can happen.
+   */
+  answerShapeKeys?: readonly string[];
 }
 
 /**
@@ -1557,6 +1575,9 @@ export function automationBackedActionHandler(deps: ActionRunDeps = {}) {
       // 2026-09-01 live fix: both ends existed (the executor sent it, `ActionRunInput` accepted
       // it) and this mapping - the one place the two shapes meet - silently lost it.
       ...(b.configValues !== undefined ? { configValues: b.configValues } : {}),
+      // The action's declared return shape - see the field's docblock. Mapped here, next to the
+      // field whose silent loss on this exact line cost a live day.
+      ...(b.answerShapeKeys !== undefined ? { answerShapeKeys: b.answerShapeKeys } : {}),
     }, deps);
     return {
       success: out.success,
@@ -1961,7 +1982,13 @@ async function learnFromRun(args: {
   if (captured.length === 0) return;
 
   const exchanges = redactCaptures(captured, secrets);
-  const compiled = compileInjectedCalls(exchanges, { inputs: input.args, runOutput });
+  const compiled = compileInjectedCalls(exchanges, {
+    inputs: input.args,
+    runOutput,
+    // The action's DECLARED return properties, used only when `runOutput` is undefined - the
+    // browser-only shape, where identity correlation is unreachable rather than merely absent.
+    ...(input.answerShapeKeys ? { declaredAnswerKeys: input.answerShapeKeys } : {}),
+  });
   if (compiled.refusedBecause !== undefined) {
     // NEVER SILENT. A refusal here means this action will keep paying for a full vision run forever,
     // which is a real (and correct) cost the operator should be able to see a reason for.
@@ -1999,11 +2026,13 @@ async function learnFromRun(args: {
     // artefact the injected-call path exists to avoid, and the flow's DOM work is already the
     // automation's authored steps - which still run whenever the replay cannot.
     scriptedSteps: [],
-    // WHICH CALL IS THE ANSWER, as the compile correlated it against this run's own output. Absent
-    // when the run answered nothing - which is every browser-only automation this repo ships, and
-    // is the honest thing for the replay to reproduce.
-    ...(compiled.answerCallIndex !== undefined
-      ? { answersWith: { callIndex: compiled.answerCallIndex, matchedBy: 'run-output-identity' as const } }
+    // WHICH CALL IS THE ANSWER, and HOW the compile knows - carried out of the compile rather than
+    // assumed here. `run-output-identity` when this run's own answer matched a captured body;
+    // `declared-return-shape` when it answered nothing at all (every browser-only automation) and
+    // the action's own `returnSchema` named the body instead. Absent when neither could speak, which
+    // stays the honest thing for the replay to reproduce.
+    ...(compiled.answerCallIndex !== undefined && compiled.answerMatchedBy !== undefined
+      ? { answersWith: { callIndex: compiled.answerCallIndex, matchedBy: compiled.answerMatchedBy } }
       : {}),
     lessons: deriveLessons(exchanges),
     capturedCallsRef: captureId,

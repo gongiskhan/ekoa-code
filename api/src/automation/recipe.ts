@@ -240,7 +240,7 @@ function parseAnswersWith(
   if (typeof raw !== 'object') return 'invalid';
   const { callIndex, matchedBy } = raw as { callIndex?: unknown; matchedBy?: unknown };
   if (typeof callIndex !== 'number' || !Number.isInteger(callIndex) || callIndex < 0 || callIndex >= callCount) return 'invalid';
-  if (matchedBy !== 'run-output-identity') return 'invalid';
+  if (matchedBy !== 'run-output-identity' && matchedBy !== 'declared-return-shape') return 'invalid';
   return { callIndex, matchedBy };
 }
 

@@ -656,6 +656,16 @@ export async function executeUserIntegrationAction(
       // plaintext projection the config row already carries, which is what a package's own
       // `configSchema` fields are (a portal address, a cedula, a region). Without it a shipped
       // template could not be pointed at anything but the address hardcoded in its own JSON.
+      // WHAT THIS ACTION SAYS IT RETURNS, so a browser-only learn can name the call that carries it
+      // (`network-capture.ts matchesDeclaredAnswerShape`). Read off the action's own `returnSchema`
+      // and never inferred: an action that declares no properties supplies no keys and keeps the
+      // previous behaviour, which is to answer nothing.
+      ...((): { answerShapeKeys?: readonly string[] } => {
+        const props = (action.returnSchema as { properties?: unknown } | undefined)?.properties;
+        if (!props || typeof props !== 'object' || Array.isArray(props)) return {};
+        const keys = Object.keys(props as Record<string, unknown>);
+        return keys.length > 0 ? { answerShapeKeys: keys } : {};
+      })(),
       ...((): { configValues?: Record<string, string> } => {
         const values = publicConfigWithDefaults(def.configSchema, config?.publicConfigValues);
         return values ? { configValues: values } : {};

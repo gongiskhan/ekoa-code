@@ -118,6 +118,157 @@ function compiled(
   return out.calls;
 }
 
+describe('compileInjectedCalls - the DECLARED answer, for a run that answered nothing', () => {
+  /**
+   * WHY THIS MATCHER EXISTS. `extractActionRunOutput` reads the last api_call/ekoa_action step, and
+   * a browser-driven automation has neither - so `runOutput` is undefined for EVERY shipped
+   * browser-only package, `answerCallIndex` was always absent, and `ReplayResult.data` was always
+   * undefined. That was documented as a property ("its replay answers nothing either"), and it is
+   * true, but it also means `listar_documentos_processo` can never answer ANYTHING, learned or not:
+   * a lawyer asks the assistant which documents a process holds, the run completes, the reply is
+   * empty. Identity is not merely absent here, it is unreachable.
+   *
+   * WHAT KEEPS IT FROM BEING THE GUESS THIS MODULE REFUSES: it never ranks and never takes a
+   * last-wins. It asks whether a captured body carries every property the ACTION'S OWN
+   * `returnSchema` declares, and two candidates is a refusal rather than a tie-break.
+   */
+  const documentos = () => capture({
+    url: 'https://portal.example/api/processo/1234/documentos?pagina=1',
+    responseBody: '{"processo":"1234","documentos":[{"nome":"Contestacao.pdf"}],"total":1}',
+  });
+  /** The ordinary internal call underneath the flow - a notification badge, a session ping. It is
+   *  the call "the last JSON body" would wrongly hand back. */
+  const noise = () => capture({
+    url: 'https://portal.example/api/badge?processo=1234',
+    responseBody: '{"unread":3}',
+  });
+
+  it('names the call whose body carries every DECLARED property', () => {
+    const out = compileInjectedCalls(redactCaptures([documentos()]), {
+      inputs: { processo: '1234' },
+      runOutput: undefined,
+      declaredAnswerKeys: ['processo', 'documentos', 'total'],
+    });
+    expect(out.refusedBecause).toBeUndefined();
+    expect(out.answerCallIndex).toBe(0);
+    expect(out.answerMatchedBy).toBe('declared-return-shape');
+  });
+
+  it('is not "the last JSON call" - the noise underneath the flow does not become the answer', () => {
+    const out = compileInjectedCalls(redactCaptures([documentos(), noise()]), {
+      inputs: { processo: '1234' },
+      runOutput: undefined,
+      declaredAnswerKeys: ['processo', 'documentos', 'total'],
+    });
+    // The badge call is captured and compiled, and is emphatically NOT the answer.
+    expect(out.calls.length).toBe(2);
+    expect(out.answerCallIndex).toBe(0);
+  });
+
+  it('REFUSES to choose when two captured bodies both satisfy the declaration', () => {
+    const otherEndpoint = capture({
+      url: 'https://portal.example/api/anexos?processo=1234',
+      responseBody: '{"processo":"1234","documentos":[{"nome":"Outro.pdf"}],"total":1}',
+    });
+    const ambiguous = compileInjectedCalls(redactCaptures([documentos(), otherEndpoint]), {
+      inputs: { processo: '1234' },
+      runOutput: undefined,
+      declaredAnswerKeys: ['processo', 'documentos', 'total'],
+    });
+    expect(ambiguous.calls.length).toBe(2);
+    // Answering nothing is strictly better than answering the wrong body under success:true.
+    expect(ambiguous.answerCallIndex).toBeUndefined();
+    expect(ambiguous.answerMatchedBy).toBeUndefined();
+  });
+
+  it('A PAGINATED LIST REFUSES, and that is the honest answer rather than a shortfall', () => {
+    // THE LIMIT OF THIS MATCHER, pinned so nobody discovers it in production. `pagina` is the
+    // automation's own paging, not a caller argument, so it is never holed and the two pages do NOT
+    // dedupe to one template: they are two compiled calls, both satisfying the declaration, so the
+    // matcher refuses.
+    //
+    // AND REFUSING IS RIGHT. The authored run's answer for a paginated action is the AGGREGATE the
+    // vision pass walked, which no single captured body equals - so naming page 1 as "the answer"
+    // would silently drop every later page under `success: true`, which is exactly the quiet
+    // wrongness the identity matcher was written to prevent. Serving these actions needs a replay
+    // that can follow pagination, which is a feature and not a matcher.
+    //
+    // CONSEQUENCE, stated plainly: the shipped `listar_documentos_processo` and
+    // `consultar_notificacoes` are both paginated, so they still answer nothing. The single-resource
+    // actions (`consultar_processo`, `obter_documento`) are the ones this closes.
+    const page2 = capture({
+      url: 'https://portal.example/api/processo/1234/documentos?pagina=2',
+      responseBody: '{"processo":"1234","documentos":[{"nome":"Sentenca.pdf"}],"total":1}',
+    });
+    const out = compileInjectedCalls(redactCaptures([documentos(), page2]), {
+      inputs: { processo: '1234' },
+      runOutput: undefined,
+      declaredAnswerKeys: ['processo', 'documentos', 'total'],
+    });
+    expect(out.calls.length).toBe(2);               // two pages, two templates, two calls
+    expect(out.answerCallIndex).toBeUndefined();    // and no answer, deliberately
+  });
+
+  it('a body missing ONE declared property is not the answer', () => {
+    const partial = capture({ responseBody: '{"processo":"1234","documentos":[]}' }); // no `total`
+    const out = compileInjectedCalls(redactCaptures([partial]), {
+      inputs: { processo: '1234' },
+      runOutput: undefined,
+      declaredAnswerKeys: ['processo', 'documentos', 'total'],
+    });
+    expect(out.answerCallIndex).toBeUndefined();
+  });
+
+  it('an ARRAY or scalar body cannot satisfy a declaration of named properties', () => {
+    for (const body of ['[{"processo":"1234"}]', '"just a string"', 'null', '42']) {
+      const out = compileInjectedCalls(redactCaptures([capture({ responseBody: body })]), {
+        inputs: { processo: '1234' },
+        runOutput: undefined,
+        declaredAnswerKeys: ['processo'],
+      });
+      expect(out.answerCallIndex, body).toBeUndefined();
+    }
+  });
+
+  it('NEVER overrides or stands in for an identity match', () => {
+    // With a real runOutput the strong matcher decides, and the declared one must not speak at all.
+    const ANSWER = { unread: 3 };
+    const out = compileInjectedCalls(redactCaptures([documentos(), noise()]), {
+      inputs: { processo: '1234' },
+      runOutput: ANSWER,
+      declaredAnswerKeys: ['processo', 'documentos', 'total'],
+    });
+    expect(out.answerCallIndex).toBe(1);              // the badge - because the RUN said so
+    expect(out.answerMatchedBy).toBe('run-output-identity');
+  });
+
+  it('declares nothing => answers nothing, exactly as before this matcher existed', () => {
+    const out = compileInjectedCalls(redactCaptures([documentos()]), {
+      inputs: { processo: '1234' },
+      runOutput: undefined,
+    });
+    expect(out.answerCallIndex).toBeUndefined();
+    expect(out.answerMatchedBy).toBeUndefined();
+  });
+
+  it('still REFUSES a declared answer whose call cannot carry the caller\'s argument', () => {
+    // The guard that stops every later caller being handed THIS run's process. The declared matcher
+    // does not bypass it: the argument reaches the wire via the badge call but not via the answer.
+    const answerWithoutTheArg = capture({
+      url: 'https://portal.example/api/documentos/recentes',
+      responseBody: '{"processo":"1234","documentos":[],"total":0}',
+    });
+    const carriesTheArg = capture({ url: 'https://portal.example/api/badge?processo=1234', responseBody: '{"unread":1}' });
+    const out = compileInjectedCalls(redactCaptures([answerWithoutTheArg, carriesTheArg]), {
+      inputs: { processo: '1234' },
+      runOutput: undefined,
+      declaredAnswerKeys: ['processo', 'documentos', 'total'],
+    });
+    expect(out.calls).toEqual([]);
+    expect(out.refusedBecause).toMatch(/reach the wire but not the call that produced/);
+  });
+});
+
 describe('compileInjectedCalls - the distillation', () => {
   it('replaces an input value with a hole, in raw and percent-encoded form', () => {
     const calls = compiled(

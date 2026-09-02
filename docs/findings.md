@@ -4294,6 +4294,55 @@ committed test:
   one that ships. The dev-madrid test pinning the `needs_credentials` code path is kept beside its
   `awaiting_daemon`-status sibling in `listener-supervisor.test.ts`.
 
+## Recently fixed - 2026-09-02 a browser-only action could never answer anything
+
+- **`a-browser-only-action-answers-nothing-even-after-it-learns-a-recipe`** (**PARTLY FIXED**
+  2026-09-02, **HIGH**, correctness; the gap was observed on dev-madrid, the diagnosis and fix here).
+  The dev-madrid live pass found that asking chat "que documentos tem o processo X" reached
+  `citius.listar_documentos_processo` unprompted and the automation COMPLETED against the
+  authenticated portal - and the document names never reached the chat window. It recorded the cause
+  correctly (a browser-only vision run records no structured step output, so `extractActionRunOutput`
+  answers null) and then recorded the WRONG resolution: "the structured answer arrives exactly when
+  the action learns its recipe".
+
+  It does not. `extractActionRunOutput` returns something only for an `api_call`/`ekoa_action` step
+  output; a browser run has neither; so `compileInjectedCalls` receives `runOutput: undefined` and
+  sets no `answerCallIndex`; so the stored recipe has no `answersWith`; so `ReplayResult.ok.data` is
+  `undefined`. The gap was PERMANENT, not first-run-only - a zero-model replay answered nothing
+  either. All three modules already said so; nobody had put the three sentences together. The
+  circularity is that a call can only be NAMED as the answer if the run already answered, and a
+  browser run never does.
+
+  **FIXED for the single-resource shape**, by the route `answersWith`'s own docblock prescribed ("a
+  weaker matcher, if one is ever earned, is a NEW value here rather than this one quietly meaning
+  something else"): `matchedBy: 'declared-return-shape'` names the captured call whose body carries
+  every top-level property the action's `returnSchema` DECLARES. It is a declaration, not a ranking -
+  the rejected alternative, "the last JSON call", is named in that module as a guess that is wrong
+  exactly when it matters. It never speaks where identity can (collected only when `runOutput` is
+  undefined), refuses on two candidates rather than choosing, and passes the SAME argument-coverage
+  guard, so it still cannot name a call that would hand every later caller this run's answer.
+  Threaded executor -> seam -> learn as `answerShapeKeys`, declared on both sides of the seam because
+  the `configValues` drop the day before proved that a field one side sends and the other never names
+  is invisible until it costs a day. Suite: 8 cases in
+  `api/tests/automation/network-capture.test.ts`, the ambiguity refusal mutation-verified.
+
+- **`a-paginated-action-still-answers-nothing-because-its-answer-is-an-aggregate`** (OPEN 2026-09-02,
+  MEDIUM, design - the named residue of the fix above, and it is the half the user actually asked
+  for). A paginated list captures ONE BODY PER PAGE and every page satisfies the declared shape, so
+  the matcher refuses. That refusal is CORRECT and must not be relaxed: the authored run's answer is
+  the AGGREGATE the vision pass walked across pages, no single captured body equals it, and naming
+  page 1 would silently drop every later page under `success: true` - precisely the quiet wrongness
+  the identity matcher exists to prevent. `pagina` is the automation's own paging rather than a
+  caller argument, so it is never holed and the pages do not dedupe to one template.
+
+  CONSEQUENCE, stated plainly: the two actions a lawyer reaches for first,
+  `listar_documentos_processo` and `consultar_notificacoes`, are both paginated and still answer
+  nothing. A process whose documents fit on ONE page does answer, which means the same action answers
+  for some arguments and not others - never wrongly, but surprisingly. CLOSE BY teaching the replay to
+  follow pagination and concatenate on a declared array property (an `answersWith` that names a call
+  plus the array field to union), which is a feature and not a matcher - deliberately not bolted onto
+  this change.
+
 ## Recently fixed - 2026-09-01 a blocked listener opened a browser window on a loop
 
 - **`a-blocked-listener-retries-from-one-second-and-opens-a-window-every-time`** (FIXED 2026-09-01,

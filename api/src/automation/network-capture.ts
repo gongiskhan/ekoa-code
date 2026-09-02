@@ -159,6 +159,15 @@ export interface CompiledCalls {
    * REFUSAL above, because a recipe that cannot reproduce the answer is a recipe that changes it.
    */
   answerCallIndex?: number;
+  /**
+   * WHY that call was chosen, carried out so the caller records the provenance rather than assuming
+   * one. Present exactly when `answerCallIndex` is.
+   *
+   * `run-output-identity` is the strong correlation: the learning run answered, and this call's body
+   * IS that answer. `declared-return-shape` is the weaker one earned for BROWSER-ONLY automations,
+   * which answer nothing at all and so can never be correlated by identity - see the matcher.
+   */
+  answerMatchedBy?: 'run-output-identity' | 'declared-return-shape';
 }
 
 /**
@@ -247,7 +256,18 @@ export interface CompiledCalls {
  */
 export function compileInjectedCalls(
   exchanges: readonly CapturedExchange[],
-  opts: { inputs?: Record<string, unknown>; max?: number; runOutput: unknown },
+  opts: {
+    inputs?: Record<string, unknown>;
+    max?: number;
+    runOutput: unknown;
+    /**
+     * The top-level property names the ACTION DECLARES it returns (`returnSchema.properties`),
+     * used ONLY when `runOutput` is undefined - i.e. for the browser-only automations that can
+     * never be correlated by identity. See `matchesDeclaredAnswerShape`. Absent or empty leaves
+     * the old behaviour exactly: no answer, and a replay that answers nothing.
+     */
+    declaredAnswerKeys?: readonly string[];
+  },
 ): CompiledCalls {
   const { holes, unlocatable } = inputHoles(opts.inputs ?? {});
   if (unlocatable.length > 0) {
@@ -277,6 +297,10 @@ export function compileInjectedCalls(
    *  may carry the caller's argument and the other may be a constant. Which is why the check below
    *  exists - the tie is broken here, and then the winner has to prove it can carry the arguments. */
   let answerCallIndex: number | undefined;
+  /** Compiled-call indices whose body satisfies the action's DECLARED return shape. Collected
+   *  rather than last-wins, because more than one is a refusal (see the matcher) and a count is the
+   *  only way to know. A Set, so the same call matching twice is still one candidate. */
+  const declaredAnswerCandidates = new Set<number>();
 
   for (const exchange of internalApiCalls(exchanges)) {
     if (exchange.requestBody !== undefined && bodyIsSecretShaped(exchange.requestBody)) continue;
@@ -326,6 +350,23 @@ export function compileInjectedCalls(
       }
     }
     if (index !== undefined && isTheRunsAnswer(exchange, opts.runOutput)) answerCallIndex = index;
+    if (
+      index !== undefined
+      && opts.runOutput === undefined
+      && matchesDeclaredAnswerShape(exchange, opts.declaredAnswerKeys ?? [])
+    ) {
+      declaredAnswerCandidates.add(index);
+    }
+  }
+
+  // THE DECLARED MATCHER ONLY SPEAKS WHERE IDENTITY CANNOT. It is reached only with
+  // `runOutput === undefined` (enforced at collection above), so it can never override, weaken or
+  // silently stand in for an identity match - and EXACTLY ONE candidate, never a pick among several.
+  let answerMatchedBy: 'run-output-identity' | 'declared-return-shape' | undefined =
+    answerCallIndex !== undefined ? 'run-output-identity' : undefined;
+  if (answerCallIndex === undefined && declaredAnswerCandidates.size === 1) {
+    answerCallIndex = [...declaredAnswerCandidates][0]!;
+    answerMatchedBy = 'declared-return-shape';
   }
 
   if (out.length === 0) return { calls: [] };
@@ -369,7 +410,11 @@ export function compileInjectedCalls(
       };
     }
   }
-  return { calls: out, ...(answerCallIndex !== undefined ? { answerCallIndex } : {}) };
+  return {
+    calls: out,
+    ...(answerCallIndex !== undefined ? { answerCallIndex } : {}),
+    ...(answerMatchedBy !== undefined ? { answerMatchedBy } : {}),
+  };
 }
 
 /**
@@ -379,6 +424,56 @@ export function compileInjectedCalls(
  * of the same document are the same answer and a re-serialisation between the run record and the
  * capture is not a difference the caller can ever see. Anything looser is a guess.
  */
+/**
+ * THE ANSWER, FOR A RUN THAT ANSWERED NOTHING - named by the ACTION'S OWN DECLARATION.
+ *
+ * ── WHY A SECOND MATCHER EXISTS AT ALL ────────────────────────────────────────────────────────
+ *
+ * `isTheRunsAnswer` correlates a captured body against what the learning run itself returned, which
+ * is the strongest possible evidence and the only one worth having when it is available. It is
+ * never available here: `extractActionRunOutput` reads the last `api_call`/`ekoa_action` step, and a
+ * browser-driven automation has neither, so `runOutput` is `undefined` for EVERY shipped
+ * browser-only package. The consequence was documented as a property rather than a defect
+ * ("its replay answers nothing either, which is precisely what the run it replaces answered") and
+ * it is correct as far as it goes - but it also means an action like `listar_documentos_processo`
+ * can never answer ANYTHING, learned or not, and a lawyer who asks the assistant which documents a
+ * process holds gets a completed run and an empty reply. That is the gap this closes.
+ *
+ * ── AND WHY IT IS A DECLARATION AND NOT A GUESS ───────────────────────────────────────────────
+ *
+ * The rejected alternative is named in this module already: "the last JSON call" is a guess that
+ * answers a different question on the run where it is wrong, and one ordinary internal call
+ * underneath the flow silently changes the action's answer. So this matcher never ranks, never
+ * takes a last-wins, and never picks among candidates. It asks a yes/no question the PACKAGE AUTHOR
+ * answered when they wrote the action: `returnSchema` declares the property names this action
+ * returns, and a captured body is the answer only if it is a JSON object carrying ALL of them.
+ *
+ * TWO CANDIDATES IS A REFUSAL, NOT A TIE-BREAK. If two captured calls both satisfy the declaration
+ * the author has not said enough to distinguish them, and choosing would be the guess this whole
+ * module refuses. Answering nothing (the status quo) is strictly better than answering the wrong
+ * body under `success: true`.
+ *
+ * WHAT KEEPS IT HONEST DOWNSTREAM: nothing here bypasses the argument-coverage guard below. A call
+ * named by this matcher must still carry every caller argument, or the compile refuses exactly as
+ * it does for an identity-matched one - which is what stops `listar_documentos_processo` learning a
+ * recipe that hands every later caller the first run's process.
+ */
+function matchesDeclaredAnswerShape(exchange: CapturedExchange, keys: readonly string[]): boolean {
+  if (keys.length === 0) return false;
+  if (exchange.responseBody === undefined) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(exchange.responseBody);
+  } catch {
+    return false;
+  }
+  // An ARRAY body cannot satisfy a declaration of named properties, and neither can a scalar. Only
+  // a plain object can, and `null` is typeof 'object' - hence the explicit check.
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  const body = parsed as Record<string, unknown>;
+  return keys.every((k) => Object.prototype.hasOwnProperty.call(body, k));
+}
+
 function isTheRunsAnswer(exchange: CapturedExchange, runOutput: unknown): boolean {
   if (runOutput === undefined) return false;
   if (exchange.responseBody === undefined) return false;

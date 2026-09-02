@@ -349,11 +349,20 @@ export interface IntegrationActionRecipe {
    * correlation strong enough to promise the same answer. A weaker matcher, if one is ever earned,
    * is a NEW value here rather than this one quietly meaning something else.
    *
+   * `declared-return-shape` IS that new value, earned 2026-09-02. It exists because identity is not
+   * merely absent for browser-only automations, it is UNREACHABLE: `extractActionRunOutput` reads
+   * the last api_call/ekoa_action step and a browser run has neither, so those actions could never
+   * answer anything, learned or not. It names the call whose captured body carries every property
+   * the action's own `returnSchema` declares - the package author's statement, not a ranking - and
+   * it refuses on two candidates rather than choosing. Both values pass the same downstream
+   * argument-coverage guard, so neither can name a call that would hand every later caller this
+   * run's answer.
+   *
    * ABSENT means the learning run produced no structured answer at all - the shipped browser-only
    * automations are exactly that shape - so its replay answers nothing either, which is precisely
    * what the run it replaces answered.
    */
-  answersWith?: { callIndex: number; matchedBy: 'run-output-identity' };
+  answersWith?: { callIndex: number; matchedBy: 'run-output-identity' | 'declared-return-shape' };
   /** Short free-text learnings: pagination shape, which header carries the session token, rate hints. */
   lessons: string[];
   /** `captureId` INTO the separate captures collection - a pointer, never the evidence itself. */

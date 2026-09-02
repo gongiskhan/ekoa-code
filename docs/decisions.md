@@ -7056,3 +7056,19 @@ it stays in the findings entry as the residue.
 Suite: `tests/integrations/recipe-store.test.ts` (D-RECIPE-OVERLAY block - materialise + invisible
 to resolution, the pre-overlay notfound contract, undeclared-action refusal, supersede-on-carrier,
 upgrade-with-carry, publish refusal).
+
+- 2026-09-02 - D-DECLARED-ANSWER-SHAPE: a recipe may name its answer-bearing call from the action's
+  DECLARED return shape when, and only when, the learning run answered nothing. Identity correlation
+  (`run-output-identity`) stays the preferred matcher and is unchanged; it is simply unreachable for
+  browser-only automations, which produce no `api_call`/`ekoa_action` step output - so those actions
+  could never answer anything, learned or not, and the chat surface got a completed run and an empty
+  reply. The new `matchedBy: 'declared-return-shape'` is the NEW VALUE that field's docblock asked
+  for rather than a widening of the old one. It is a declaration and not a ranking: "the last JSON
+  call" is refused in this module as a guess that is wrong exactly when it matters, so the new
+  matcher asks a yes/no question the package author already answered in `returnSchema`, refuses on
+  two candidates instead of tie-breaking, never runs when identity could, and passes the same
+  argument-coverage guard. LIMIT ACCEPTED, not hidden: a paginated action captures one body per page,
+  all matching, so it refuses - correct, because the real answer is the aggregate across pages and
+  naming page 1 would silently truncate it. Closing that needs a replay that follows pagination,
+  which is a separate feature.
+

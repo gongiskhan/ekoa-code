@@ -95,3 +95,46 @@ so `extractActionRunOutput` answers null and the agent could only promise a foll
 structured answer arrives exactly when the action learns its recipe (an injected-call replay
 carries the response body - the notificacoes action already answers this way). Same class as the
 S9 ladder notes on `extractActionRunOutput`'s api_call/ekoa_action-only semantics.
+
+---
+
+## CORRECTION, 2026-09-02 (Mac session)
+
+The last sentence of the section above - "The structured answer arrives exactly when the action
+learns its recipe (an injected-call replay carries the response body - the notificacoes action
+already answers this way)" - is **wrong**, and wrong in a load-bearing way: learning the recipe does
+NOT close that gap. The chain, all of it already documented in the modules themselves:
+
+- `extractActionRunOutput` (automation/service.ts) returns something only for a step whose output
+  kind is `api_call` or `ekoa_action`. A browser-driven automation has neither, so `runOutput` is
+  `undefined`.
+- `compileInjectedCalls` therefore sets no `answerCallIndex`; its own docblock: "the run answered
+  nothing (`undefined`) ... the replay answers nothing too. Every browser-only automation this repo
+  ships is this case."
+- `ReplayResult.ok.data` is "the body of the call the RECIPE NAMES ... or `undefined` when the recipe
+  names none", and `IntegrationActionRecipe.answersWith` says "ABSENT means the learning run produced
+  no structured answer at all - the shipped browser-only automations are exactly that shape".
+
+So a zero-model replay of `consultar_notificacoes` answers nothing to its caller either. The gap was
+PERMANENT, not first-run-only, and the circularity is that a call can only be NAMED as the answer if
+the run already answered.
+
+**What landed.** That same docblock said "a weaker matcher, if one is ever earned, is a NEW value
+here rather than this one quietly meaning something else". That is exactly what was added:
+`matchedBy: 'declared-return-shape'` names the captured call whose body carries every property the
+action's own `returnSchema` declares - the package author's statement, not a ranking. It never
+overrides identity, refuses on two candidates rather than choosing, and passes the same
+argument-coverage guard, so it still cannot name a call that would hand every later caller this
+run's answer.
+
+**It closes the SINGLE-RESOURCE actions only, and that is a real limit.** A paginated list captures
+one body per page, every page satisfies the declaration, so the matcher refuses - correctly, because
+the authored run's answer is the AGGREGATE the vision pass walked and naming page 1 would silently
+drop the rest under `success: true`. The two actions a lawyer would ask for first,
+`listar_documentos_processo` and `consultar_notificacoes`, are both paginated. Serving them needs a
+replay that can follow pagination and concatenate on a declared array property - a feature, not a
+matcher. Ledgered OPEN in docs/findings.md.
+
+Nothing in the run this file records is retracted: the four legs, the ceremony, the armed inbox rail
+and the chat tool-flow observation all stand. It was that observation - the tool flow works and only
+the answer is missing - that made the diagnosis findable.
