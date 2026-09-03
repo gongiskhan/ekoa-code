@@ -148,6 +148,17 @@ Prints, then stays alive until Ctrl-C:
 ```
 [run-ekoa-code] READY  web=http://localhost:3000  api(proxy)=http://localhost:4111  login=admin/tmp12345
 ```
+
+**Hand-off rule - which URL the operator gets.** That `localhost` READY line is
+for the agent's own `playwright-cli` driving on this box. The moment a human is
+going to open the app - a manual test, a session ceremony, any "click this"
+hand-off - boot in tailnet mode from the start (`EKOA_TAILNET=1`, section below)
+and give the `https://<host>.ts.net:3000` URL, never `localhost`: the operator
+usually reads from another device (often a phone), a localhost URL is dead there,
+and switching later is a full restart because the allowed origins are baked at
+boot (2026-09-02: five localhost hand-offs went out over 3h before the operator
+asked for a tailnet address).
+
 With it running (in another shell / background), drive the dashboard with the
 global `playwright-cli` — this is the exact login the e2e suite uses:
 
