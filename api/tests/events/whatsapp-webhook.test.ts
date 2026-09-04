@@ -600,13 +600,16 @@ describe('WhatsApp dispatch (the REAL wired path: JSON-TEXT payload → fan-out)
     ).rejects.toThrow(/not valid JSON/);
   });
 
-  it('a non-whatsapp source still gets the unchanged generic { event, trigger } envelope', async () => {
+  it('a non-whatsapp source gets the generic { event, trigger } envelope with the JSON-text payload PARSED', async () => {
+    // The generic branch parses the queue's JSON-text payload back to its object (like the email /
+    // whatsapp branches) so `event` is structured, not a raw string - the fix for the empty-inbox
+    // bug where onNotificacaoCitius read event.processo off a string. See dispatch-target.test.ts.
     const inputs = await buildArtifactBackendInputs(
       { id: 'trg-7', integrationKey: 'stripe', eventName: 'payment.succeeded' },
       '{"amount":100}',
       { hydrateEmail: async () => { throw new Error('unused'); } },
     );
-    expect(inputs).toEqual([{ event: '{"amount":100}', trigger: { id: 'trg-7', eventName: 'payment.succeeded' } }]);
+    expect(inputs).toEqual([{ event: { amount: 100 }, trigger: { id: 'trg-7', eventName: 'payment.succeeded' } }]);
   });
 });
 

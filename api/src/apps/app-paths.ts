@@ -15,7 +15,7 @@ import { artifacts } from '../data/stores.js';
 import type { ArtifactDoc } from './artifacts-service.js';
 import type { Actor } from '../data/scoped.js';
 import { resolveWithinJail, sandboxRoot, UnsafePathError } from '../services/safe-path.js';
-import { featuredArtifactDir } from './featured-seeder.js';
+import { featuredArtifactDir, featuredBuildDir } from './featured-seeder.js';
 
 const SEEDED_FROM = 'assets/featured-artifacts';
 
@@ -58,10 +58,28 @@ export function newProjectDir(ownerUserId: string, appId: string): string {
   return join(sandboxRoot(), `user-${ownerUserId}`, appId);
 }
 
-/** Absolute path to an artifact's built backend bundle, or null when absent. */
+/**
+ * Absolute path to an artifact's built backend bundle, or null when absent.
+ *
+ * A SEEDED FEATURED app is a special case: `projectDirFor` returns its versioned `scaffold/` dir
+ * (which carries no build output), but the featured-builder esbuilds the backend into the
+ * featured-builds MIRROR under the data dir. That mirror is outside the sandbox jail, so the
+ * record's patched `data.projectDir` is dropped by `recordedProjectDir` and `projectDirFor` never
+ * points at it — leaving a seeded featured app's backend permanently `no backend bundle`. So look
+ * in the mirror FIRST for a seeded featured app, then fall back to the working-copy dir (a forked /
+ * user-built app builds `dist-backend` in place under `projectDirFor`).
+ */
 export function backendBundlePath(art: ArtifactDoc): string | null {
-  const bundle = join(projectDirFor(art), 'dist-backend', 'backend.mjs');
-  return existsSync(bundle) ? bundle : null;
+  const data = (art.data ?? {}) as Record<string, unknown>;
+  const roots =
+    art.featured === true && data.seededFrom === SEEDED_FROM
+      ? [featuredBuildDir(art._id), projectDirFor(art)]
+      : [projectDirFor(art)];
+  for (const root of roots) {
+    const bundle = join(root, 'dist-backend', 'backend.mjs');
+    if (existsSync(bundle)) return bundle;
+  }
+  return null;
 }
 
 /**

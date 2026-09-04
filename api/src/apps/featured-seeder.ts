@@ -21,6 +21,7 @@
  */
 import { readFile, readdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { artifacts, slugs, users } from '../data/stores.js';
@@ -48,6 +49,22 @@ export function featuredArtifactsDir(): string {
 
 export function featuredArtifactDir(id: string): string {
   return join(featuredArtifactsDir(), id);
+}
+
+/**
+ * The featured-builds MIRROR root under the DATA dir (not the versioned tree): the featured-builder
+ * copies each scaffold here and esbuilds it, so this is where a seeded featured app's built frontend
+ * (`dist/`) AND backend (`dist-backend/backend.mjs`) live. `app-paths.backendBundlePath` resolves a
+ * seeded featured app's backend from here — the record's patched `data.projectDir` points here too,
+ * but that path is outside the sandbox jail so `recordedProjectDir` drops it. Single source of truth
+ * for the root so the builder's write target and the runtime's read target can never drift.
+ */
+export function featuredBuildsRoot(): string {
+  return process.env.EKOA_FEATURED_BUILDS_DIR || join(process.env.EKOA_DATA_DIR || join(homedir(), '.ekoa', 'data'), 'featured-builds');
+}
+
+export function featuredBuildDir(id: string): string {
+  return join(featuredBuildsRoot(), id);
 }
 
 async function getSuperAdmin(): Promise<{ id: string; orgId: string } | null> {

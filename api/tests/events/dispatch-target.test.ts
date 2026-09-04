@@ -16,6 +16,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   buildArtifactBackendInput,
+  structuredEventPayload,
   type DispatchInputDeps,
   type DispatchTrigger,
 } from '../../src/integrations/event-sources/dispatch-input.js';
@@ -69,6 +70,47 @@ describe('buildArtifactBackendInput — dispatch-input branching', () => {
     const trigger: DispatchTrigger = { id: 'trg-1', integrationKey: 'google-workspace', eventName: 'email.received' };
     await expect(buildArtifactBackendInput(trigger, { id: 'AAA', bodyPreview: 'prev' }, d))
       .rejects.toThrow(/read_email failed for message AAA/);
+  });
+});
+
+describe('regression: a GENERIC (non-email) listener delivers the JSON-STRING payload PARSED', () => {
+  // The queue stores every body as UTF-8 TEXT, so a listener that enqueues JSON.stringify(item)
+  // reaches the generic branch as a STRING. It used to be handed to the backend as `event` UNPARSED,
+  // so an artifact reading event.<field> (legal-citius' onNotificacaoCitius reads event.processo)
+  // saw undefined on every delivery and wrote empty "sem processo" rows. Found 2026-09-04 driving the
+  // live CITIUS read into the inbox. The generic branch now parses a JSON-text payload back to its
+  // object (guarded), matching the email/WhatsApp branches.
+  const trigger: DispatchTrigger = { id: 'trg-c', integrationKey: 'citius', eventName: 'notificacao.recebida' };
+  const d = deps();
+
+  it('parses a JSON-OBJECT text payload so event carries the fields the backend reads', async () => {
+    const row = { processo: '11566/24.0T8LRS', ato: 'Notificação (outras) (AE)', data: '28-07-2026', id: '170555557' };
+    const out = (await buildArtifactBackendInput(trigger, JSON.stringify(row), d)) as { event: Record<string, unknown> };
+    expect(d.hydrateEmail).not.toHaveBeenCalled();
+    expect(out.event).toEqual(row);
+    expect(out.event.processo).toBe('11566/24.0T8LRS'); // the read that used to be undefined
+  });
+
+  it('parses a JSON-ARRAY text payload to the array', async () => {
+    const out = (await buildArtifactBackendInput(trigger, JSON.stringify([1, 2, 3]), d)) as { event: unknown };
+    expect(out.event).toEqual([1, 2, 3]);
+  });
+
+  it('passes an already-parsed OBJECT payload through unchanged', async () => {
+    const row = { processo: 'X', id: '1' };
+    const out = (await buildArtifactBackendInput(trigger, row, d)) as { event: unknown };
+    expect(out.event).toBe(row);
+  });
+
+  it('leaves a NON-JSON body (form-encoded / plain text) as the raw string, never throwing', async () => {
+    const out = (await buildArtifactBackendInput(trigger, 'a=1&b=2', d)) as { event: unknown };
+    expect(out.event).toBe('a=1&b=2');
+  });
+
+  it('leaves a JSON SCALAR string as the raw string (only objects/arrays are unwrapped)', () => {
+    expect(structuredEventPayload('"hello"')).toBe('"hello"');
+    expect(structuredEventPayload('42')).toBe('42');
+    expect(structuredEventPayload('null')).toBe('null');
   });
 });
 

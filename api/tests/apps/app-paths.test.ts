@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { projectDirFor } from '../../src/apps/app-paths.js';
+import { projectDirFor, backendBundlePath } from '../../src/apps/app-paths.js';
 import { sandboxRoot } from '../../src/services/safe-path.js';
 import type { ArtifactDoc } from '../../src/apps/artifacts-service.js';
 
@@ -57,5 +57,52 @@ describe('projectDirFor — recorded data.projectDir is jailed (ch09 invariant 1
   it('falls back to the deterministic layout when no projectDir is recorded', () => {
     const a = art({ _id: 'art4', userId: 'u2', data: {} });
     expect(projectDirFor(a)).toBe(defaultLayout('u2', 'art4'));
+  });
+});
+
+/**
+ * backendBundlePath resolves a SEEDED FEATURED app's backend from the featured-builds MIRROR, not
+ * the scaffold projectDirFor returns for it. Regression for the empty-inbox chain (2026-09-04):
+ * projectDirFor early-returns the versioned scaffold dir for a seeded featured app (no build output
+ * there), and the record's patched data.projectDir points at the mirror but is outside the sandbox
+ * jail so recordedProjectDir drops it — so the backend was permanently `no backend bundle` and
+ * onNotificacaoCitius/onEmail never ran.
+ */
+describe('backendBundlePath — seeded featured app resolves from the featured-builds mirror', () => {
+  let builds: string;
+  const PRIOR_BUILDS = process.env.EKOA_FEATURED_BUILDS_DIR;
+
+  beforeAll(async () => {
+    builds = await mkdtemp(join(tmpdir(), 'ekoa-featured-builds-'));
+    process.env.EKOA_FEATURED_BUILDS_DIR = builds;
+  });
+  afterAll(async () => {
+    if (PRIOR_BUILDS === undefined) delete process.env.EKOA_FEATURED_BUILDS_DIR;
+    else process.env.EKOA_FEATURED_BUILDS_DIR = PRIOR_BUILDS;
+    await rm(builds, { recursive: true, force: true });
+  });
+
+  const seededFeatured = (id: string) =>
+    art({ _id: id, userId: 'system', featured: true, data: { seededFrom: 'assets/featured-artifacts' } });
+
+  it('finds the bundle in the mirror even though projectDirFor points at the scaffold', async () => {
+    const a = seededFeatured('legal-citius');
+    await mkdir(join(builds, 'legal-citius', 'dist-backend'), { recursive: true });
+    await writeFile(join(builds, 'legal-citius', 'dist-backend', 'backend.mjs'), 'export async function onNotificacaoCitius(){}');
+    // The scaffold projectDirFor returns has NO build output, so the OLD lookup would be null.
+    expect(projectDirFor(a).endsWith('/scaffold')).toBe(true);
+    expect(backendBundlePath(a)).toBe(join(builds, 'legal-citius', 'dist-backend', 'backend.mjs'));
+  });
+
+  it('returns null for a seeded featured app whose mirror bundle has not been built', () => {
+    expect(backendBundlePath(seededFeatured('legal-unbuilt'))).toBeNull();
+  });
+
+  it('a NON-featured app still resolves its bundle under the in-jail working copy (unchanged)', async () => {
+    const inside = join(sandboxRoot(), 'user-u9', 'built-app');
+    const a = art({ _id: 'built-app', userId: 'u9', data: { projectDir: inside } });
+    await mkdir(join(inside, 'dist-backend'), { recursive: true });
+    await writeFile(join(inside, 'dist-backend', 'backend.mjs'), 'export function onWebhook(){}');
+    expect(backendBundlePath(a)).toBe(join(inside, 'dist-backend', 'backend.mjs'));
   });
 });

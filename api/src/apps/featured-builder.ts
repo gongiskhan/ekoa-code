@@ -27,13 +27,12 @@
 import { readFile, readdir, mkdir, cp, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
 import { appBuilder } from './builder.js';
 import { appRegistry } from './app-registry.js';
 import { artifacts } from '../data/stores.js';
 import { recordedProjectDir } from './app-paths.js';
-import { featuredArtifactsDir, featuredArtifactDir } from './featured-seeder.js';
+import { featuredArtifactsDir, featuredArtifactDir, featuredBuildsRoot } from './featured-seeder.js';
 import { captureArtifactScreenshot, getArtifactScreenshotDir } from '../services/artifact-screenshot.js';
 import { getSharedBrowser } from '../services/browser-pool.js';
 import { loadConfig } from '../config.js';
@@ -41,12 +40,11 @@ import { loadConfig } from '../config.js';
 const _require = createRequire(import.meta.url);
 
 /** The featured-builds mirror under the data dir - build output stays out of the
- *  versioned tree. The same root the serving lazy-heal trusts. */
+ *  versioned tree. The same root the serving lazy-heal trusts, and the one
+ *  `app-paths.backendBundlePath` reads a seeded featured app's backend from
+ *  (single source of truth in featured-seeder so write and read targets never drift). */
 export function builtBuildsRoot(): string {
-  return (
-    process.env.EKOA_FEATURED_BUILDS_DIR ||
-    join(process.env.EKOA_DATA_DIR || join(homedir(), '.ekoa', 'data'), 'featured-builds')
-  );
+  return featuredBuildsRoot();
 }
 
 interface ManifestLite {

@@ -10,8 +10,10 @@
  *     frozen `EmailInput` envelope (via the injected `hydrateEmail`, which reads the body through
  *     core's OAuth boundary). A read failure THROWS out of here so the delivery pipeline retries —
  *     the backend is NEVER handed a truncated preview body.
- *   - any OTHER source keeps the generic envelope ekoa-code already delivered (`{ event, trigger }`),
- *     unchanged, so non-email artifact backends see the exact input they saw before.
+ *   - any OTHER source keeps the generic envelope (`{ event, trigger }`); the JSON-text queue
+ *     payload is parsed back to its object/array so `event` is structured (see
+ *     `structuredEventPayload`), matching the email/WhatsApp branches. A non-JSON body passes
+ *     through unchanged.
  *
  *   - a WHATSAPP source (2A-S3) FANS OUT: one Meta webhook envelope batches N inbound messages, so
  *     it produces N backend invocations — one neutral `MessageInput` each. A statuses-only
@@ -37,11 +39,34 @@ export interface DispatchTrigger {
   eventName: string;
 }
 
-/** The generic (non-email) envelope handed to an artifact backend. Preserves ekoa-code's existing
- *  artifact-backend dispatch shape verbatim (a non-email source sees no behavioural change). */
+/** The generic (non-email) envelope handed to an artifact backend. */
 export interface GenericBackendInput {
   event: unknown;
   trigger: { id: string; eventName: string };
+}
+
+/**
+ * The queue stores every event body as UTF-8 TEXT (`enqueueListenerEvent` /`handleIngress` both
+ * `rawBody.toString('utf8')`), so a listener that enqueues `JSON.stringify(item)` arrives here as a
+ * STRING. The email and WhatsApp branches already turn that text back into structured data; the
+ * generic branch did NOT, and handed the backend a raw JSON string as `event` — so an artifact
+ * reading `event.<field>` (e.g. `legal-citius`'s `onNotificacaoCitius` reading `event.processo`) saw
+ * `undefined` on every delivery. This parses a JSON-text payload back to its object/array so the
+ * three branches deliver structured data alike.
+ *
+ * GUARDED: only a string that parses to an OBJECT or ARRAY is unwrapped. A non-JSON body (a
+ * form-encoded or plain-text webhook), or JSON that decodes to a bare scalar, passes through
+ * UNCHANGED — so no existing generic consumer that reads a raw string body changes behaviour, and
+ * unlike the WhatsApp branch a non-JSON body is never an error here.
+ */
+export function structuredEventPayload(payload: unknown): unknown {
+  if (typeof payload !== 'string') return payload;
+  try {
+    const parsed = JSON.parse(payload);
+    return parsed !== null && typeof parsed === 'object' ? parsed : payload;
+  } catch {
+    return payload;
+  }
 }
 
 export interface DispatchInputDeps {
@@ -66,7 +91,7 @@ export async function buildArtifactBackendInput(
     // out of hydrateEmail → out of here → the delivery pipeline schedules a retry.
     return deps.hydrateEmail(trigger, payload);
   }
-  return { event: payload, trigger: { id: trigger.id, eventName: trigger.eventName } };
+  return { event: structuredEventPayload(payload), trigger: { id: trigger.id, eventName: trigger.eventName } };
 }
 
 /**
