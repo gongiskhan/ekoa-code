@@ -78,7 +78,9 @@ describe('createTrigger listener inference (2A-S2)', () => {
       deps,
     );
     expect(trigger.kind).toBe('listener');
-    expect(trigger.pollConfig).toEqual({ actionName: 'consultar_notificacoes', intervalMs: 900_000 });
+    // The citius poller uses the reliable HTTP form-login read (ler_notificacoes_http), 8h default -
+    // an unattended poll cannot use the browser/vision action, which needs a live session (D-FORM-LOGIN).
+    expect(trigger.pollConfig).toEqual({ actionName: 'ler_notificacoes_http', intervalMs: 28_800_000 });
     // The supervisor discovers listeners with find({ kind: 'listener' }) - the row must MATCH.
     const polled = (await triggers.find({ kind: 'listener' })) as TriggerDoc[];
     expect(polled.map((t) => t._id)).toContain(trigger._id);
@@ -90,7 +92,7 @@ describe('createTrigger listener inference (2A-S2)', () => {
       { ...backendTarget, integrationKey: 'citius', eventName: 'notificacao.recebida', pollIntervalMs: 45_000 },
       deps,
     );
-    expect(trigger.pollConfig).toEqual({ actionName: 'consultar_notificacoes', intervalMs: 45_000 });
+    expect(trigger.pollConfig).toEqual({ actionName: 'ler_notificacoes_http', intervalMs: 45_000 });
   });
 
   it('an event the package does NOT declare stays webhook-implicit', async () => {

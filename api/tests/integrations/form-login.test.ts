@@ -182,26 +182,30 @@ describe('parseAspNetGridRows (declarative ASP.NET DataGrid extraction)', () => 
   const G = 'ctl00_ctl00_Conteudo_cpHabilus_dgNotificacoes';
   const cell = (ctl: string, suffix: string, value: string, tag = 'span') =>
     `<td><${tag} id="${G}_${ctl}_${suffix}">${value}</${tag}></td>`;
+  // Column order after the real NotCitIndex grid: 0 Marcar, 1 Origem, 2 Data, 3 Acto, 4 Doc,
+  // 5 Tribunal, 6 Un.Organica, 7 Processo (a PLAIN <td>, no control id), 8 Especie, 9 Referencia(IdDoc).
   const dataRow = (ctl: string, o: Record<string, string>) =>
     `<tr><td><input id="chkSelection" type="checkbox" /></td>` +
     cell(ctl, 'lblOrigem', o.origem) + cell(ctl, 'DataElaboracao', o.data) + cell(ctl, 'NomeActo', o.ato) +
     cell(ctl, 'lnkDoc', o.documento, 'a') + cell(ctl, 'NomeTribunal', o.tribunal) +
-    cell(ctl, 'DescricaoUnidadeOrganica', o.unidade) + cell(ctl, 'DescricaoEspecie', o.especie) + `</tr>`;
+    cell(ctl, 'DescricaoUnidadeOrganica', o.unidade) + `<td>${o.processo}</td>` +
+    cell(ctl, 'DescricaoEspecie', o.especie) + cell(ctl, 'IdDoc', o.id) + `</tr>`;
   const grid = `<table id="${G}">
-    <tr align="center"><td>Origem</td><td>Data</td><td>Acto</td></tr>
-    ${dataRow('ctl02', { origem: 'Tribunal Judicial da Comarca', data: '01-09-2026', ato: 'Cita&ccedil;&atilde;o', documento: 'peticao.pdf', tribunal: 'Ju&iacute;zo Central C&iacute;vel', unidade: 'Unidade 1', especie: 'A&ccedil;&atilde;o comum' })}
-    ${dataRow('ctl03', { origem: 'Tribunal X', data: '28-08-2026', ato: 'Notifica&ccedil;&atilde;o', documento: 'despacho.pdf', tribunal: 'Ju&iacute;zo Local', unidade: 'Unidade 2', especie: 'Execu&ccedil;&atilde;o' })}
+    <tr align="center"><td>Marcar</td><td>Origem</td><td>Data</td><td>Acto</td><td>Doc</td><td>Tribunal</td><td>Un.</td><td>Processo</td><td>Especie</td><td>Ref</td></tr>
+    ${dataRow('ctl02', { origem: 'Tribunal Judicial da Comarca', data: '01-09-2026', ato: 'Cita&ccedil;&atilde;o', documento: 'peticao.pdf', tribunal: 'Ju&iacute;zo Central C&iacute;vel', unidade: 'Unidade 1', processo: '11566/24.0T8LRS', especie: 'A&ccedil;&atilde;o comum', id: 'N-100' })}
+    ${dataRow('ctl03', { origem: 'Tribunal X', data: '28-08-2026', ato: 'Notifica&ccedil;&atilde;o', documento: 'despacho.pdf', tribunal: 'Ju&iacute;zo Local', unidade: 'Unidade 2', processo: '900/25.1T8LSB', especie: 'Execu&ccedil;&atilde;o', id: 'N-101' })}
   </table>`;
-  const FIELDS = { ato: 'NomeActo', data: 'DataElaboracao', tribunal: 'NomeTribunal', unidade: 'DescricaoUnidadeOrganica', especie: 'DescricaoEspecie', origem: 'lblOrigem', documento: 'lnkDoc' };
+  const FIELDS = { ato: 'NomeActo', data: 'DataElaboracao', tribunal: 'NomeTribunal', unidade: 'DescricaoUnidadeOrganica', especie: 'DescricaoEspecie', origem: 'lblOrigem', documento: 'lnkDoc', id: 'IdDoc' };
+  const COLUMNS = { processo: 7 };
 
-  it('extracts one object per data row with the declared fields, entity-decoded, in order', () => {
-    const rows = parseAspNetGridRows(grid, 'dgNotificacoes', FIELDS);
+  it('extracts each data row: id-suffix fields + a positional column, entity-decoded, in order', () => {
+    const rows = parseAspNetGridRows(grid, 'dgNotificacoes', FIELDS, COLUMNS);
     expect(rows).toHaveLength(2); // header row excluded (no named cell controls)
-    expect(rows[0]).toMatchObject({ _row: '02', ato: 'Citação', data: '01-09-2026', tribunal: 'Juízo Central Cível', documento: 'peticao.pdf', especie: 'Ação comum' });
-    expect(rows[1]).toMatchObject({ _row: '03', ato: 'Notificação', documento: 'despacho.pdf' });
+    expect(rows[0]).toMatchObject({ _row: '02', ato: 'Citação', data: '01-09-2026', tribunal: 'Juízo Central Cível', documento: 'peticao.pdf', especie: 'Ação comum', id: 'N-100', processo: '11566/24.0T8LRS' });
+    expect(rows[1]).toMatchObject({ _row: '03', ato: 'Notificação', documento: 'despacho.pdf', id: 'N-101', processo: '900/25.1T8LSB' });
   });
 
   it('returns no rows when the grid is absent', () => {
-    expect(parseAspNetGridRows('<html><body>no grid here</body></html>', 'dgNotificacoes', FIELDS)).toHaveLength(0);
+    expect(parseAspNetGridRows('<html><body>no grid here</body></html>', 'dgNotificacoes', FIELDS, COLUMNS)).toHaveLength(0);
   });
 });

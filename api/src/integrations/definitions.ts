@@ -197,7 +197,10 @@ export interface IntegrationActionFormLogin {
    */
   resultParse?: {
     gridIdContains: string;
+    /** outputKey → the per-cell control-id SUFFIX (robust against column reordering). */
     fields: Record<string, string>;
+    /** outputKey → 0-based `<td>` INDEX, for plain cells with no named control (e.g. a "Processo" column). */
+    columns?: Record<string, number>;
   };
 }
 

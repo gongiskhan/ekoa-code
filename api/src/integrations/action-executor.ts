@@ -620,9 +620,12 @@ export async function executeUserIntegrationAction(
     };
     if (result.targetHtml && fl.resultParse) {
       // Declarative parse → structured rows (the useful shape). No raw HTML leaves the executor.
-      const rows = parseAspNetGridRows(result.targetHtml, fl.resultParse.gridIdContains, fl.resultParse.fields);
+      const rows = parseAspNetGridRows(result.targetHtml, fl.resultParse.gridIdContains, fl.resultParse.fields, fl.resultParse.columns);
       data.rows = rows;
       data.rowCount = rows.length;
+      // A present scalar cursor so a listener poll can ARM (the per-row dedup key is what actually
+      // prevents re-delivery). A signature of the current row ids — changes when the set changes.
+      data.cursor = rows.length ? rows.map((r) => String(r.id ?? r._row ?? '')).join(',') : 'empty';
     } else if (result.targetHtml) {
       // No parser declared yet: a bounded preview so the real page structure can be inspected once.
       data.htmlPreview = result.targetHtml.slice(0, 8000);

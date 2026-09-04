@@ -254,7 +254,11 @@
             "unidade": "DescricaoUnidadeOrganica",
             "especie": "DescricaoEspecie",
             "origem": "lblOrigem",
-            "documento": "lnkDoc"
+            "documento": "lnkDoc",
+            "id": "IdDoc"
+          },
+          "columns": {
+            "processo": 7
           }
         }
       },
@@ -283,6 +287,9 @@
             "items": {
               "type": "object",
               "properties": {
+                "processo": {
+                  "type": "string"
+                },
                 "ato": {
                   "type": "string"
                 },
@@ -292,10 +299,10 @@
                 "tribunal": {
                   "type": "string"
                 },
-                "unidade": {
+                "especie": {
                   "type": "string"
                 },
-                "especie": {
+                "unidade": {
                   "type": "string"
                 },
                 "origem": {
@@ -303,9 +310,15 @@
                 },
                 "documento": {
                   "type": "string"
+                },
+                "id": {
+                  "type": "string"
                 }
               }
             }
+          },
+          "cursor": {
+            "type": "string"
           }
         }
       }
@@ -380,16 +393,15 @@
     }
   ],
   "listenerConfig": {
-    "pollAction": "consultar_notificacoes",
-    "intervalMs": 900000,
-    "cursorField": "highWater",
-    "eventArrayField": "notificacoes",
+    "pollAction": "ler_notificacoes_http",
+    "intervalMs": 28800000,
+    "eventArrayField": "rows",
     "dedupKeyField": "id",
-    "outOfOrder": true,
+    "cursorField": "cursor",
     "events": [
       {
         "name": "notificacao.recebida",
-        "labelPt": "Notificação recebida"
+        "description": "Nova notificação/citação na Caixa do Mandatário (CITIUS WEB)."
       }
     ]
   },

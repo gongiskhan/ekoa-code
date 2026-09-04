@@ -145,10 +145,38 @@ ASP.NET **DataGrid** `…_dgNotificacoes` whose per-row cells carry named contro
   `{ ato: NomeActo, data: DataElaboracao, tribunal: NomeTribunal, unidade: DescricaoUnidadeOrganica,
   especie: DescricaoEspecie, origem: lblOrigem, documento: lnkDoc }`.
 
+## The 8-hour poller
+
+The CITIUS package declares `ler_notificacoes_http` as a polled listener source
+(`citius/config.json` `listenerConfig`): `intervalMs: 28_800_000` (8h), `eventArrayField: 'rows'`,
+`dedupKeyField: 'id'` (the notification's own `IdDoc`), `cursorField: 'cursor'` (a signature of the
+current id set, so the listener can arm). The listener rail is generic: `pollUserDefinedSource` runs
+the action, reads the rows, dedups each by `id` against the queue's `UNIQUE(triggerId, dedupKey)`, and
+delivers each new one to the artifact backend. Because the parser now yields `processo`, `ato`, `data`
+and `id`, the notifications carry the process number — the `resultParse` maps the named DataGrid cells
+plus the plain "Processo" cell (`columns: { processo: 7 }`).
+
+The delivery target already exists: `legal-citius`'s backend `onNotificacaoCitius(input, ekoa)` reads
+exactly `event.processo / ato / data / id`, runs the deterministic prazo engine, and writes the
+needs-review inbox row + the bell. It was written for this listener.
+
+**To arm it (operator/runtime step):** a `legal-citius` app must be registered, then create the
+listener trigger:
+
+```
+POST /api/v1/triggers
+{ "integrationKey": "citius", "eventName": "notificacao.recebida",
+  "target": { "kind": "artifact-backend", "artifactId": "<legal-citius app id>", "entrypoint": "onNotificacaoCitius" } }
+```
+
+The supervisor then polls every 8h (override per-trigger with `pollIntervalMs`). Note the rail's
+NO-BACKFILL rule: the establishing poll adopts the cursor and delivers nothing, so the artifact should
+show the CURRENT list via a direct `ler_notificacoes_http` call on open, and the poller alerts on new
+notifications from then on.
+
 ## Remaining
 
-- **Poller.** A `listenerConfig` (`intervalMs`, default `28_800_000` = 8h) driving the action into the
-  `legal-citius` inbox artifact — the lawyer-configurable schedule.
+- **Register a `legal-citius` app + create the trigger** (the operator step above) to run the poller live.
 - **Chat.** Surface the notifications (and a documents-by-process action) in the chat flow.
 - **Duplicate config rows.** The UI credential save can create a second `integration_configs` row for
   the same owner; `findConfigForOwner` then picks nondeterministically and the executor can read the

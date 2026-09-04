@@ -108,26 +108,42 @@ export function parseAspNetGridRows(
   html: string,
   gridIdContains: string,
   fields: Record<string, string>,
+  columns?: Record<string, number>,
 ): Array<Record<string, string>> {
   const suffixes = Object.values(fields);
   if (suffixes.length === 0) return [];
-  const discover = new RegExp(
-    `id="([^"]*${escapeRe(gridIdContains)}[^"]*_ctl(\\d+)_)(?:${suffixes.map(escapeRe).join('|')})"`,
-    'gi',
-  );
-  // Preserve document order and de-dupe by the row prefix.
-  const seen = new Set<string>();
-  const prefixes: Array<{ prefix: string; ctl: string }> = [];
-  for (const m of html.matchAll(discover)) {
-    const prefix = m[1];
-    const ctl = m[2];
-    if (prefix === undefined || ctl === undefined || seen.has(prefix)) continue;
-    seen.add(prefix);
-    prefixes.push({ prefix, ctl });
+  // Isolate the grid table (from its opening tag to the next </table>) so a <tr> split cannot stray
+  // into an outer layout table. Falls back to the whole document if the close tag is not found.
+  const openRe = new RegExp(`<table\\b[^>]*\\bid="[^"]*${escapeRe(gridIdContains)}[^"]*"[^>]*>`, 'i');
+  const open = openRe.exec(html);
+  if (!open) return [];
+  const from = open.index + open[0].length;
+  const closeIdx = html.indexOf('</table>', from);
+  const inner = closeIdx >= 0 ? html.slice(from, closeIdx) : html.slice(from);
+
+  const rows: Array<Record<string, string>> = [];
+  const suffixAlt = suffixes.map(escapeRe).join('|');
+  const dataRowRe = new RegExp(`_ctl(\\d+)_(?:${suffixAlt})"`, 'i');
+  const trRe = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
+  let tr: RegExpExecArray | null;
+  while ((tr = trRe.exec(inner)) !== null) {
+    const rowHtml = tr[1] ?? '';
+    const ctlM = dataRowRe.exec(rowHtml); // a DATA row carries the named cell controls; headers do not
+    if (!ctlM) continue;
+    const row: Record<string, string> = { _row: ctlM[1] ?? '' };
+    // id-suffix fields: robust against column reordering (the control id is stable).
+    for (const [key, suffix] of Object.entries(fields)) {
+      const vm = new RegExp(`id="[^"]*_${escapeRe(suffix)}"[^>]*>([\\s\\S]*?)</`, 'i').exec(rowHtml);
+      row[key] = vm && vm[1] !== undefined ? decodeEntities(vm[1].replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim() : '';
+    }
+    // positional columns: for plain <td> cells with no named control (e.g. the "Processo" column).
+    if (columns) {
+      const cells = [...rowHtml.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)].map((c) =>
+        decodeEntities((c[1] ?? '').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim(),
+      );
+      for (const [key, idx] of Object.entries(columns)) row[key] = cells[idx] ?? '';
+    }
+    rows.push(row);
   }
-  return prefixes.map(({ prefix, ctl }) => {
-    const row: Record<string, string> = { _row: ctl };
-    for (const [key, suffix] of Object.entries(fields)) row[key] = textOfId(html, prefix + suffix);
-    return row;
-  });
+  return rows;
 }
