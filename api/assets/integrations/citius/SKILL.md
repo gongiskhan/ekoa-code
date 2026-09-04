@@ -68,13 +68,11 @@ O resultado estruturado (nº processo / tribunal / data / espécie) é produzido
 
 ## Escutar notificações (listener)
 
-A skill declara um `listenerConfig` (ação de sondagem `consultar_notificacoes`). Ao ligar, o fluxo de ligação regista um **listener** (`ekoa.triggers create`, `kind: listener`) que sonda periodicamente a automação de notificações e despacha cada **NOVA** notificação para o backend do artefacto `legal-citius` (o mesmo alvo do intake de email). A deduplicação é por **marca de água** (`dedupCitiusNotificacoes`) reforçada pela restrição UNIQUE da fila durável. O **alerta IMAP** de email do tribunal (`legal-citius/onEmail`) continua a ser o sinal de **baixa latência**; a automação de notificações é o **fetcher** autoritativo. Ver `citius-connect.ts` (`buildCitiusNotificationTrigger`) e `docs/integrations-citius.md`.
+A skill declara um `listenerConfig` (ação de sondagem `ler_notificacoes_http`, a leitura HTTP com utilizador/palavra-passe, a cada 8h - uma sondagem sem supervisão não pode usar a automação de browser, que precisa de uma sessão interativa viva). Ao ligar, o fluxo de ligação regista um **listener** (`ekoa.triggers create`, `kind: listener`) que sonda periodicamente a automação de notificações e despacha cada **NOVA** notificação para o backend do artefacto `legal-citius` (o mesmo alvo do intake de email). A deduplicação é por **marca de água** (`dedupCitiusNotificacoes`) reforçada pela restrição UNIQUE da fila durável. O **alerta IMAP** de email do tribunal (`legal-citius/onEmail`) continua a ser o sinal de **baixa latência**; a automação de notificações é o **fetcher** autoritativo. Ver `citius-connect.ts` (`buildCitiusNotificationTrigger`) e `docs/integrations-citius.md`.
 
-## Endereço do portal: uma configuração, não uma constante
+## Endereço do portal: uma constante do pacote
 
-O endereço vive **uma vez**, no campo de configuração `portal_url` (não-secreto, com o valor por omissão `https://portal.tribunais.org.pt` declarado no `defaultValue` do próprio campo). Tanto o `sessionConnect.loginUrl` como o passo `navigate` de todas as automações o leem como `{{config.portal_url}}`.
-
-As duas metades **têm** de andar juntas: a sessão capturada fica ligada à origem que a cerimónia abriu, por isso uma sessão capturada num endereço não pode ser levantada por uma execução que conduz outro. Mudar o campo move as duas.
+O endereço do Portal dos Mandatários é **uma constante** (`https://portal.tribunais.org.pt`), escrita à letra no `sessionConnect.loginUrl` e no passo `navigate` de todas as automações. Já não é um campo de configuração: a única cerimónia de configuração que a integração pede é o utilizador e a palavra-passe do CITIUS WEB. As duas metades da sessão (a cerimónia e as automações) apontam ao mesmo endereço literal, por isso uma sessão capturada continua a ser levantada por uma execução que conduz a mesma origem.
 
 ## Ligação ação -> automação
 

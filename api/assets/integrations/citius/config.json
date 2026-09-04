@@ -8,38 +8,13 @@
   "provider": "Ministério da Justiça — IGFEJ (eTribunal / CITIUS)",
   "category": "legal",
   "sessionConnect": {
-    "loginUrl": "{{config.portal_url}}",
+    "loginUrl": "https://portal.tribunais.org.pt",
     "successUrlContains": "/mandatario",
     "errorUrlContains": "/error",
     "guidePt": "Abra o Portal dos Mandatários e autentique-se uma vez (certificado da Ordem dos Advogados ou Chave Móvel Digital / Cartão de Cidadão). A sessão é capturada e reutilizada até expirar. A consulta pública de distribuição não precisa de sessão."
   },
-  "credentialGuide": "O CITIUS/eTribunal não disponibiliza API oficial nem credenciais de máquina. O acesso do mandatário ao Portal dos Mandatários (https://portal.tribunais.org.pt) é sempre interativo: certificado digital da Ordem dos Advogados ou Chave Móvel Digital / Cartão de Cidadão através do autenticacao.gov.pt (com autenticação de dois fatores).\n\nPor isso, esta integração NÃO guarda palavra-passe. Liga-se assim:\n\n1. A partir do seu Ekoa local, inicia a ligação desta integração.\n2. Abre-se uma janela do Portal dos Mandatários; autentica-se uma vez (certificado da OA ou Chave Móvel Digital / Cartão de Cidadão).\n3. O Ekoa captura a sessão autenticada (cookies) e guarda-a cifrada. A sessão é reutilizada até expirar, altura em que volta a pedir uma autenticação.\n\nOs campos abaixo (cédula profissional, endereço do portal) são apenas configuração, não são segredos. A consulta pública de distribuição não precisa de sessão.",
+  "credentialGuide": "Esta integração pede apenas o utilizador e a palavra-passe do CITIUS WEB (login.aspx). São guardados cifrados e usados para ler automaticamente, por HTTP e sem supervisão, a lista de notificações/citações do mandatário. A leitura é estritamente da lista: nunca abre uma notificação (abrir conta como leitura e pode iniciar prazos).\n\nAs peças e os documentos de um processo (descarregar, submeter) usam o Portal dos Mandatários com uma sessão autenticada e capturada de forma interativa (certificado da Ordem dos Advogados ou Chave Móvel Digital / Cartão de Cidadão), quando essa ação for pedida. A consulta pública de distribuição não precisa de nada disto.",
   "configSchema": [
-    {
-      "key": "cedula_profissional",
-      "label": "Cédula profissional (OA)",
-      "type": "string",
-      "required": false,
-      "secret": false,
-      "helpText": "Número de cédula profissional / inscrição na Ordem dos Advogados do mandatário. Usado apenas para identificação; não é uma credencial de acesso."
-    },
-    {
-      "key": "portal_url",
-      "label": "Endereço do Portal dos Mandatários",
-      "type": "url",
-      "required": false,
-      "secret": false,
-      "defaultValue": "https://portal.tribunais.org.pt",
-      "helpText": "Endereço do Portal dos Mandatários. Por omissão https://portal.tribunais.org.pt."
-    },
-    {
-      "key": "nome_mandatario",
-      "label": "Nome do mandatário",
-      "type": "string",
-      "required": false,
-      "secret": false,
-      "helpText": "Nome do advogado/mandatário, para identificação nas listas e comprovativos. Opcional."
-    },
     {
       "key": "login_username",
       "label": "Utilizador CITIUS (login)",

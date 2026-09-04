@@ -118,23 +118,24 @@ describe('integration definitions registry (ch03 §3.8.13) — list / active / r
       .toEqual(['documento', 'numeroProcesso']);
     expect(byName['obter_documento']!.argsSchema?.required?.sort()).toEqual(['documento', 'numeroProcesso']);
 
-    // ── THE ADDRESS IS THE TENANT'S, NOT THE PACKAGE'S ─────────────────────────────────────────
+    // ── THE ADDRESS IS A PACKAGE CONSTANT; THE ONLY CONFIG IS THE LOGIN ────────────────────────
     //
-    // `portal_url` used to be a config field nothing read: the ceremony and every template were
-    // hardcoded to one host, so a tenant on a different portal address had no way to say so and the
-    // field was decoration. Both halves must move together - a session captured at one origin
-    // cannot be checked out by a run driving another.
-    const portalField = (citius!.configSchema ?? []).find((f) => f.key === 'portal_url');
-    expect(portalField?.secret).toBe(false);
-    expect(portalField?.defaultValue).toBe('https://portal.tribunais.org.pt');
-    expect(citius!.sessionConnect?.loginUrl).toBe('{{config.portal_url}}');
+    // There is exactly one eTribunal portal, so its address is written to the letter in
+    // sessionConnect + every automation navigate step - not a config field. The whole config
+    // ceremony the integration asks for is the CITIUS WEB username + password (both secret), used
+    // for the unattended HTTP read; nothing else is a field.
+    const configKeys = (citius!.configSchema ?? []).map((f) => f.key).sort();
+    expect(configKeys).toEqual(['login_password', 'login_username']);
+    expect(citius!.sessionConnect?.loginUrl).toBe('https://portal.tribunais.org.pt');
     expect(byName['submeter_peca']!.mutates).toBe(true);
     expect(byName['consultar_notificacoes']!.mutates).toBe(false);
 
-    // Notification listener: polls consultar_notificacoes, dedups by id over the notificacoes array.
-    expect(citius!.listenerConfig?.pollAction).toBe('consultar_notificacoes');
+    // Notification listener: polls the HTTP form-login read (ler_notificacoes_http, 8h - an
+    // unattended poll cannot use the browser automation, which needs a live captured session),
+    // dedups by id over the rows array.
+    expect(citius!.listenerConfig?.pollAction).toBe('ler_notificacoes_http');
     expect(citius!.listenerConfig?.dedupKeyField).toBe('id');
-    expect(citius!.listenerConfig?.eventArrayField).toBe('notificacoes');
+    expect(citius!.listenerConfig?.eventArrayField).toBe('rows');
 
     // Credential-free public consulta: httpConfig GET against citius.mj.pt, no session, no auth header.
     const pub = byName['consulta_publica_distribuicao'];
@@ -144,10 +145,12 @@ describe('integration definitions registry (ch03 §3.8.13) — list / active / r
     expect(Object.keys(pub!.httpConfig?.headers ?? {}).map((h) => h.toLowerCase())).not.toContain('authorization');
     expect(pub!.httpConfig?.baseUrl ?? '').toMatch(/citius\.mj\.pt/);
 
-    // configSchema holds no secret fields (session captured, not stored); credentialGuide explains it.
-    expect((citius!.configSchema ?? []).some((f) => f.secret === true)).toBe(false);
+    // configSchema now holds exactly the two secret login fields (stored for the HTTP read);
+    // credentialGuide explains what is stored and that documents still use a captured session.
+    const secretKeys = (citius!.configSchema ?? []).filter((f) => f.secret === true).map((f) => f.key).sort();
+    expect(secretKeys).toEqual(['login_password', 'login_username']);
     expect(typeof citius!.credentialGuide).toBe('string');
-    expect(citius!.credentialGuide ?? '').toMatch(/sess/i);
+    expect(citius!.credentialGuide ?? '').toMatch(/palavra-passe/i);
   });
 
   it('GET /integrations/active exposes action + listener catalogs for org-connected integrations only', async () => {
