@@ -50,6 +50,14 @@ const API_KEY = ['tk', 'backing', Math.random().toString(36).slice(2, 10)].join(
 const HTTP = { method: 'GET', baseUrl: 'https://api.backing.example', path: '/things' } as const;
 const BINDING = { automationId: 'auto-1', argMap: {} } as const;
 const DATASET = 'backing.rows';
+const FL = {
+  loginUrl: 'https://portal.example/login',
+  usernameField: 'ctl00$u',
+  passwordField: 'ctl00$p',
+  usernameConfigKey: 'login_username',
+  passwordConfigKey: 'login_password',
+  targetUrl: 'https://portal.example/inbox',
+} as const;
 
 /** The fixture package: one action per cell of the backing table, including the malformed ones. */
 const ACTIONS: Array<Record<string, unknown>> = [
@@ -178,6 +186,24 @@ describe('resolveBackingType: derivation when `backingType` is ABSENT', () => {
 
   it('NEITHER shape derives api-call — the branch that has always refused it, unchanged', () => {
     expect(resolveBackingType(act({}))).toBe('api-call');
+  });
+});
+
+describe('resolveBackingType: the form-login backing (D-FORM-LOGIN)', () => {
+  it('resolves when the action carries a complete formLogin descriptor', () => {
+    expect(resolveBackingType(act({ backingType: 'form-login', formLogin: FL }))).toBe('form-login');
+  });
+  it('refuses an incomplete descriptor or a shape it contradicts', () => {
+    const cases: Array<Partial<IntegrationAction>> = [
+      { backingType: 'form-login' }, // no descriptor at all
+      { backingType: 'form-login', formLogin: { ...FL, usernameField: '' } }, // a field missing
+      { backingType: 'form-login', formLogin: FL, httpConfig: HTTP }, // a form-login has no single request
+      { backingType: 'form-login', formLogin: FL, automationBinding: BINDING }, // no browser steps
+      { backingType: 'form-login', formLogin: FL, tenantRead: { dataset: DATASET } }, // contacts the portal
+    ];
+    for (const shape of cases) {
+      expect(() => resolveBackingType(act({ actionName: 'x', ...shape }))).toThrow(IntegrationActionBackingTypeError);
+    }
   });
 });
 

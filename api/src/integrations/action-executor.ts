@@ -63,6 +63,9 @@ import {
   type IntegrationActionBackingType,
   type IntegrationActionHttpConfig,
 } from './definitions.js';
+import { performFormLogin, type ManualFetch } from './form-login.js';
+import { parseAspNetGridRows } from '../services/portal-forms.js';
+import { secretRegistryFromValues } from '../security/redaction.js';
 import { actionRequiresConsent, actionShape, checkActionConsent, targetResolutionOf, type IntegrationActionConsentDescriptor } from './action-consent.js';
 // THE ONE RESOLUTION (S1 round four). This module used to inline it; it is now shared with the
 // evidence collector so "what a run reaches" and "what a retention decision believes a run reaches"
@@ -289,6 +292,14 @@ export type TenantReadHandler = (input: {
 export interface ExecutorDeps {
   /** Transport seam; default plain fetch (SSRF-exempt by design). Tests inject a fake. */
   fetchImpl?: FetchLike;
+  /**
+   * Redirect-observing transport seam for a `form-login` action. ABSENT ⇒ `performFormLogin` uses
+   * its own default (`guardedFetchManual`, the SSRF-guarded one), so production needs no binding.
+   * Tests inject a loopback transport to reach an in-process mock portal; the ORIGIN BINDING is
+   * asserted by `performFormLogin` itself before this is ever called, so a test transport cannot
+   * step around it.
+   */
+  formLoginManualFetch?: ManualFetch;
   /** Wall-clock timeout for the outbound call (ms). */
   timeoutMs?: number;
   /** Optional automation-backed action handler (the automation/ seam). */
@@ -468,7 +479,7 @@ export async function executeUserIntegrationAction(
       error: `action "${input.actionName}" on ${input.integrationKey} is tenant-read-backed and this deployment binds no dataset readers`,
     };
   }
-  if (backingType !== 'tenant-read' && !action.httpConfig && !action.automationBinding) {
+  if (backingType !== 'tenant-read' && backingType !== 'form-login' && !action.httpConfig && !action.automationBinding) {
     return { success: false, code: 'unsupported_auth_type', error: `action "${input.actionName}" has no httpConfig — only HTTP-backed actions are executable` };
   }
 
@@ -552,6 +563,76 @@ export async function executeUserIntegrationAction(
     return { success: false, code: 'credential_decrypt_failed', error: 'failed to decrypt credentials' };
   }
   const credentialFields = decrypted;
+
+  // FORM-LOGIN DISPATCH. A `form-login` action logs the portal in with a STORED username/password
+  // over HTTP (GET login page → echo hidden state → POST credentials → capture the session cookie →
+  // fetch the target page) and returns that page — the mechanism an unattended poller needs, since
+  // the browser/typist session-capture rail needs a human and yields a session portals expire in
+  // minutes. The password is injected server-side into a run-scoped SecretRegistry and never reaches
+  // a model/URL/log; the origin binding and SSRF guard are enforced inside `performFormLogin`. It
+  // sits AFTER the credential decrypt (it needs the password) and returns EARLY, before the api-call
+  // machinery below. See `integrations/form-login.ts` and `docs/form-login.md`.
+  if (backingType === 'form-login') {
+    const fl = action.formLogin!;
+    const cfg = config?.publicConfigValues ?? {};
+    const interp = (t: string): string =>
+      t.replace(/\{\{\s*config\.([a-zA-Z0-9_]+)\s*\}\}/g, (_, k: string) => String(cfg[k] ?? ''));
+    const loginUrl = interp(fl.loginUrl);
+    const targetUrl = interp(fl.targetUrl);
+    const username = String(credentialFields[fl.usernameConfigKey] ?? '');
+    const password = String(credentialFields[fl.passwordConfigKey] ?? '');
+    if (!username || !password) {
+      return {
+        success: false,
+        code: 'not_connected',
+        error: `form-login credentials for ${input.integrationKey} are not set (fields ${fl.usernameConfigKey}/${fl.passwordConfigKey})`,
+      };
+    }
+    // The credential is bound to the login and target hosts (both declared package data, not args).
+    const allowedOrigins = Array.from(
+      new Set([loginUrl, targetUrl].map((u) => { try { return new URL(u).hostname.toLowerCase(); } catch { return ''; } }).filter(Boolean)),
+    );
+    const secrets = secretRegistryFromValues([username, password]);
+    const result = await performFormLogin(
+      {
+        loginUrl,
+        usernameField: fl.usernameField,
+        passwordField: fl.passwordField,
+        submitField: fl.submitField,
+        submitKind: fl.submitKind,
+        successUrlContains: fl.successUrlContains ? interp(fl.successUrlContains) : undefined,
+        failureBodyContains: fl.failureBodyContains,
+        targetUrl,
+        targetLoginRedirectContains: fl.targetLoginRedirectContains,
+      },
+      { username, password },
+      { allowedOrigins, secrets, credentialLabel: `${input.integrationKey}:${input.actionName}`, timeoutMs: deps.timeoutMs, fetchManual: deps.formLoginManualFetch },
+    );
+    // Output shape (until a per-portal parser is declared): prove auth + expose the fetched page for
+    // structure discovery. The raw HTML is the owner's own page; a future parser turns it structured.
+    const data: Record<string, unknown> = {
+      authenticated: result.ok,
+      loginStatus: result.status,
+      finalUrl: result.finalUrl,
+      targetStatus: result.targetStatus,
+      targetUrl: result.targetUrl,
+      htmlBytes: result.targetHtml ? result.targetHtml.length : 0,
+    };
+    if (result.targetHtml && fl.resultParse) {
+      // Declarative parse → structured rows (the useful shape). No raw HTML leaves the executor.
+      const rows = parseAspNetGridRows(result.targetHtml, fl.resultParse.gridIdContains, fl.resultParse.fields);
+      data.rows = rows;
+      data.rowCount = rows.length;
+    } else if (result.targetHtml) {
+      // No parser declared yet: a bounded preview so the real page structure can be inspected once.
+      data.htmlPreview = result.targetHtml.slice(0, 8000);
+    }
+    if (!result.ok) {
+      const code = result.status === 'auth-failed' ? 'credential_invalid' : 'transport_error';
+      return { success: false, code, error: secrets.redact(result.reason ?? `form login ${result.status}`), data };
+    }
+    return { success: true, status: 200, data };
+  }
 
   // RULE-10 MEASUREMENT (C2, closing B2's review MEDIUM-1). Every OTHER credential read runs the
   // WS-C comparator; this one did not, because this rail decrypts the config itself instead of

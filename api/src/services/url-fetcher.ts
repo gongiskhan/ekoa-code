@@ -153,3 +153,35 @@ export async function guardedFetchFollow(
   }
   throw new SsrfError('Too many redirects');
 }
+
+/**
+ * Guarded fetch that does NOT follow redirects and hands the caller the RAW response — a 3xx
+ * included — so it can read `Set-Cookie` and `Location` off the redirect itself.
+ *
+ * WHY A THIRD VARIANT. `guardedFetch` uses `redirect: 'error'` and THROWS on any 3xx, and
+ * `guardedFetchFollow` auto-follows but reads only `Location` per hop — it never carries or
+ * surfaces the `Set-Cookie` a hop sets. A multi-step form login needs the session cookie that a
+ * WebForms/ASP.NET portal sets ON the post-login 302, so it must be able to SEE that 302 and read
+ * its `Set-Cookie`. This variant runs the SAME per-request SSRF guard as `guardedFetch` (the URL
+ * literal check plus the resolved-IP re-check for DNS rebinding) and returns whatever the server
+ * sent, following nothing. The CALLER drives the redirect chain by re-invoking this per hop — each
+ * call re-guards the next URL — and manages its own cookie jar; it must never blindly follow a
+ * `Location` to a host outside its declared binding (see `credentialedFetchManual`).
+ */
+export async function guardedFetchManual(url: string, opts: GuardedFetchOptions = {}): Promise<Response> {
+  const parsed = assertSafeUrl(url); // same literal SSRF guard as guardedFetch
+  await assertResolvedIpsSafe(parsed.hostname); // same resolved-IP re-check (DNS rebinding)
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 10_000);
+  try {
+    return await fetch(url, {
+      method: opts.method ?? 'GET',
+      headers: opts.headers,
+      body: opts.body,
+      redirect: 'manual', // hand the 3xx back so the caller reads Location + Set-Cookie itself
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+}

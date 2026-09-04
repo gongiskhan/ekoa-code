@@ -7072,3 +7072,31 @@ upgrade-with-carry, publish refusal).
   naming page 1 would silently truncate it. Closing that needs a replay that follows pagination,
   which is a separate feature.
 
+
+- 2026-09-03 - D-FORM-LOGIN: a REUSABLE server-side HTML form login is a first-class integration
+  capability (`api/src/integrations/form-login.ts` + `docs/form-login.md`), not a per-consumer
+  scraper. It logs a portal in with a stored username/password over HTTP - GET login page, echo the
+  hidden/anti-forgery fields, POST credentials, capture the session cookie off the 302, optionally
+  fetch a target page - and hands back a cookie jar. It is the mechanism an UNATTENDED poller needs:
+  the attended browser/typist rail (`ensureSession`) needs a human and yields a session portals expire
+  in minutes, whereas this logs in and reads in one fast sequence with no timing gap. It is NOT a
+  substitute for certificate / Chave Movel Digital / OTP / OAuth logins (those stay on the attended
+  browser path) and has no residential egress, so a WAF datacentre-IP block is reported `blocked` for
+  the caller to fall back. THE ONE NEW PRIMITIVE it required is `guardedFetchManual`
+  (`services/url-fetcher.ts`) + `credentialedFetchManual` (`security/origin-binding.ts`): a
+  redirect-OBSERVING guarded fetch, because the existing `guardedFetch` uses `redirect:'error'` (throws
+  on the post-login 302, losing its Set-Cookie) and `guardedFetchFollow` never surfaces an
+  intermediate hop's Set-Cookie - the fix the CITIUS http module (`citius-mandatarios-http.ts:154-165`)
+  already named. The redirect:'error' default is UNCHANGED (load-bearing for every other caller); the
+  manual variant is additive. Security posture is asserted by `tests/integrations/form-login.test.ts`
+  against the mock WebForms portal: password never in any returned field (run-scoped `SecretRegistry`),
+  origin binding asserted before every request incl. every redirect hop (empty/unbound binding THROWS
+  `CredentialOriginError`, not a swallowed error result), AT-MOST-ONCE (no retry on a rejected
+  password), and a credential-safe cookie jar (`services/cookie-jar.ts`: host/path/secure scoped, no
+  forged wider Domain). REVIEW DATE / what is deferred: the capability is built + unit-proven but NOT
+  yet wired as an integration backing - that needs a `backingType: 'form-login'` in `resolveBackingType`,
+  a `formLoginFetch` `ExecutorDeps` seam dispatched after the credential decrypt and bound once in
+  `server.ts` (the `tenant-read` seam pattern), a contract test, and the `listenerConfig.intervalMs`
+  (default 28_800_000 = 8h) poller into an inbox artifact. CITIUS is the intended first consumer
+  (Habilus `login.aspx` username/password, target `NotCitIndex.aspx`); whether that session
+  authenticates `NotCitIndex.aspx` in one shot is confirmed live once the password is stored.

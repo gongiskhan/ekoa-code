@@ -27,7 +27,7 @@
  * needs no new configuration, and the Cofre's per-item `boundOrigins` replaces this derivation
  * later (WS-C) without moving the enforcement point.
  */
-import { guardedFetch, type GuardedFetchOptions } from '../services/url-fetcher.js';
+import { guardedFetch, guardedFetchManual, type GuardedFetchOptions } from '../services/url-fetcher.js';
 
 /** Refused because the destination is not bound to the credential. Distinct from SsrfError: the
  *  host may be perfectly reachable and still have no business seeing this secret. */
@@ -120,4 +120,18 @@ export async function credentialedFetch(url: string, opts: CredentialedFetchOpti
   assertOriginAllowed(url, opts);
   const { allowedOrigins: _a, credentialLabel: _c, ...guarded } = opts;
   return guardedFetch(url, guarded);
+}
+
+/**
+ * Like `credentialedFetch`, but does NOT follow redirects: the raw response — a 3xx included — is
+ * returned so a multi-step form login can read the session `Set-Cookie` a portal sets on the
+ * post-login redirect. Origin binding is asserted on the REQUEST url exactly as above (cheapest,
+ * never skipped) before the SSRF guard runs. A caller that follows the `Location` MUST re-call
+ * this on the next hop so the binding is re-checked before any credential or session cookie is
+ * carried onward — the redirect target is not automatically inside the binding.
+ */
+export async function credentialedFetchManual(url: string, opts: CredentialedFetchOptions): Promise<Response> {
+  assertOriginAllowed(url, opts);
+  const { allowedOrigins: _a, credentialLabel: _c, ...guarded } = opts;
+  return guardedFetchManual(url, guarded);
 }

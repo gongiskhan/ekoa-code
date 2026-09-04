@@ -19,7 +19,7 @@
       "key": "cedula_profissional",
       "label": "Cédula profissional (OA)",
       "type": "string",
-      "required": true,
+      "required": false,
       "secret": false,
       "helpText": "Número de cédula profissional / inscrição na Ordem dos Advogados do mandatário. Usado apenas para identificação; não é uma credencial de acesso."
     },
@@ -39,6 +39,22 @@
       "required": false,
       "secret": false,
       "helpText": "Nome do advogado/mandatário, para identificação nas listas e comprovativos. Opcional."
+    },
+    {
+      "key": "login_username",
+      "label": "Utilizador CITIUS (login)",
+      "type": "string",
+      "required": true,
+      "secret": true,
+      "helpText": "Nome de utilizador do login no CITIUS WEB (usado em login.aspx). Guardado cifrado; usado para a leitura automática por HTTP."
+    },
+    {
+      "key": "login_password",
+      "label": "Palavra-passe CITIUS",
+      "type": "password",
+      "required": true,
+      "secret": true,
+      "helpText": "Palavra-passe do login no CITIUS WEB. Guardada cifrada, nunca apresentada nem registada. Usada para iniciar sessão automaticamente na leitura periódica."
     }
   ],
   "actions": [
@@ -211,6 +227,87 @@
         "automationId": "citius-documentos-template",
         "automationTemplate": "documentos",
         "passCredentials": true
+      }
+    },
+    {
+      "actionName": "ler_notificacoes_http",
+      "description": "Lê a LISTA de notificações/citações do mandatário no CITIUS WEB por autenticação HTTP com utilizador/palavra-passe guardados (sem browser, para correr sem supervisão). Apenas leitura da lista; nunca abre uma notificação. Requer as credenciais de login guardadas.",
+      "mutates": false,
+      "backingType": "form-login",
+      "formLogin": {
+        "loginUrl": "https://citius.tribunaisnet.mj.pt/habilus/myhabilus/login.aspx",
+        "usernameField": "txtUserName",
+        "passwordField": "txtUserPass",
+        "usernameConfigKey": "login_username",
+        "passwordConfigKey": "login_password",
+        "submitField": "ImBtnLogin",
+        "submitKind": "image",
+        "failureBodyContains": "inválidos",
+        "targetUrl": "https://citius.tribunaisnet.mj.pt/habilus/myhabilus/NotificacoesCitacoes/NotCitIndex.aspx",
+        "targetLoginRedirectContains": "login.aspx",
+        "resultParse": {
+          "gridIdContains": "dgNotificacoes",
+          "fields": {
+            "ato": "NomeActo",
+            "data": "DataElaboracao",
+            "tribunal": "NomeTribunal",
+            "unidade": "DescricaoUnidadeOrganica",
+            "especie": "DescricaoEspecie",
+            "origem": "lblOrigem",
+            "documento": "lnkDoc"
+          }
+        }
+      },
+      "argsSchema": {
+        "type": "object",
+        "properties": {},
+        "required": []
+      },
+      "returnSchema": {
+        "type": "object",
+        "properties": {
+          "authenticated": {
+            "type": "boolean"
+          },
+          "loginStatus": {
+            "type": "string"
+          },
+          "targetStatus": {
+            "type": "number"
+          },
+          "rowCount": {
+            "type": "number"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ato": {
+                  "type": "string"
+                },
+                "data": {
+                  "type": "string"
+                },
+                "tribunal": {
+                  "type": "string"
+                },
+                "unidade": {
+                  "type": "string"
+                },
+                "especie": {
+                  "type": "string"
+                },
+                "origem": {
+                  "type": "string"
+                },
+                "documento": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
       }
     },
     {

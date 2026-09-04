@@ -156,7 +156,50 @@ export interface IntegrationActionTenantRead {
  * `imap`, …). An action is refused for an unimplemented transport and for an unimplemented backing
  * independently, with distinct codes.
  */
-export type IntegrationActionBackingType = 'api-call' | 'bash-cli' | 'browser-steps' | 'tenant-read';
+export type IntegrationActionBackingType = 'api-call' | 'bash-cli' | 'browser-steps' | 'tenant-read' | 'form-login';
+
+/**
+ * The reviewed description of a portal's username/password login form, for a `form-login`-backed
+ * action. Declared as PACKAGE DATA (never model-authored, I5). `loginUrl`/`targetUrl`/`successUrlContains`
+ * may carry `{{config.<key>}}` references resolved against the tenant's non-secret config at run time
+ * (so one field, e.g. `portal_url`, moves the whole flow). The credentials live in the integration's
+ * encrypted config under the field names `usernameConfigKey`/`passwordConfigKey` (both declared
+ * `secret: true` in `configSchema`), and are injected server-side by the executor — see
+ * `integrations/form-login.ts` and `docs/form-login.md`.
+ */
+export interface IntegrationActionFormLogin {
+  /** The login page to GET (and POST to, unless the page declares a `<form action>`). Supports `{{config.*}}`. */
+  loginUrl: string;
+  /** The login-form field NAME carrying the username, e.g. `ctl00$cph$txtUserName`. */
+  usernameField: string;
+  /** The login-form field NAME carrying the password, e.g. `ctl00$cph$txtUserPass`. */
+  passwordField: string;
+  /** Which `configSchema` field holds the username (a non-secret or secret field). */
+  usernameConfigKey: string;
+  /** Which `configSchema` field holds the password (MUST be `secret: true`). */
+  passwordConfigKey: string;
+  /** Optional submit control name (an ASP.NET image button submits `<name>.x`/`.y`). */
+  submitField?: string;
+  submitKind?: 'image' | 'button';
+  /** Login OK when the final post-login URL contains this. Supports `{{config.*}}`. */
+  successUrlContains?: string;
+  /** Login FAILED when the post response body contains this (a "credenciais inválidas" marker). */
+  failureBodyContains?: string;
+  /** The page to fetch after login; its HTML is the action's raw result until a parser is declared. Supports `{{config.*}}`. */
+  targetUrl: string;
+  /** If the target GET's final URL contains this, the session did NOT cover the target (bounced to login). */
+  targetLoginRedirectContains?: string;
+  /**
+   * Optional DECLARATIVE parse of the target page into structured rows. When present, the executor
+   * runs `parseAspNetGridRows(html, gridIdContains, fields)` and returns `rows` instead of the raw
+   * HTML preview. `gridIdContains` is a substring identifying the ASP.NET grid; `fields` maps each
+   * output key to the per-cell control-id suffix (e.g. `{ ato: 'NomeActo', data: 'DataElaboracao' }`).
+   */
+  resultParse?: {
+    gridIdContains: string;
+    fields: Record<string, string>;
+  };
+}
 
 /**
  * HOW THE ORIGIN BEHIND AN ACTION TREATS AUTOMATION - the policy label, declared by the action's
@@ -384,6 +427,8 @@ export interface IntegrationAction {
   automationBinding?: IntegrationActionAutomationBinding;
   /** Present ONLY on a `tenant-read` action (slice S9) - the dataset it answers from. */
   tenantRead?: IntegrationActionTenantRead;
+  /** Present ONLY on a `form-login` action - the reviewed description of the portal's login form. */
+  formLogin?: IntegrationActionFormLogin;
   /**
    * The action's BACKING — how it runs. ABSENT ⇒ derived from the action's shape by
    * `resolveBackingType`, which reproduces today's behaviour byte for byte, so the field is
@@ -559,6 +604,21 @@ export function resolveBackingType(action: IntegrationAction): IntegrationAction
     return action.automationBinding
       ? refuse('also carries an automationBinding - a tenant-read action answers from data this platform already holds, so there are no steps to run')
       : 'tenant-read';
+  }
+  if (declared === 'form-login') {
+    if (!action.formLogin?.loginUrl || !action.formLogin.usernameField || !action.formLogin.passwordField) {
+      return refuse('carries no complete formLogin descriptor - a form-login action must name the login URL and the username/password form fields');
+    }
+    if (action.httpConfig) {
+      return refuse('also carries an httpConfig - a form-login action drives a login FORM, not a single configured request, so the request config is dead weight');
+    }
+    if (action.automationBinding) {
+      return refuse('also carries an automationBinding - a form-login action logs in over HTTP, so there are no browser steps to run');
+    }
+    if (action.tenantRead) {
+      return refuse('also carries a tenantRead - a form-login action contacts the portal, it does not answer from platform-held data');
+    }
+    return 'form-login';
   }
   return refuse('that is not a backing type this version implements');
 }
