@@ -6,33 +6,53 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
 
 ## OPEN
 
-- **`citius-inbox-pipeline-three-blockers`** (**OPEN, found 2026-09-04 driving the live CITIUS
-  read into the `legal-citius` inbox; the owner reported "I dont see anything on the citius
-  inbox"**). The HTTP form-login read (`ler_notificacoes_http`) works live end to end - executed
-  through the running stack it authenticated and returned the 2 current notifications for process
-  `11566/24.0T8LRS` - but NOTHING reaches the app's inbox on its own. Three independent defects, in
-  the order they bite:
-  1. **`seeded-featured-app-backend-bundle-unresolvable` (HIGH).** `projectDirFor`
+- **`app-registry-watch-live-flaky`** (**OPEN, LOW/flaky, observed 2026-09-05 during citius pipeline
+  verification**). `api/tests/apps/app-registry-watch-live.test.ts` (the chokidar dist-watch routing
+  suite) fails NON-DETERMINISTICALLY: across four runs the failing set was different each time
+  (`{live-b,live-inner}`, `{drop-a}`, `{drop-a,twin,nested}`, `{twin,nested}`), i.e. a timing race in
+  FS-watch event delivery, not a logic error. The `expect(seen).not.toContain(<other-app>)` assertions
+  see a dist-change routed to a co-registered/nested app before the watch settles. Aggravated on
+  macOS (fsevents) under parallel load and with a dev stack running its own featured-builds watchers.
+  NOT a regression from the 2026-09-04/05 citius work: the test imports only `appRegistry`,
+  `app-registry.ts` imports none of the changed files (app-paths / dispatch-input / featured-seeder /
+  featured-builder), and neither the SUT nor the test was touched by those commits. CLOSE BY: make the
+  watch-routing assertions wait on a settle/quiescence signal rather than a bare `until(includes(...))`
+  before asserting non-inclusion, or serialise this file (it is inherently timing-sensitive). Left
+  open, not silenced, per the QA process.
+
+- **`citius-inbox-pipeline-three-blockers`** (**#1 + #2 FIXED 2026-09-05 (commits 39597b4d ->
+  0a5a582b, actually the pipeline pair `fix(apps,events)` + tests); #3 OPEN (design). Found
+  2026-09-04 driving the live CITIUS read into the `legal-citius` inbox; the owner reported "I dont
+  see anything on the citius inbox"**). The HTTP form-login read (`ler_notificacoes_http`) works live
+  end to end - executed through the running stack it authenticated and returned the current
+  notifications for process `11566/24.0T8LRS` - but NOTHING reached the app's inbox on its own. Three
+  independent defects, in the order they bit:
+  1. **`seeded-featured-app-backend-bundle-unresolvable` (HIGH, FIXED).** `projectDirFor`
      (`api/src/apps/app-paths.ts`) early-returns the versioned `scaffold/` dir for a seeded featured
      artifact (`featured===true && data.seededFrom===SEEDED_FROM`), but `featured-builder` esbuilds
      the backend into the data-dir MIRROR (`<dataDir>/featured-builds/<id>/dist-backend/backend.mjs`)
      and only patches `data.projectDir` - which the early return ignores. So `backendBundlePath`
      resolves `scaffold/dist-backend/backend.mjs`, which never exists, and EVERY invoke of a seeded
      featured app's backend fails `no backend bundle for this artifact (build the backend first)`.
-     Verified live: `POST /api/v1/artifacts/legal-citius/backend/sample-run` returns exactly that.
-     `onEmail` and `onNotificacaoCitius` are both dead for the featured `legal-citius`. Fix: resolve
-     a seeded featured app's backend bundle from the mirror (or build `dist-backend` into the
-     scaffold) so a seeded featured app with a declared backend is runnable.
-  2. **`generic-listener-dispatch-delivers-string-payload` (HIGH).** The listener enqueue stores the
+     Verified live (pre-fix): `POST /api/v1/artifacts/legal-citius/backend/sample-run` returned
+     exactly that. `onEmail` and `onNotificacaoCitius` were both dead for the featured `legal-citius`.
+     FIXED: `backendBundlePath` (`app-paths.ts`) now resolves a seeded featured app's backend from the
+     featured-builds mirror (root helper single-sourced in `featured-seeder`). Verified live post-fix:
+     sample-run returns `ok:true` and the engine's dry-run effects.
+  2. **`generic-listener-dispatch-delivers-string-payload` (HIGH, FIXED).** The listener enqueue stored the
      item as UTF-8 TEXT (`enqueueListenerEvent` -> `rawBody.toString('utf8')`,
      `events/listener-supervisor.ts`) and the generic artifact-backend envelope
      (`integrations/event-sources/dispatch-input.ts:69`) returns `{ event: payload }` with that raw
      string UNPARSED - only the WhatsApp branch JSON-parses (its own comment calls a raw string "the
      2A-S2 wiring bug class"). `onNotificacaoCitius` reads `input.event.processo`, so every delivered
-     notification would land as a null-field "sem processo" needs-review row. Fix: parse a JSON-text
-     payload in the generic branch too (guarded - pass through unchanged when it is not JSON, so a
-     non-JSON webhook body is unaffected); cover with a dispatch test.
-  3. **`citius-on-open-direct-read-not-implementable` (MEDIUM, design).** `docs/form-login.md`
+     notification landed as a null-field "sem processo" needs-review row. FIXED: `structuredEventPayload`
+     (`dispatch-input.ts`) parses a JSON-text payload back to its object/array in the generic branch,
+     guarded - a non-JSON body (or a JSON scalar) passes through unchanged and never throws, matching
+     the email/WhatsApp branches. Covered by `dispatch-target.test.ts` + the updated `whatsapp-webhook`
+     non-whatsapp case. Verified live post-fix: the 2 real notifications, pushed through the actual
+     delivery path (webhook ingress stores them as JSON strings), arrived PARSED and wrote 2 inbox rows
+     with the correct `numeroProcesso` + 2 bell entries - not the empty "sem processo" the bug produced.
+  3. **`citius-on-open-direct-read-not-implementable` (MEDIUM, design, OPEN - remaining).** `docs/form-login.md`
      prescribes the artifact showing the CURRENT list via a direct `ler_notificacoes_http` call on
      open (the poll's establishing tick adopts the cursor and delivers nothing - correct no-backfill).
      But the app backend CANNOT call the citius action: the backend `integration.call` capability is
@@ -41,13 +61,15 @@ the RUN_LOG finding tail. Journey findings keep their `F` ids; later findings us
      decision: a first-class server-side "sincronizar agora" that runs the integration action and
      delivers into the app, or a scoped one-shot backfill for this listener source.
 
-  **Interim, done 2026-09-04:** the 2 live notifications were populated into
-  `usr.<owner>/citius_notificacoes` through the REAL engine (`processarNotificacaoEstruturada` + the
-  actual `ATOS`/`computePrazo` rules, exactly as `onNotificacaoCitius` builds them) written via the
-  served-data shared endpoint, so the inbox shows them now. They are `needs-review` with no prazo:
-  the act "Notificação (outras) (AE)" carries no deadline rule and the process is not on the spine,
-  so the engine refuses to guess a deadline (by design). This is a one-off populate, NOT the wired
-  pipeline - the three defects above still gate the automatic path.
+  **Status 2026-09-05:** with #1 + #2 fixed the WIRED pipeline delivers - proven live by pushing the 2
+  real notifications through the actual delivery path (webhook ingress -> queue JSON-text -> generic
+  dispatch parse -> `onNotificacaoCitius`), which wrote 2 `citius_notificacoes` rows + 2 bell entries
+  with the correct process number. The 8h listener trigger (`ler_notificacoes_http`) is armed. They
+  are `needs-review` with no prazo: the act "Notificação (outras) (AE)" carries no deadline rule and
+  the process is not on the spine, so the engine refuses to guess a deadline (by design). REMAINING:
+  #3 (no on-open read path) - so the establishing poll still delivers nothing for items already in the
+  box (no-backfill, correct); the current items reach the inbox via the one-off / webhook backfill,
+  and the poller alerts on NEW notifications once the owner re-saves the CITIUS login after a restart.
 
 - **`a-ceremony-session-is-unusable-on-the-machine-that-established-it`** (**EGRESS HALF FIXED
   2026-08-31 in 975fba2a; the LEGIBILITY half is OPEN, MEDIUM**, cofre session checkout / bridge
